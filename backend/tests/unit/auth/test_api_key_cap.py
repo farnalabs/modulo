@@ -39,12 +39,12 @@ class TestClampRole:
         assert _clamp_role(minted, live) == expected
 
     def test_clamp_live_none_denial_marker(self) -> None:
-        assert _clamp_role("operator", None) == ""
+        assert not _clamp_role("operator", None)
 
     def test_clamp_unknown_roles_deny(self) -> None:
-        assert _clamp_role("superadmin", "admin") == ""
-        assert _clamp_role("operator", "owner") == ""
-        assert _clamp_role("", "runner") == ""
+        assert not _clamp_role("superadmin", "admin")
+        assert not _clamp_role("operator", "owner")
+        assert not _clamp_role("", "runner")
 
 
 # ── REST mint-cap (route gate + _enforce_mint_cap) ─────────────────────────
@@ -224,7 +224,7 @@ class TestMiddlewareLiveClamp:
         assert clamped is None
         assert _ms.get_api_key_role_cap_count() == 1
         # The denial marker from the pure helper is the empty string.
-        assert _clamp_role("operator", None) == ""
+        assert not _clamp_role("operator", None)
 
     async def test_no_degradation_when_live_matches_minted(self) -> None:
         """operator minted / operator live → no clamp, no counter increment."""

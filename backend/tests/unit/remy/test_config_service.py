@@ -24,8 +24,8 @@ class TestRemyConfigDefaults:
 
     def test_default_values(self) -> None:
         config = RemyConfig()
-        assert config.system_prompt == ""
-        assert config.additional_guidance == ""
+        assert not config.system_prompt
+        assert not config.additional_guidance
         assert config.access_rules == {"user_ids": [], "team_ids": [], "org_roles": ["admin"]}
         assert config.default_provider == "anthropic"
         assert config.default_model == "claude-sonnet-4-20250514"
@@ -39,7 +39,7 @@ class TestRemyConfigDefaults:
 
     def test_product_primer_default(self) -> None:
         config = RemyConfig()
-        assert config.product_primer == ""
+        assert not config.product_primer
 
     def test_context_sources_defaults(self) -> None:
         config = RemyConfig()
@@ -82,7 +82,7 @@ class TestRemyConfigServiceGetConfig:
 
         config = await service.get_config(org_id)
         assert isinstance(config, RemyConfig)
-        assert config.system_prompt == ""
+        assert not config.system_prompt
         assert config.default_provider == "anthropic"
 
     async def test_returns_stored_config(
@@ -117,7 +117,7 @@ class TestRemyConfigServiceGetConfig:
 
         config = await service.get_config(org_id)
         assert isinstance(config, RemyConfig)
-        assert config.system_prompt == ""
+        assert not config.system_prompt
 
     async def test_returns_defaults_when_db_query_raises(
         self,
@@ -129,7 +129,7 @@ class TestRemyConfigServiceGetConfig:
 
         config = await service.get_config(org_id)
         assert isinstance(config, RemyConfig)
-        assert config.system_prompt == ""
+        assert not config.system_prompt
         assert config.default_provider == "anthropic"
 
     async def test_returns_defaults_when_stored_value_is_invalid(

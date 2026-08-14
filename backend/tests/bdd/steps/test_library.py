@@ -457,7 +457,7 @@ def _request_list_ratings(client, primitive_id: str, ctx: dict[str, Any]) -> Non
 def _response_contains_ratings_list(ctx: dict[str, Any]) -> None:
     data = ctx["response"].json()
     assert "items" in data, "Missing items in ratings response"
-    assert len(data["items"]) >= 0, "Ratings list should be present"
+    assert isinstance(data["items"], list), "Ratings list should be present"
 
 
 @then("each rating has id, thumbs_up, comment, and created_at")

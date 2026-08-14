@@ -59,9 +59,14 @@ PRICING_TABLE: Final[list[PricingConfig]] = [
     PricingConfig("togetherai", "llama*", 0.80, 0.80),
     PricingConfig("togetherai", "Llama*", 0.80, 0.80),
     # ── Azure OpenAI (same as OpenAI) ───────────────────────────────────────
-    PricingConfig("azure_openai", "gpt-4o*", 2.50, 10.00),
+    # Specific patterns BEFORE generic ones so fnmatch hits the right entry first
+    PricingConfig("azure_openai", "gpt-4o-mini", 0.15, 0.60),
     PricingConfig("azure_openai", "gpt-4o-mini*", 0.15, 0.60),
+    PricingConfig("azure_openai", "gpt-4o", 2.50, 10.00),
+    PricingConfig("azure_openai", "gpt-4o*", 2.50, 10.00),
+    PricingConfig("azure_openai", "o3", 10.00, 40.00),
     PricingConfig("azure_openai", "o3*", 10.00, 40.00),
+    PricingConfig("azure_openai", "o4-mini", 1.10, 4.40),
     PricingConfig("azure_openai", "o4-mini*", 1.10, 4.40),
 ]
 

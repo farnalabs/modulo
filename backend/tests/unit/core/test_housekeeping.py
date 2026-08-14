@@ -34,7 +34,7 @@ class TestCandidate:
 
     def test_to_dict_defaults_entity_type_to_empty(self) -> None:
         c = Candidate(id="abc", name="key", detail="detail")
-        assert c.to_dict()["entity_type"] == ""
+        assert not c.to_dict()["entity_type"]
 
 
 class TestCategoryResult:
@@ -45,7 +45,7 @@ class TestCategoryResult:
         assert data["label"] == "Orphan Secrets"
         assert data["description"]
         assert data["count"] == 1
-        assert data["candidates"][0]["entity_type"] == ""
+        assert not data["candidates"][0]["entity_type"]
 
     def test_to_dict_falls_back_to_category_label(self) -> None:
         r = CategoryResult(category="mystery_category", candidates=[])

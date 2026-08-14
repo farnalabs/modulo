@@ -247,7 +247,7 @@ async def test_env_var_secret_ref_missing_resolves_to_empty_string(caplog):
 
     assert result["output"]["status"] == "completed"
     envs = sandbox.commands.run.call_args.kwargs["envs"]
-    assert envs["FOO"] == ""
+    assert not envs["FOO"]
     assert any("env_var.secret_ref_not_found" in m for m in caplog.messages)
 
 
@@ -994,7 +994,7 @@ async def test_fetch_sandbox_log_tail_returns_empty_without_api_key(monkeypatch)
     monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
     monkeypatch.delenv("E2B_API_KEY", raising=False)
     with patch("urllib.request.urlopen") as _urlopen:
-        assert await _fetch_sandbox_log_tail("sbx-nokey") == ""
+        assert not await _fetch_sandbox_log_tail("sbx-nokey")
     _urlopen.assert_not_called()
 
 
@@ -1002,14 +1002,14 @@ async def test_fetch_sandbox_log_tail_never_raises_on_network_failure(monkeypatc
     """A failing urlopen (no network / non-2xx / garbage) is swallowed -> ''."""
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     with patch("urllib.request.urlopen", side_effect=OSError("boom")):
-        assert await _fetch_sandbox_log_tail("sbx-netfail") == ""
+        assert not await _fetch_sandbox_log_tail("sbx-netfail")
     with patch("urllib.request.urlopen", side_effect=urllib.request.HTTPError("url", 401, "unauthorized", None, None)):
-        assert await _fetch_sandbox_log_tail("sbx-netfail") == ""
+        assert not await _fetch_sandbox_log_tail("sbx-netfail")
 
 
 async def test_fetch_sandbox_log_tail_returns_empty_for_invalid_id(monkeypatch):
     """A non-string/None sandbox id never triggers a network call."""
     monkeypatch.setenv("MODULO_E2B_API_KEY", "test-key")
     with patch("urllib.request.urlopen") as _urlopen:
-        assert await _fetch_sandbox_log_tail(None) == ""
+        assert not await _fetch_sandbox_log_tail(None)
     _urlopen.assert_not_called()

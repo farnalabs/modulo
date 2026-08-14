@@ -128,8 +128,8 @@ def test_sanitize_is_noop_for_clean_strings():
     assert sanitize_error_text("LLM provider returned 429 Too Many Requests") == (
         "LLM provider returned 429 Too Many Requests"
     )
-    assert sanitize_error_text("") == ""
-    assert sanitize_error_text(None) == ""
+    assert not sanitize_error_text("")
+    assert not sanitize_error_text(None)
 
 
 def test_sanitize_redacts_secret_patterns():

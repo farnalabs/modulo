@@ -25,8 +25,15 @@ def safe_int(value: object, default: int = 0) -> int:
     """
     if isinstance(value, bool) or not isinstance(value, _NUMERIC_TYPES):
         return default
-    if isinstance(value, (float, Decimal)) and not math.isfinite(value):
-        return default
+    if isinstance(value, (float, Decimal)):
+        try:
+            finite = math.isfinite(value)
+        except (ValueError, OverflowError):
+            # math.isfinite() raises on signaling NaNs (Decimal('sNaN')) —
+            # a corrupt payload must fall back to the default, not crash.
+            finite = False
+        if not finite:
+            return default
     try:
         return int(value)
     except (TypeError, ValueError, OverflowError):

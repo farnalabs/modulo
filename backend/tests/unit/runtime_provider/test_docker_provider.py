@@ -265,7 +265,7 @@ async def test_exec_command(
     mock_container.exec.assert_awaited_once_with(cmd=["echo", "hi"])
     assert isinstance(result, ExecResult)
     assert result.stdout == "Hello, Docker!"
-    assert result.stderr == ""
+    assert not result.stderr
     assert result.exit_code == 0
     assert result.duration_ms is not None
     assert result.duration_ms >= 0
@@ -294,7 +294,7 @@ async def test_exec_command_captures_stderr_and_exit_code(
 
     assert result.exit_code == 1
     assert result.stderr == "boom"
-    assert result.stdout == ""
+    assert not result.stdout
 
 
 async def test_exec_command_timeout_returns_timeout_result(
@@ -318,7 +318,7 @@ async def test_exec_command_timeout_returns_timeout_result(
 
     assert result.exit_code == -1
     assert result.stderr == "Command timed out"
-    assert result.stdout == ""
+    assert not result.stdout
     assert result.duration_ms is not None
     assert result.duration_ms >= 0
 

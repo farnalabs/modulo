@@ -15,22 +15,22 @@
     >
       <template #after>
         <div class="flex items-center gap-2">
-          <Select aria-label="Pipeline" v-model="pipelineFilter" @update:model-value="loadFeedback">
-            <SelectTrigger data-testid="feedback-inbox-pipeline-select" aria-label="Pipeline" class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          <Select :aria-label="$t('views.FeedbackInboxView.pipeline')" v-model="pipelineFilter" @update:model-value="loadFeedback">
+            <SelectTrigger data-testid="feedback-inbox-pipeline-select" :aria-label="$t('views.FeedbackInboxView.pipeline')" class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
               <SelectValue :placeholder="$t('views.FeedbackInboxView.all_pipelines')" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</SelectItem>
             </SelectContent>
           </Select>
-          <input aria-label="date"
+          <input :aria-label="$t('views.FeedbackInboxView.from')"
             v-model="dateFrom"
             type="date"
             data-testid="feedback-inbox-date-from"
             class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             @change="loadFeedback"
           />
-          <input aria-label="date"
+          <input :aria-label="$t('views.FeedbackInboxView.to')"
             v-model="dateTo"
             type="date"
             data-testid="feedback-inbox-date-to"
@@ -63,25 +63,20 @@
         >
           <div
             data-testid="feedback-inbox-toggle-expand"
-            class="flex cursor-pointer items-center gap-4 p-4"
+            class="flex cursor-pointer items-center gap-4 rounded-lg p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             :class="{ 'border-b': expandedId === record.id }"
             role="button"
             tabindex="0"
+            :aria-expanded="expandedId === record.id"
             @click="toggleExpand(record.id)"
             @keydown.enter="toggleExpand(record.id)"
             @keydown.space.prevent="toggleExpand(record.id)"
           >
-            <svg
+            <ChevronRight
               class="h-4 w-4 flex-shrink-0 text-muted-foreground transition-transform"
               :class="{ 'rotate-90': expandedId === record.id }"
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <path d="m9 18 6-6-6-6" />
-            </svg>
+              aria-hidden="true"
+            />
 
             <span :class="statusBadgeClass(record.feedback_status)" class="capitalize">
               {{ record.feedback_status }}
@@ -127,7 +122,7 @@
             </div>
 
             <template v-else-if="detailError[record.id]">
-              <div class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
+              <div role="alert" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
                 {{ detailError[record.id] }}
                 <button data-testid="feedback-inbox-retry" class="ml-2 underline" @click="loadDetail(record.id)">{{ $t('views.FeedbackInboxView.retry') }}</button>
               </div>
@@ -197,7 +192,7 @@
                     >
                       {{ dismissLoading[record.id] ? $t('views.FeedbackInboxView.dismissing') : $t('views.FeedbackInboxView.dismiss') }}
                     </button>
-                    <div v-if="annotationMessage[record.id]" class="text-sm" :class="annotationMessage[record.id]?.type === 'error' ? 'text-destructive' : 'text-success'">
+                    <div v-if="annotationMessage[record.id]" role="status" aria-live="polite" class="text-sm" :class="annotationMessage[record.id]?.type === 'error' ? 'text-destructive' : 'text-success'">
                       {{ annotationMessage[record.id]?.text }}
                     </div>
                   </div>
@@ -232,6 +227,7 @@ import {
 } from '../components/ui/tooltip'
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 import { formatDateShortWithTime } from '../lib/formatDate'
+import { ChevronRight } from '@lucide/vue'
 
 interface FeedbackRecordItem {
   id: string
