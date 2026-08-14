@@ -117,6 +117,25 @@ _BUDGET_EXCEEDED_ERROR_CODE = "budget_exceeded"
 _BUDGET_EXCEEDED_MESSAGE = "This run exceeded its token budget."
 
 
+async def _refresh_run_for_facts(session: AsyncSession, run: Run) -> Run:
+    """Re-load *run* AFTER the terminal status write so the daily fact snapshots
+    the run's TERMINAL state (status / total_cost_usd / total_tokens /
+    completed_at / duration), not the pre-write ``running`` row.
+
+    ``update_run_status``'s FENCED path (the one production always uses —
+    ``claim_token`` is set) writes via raw SQL
+    (``_UPDATE_STATUS_FENCED_SQL``), which bypasses the ORM identity map: the
+    in-memory ``run`` object is NOT mutated by it. Without this refresh the
+    live fact writer would stamp the stale pre-write row — ``status='running'``,
+    NULL cost/tokens — which is exactly the FAR-200 recent-days
+    ``complete_count=0`` + NULL-cost bug (the compensating writers already
+    re-select in a fresh session before recording; this closes the same gap for
+    the live finalize path).
+    """
+    await session.refresh(run)
+    return run
+
+
 def _e2b_rate() -> Decimal:
     """The E2B hourly rate for the LEGACY FALLBACK's wall-clock cost (runtime read)."""
     try:
@@ -1150,7 +1169,10 @@ async def finalize_cost(
             claim_token=claim_token,
         )
         if is_terminal:
-            await record_run_facts(session, run)
+            # Refresh AFTER the status write — the fenced UPDATE bypasses the
+            # ORM identity map, so without it the fact would snapshot the
+            # pre-write 'running' row (FAR-200).
+            await record_run_facts(session, await _refresh_run_for_facts(session, run))
             # FAR-143 — even with empty outputs the run still advances from its
             # create-stamped refs (zero-cost terminal).
             await _advance_journeys_on_terminal(session, run, status, merged_outputs, writer=_WRITER_EARLY_RETURN)
@@ -1252,9 +1274,12 @@ async def finalize_cost(
 
     # --- Analytics facts — every terminal path, SAME transaction (ADR 020) ---
     # ``record_run_facts`` is fail-open: a facts-write failure rolls back only
-    # its own savepoint and never affects the cost/ledger outcome.
+    # its own savepoint and never affects the cost/ledger outcome. The run is
+    # refreshed AFTER the status write (the fenced UPDATE bypasses the ORM
+    # identity map, so the in-memory object would otherwise snapshot the
+    # pre-write 'running' row with NULL cost — FAR-200).
     if is_terminal:
-        await record_run_facts(session, run)
+        await record_run_facts(session, await _refresh_run_for_facts(session, run))
         # FAR-143 — self-report confirm + journey advancement (fail-open, own
         # savepoint). Also covers the reduced-escape terminal (its fresh-tx
         # status write is committed before we get here).

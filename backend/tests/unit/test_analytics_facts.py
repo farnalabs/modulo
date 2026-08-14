@@ -561,6 +561,55 @@ class TestBackfillBatches:
         set_rows.assert_called_once_with(2)
 
 
+class TestRepairStaleFacts:
+    async def test_deletes_stale_non_terminal_facts_and_returns_rowcount(self) -> None:
+        result = MagicMock()
+        result.rowcount = 3
+        session = _session(execute_side_effect=[result])
+
+        deleted = await maintenance_mod.repair_stale_facts(session, date(2026, 8, 12))
+
+        assert deleted == 3
+        assert session.execute.await_count == 1
+        executed_stmt = session.execute.await_args_list[0].args[0]
+        assert executed_stmt.is_delete, "repair must issue a DELETE"
+        assert "run_daily_facts" in str(executed_stmt).lower()
+
+    async def test_zero_when_no_stale_rows(self) -> None:
+        result = MagicMock()
+        result.rowcount = 0
+        session = _session(execute_side_effect=[result])
+
+        deleted = await maintenance_mod.repair_stale_facts(session, date(2026, 8, 13))
+
+        assert deleted == 0
+        assert session.execute.await_count == 1
+
+
+class TestBackfillFactsRepairsFirst:
+    async def test_repairs_stale_rows_before_inserting(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        insert_result = MagicMock()
+        insert_result.rowcount = 4
+        session = _session(execute_side_effect=[insert_result])
+        monkeypatch.setattr(maintenance_mod, "repair_stale_facts", AsyncMock(return_value=2))
+
+        inserted = await maintenance_mod.backfill_facts(session, date(2026, 8, 12))
+
+        assert inserted == 4
+        maintenance_mod.repair_stale_facts.assert_awaited_once_with(session, date(2026, 8, 12))
+        # The INSERT is the only other statement executed.
+        assert session.execute.await_count == 1
+
+    async def test_repair_failure_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        session = _session(execute_side_effect=[None])
+        monkeypatch.setattr(maintenance_mod, "repair_stale_facts", AsyncMock(side_effect=RuntimeError("boom")))
+
+        with pytest.raises(RuntimeError, match="boom"):
+            await maintenance_mod.backfill_facts(session, date(2026, 8, 12))
+        maintenance_mod.repair_stale_facts.assert_awaited_once()
+        assert session.execute.await_count == 0, "no INSERT runs when the repair raises"
+
+
 class TestBackfillLedger:
     @staticmethod
     def _capturing_insert(monkeypatch: pytest.MonkeyPatch) -> dict:
