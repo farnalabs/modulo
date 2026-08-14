@@ -480,7 +480,7 @@ class TestShutdownRateLimiters:
         await shutdown_rate_limiters()
         client1.aclose.assert_awaited_once()
         client2.aclose.assert_awaited_once()
-        assert rl_mod._redis_clients == set()
+        assert not rl_mod._redis_clients
 
     async def test_shutdown_survives_close_errors(self):
         from modulo.api.middleware import rate_limiter as rl_mod
@@ -492,7 +492,7 @@ class TestShutdownRateLimiters:
         await shutdown_rate_limiters()
         failing.aclose.assert_awaited_once()
         ok.aclose.assert_awaited_once()
-        assert rl_mod._redis_clients == set()
+        assert not rl_mod._redis_clients
 
     async def test_shutdown_propagates_cancelled_error(self):
         """asyncio.CancelledError from aclose must propagate, not be logged."""
