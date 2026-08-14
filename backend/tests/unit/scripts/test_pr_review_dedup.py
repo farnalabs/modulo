@@ -35,6 +35,7 @@ def run_script(tmp_path, reviews, commits, head=HEAD):
         capture_output=True,
         text=True,
         check=False,
+        timeout=30,
     )
 
 
@@ -152,5 +153,6 @@ def test_api_failure_fails_open(tmp_path):
         capture_output=True,
         text=True,
         check=False,
+        timeout=30,
     )
     assert "skip=false" in result.stdout

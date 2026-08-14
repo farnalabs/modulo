@@ -517,7 +517,7 @@ async def test_initialise_double_guard_inside_lock_warns(tmp_path, caplog):
 
     assert any("already initialised" in rec.message for rec in caplog.records)
     # Nothing was built because the inner guard fired before the loop.
-    assert hub.connector_ids == frozenset()
+    assert not hub.connector_ids
 
 
 async def test_initialise_cancelled_error_propagates():

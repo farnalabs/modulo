@@ -14,7 +14,7 @@ from decimal import Decimal
 from operator import attrgetter
 from typing import Any
 
-from sqlalchemy import Date, bindparam, case, cast, delete, func, select, text
+from sqlalchemy import Date, bindparam, case, cast, delete, func, select, text, update
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -669,6 +669,60 @@ def _json_bind(value: Any) -> str | bytes | None:
     return json.dumps(value)
 
 
+async def _write_unclassified_classification(session: AsyncSession, run: Run) -> None:
+    """Fail-closed marker write for a terminal run the classifier could not process.
+
+    Called when importing/calling the classifier itself failed — the classifier
+    module may be the very thing that raised, so this write is fully
+    self-contained (no ``classify`` import). A terminal run must NEVER commit
+    with ``run_classification = NULL`` (a missing record breaks the FAR-190
+    walk); the ``unclassified`` marker is what keeps the walk alive.
+    Best-effort and NEVER raises.
+    """
+    try:
+        await session.execute(
+            update(Run)
+            .where(Run.id == run.id)
+            .values(
+                run_classification={
+                    "value": "unclassified",
+                    "reason": "classifier_error",
+                    "delivered_pr_urls": [],
+                    "computed_at": datetime.now(UTC).isoformat(),
+                    "work_intact": None,
+                    "declared_success_nodes": 0,
+                }
+            )
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("classification.marker_fallback_failed run=%s", run.id)
+
+
+async def _classify_terminal_run(session: AsyncSession, run: Run) -> None:
+    """FAR-189 hook: classify + persist the run-outcome record for a terminal run.
+
+    Best-effort and NEVER raises. Imported lazily so the classification
+    machinery stays off the hot CRUD import path (the vast majority of
+    ``update_run_status`` calls are non-terminal). The import AND the call are
+    guarded: a classifier import failure must not roll back the terminal status
+    write that already flushed — on any failure an ``unclassified`` marker is
+    written directly instead. All callers gate on ``TERMINAL_STATUSES`` before
+    invoking, so the status guard lives only in
+    ``classify_and_persist_run`` (the shared entry point).
+    """
+    try:
+        from modulo.core.pipeline_engine.classify import classify_and_persist_run
+
+        await classify_and_persist_run(session, run)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("classification.import_or_call_failed run=%s", run.id)
+        await _write_unclassified_classification(session, run)
+
+
 async def update_run_status(
     session: AsyncSession,
     run_id: uuid.UUID,
@@ -748,6 +802,8 @@ async def update_run_status(
         # pair lands in one atomic write, never a torn half-state.
         run.node_telemetry_json = node_telemetry_json
     await session.flush()
+    if run.status in TERMINAL_STATUSES:
+        await _classify_terminal_run(session, run)
     return run
 
 
@@ -841,8 +897,16 @@ async def _update_run_status_fenced(
     )
     if result.fetchone() is None:
         return None
-    refreshed = await session.execute(select(Run).where(Run.id == run_id))
-    return refreshed.scalar_one_or_none()
+    # ``populate_existing`` forces a REAL row read rather than returning the
+    # session's identity-map object (which is STALE for status/error_code/
+    # outputs_json after the raw fenced UPDATE above — finalize_cost loads the
+    # run earlier in the same transaction). The classification hook needs the
+    # freshly-written facts.
+    refreshed = await session.execute(select(Run).where(Run.id == run_id).execution_options(populate_existing=True))
+    refreshed_run = refreshed.scalar_one_or_none()
+    if refreshed_run is not None and refreshed_run.status in TERMINAL_STATUSES:
+        await _classify_terminal_run(session, refreshed_run)
+    return refreshed_run
 
 
 _TRANSITION_SQL = text(
@@ -921,7 +985,13 @@ async def transition_run(
             "allowed_from": sorted(allowed_from),
         },
     )
-    return result.fetchone() is not None
+    ok = result.fetchone() is not None
+    if ok and target_status in TERMINAL_STATUSES:
+        refreshed = await session.execute(select(Run).where(Run.id == run_id).execution_options(populate_existing=True))
+        refreshed_run = refreshed.scalar_one_or_none()
+        if refreshed_run is not None and refreshed_run.status in TERMINAL_STATUSES:
+            await _classify_terminal_run(session, refreshed_run)
+    return ok
 
 
 async def request_cancellation(session: AsyncSession, run_id: uuid.UUID) -> Run | None:
@@ -933,6 +1003,8 @@ async def request_cancellation(session: AsyncSession, run_id: uuid.UUID) -> Run 
     run.status = "cancelled"
     run.completed_at = datetime.now(UTC)
     await session.flush()
+    if run.status in TERMINAL_STATUSES:
+        await _classify_terminal_run(session, run)
     return run
 
 

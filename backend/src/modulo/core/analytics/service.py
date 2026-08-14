@@ -51,6 +51,7 @@ from modulo.core.analytics.builder import (
 )
 from modulo.db.crud.run import get_org_run_concurrency_limit
 from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.run import TERMINAL_STATUSES
 from modulo.db.models.run_daily_facts import RunDailyFact
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings
@@ -77,6 +78,14 @@ _DEFAULT_STATEMENT_TIMEOUT_MS = 5000
 
 # Max date range accepted by the bucketed query (matches the old route guard).
 _MAX_QUERY_RANGE_DAYS = 365
+
+# Facts-freshness stale threshold (hours): the analytics response is flagged
+# ``facts_stale`` when the org's newest day with a TERMINAL-status fact row is
+# older than this (~36h, matching the ticket's 24-36h window). Facts are
+# materialized asynchronously (live writer at run completion + a daily 01:00
+# UTC backfill cron), so a stale flag is a "the numbers for recent days may be
+# incomplete" signal — the frontend surfaces it as a notice, never a hard block.
+_FRESHNESS_STALE_HOURS = 36
 
 # Export pagination bounds (FAR-102, Part D).
 _EXPORT_DEFAULT_LIMIT = 500
@@ -219,6 +228,76 @@ def _check_hour_cap(
         )
 
 
+async def _facts_freshness(
+    factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    *,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID | None,
+    org_role: str | None,
+) -> tuple[float | None, bool]:
+    """How long since the org's newest RELIABLE fact day, and whether it is stale.
+
+    ``run_daily_facts`` is materialized asynchronously (the live writer at run
+    completion plus a daily 01:00 UTC backfill cron), so a query for the most
+    recent window can silently return zeros/missing rows while the facts for
+    those days are still being written — or, worse, the writer is broken
+    (FAR-200: facts stamped with the pre-write ``'running'`` status and NULL
+    cost). The freshness signal is the newest ``run_date`` that has AT LEAST ONE
+    TERMINAL-status fact row: a writer that stops producing terminal facts makes
+    this lag even when raw (non-terminal) rows for today exist.
+
+    Returns ``(freshness_hours, stale)``:
+
+    - ``freshness_hours`` — hours since that day's UTC boundary (``0.0`` when
+      the newest reliable day is today; ``None`` when the org has no terminal
+      fact at all — a brand-new/empty org reads as "no data yet", not "stale").
+    - ``stale`` — ``True`` when ``freshness_hours`` exceeds
+      ``_FRESHNESS_STALE_HOURS``.
+
+    Fail-open: any error degrades to ``(None, False)`` with a log, so the
+    staleness indicator can never break the analytics query itself.
+    """
+    try:
+        async with factory() as session:
+            try:
+                async with session.begin():
+                    await set_rls_org(session, org_id)
+                    if account_id is not None:
+                        await set_rls_user_context(session, account_id, org_role or "")
+                    dialect = (await session.connection()).dialect.name
+                    if dialect == "postgresql":
+                        timeout_ms = getattr(
+                            settings, "analytics_query_statement_timeout_ms", _DEFAULT_STATEMENT_TIMEOUT_MS
+                        )
+                        await session.execute(
+                            text("SELECT set_config('statement_timeout', :ms, true)"),
+                            {"ms": str(int(timeout_ms))},
+                        )
+                    newest_terminal_day = (
+                        await session.execute(
+                            sa.select(sa.func.max(RunDailyFact.run_date)).where(
+                                RunDailyFact.organisation_id == org_id,
+                                RunDailyFact.status.in_(TERMINAL_STATUSES),
+                            )
+                        )
+                    ).scalar_one_or_none()
+            except asyncio.CancelledError:
+                raise
+            except (ProgrammingError, SQLAlchemyError):
+                _log.exception("analytics.freshness.db_error", extra={"org_id": str(org_id)})
+                return None, False
+    except Exception:
+        _log.exception("analytics.freshness.unexpected_error", extra={"org_id": str(org_id)})
+        return None, False
+
+    if newest_terminal_day is None:
+        return None, False
+    newest_instant = datetime.combine(newest_terminal_day, datetime.min.time(), tzinfo=UTC)
+    freshness_hours = (datetime.now(UTC) - newest_instant).total_seconds() / 3600.0
+    return round(freshness_hours, 1), freshness_hours > _FRESHNESS_STALE_HOURS
+
+
 # ---------------------------------------------------------------------------
 # Execution
 # ---------------------------------------------------------------------------
@@ -337,11 +416,20 @@ async def run_analytics_query(
         date_to=effective_to,
         limit=params.limit,
     )
+    freshness_hours, stale = await _facts_freshness(
+        factory,
+        settings,
+        org_id=org_id,
+        account_id=account_id,
+        org_role=org_role,
+    )
     return {
         "group_by": effective_group_by.value,
         "dimension": params.dimension.value if params.dimension is not None else None,
         "date_from": effective_from.isoformat(),
         "date_to": effective_to.isoformat(),
+        "facts_freshness_hours": freshness_hours,
+        "facts_stale": stale,
         "buckets": buckets,
     }
 

@@ -331,6 +331,88 @@ async def test_execute_terminal_fails_node_cancellation_when_retries_exhausted()
     assert not any("status='pending'" in s for s in statements)
 
 
+async def test_execute_terminal_fail_roundtrips_sandbox_diagnostics():
+    """FAR-197 review fix (PR #1317 CHANGES_REQUESTED): the retry-exhausted
+    terminal-fail write surface used to truncate the error_detail at 500 chars,
+    cutting the stderr tail AND the E2B log tail (the only place the kill reason
+    lives) for large-output failures. The write cap is raised to 5000 (matching
+    the sanitizer + String(5000) column); this round-trips a realistic large-output
+    SandboxNodeFailedError through the executor AND the run-detail read surface
+    and asserts stderr + log-tail markers survive."""
+    from modulo.core.pipeline_engine.error_codes import present_error
+    from modulo.core.pipeline_engine.node_runner import (
+        SandboxNodeFailedError,
+        _build_no_output_message,
+    )
+
+    # Realistic large-output failure: stdout floods, the agent's fatal error sits
+    # at the END of stderr, the kill reason at the END of the sandbox log tail —
+    # the exact case the 500-char cap previously destroyed.
+    stderr_marker = "AGENT_FATAL_AT_END"
+    log_marker = "KILL_REASON_AT_END"
+    diagnostic = _build_no_output_message(
+        exit_code=137,
+        stdout_raw="o" * 50_000,
+        stderr_raw=("e" * 10_000) + stderr_marker,
+        sandbox_id="sbx-roundtrip",
+        read_raw="",
+        log_tail=("l" * 8_000) + log_marker,
+    )
+    # The builder already keeps the message under the 5000-char surface cap.
+    assert len(diagnostic) <= 5000
+    assert stderr_marker in diagnostic
+    assert log_marker in diagnostic
+
+    run = _make_run(claim_count=20, node_attempt_count=5, claim_token="tok-claim-abc")
+    final_run = _make_run(
+        run_id=run.id,
+        status="failed",
+        claim_count=20,
+        node_attempt_count=5,
+        claim_token="tok-claim-abc",
+    )
+    snapshot = _make_snapshot()
+    statements: list[str] = []
+    session = _make_session(snapshot, statements=statements)
+    factory = _make_session_factory(session)
+    compiled = _mock_compiled_raising(SandboxNodeFailedError(diagnostic))
+    registry = _mock_registry()
+    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+        patch("modulo.settings.get_settings", return_value=settings),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        result = await executor.execute(
+            run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
+        )
+
+    assert result is final_run
+    persisted = mock_finalize.await_args.kwargs["error_detail"]
+    assert persisted.startswith("Sandbox node failed (transient) after retries exhausted")
+    assert "no parseable output.json" in persisted
+    # The stderr tail (agent error) and the E2B log tail (kill reason) SURVIVE
+    # the executor's terminal write surface — the prove-the-fix assertion.
+    assert stderr_marker in persisted
+    assert log_marker in persisted
+    assert len(persisted) <= 5000
+    # And they survive the run-detail READ surface (present_error limit=5000).
+    _code, presented = present_error("node_cancelled", persisted, limit=5000)
+    assert stderr_marker in presented
+    assert log_marker in presented
+    # No reset once retries are exhausted.
+    assert not any("status='pending'" in s for s in statements)
+
+
 async def test_execute_retry_budget_ignores_non_executing_claims():
     """Capacity-deferred / non-executing claims do NOT consume the retry
     budget. Here claim_count (5) is AT the old saq_run_retries=5 cap — a pure

@@ -86,6 +86,10 @@ class TestReadiness:
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
             patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
             patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch(
+                "modulo.api.routes.health._check_dispatcher_reconcile",
+                AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
+            ),
         ):
             resp = client.get("/healthz/ready")
         assert resp.status_code == 200
@@ -103,6 +107,10 @@ class TestReadiness:
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
             patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
             patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch(
+                "modulo.api.routes.health._check_dispatcher_reconcile",
+                AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
+            ),
         ):
             resp = client.get("/healthz/ready")
         assert resp.status_code == 503
@@ -118,6 +126,10 @@ class TestReadiness:
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
             patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
             patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch(
+                "modulo.api.routes.health._check_dispatcher_reconcile",
+                AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
+            ),
         ):
             resp = client.get("/healthz/ready")
         assert resp.status_code == 200
@@ -134,6 +146,10 @@ class TestReadiness:
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
             patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
             patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch(
+                "modulo.api.routes.health._check_dispatcher_reconcile",
+                AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
+            ),
         ):
             resp = client.get("/healthz/ready")
         body = resp.json()
@@ -142,6 +158,49 @@ class TestReadiness:
             assert "status" in c
             assert "latency_ms" in c
             assert "detail" in c
+
+    def test_healthz_ready_dispatcher_unavailable_gates(self, client: TestClient) -> None:
+        """FAR-199: a dispatcher_reconcile check that is unavailable (reconcile
+        stale past the 300s tier — wedged system worker) 503s readiness even
+        when every other check is ok."""
+        with (
+            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch(
+                "modulo.api.routes.health._check_dispatcher_reconcile",
+                AsyncMock(return_value=_unavailable_check("dispatcher_reconcile stale 360s")),
+            ),
+        ):
+            resp = client.get("/healthz/ready")
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["status"] == "unavailable"
+        assert body["checks"]["dispatcher_reconcile"]["status"] == "unavailable"
+
+    def test_healthz_ready_dispatcher_degraded_stays_advisory(self, client: TestClient) -> None:
+        """FAR-199: a dispatcher_reconcile check that is degraded (a single
+        missed 60s tick) must NOT flip overall readiness — it stays advisory."""
+        with (
+            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch(
+                "modulo.api.routes.health._check_dispatcher_reconcile",
+                AsyncMock(return_value=_degraded_check("dispatcher_reconcile stale 120s")),
+            ),
+        ):
+            resp = client.get("/healthz/ready")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert body["checks"]["dispatcher_reconcile"]["status"] == "degraded"
 
 
 class TestHttpTimeout:
@@ -156,6 +215,10 @@ class TestHttpTimeout:
             patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
             patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
             patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch(
+                "modulo.api.routes.health._check_dispatcher_reconcile",
+                AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
+            ),
         ):
             resp = client.get("/healthz/ready")
         assert resp.status_code == 503

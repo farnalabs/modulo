@@ -21,14 +21,21 @@ def _run(**attrs: object) -> SimpleNamespace:
 
     ``update_run_status`` / ``update_run_outputs`` only mutate attributes on
     the object returned by ``scalar_one_or_none()`` and flush the session, so a
-    plain mutable namespace exercises the real write path.
+    plain mutable namespace exercises the real write path. The FAR-189
+    classification hook fires on terminal status writes and reads the run's
+    classification inputs (``error_code``, ``raw_output_markers``,
+    ``work_intact``) plus ``id``, so the stand-in carries them too.
     """
     defaults: dict[str, object] = {
+        "id": uuid.uuid4(),
         "status": "pending",
         "started_at": None,
         "completed_at": None,
+        "error_code": None,
         "outputs_json": None,
         "node_telemetry_json": None,
+        "raw_output_markers": None,
+        "work_intact": None,
     }
     defaults.update(attrs)
     return SimpleNamespace(**defaults)

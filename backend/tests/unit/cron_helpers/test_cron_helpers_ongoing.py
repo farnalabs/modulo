@@ -245,7 +245,9 @@ class TestCountOngoingRuns:
         # the actual status vocabulary.
         sql = str(executed[0].compile(compile_kwargs={"literal_binds": True}))
         assert "runs.status IN" in sql
-        assert "pending" in sql and "running" in sql and "claimed" in sql
+        assert "pending" in sql
+        assert "running" in sql
+        assert "claimed" in sql
         for excluded in ("awaiting_human", "stalled", "eval_failed", "cancelled"):
             assert excluded not in sql, f"{excluded} must not be counted"
         assert "cancellation_requested" not in sql, "count is status-only — no cancellation filter"

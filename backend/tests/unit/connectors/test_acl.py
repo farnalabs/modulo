@@ -34,7 +34,8 @@ def test_acl_empty_allowlist_denies_all_operations():
     # An *explicit* empty allowlist is distinct from None — it must deny
     # every operation, not fall back to the unrestricted default.
     acl = ConnectorACL(visibility="org", allowed_operations=[])
-    assert acl.allowed_operations == frozenset()
+    assert acl.allowed_operations is not None
+    assert not acl.allowed_operations
     with pytest.raises(ConnectorPermissionError, match="No operations allowed"):
         acl.check("read")
 

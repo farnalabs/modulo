@@ -125,6 +125,19 @@ class _FakeSession:
         return result
 
 
+class _ScalarSession(_FakeSession):
+    """``_FakeSession`` whose execute result also answers ``scalar_one_or_none``
+    (used by the facts-freshness query — ``MAX(run_date)``)."""
+
+    async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
+        self.executed.append(stmt)
+        if self._exc is not None:
+            raise self._exc
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = self._scalar
+        return result
+
+
 def _factory(session: _FakeSession) -> MagicMock:
     factory = MagicMock()
     factory.return_value = session
@@ -304,6 +317,7 @@ class TestRunAnalyticsQuery:
             patch.object(svc, "_rate_limited", return_value=False),
             patch.object(svc, "_execute_with_guards", new=AsyncMock(return_value=rows)) as mock_exec,
             patch.object(svc, "bucket_rows", return_value=buckets) as mock_bucket,
+            patch.object(svc, "_facts_freshness", new=AsyncMock(return_value=(1.0, False))) as mock_fresh,
         ):
             result = await run_analytics_query(
                 org_id=_ORG,
@@ -314,8 +328,11 @@ class TestRunAnalyticsQuery:
         assert result["group_by"] == "day"
         assert result["dimension"] == "trigger_type"
         assert result["buckets"] == buckets
+        assert result["facts_freshness_hours"] == 1.0
+        assert result["facts_stale"] is False
         mock_exec.assert_awaited_once()
         mock_bucket.assert_called_once()
+        mock_fresh.assert_awaited_once()
 
     async def test_rate_limited_raises(self) -> None:
         with (
@@ -655,3 +672,91 @@ class TestPruneRateHitsCapEviction:
             assert org_a not in svc._rate_hits, "the oldest org must be evicted when over cap"
         finally:
             svc._rate_hits.clear()
+
+
+# ---------------------------------------------------------------------------
+# _facts_freshness — the FAR-200 staleness indicator
+# ---------------------------------------------------------------------------
+
+
+class TestFactsFreshness:
+    def _freeze_now(self, monkeypatch: pytest.MonkeyPatch, now: datetime) -> None:
+        """Pin ``svc.datetime.now`` to *now* so the hour-based staleness math is
+        deterministic (otherwise a near-midnight run makes the threshold test
+        time-of-day dependent)."""
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):  # type: ignore[override]
+                return now.astimezone(tz) if tz is not None else now
+
+        monkeypatch.setattr(svc, "datetime", _FrozenDatetime)
+
+    async def _call(
+        self,
+        scalar: Any,
+        *,
+        exc: Exception | None = None,
+        account_id: uuid.UUID | None = _ACCOUNT,
+    ) -> tuple[float | None, bool]:
+        session = _ScalarSession(scalar=scalar, exc=exc)
+        with (
+            patch.object(svc, "set_rls_org", new_callable=AsyncMock),
+            patch.object(svc, "set_rls_user_context", new_callable=AsyncMock),
+        ):
+            return await svc._facts_freshness(
+                _factory(session),
+                _settings(),
+                org_id=_ORG,
+                account_id=account_id,
+                org_role="admin",
+            )
+
+    async def test_fresh_when_newest_terminal_day_is_today(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._freeze_now(monkeypatch, datetime(2026, 8, 14, 12, 0, tzinfo=UTC))
+        hours, stale = await self._call(date(2026, 8, 14))
+        assert stale is False
+        assert hours == 12.0
+
+    async def test_stale_when_newest_terminal_day_lags_over_threshold(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._freeze_now(monkeypatch, datetime(2026, 8, 14, 12, 0, tzinfo=UTC))
+        hours, stale = await self._call(date(2026, 8, 12))
+        assert stale is True
+        assert hours == 60.0
+
+    async def test_not_stale_when_lag_is_within_threshold(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 30h since the newest terminal day — under the 36h window (e.g. a
+        # fresh day not yet touched by the daily 01:00 UTC backfill cron).
+        self._freeze_now(monkeypatch, datetime(2026, 8, 14, 6, 0, tzinfo=UTC))
+        hours, stale = await self._call(date(2026, 8, 13))
+        assert stale is False, "a ~24-36h lag (e.g. the daily cron cadence) is not yet stale"
+        assert hours == 30.0
+
+    async def test_no_terminal_facts_reads_as_no_data_not_stale(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._freeze_now(monkeypatch, datetime(2026, 8, 14, 12, 0, tzinfo=UTC))
+        hours, stale = await self._call(None)
+        assert hours is None
+        assert stale is False
+
+    async def test_db_error_degrades_fail_open(self) -> None:
+        hours, stale = await self._call(None, exc=SQLAlchemyError("boom"))
+        assert hours is None
+        assert stale is False
+
+    async def test_no_user_context_when_account_id_absent(self) -> None:
+        today = datetime.now(UTC).date()
+        session = _ScalarSession(scalar=today)
+        with (
+            patch.object(svc, "set_rls_org", new_callable=AsyncMock) as mock_rls,
+            patch.object(svc, "set_rls_user_context", new_callable=AsyncMock) as mock_user,
+        ):
+            _hours, stale = await svc._facts_freshness(
+                _factory(session),
+                _settings(),
+                org_id=_ORG,
+                account_id=None,
+                org_role=None,
+            )
+        assert stale is False
+        mock_rls.assert_awaited_once()
+        mock_user.assert_not_awaited()

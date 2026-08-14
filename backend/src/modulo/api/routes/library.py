@@ -1416,7 +1416,10 @@ async def create_lifecycle_map_from_primitive_endpoint(
 
 
 class CommunityContributeRequest(BaseModel):
-    primitive_type: str = Field(..., pattern=r"^(schema|workflow|agent|integration|test_fixture|composite)$")
+    primitive_type: str = Field(
+        ...,
+        pattern=r"^(schema|workflow|agent|integration|test_fixture|composite|lifecycle_map)$",
+    )
     name: str = Field(..., min_length=1, max_length=255)
     slug: str = Field(..., min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=2000)

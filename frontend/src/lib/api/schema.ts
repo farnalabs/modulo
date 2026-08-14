@@ -7675,6 +7675,13 @@ export interface components {
             date_from?: string | null;
             /** Date To */
             date_to?: string | null;
+            /** Facts Freshness Hours */
+            facts_freshness_hours?: number | null;
+            /**
+             * Facts Stale
+             * @default false
+             */
+            facts_stale: boolean;
             /** Buckets */
             buckets: components["schemas"]["AnalyticsBucket"][];
         };
@@ -10343,7 +10350,10 @@ export interface components {
          *
          *     This is the primitive shape ``GET .../export`` returns and ``POST
          *     /import`` accepts: ``content_json`` holds the canonical stages/edges/notes
-         *     graph and is validated with the same rules as an editor save.
+         *     graph and is validated with the same rules as an editor save. ``format_version``
+         *     is ``2`` and the optional ``versions`` array carries the version history
+         *     (each version's stages/edges/notes + metadata); a v1 envelope without
+         *     ``versions`` still imports as a single-version map.
          */
         LifecycleMapTransfer: {
             /**
@@ -10354,7 +10364,7 @@ export interface components {
             primitive_type: "lifecycle_map";
             /**
              * Format Version
-             * @default 1
+             * @default 2
              */
             format_version: string;
             /** Name */
@@ -10365,6 +10375,10 @@ export interface components {
             content_json?: {
                 [key: string]: unknown;
             };
+            /** Versions */
+            versions?: {
+                [key: string]: unknown;
+            }[] | null;
         };
         /** LifecycleMapTransitionItem */
         LifecycleMapTransitionItem: {
@@ -12545,6 +12559,8 @@ export interface components {
             } | null;
             /** Trace Id */
             trace_id?: string | null;
+            /** Trace Url */
+            trace_url?: string | null;
             /** Node Token Usage */
             node_token_usage?: {
                 [key: string]: unknown;

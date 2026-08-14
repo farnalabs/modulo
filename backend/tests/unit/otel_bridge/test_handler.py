@@ -16,6 +16,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from opentelemetry.trace import StatusCode
 
 from modulo.otel_bridge.handler import LangGraphOtelBridge
+from modulo.otel_bridge.trace_id import trace_id_for_thread
 
 
 @pytest.fixture
@@ -87,6 +88,79 @@ def test_chain_attributes_set(bridge: LangGraphOtelBridge, exporter: InMemorySpa
     span = exporter.get_finished_spans()[0]
     assert span.attributes is not None
     assert span.attributes.get("langgraph.chain.name") == "SomeChain"
+
+
+# ---------------------------------------------------------------------------
+# Deterministic trace id (FAR-198)
+# ---------------------------------------------------------------------------
+
+
+def test_run_root_span_carries_deterministic_trace_id(
+    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
+) -> None:
+    thread_id = "org-uuid:run-uuid"
+    root = bridge.start_run_root(thread_id)
+    bridge.end_run_root()
+
+    expected_trace_id = int(trace_id_for_thread(thread_id), 16)
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].name == "modulo.pipeline.run"
+    assert spans[0].context.trace_id == expected_trace_id
+    assert root.is_recording() is False  # ended
+
+
+def test_run_root_span_attributes(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
+    thread_id = "org-uuid:run-uuid"
+    bridge.start_run_root(thread_id)
+    bridge.end_run_root()
+
+    span = exporter.get_finished_spans()[0]
+    assert span.attributes is not None
+    assert span.attributes.get("modulo.run.thread_id") == thread_id
+
+
+def test_bridge_spans_inherit_run_root_trace_id(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
+    """Chain spans without a LangGraph parent inherit the run root's trace id."""
+    thread_id = "org-uuid:run-uuid"
+    bridge.start_run_root(thread_id)
+    run_id = uuid.uuid4()
+    bridge.on_chain_start(_serialized("MyNode"), {}, run_id=run_id)
+    bridge.on_chain_end({}, run_id=run_id)
+    bridge.end_run_root()
+
+    expected_trace_id = int(trace_id_for_thread(thread_id), 16)
+    spans = exporter.get_finished_spans()
+    chain = next(s for s in spans if "MyNode" in s.name)
+    root = next(s for s in spans if "modulo.pipeline.run" in s.name)
+    assert chain.context.trace_id == expected_trace_id == root.context.trace_id
+    assert chain.parent is not None
+    assert chain.parent.span_id == root.context.span_id
+
+
+def test_end_run_root_is_idempotent_without_start(bridge: LangGraphOtelBridge) -> None:
+    bridge.end_run_root()  # must not raise
+    bridge.end_run_root()
+    assert bridge._root_span is None
+
+
+def test_span_id_for_run_returns_hex_after_end(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
+    run_id = uuid.uuid4()
+    bridge.on_chain_start(_serialized("NodeA"), {}, run_id=run_id)
+    # Record the live span id while open.
+    live = bridge.span_id_for_run(run_id)
+    assert live is not None
+    assert len(live) == 16
+    int(live, 16)  # must be hex-parsable
+    bridge.on_chain_end({}, run_id=run_id)
+
+    # After end the span is popped from _spans but the id is still readable.
+    after = bridge.span_id_for_run(run_id)
+    assert after == live
+
+
+def test_span_id_for_run_unknown_returns_none(bridge: LangGraphOtelBridge) -> None:
+    assert bridge.span_id_for_run(uuid.uuid4()) is None
 
 
 # ---------------------------------------------------------------------------

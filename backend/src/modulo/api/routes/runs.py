@@ -43,6 +43,7 @@ from modulo.core.pipeline_engine.recovery import (
 )
 from modulo.core.trigger_engine import TriggerEngine
 from modulo.db.crud.node_observation import observe_node
+from modulo.db.crud.observability import get_otel_config
 from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 from modulo.db.crud.run import (
@@ -60,6 +61,7 @@ from modulo.db.models.agent import Agent
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.rls import set_rls_org
+from modulo.otel_bridge import trace_id_for_thread
 from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
@@ -130,6 +132,28 @@ async def _do_get_child_run_rollup(
         rollup = await get_child_run_rollup(session, [run_id])
         cost, count = rollup.get(run_id, (_COST_ROLLUP_ZERO, 0))
         return _quantize_cost_rollup(cost), count
+
+
+async def _do_get_otel_endpoint(
+    factory: async_sessionmaker[AsyncSession],
+    org_id: uuid.UUID,
+) -> str:
+    """Return the org's configured OTLP endpoint, or ``""`` when unset.
+
+    Best-effort enrichment (FAR-198 trace_url deep-link): a DB failure must
+    never turn a run-detail request into an error — the run response is valid
+    without a trace_url.
+    """
+    try:
+        async with factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            config = await get_otel_config(session, org_id)
+        return config.get("otlp_endpoint") or ""
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("runs.otel_endpoint_unavailable", extra={"org_id": str(org_id)}, exc_info=True)
+        return ""
 
 
 async def _do_list_runs(
@@ -240,8 +264,6 @@ async def list_runs_endpoint(
         ) from None
 
 
-_NAMESPACE_TRACE = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
-
 # Union serialization bounds (PR B, plan §6.1): the per-node node_token_usage
 # summary is truncated to the NEWEST N nodes on RunResponse, beyond which a
 # node_count aggregate is emitted; the full union stays on the run row.
@@ -317,6 +339,10 @@ class RunResponse(BaseModel):
     total_cost_usd: Decimal | None = None
     token_consumption: dict[str, Any] | None = None
     trace_id: str | None = None
+    # Deep-link to the org's configured OTLP backend (Jaeger-style) for this
+    # run's trace. Only populated on the detail endpoint when the org has an
+    # otlp_endpoint configured — always None on list/trigger responses.
+    trace_url: str | None = None
     node_token_usage: dict[str, Any] | None = None
     # Cost breakdown — component snapshots (amounts as strings). NULL for
     # pre-migration runs; amounts ride the breakdown serializer which owns the
@@ -333,15 +359,23 @@ class RunResponse(BaseModel):
     completed_at: datetime | None = None
 
 
-def _build_run_response(run: Any, child_cost: Decimal | None = None, child_count: int = 0) -> RunResponse:
+def _build_run_response(
+    run: Any,
+    child_cost: Decimal | None = None,
+    child_count: int = 0,
+    otlp_endpoint: str | None = None,
+) -> RunResponse:
     """Build a RunResponse from a Run ORM entity, populating derived fields."""
     token_consumption: dict[str, Any] | None = None
     if run.total_tokens is not None:
         token_consumption = {"total_tokens": run.total_tokens}
 
     trace_id: str | None = None
+    trace_url: str | None = None
     if run.langgraph_thread_id:
-        trace_id = str(uuid.uuid5(_NAMESPACE_TRACE, run.langgraph_thread_id))
+        trace_id = trace_id_for_thread(run.langgraph_thread_id)
+        if otlp_endpoint:
+            trace_url = f"{otlp_endpoint.rstrip('/')}/jaeger/ui/trace/{trace_id}"
 
     pipeline_name: str | None = None
     if run.pipeline is not None:
@@ -364,6 +398,7 @@ def _build_run_response(run: Any, child_cost: Decimal | None = None, child_count
         total_cost_usd=run.total_cost_usd,
         token_consumption=token_consumption,
         trace_id=trace_id,
+        trace_url=trace_url,
         node_token_usage=_serialize_node_token_usage(run.node_token_usage),
         cost_breakdown=run.cost_breakdown,
         child_runs_cost_usd=child_runs_cost_usd,
@@ -619,6 +654,7 @@ async def get_run_status(
     try:
         run = await _run_with_retry(lambda: _do_get_run(factory, principal, run_id))
         child_cost, child_count = await _run_with_retry(lambda: _do_get_child_run_rollup(factory, principal, run_id))
+        otlp_endpoint = await _do_get_otel_endpoint(factory, principal.organisation_id)
     except IntegrityError:
         _log.exception("runs.get_run_status")
         raise HTTPException(
@@ -653,7 +689,7 @@ async def get_run_status(
             detail="An unexpected error occurred.",
         ) from None
 
-    return _build_run_response(run, child_cost, child_count)
+    return _build_run_response(run, child_cost, child_count, otlp_endpoint=otlp_endpoint)
 
 
 @router.post("/{run_id}/cancel", status_code=status.HTTP_202_ACCEPTED)

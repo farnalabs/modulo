@@ -5,7 +5,7 @@ import pytest
 import respx
 
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.snyk import SnykConnector, _meta_total
+from modulo.connectors.snyk import SnykConnector, _meta_total, _next_cursor
 
 TOKEN = "snyk_test_token"
 API_BASE = "https://api.snyk.io/rest"
@@ -207,6 +207,19 @@ def test_meta_total() -> None:
     assert _meta_total({}, 3) == 3
 
 
+def test_next_cursor() -> None:
+    assert _next_cursor({"links": {"next": "abc"}}) == "abc"
+    assert _next_cursor({"links": {"next": ""}}) is None
+    assert _next_cursor({"links": {"next": True}}) is None
+    assert _next_cursor({"links": {"next": 5}}) is None
+    assert _next_cursor({"links": {"next": ["x"]}}) is None
+    assert _next_cursor({"links": {"next": {"href": "x"}}}) is None
+    assert _next_cursor({"links": "garbage"}) is None
+    assert _next_cursor({"links": []}) is None
+    assert _next_cursor({}) is None
+    assert _next_cursor({"links": None}) is None
+
+
 @respx.mock
 async def test_query_projects_with_names(connector):
     respx.get(f"{API_BASE}/orgs/my-org/projects", params={"version": VERSION, "limit": "100", "names": "my-app"}).mock(
@@ -253,6 +266,52 @@ async def test_query_projects_with_cursor(connector):
     )
     assert len(result.records) == 1
     assert result.next_cursor == "next-page-token"
+
+
+@respx.mock
+async def test_query_projects_non_dict_links(connector):
+    respx.get(f"{API_BASE}/orgs/my-org/projects", params={"version": VERSION, "limit": "100"}).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [{"id": "proj-1"}],
+                "meta": {"count": 1},
+                "links": "garbage",
+            },
+        ),
+    )
+    result = await connector.query(
+        ConnectorQuery(
+            resource="projects",
+            filters={"org_id": "my-org"},
+            limit=100,
+        )
+    )
+    assert len(result.records) == 1
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_projects_corrupt_cursor_value(connector):
+    respx.get(f"{API_BASE}/orgs/my-org/projects", params={"version": VERSION, "limit": "100"}).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [{"id": "proj-1"}],
+                "meta": {"count": 1},
+                "links": {"next": {"href": "https://evil.example/next"}},
+            },
+        ),
+    )
+    result = await connector.query(
+        ConnectorQuery(
+            resource="projects",
+            filters={"org_id": "my-org"},
+            limit=100,
+        )
+    )
+    assert len(result.records) == 1
+    assert result.next_cursor is None
 
 
 @respx.mock

@@ -20,11 +20,10 @@ Get-ChildItem -Recurse -Filter "*.md" -LiteralPath $productMap|Where-Object{$_.N
   if($c -notmatch '(?s)^---[\r\n]+(.+?)[\r\n]+---'){$issues+="FILE|$($_.Name)|missing frontmatter";return}
   if($c-match'<<<<<<<|=======|>>>>>>>'){$issues+="CONFLICT|$($_.Name)|file contains unresolved merge conflict markers"}
   $fm=$Matches[1]
-  $id=if($fm-match'(?m)^id:\s*(\S+)'){$Matches[1]}else{$null}
+  $meta=ConvertFrom-ProductMapFrontmatter -Frontmatter $fm -Path $_.FullName -Name $_.Name
+  $id=$meta.id;$bdd=$meta.bdd;$dep=$meta.depends
   $prdRefs=@(Get-ProductMapPrdReferences -Frontmatter $fm)
   $prd=if($prdRefs.Count -gt 0){$prdRefs -join ', '}else{$null}
-  $bdd=@();if($fm-match'(?m)^bdd:\s*(.+?)[\r\n]'){$bList=$Matches[1].Trim();if($bList-match'^\['){$bdd=$bList-replace'[\[\]" ]',''-split','}};if($fm-match'(?m)^bdd:\s*\n((?:\s+- .+\n?)+)'){$bBlock=$Matches[1]-split'\n'|ForEach-Object{$_-replace'^\s*-\s*',''-replace'"',''-replace"'",''-replace'#.*',''.Trim()}|Where-Object{$_};if($bBlock){$bdd=@($bdd)+$bBlock}}
-  $dep=@();if($fm-match'(?m)^depends-on:\s*\[(.*?)\]'){$dep=$Matches[1]-replace' ',''-split','};if($fm-match'(?m)^depends-on:\s*\n((?:\s+- .+\n?)+)'){$depBlock=$Matches[1]-split'\n'|ForEach-Object{$_-replace'^\s*-\s*',''-replace'"',''-replace"'",''-replace'#.*',''.Trim()}|Where-Object{$_};$dep=@($dep+$depBlock)|Where-Object{$_}}
   $codePaths=@();if($fm-match'(?m)^code:\s*\[(.*?)\]'){$codePaths=$Matches[1]-replace' ',''-split','};if($fm-match'(?m)^code:\s*\n((?:\s+- .+\n?)+)'){$lines=$Matches[1]-split'\n'|ForEach-Object{$_-replace'^\s*-\s*',''-replace'"',''.Trim()}|Where-Object{$_};$codePaths=@($codePaths)+$lines|Where-Object{$_}}
   $unitTests=@();if($fm-match'(?m)^unit-tests:\s*\[(.*?)\]'){$unitTests=$Matches[1]-split','|ForEach-Object{$_-replace'\s+\(.*\)\s*$',''-replace' ',''-replace'"',''}|Where-Object{$_}};if($fm-match'(?m)^unit-tests:\s*\n((?:\s+- .+\n?)+)'){$utLines=$Matches[1]-split'\n'|ForEach-Object{$_-replace'^\s*-\s*',''-replace'"',''-replace'#.*',''-replace'\s+\(.*\)\s*$',''.Trim()}|Where-Object{$_};$unitTests=@($unitTests)+$utLines|Where-Object{$_}}
   $entries+=@{id=$id;prd=$prd;bdd=$bdd;depends=$dep;codePaths=$codePaths;unitTests=$unitTests;path=$_.FullName;name=$_.Name}

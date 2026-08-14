@@ -266,7 +266,7 @@ async function save() {
     const apiPayload = toApiPayload()
     const res = await api.PUT('/api/v1/admin/monitor-config', { body: apiPayload as any })
     if (res.error) {
-      showFlash(`${t('common.failed_to_save')}: ${(res.error as any).detail}`, 'error')
+      showFlash(`${t('common.failed_to_save')}: ${formatApiError(res.error)}`, 'error')
       return
     }
 

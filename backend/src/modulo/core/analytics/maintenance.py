@@ -57,6 +57,7 @@ __all__ = [
     "backfill_facts",
     "backfill_ledger",
     "reconcile_facts",
+    "repair_stale_facts",
     "retention_facts",
     "run_maintenance",
 ]
@@ -117,13 +118,44 @@ def _reconcile_cooldown_prune(now: float) -> None:
             del _reconcile_cooldown[key]
 
 
+async def repair_stale_facts(session: Any, day: date) -> int:
+    """Delete facts for TERMINAL runs whose fact still carries a NON-terminal
+    status (the FAR-200 stale-live-writer class: ``status='running'``/``'pending'``
+    with NULL cost/tokens).
+
+    Before the live-writer fix, ``finalize_cost`` snapshotted the PRE-write run
+    object (status ``'running'``, NULL cost) for runs that later reached a
+    terminal status. Those stale rows made ``complete_count=0`` and NULL cost
+    for their day — and, because ``backfill_facts``' anti-join only inserts runs
+    with NO existing fact, the daily backfill could never repair them. This
+    DELETE clears them (idempotent: a correct terminal fact is never matched),
+    so the anti-join in ``backfill_facts`` re-inserts them with the run's real
+    terminal values on the same pass. Returns the number of stale rows removed.
+    """
+    stale_fact_run_ids = (
+        sa.select(RunDailyFact.run_id)
+        .join(Run, Run.id == RunDailyFact.run_id)
+        .where(
+            Run.status.in_(TERMINAL_STATUSES),
+            RunDailyFact.status.notin_(TERMINAL_STATUSES),
+            sa.func.date_trunc("day", sa.func.coalesce(Run.started_at, Run.created_at)) == day,
+        )
+    )
+    result = await session.execute(sa.delete(RunDailyFact).where(RunDailyFact.run_id.in_(stale_fact_run_ids)))
+    return result.rowcount or 0
+
+
 async def backfill_facts(session: Any, day: date) -> int:
     """Per-day INSERT...SELECT anti-join backfill for terminal runs on *day*.
 
     Idempotent — ``ON CONFLICT (run_id) DO NOTHING`` (the unique
     ``uq_run_daily_facts_run_id`` index is the conflict target). The UTC
     ``run_date`` expression matches the live writer
-    (``started_at/created_at AT TIME ZONE 'UTC'``).
+    (``started_at/created_at AT TIME ZONE 'UTC'``). As a repair (FAR-200), stale
+    non-terminal facts for terminal runs on *day* are deleted FIRST (see
+    ``repair_stale_facts``) so the anti-join re-inserts them with correct
+    terminal values — a previously-bad fact row can no longer suppress the
+    backfill.
     """
     run_date_expr = sa.cast(
         sa.func.timezone("UTC", sa.func.coalesce(Run.started_at, Run.created_at)),
@@ -282,6 +314,11 @@ async def backfill_facts(session: Any, day: date) -> int:
         )
         .on_conflict_do_nothing(index_elements=[RunDailyFact.run_id])
     )
+    # FAR-200 repair FIRST: delete stale non-terminal facts for terminal runs
+    # on this day, so the anti-join below re-inserts them with the run's real
+    # terminal values. Without this, a previously-bad fact row would suppress
+    # the backfill (the anti-join only sees runs with NO existing fact).
+    await repair_stale_facts(session, day)
     result = await session.execute(stmt)
     return result.rowcount or 0
 

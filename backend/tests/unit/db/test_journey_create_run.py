@@ -344,7 +344,8 @@ class TestDeterministicId:
         run_b = await _create(session, work_item_refs=_REF_ENTRIES)
         journey_a = await _journey_for(session, "github_issue", "a/b#5")
         journey_b = await _journey_for(session, "github_issue", "a/b#5")
-        assert journey_a is not None and journey_b is not None
+        assert journey_a is not None
+        assert journey_b is not None
         assert journey_a.id == journey_b.id
         assert journey_a.canonical_work_item_id == journey_b.canonical_work_item_id
         assert run_a.work_item_refs == run_b.work_item_refs

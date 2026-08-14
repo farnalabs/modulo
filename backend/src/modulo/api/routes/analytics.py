@@ -79,6 +79,12 @@ class AnalyticsResponse(BaseModel):
     dimension: str | None = None
     date_from: str | None = None
     date_to: str | None = None
+    # FAR-200 facts-freshness indicator: hours since the org's newest day with a
+    # TERMINAL-status fact row (None when the org has no terminal facts yet),
+    # and whether that lags > ~36h. The frontend surfaces a "stale data" notice
+    # when ``facts_stale`` is true.
+    facts_freshness_hours: float | None = None
+    facts_stale: bool = False
     buckets: list[AnalyticsBucket]
 
 

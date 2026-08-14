@@ -902,7 +902,9 @@ export default {
       "trend_table_title": "Trend table",
       "bucket_label": "Date",
       "delta": "Delta",
-      "delta_hint": "Current vs previous window"
+      "delta_hint": "Current vs previous window",
+      "stale_data_title": "Data may be stale",
+      "stale_data_detail": "Daily analytics facts for recent days are still being computed. Numbers for the latest days may be incomplete."
     },
     "DashboardView": {
       "dashboard": "Dashboard",
@@ -1062,6 +1064,8 @@ export default {
       "total_tokens": "{count} total tokens",
       "share_summary": "Share Summary",
       "copy_node_trace_id": "Copy node trace ID",
+      "copy_node_span_id": "Copy node span ID",
+      "view_trace": "View trace",
       "execution_trace": "Execution Trace",
       "no_run_id_provided": "No run ID provided",
       "otel_trace_id": "OTel Trace ID:",

@@ -2174,7 +2174,14 @@ async def fire_due_triggers() -> dict[str, Any]:
                         connector_instance_id = uuid.UUID(str(ci_id_str)) if ci_id_str else None
                     except (ValueError, TypeError):
                         connector_instance_id = None
-                    interval = max(int(config.get("poll_interval_seconds") or 60), 1)
+                    try:
+                        interval = max(int(config.get("poll_interval_seconds") or 60), 1)
+                    except (ValueError, TypeError):
+                        _log.warning(
+                            "fire_due_triggers: invalid poll_interval_seconds for trigger %s, using default",
+                            row.id,
+                        )
+                        interval = 60
                     if connector_instance_id is None:
                         # Missing connector instance — log poll_error and advance
                         # (mirrors the legacy beat _fetch_due_triggers behaviour).
@@ -2932,6 +2939,27 @@ async def _record_fact_for_terminalized_run(run_id: uuid.UUID, org_id: uuid.UUID
         _log.warning("cron_helpers.terminalized_facts_failed run=%s", run_id, exc_info=True)
 
 
+async def run_classification_reconcile() -> dict[str, int]:
+    """FAR-189 backfill: classify terminal runs missed by the inline hook.
+
+    Invoked from :func:`dispatcher_reconcile` (every 60s) — the periodic
+    production path for the FAR-189 reconciliation sweep. The raw-SQL
+    terminalizers in this module (nodeless zombie, mid-graph wedge,
+    claim-cap-exhausted, enqueue-failed) never run the classification hook, so
+    without this their ``run_classification`` stays NULL forever and the
+    FAR-190 streak walk loses the infra failures this feature exists to count.
+
+    Runs system-scoped (no ``set_rls_org`` — the BYPASSRLS worker precedent,
+    matching the other system crons): the sweep itself processes each org under
+    its own RLS context. Bounded + idempotent, so an every-60s tick simply
+    drains whatever backlog remains. Best-effort and never raises: a sweep
+    failure is logged by the caller and must never fail the reconcile tick.
+    """
+    from modulo.core.pipeline_engine.classify import reconcile_missing_classifications
+
+    return await reconcile_missing_classifications(_open_factory())
+
+
 async def dispatcher_reconcile() -> dict[str, Any]:
     """System cron — re-dispatch runs whose SAQ job is missing (every 60s).
 
@@ -3370,6 +3398,30 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         # committed by now; each facts write opens its own RLS-scoped session.
         for run_id, run_org_id in terminalized_run_ids:
             await _record_fact_for_terminalized_run(run_id, run_org_id)
+        # FAR-189 (P6''): classify terminal runs that missed the inline hook.
+        # The raw-SQL terminalizers in this tick never run the classification
+        # hook, so without this sweep their run_classification stays NULL and
+        # the FAR-190 streak walk loses the infra failures it counts. Runs
+        # every tick (not just when this tick terminalized something) so the
+        # saq_hooks task_failure / pipeline_execution writers are drained too.
+        # Best-effort — a sweep failure must never fail the reconcile tick.
+        try:
+            classification = await run_classification_reconcile()
+            summary["classification_classified"] = classification.get("classified", 0)
+            summary["classification_unclassified"] = classification.get("unclassified", 0)
+            summary["classification_errors"] = classification.get("errors", 0)
+            if classification.get("classified") or classification.get("unclassified"):
+                _log.info(
+                    "dispatcher_reconcile.classification_sweep",
+                    extra={
+                        "classified": classification.get("classified", 0),
+                        "unclassified": classification.get("unclassified", 0),
+                    },
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning("dispatcher_reconcile.classification_sweep_failed", exc_info=True)
         # Record the outcome for /healthz/ready BEFORE the client is closed:
         # the shared Redis key is what the WEB process reads (the in-process
         # dict lives only in this worker process).

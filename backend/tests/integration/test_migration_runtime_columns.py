@@ -189,12 +189,14 @@ async def test_0074_migration_round_trip(
                     )
                 )
             ).scalar_one()
-            assert default_expr is not None and "gen_random_uuid" in default_expr
+            assert default_expr is not None
+            assert "gen_random_uuid" in default_expr
 
             backfilled = (
                 await conn.execute(text("SELECT claim_token FROM runs WHERE id = :id"), {"id": str(null_token_run)})
             ).scalar_one()
-            assert backfilled is not None and backfilled != "seed-token"
+            assert backfilled is not None
+            assert backfilled != "seed-token"
 
             # The 3 new runs columns exist.
             runs_cols = {

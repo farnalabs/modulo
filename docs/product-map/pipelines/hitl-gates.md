@@ -8,6 +8,7 @@ bdd:
   - backend/tests/bdd/features/hitl/feedback_handler.feature
   - backend/tests/bdd/features/hitl/manual_node.feature
   - backend/tests/bdd/features/hitl/modify_then_approve.feature
+  - backend/tests/bdd/features/hitl/reject.feature
   - backend/tests/bdd/features/eval/conditional_hitl.feature
 code:
   - backend/src/modulo/core/hitl_manager/__init__.py
@@ -30,6 +31,7 @@ unit-tests:
   - backend/tests/unit/pipeline_engine/test_conditional_transitions.py
   - backend/tests/unit/graph_validator/test_graph_validator.py
   - backend/tests/unit/mcp/test_mcp_runtime_tools.py
+  - backend/tests/bdd/steps/test_alpha_hitl.py
 depends-on: [feat-pipelines-core, feat-evals-eval-engine]
 status: partial
 ---
@@ -174,6 +176,7 @@ to an intermediate LangGraph gate node at runtime.
 
 ## QA History
 
+- 2026-08-14 (improve-architecture): Linked the already-wired `backend/tests/bdd/features/hitl/reject.feature` (3 executable scenarios: reject routes via reject edge, stop/expiry on reject, run marked rejected) to the `feat-pipelines-hitl-gates` `bdd:` field, and added the wiring step file `backend/tests/bdd/steps/test_alpha_hitl.py` to `unit-tests:`. The feature file existed on disk and was executable but was never listed in frontmatter.
 - 2026-08-13 (improve-tests): QA lens pass on the HITL expiry/overdue test package — extended the canonical unit suites (`tests/unit/hitl_manager/test_claim_expiry_job.py`, `tests/unit/hitl_manager/test_overdue_warning.py`) with direct `expire_stale_claims` / `get_overdue_claims` coverage. Locks the shared `expire_stale_claims` sweep: per-org advisory-lock guard (lock denied / lock query failure / CancelledError propagation), stale-claim reset + run `claimed→awaiting_human` reversion (compiled-SQL assertions on the `hitl_claims`/`runs` updates), `hitl.claim_expired` audit capture with savepoint failure isolation, `claim_expired` notification dispatch (and failure isolation), multi-org independence, and the `ClaimExpiryJob` polling loop (single-task start, tick-failure continuation, cancel handling, notifier forwarding). Locks `get_overdue_claims` validation gates (negative thresholds, escalation ≤ warning), warning vs escalated classification, age floor for future `claimed_at`, null-`claimed_at` filtering, the org-scoped undecided/claimed SQL predicate, and query-failure tolerance.
 
 - 2026-08-12: cross-cutting improve-architecture (idx-170): Fixed the HITL route double-registration defect — all 9 HITL handlers (claim, approve, approve-with-modification, reject, deliver-manual, manual-output submit, run-pending, org-pending) were stacked with two identical `@router.<method>` decorators around `@handle_db_errors`. Starlette matches the FIRST-registered (raw, unwrapped) handler, so `handle_db_errors` was dead code on every one of these routes and each route appeared twice in the OpenAPI schema. Same defect fixed in the SSE stream route (`events.py`) and the run WebSocket (`run_ws.py`). Also removed the shadowed `GET /api/v1/me` duplicate in `me.py` (the viewmodel aggregate handler was already first-registered and canonical; the shadowed handler made the OpenAPI contract disagree with the runtime response shape). Added a whole-app duplicate-registration guard + wrapper-activity regression tests to `test_route_introspection.py`.

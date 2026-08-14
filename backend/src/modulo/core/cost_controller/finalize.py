@@ -1150,6 +1150,11 @@ async def finalize_cost(
             claim_token=claim_token,
         )
         if is_terminal:
+            # Refresh AFTER the status write — the fenced UPDATE bypasses the
+            # ORM identity map, so without it the fact would snapshot the
+            # pre-write 'running' row (FAR-200). The refresh runs INSIDE
+            # ``record_run_facts``'s fail-open guard (ADR-020), so a refresh
+            # failure degrades to the in-memory object and never propagates.
             await record_run_facts(session, run)
             # FAR-143 — even with empty outputs the run still advances from its
             # create-stamped refs (zero-cost terminal).
@@ -1252,7 +1257,10 @@ async def finalize_cost(
 
     # --- Analytics facts — every terminal path, SAME transaction (ADR 020) ---
     # ``record_run_facts`` is fail-open: a facts-write failure rolls back only
-    # its own savepoint and never affects the cost/ledger outcome.
+    # its own savepoint and never affects the cost/ledger outcome. The run is
+    # refreshed INSIDE ``record_run_facts``'s guard (the fenced UPDATE bypasses
+    # the ORM identity map, so the fact must snapshot the terminal row — FAR-200);
+    # a refresh failure degrades to the in-memory object and never propagates.
     if is_terminal:
         await record_run_facts(session, run)
         # FAR-143 — self-report confirm + journey advancement (fail-open, own

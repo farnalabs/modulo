@@ -158,7 +158,8 @@ def test_split_row_sandbox_agent_produces_lockstep_columns():
     ok, new_outputs, new_telemetry, reason = backfill._split_row(
         {"n1": _sandbox_envelope()}, {"n1": "sandbox_agent"}, "run-1"
     )
-    assert ok is True and reason is None
+    assert ok is True
+    assert reason is None
     assert new_outputs["n1"] == {"answer": 42}
     tel = new_telemetry["n1"]
     assert tel["status"] == "ok"
@@ -172,7 +173,8 @@ def test_split_row_regular_agent_returns_outer_output():
     ok, new_outputs, new_telemetry, reason = backfill._split_row(
         {"n1": {"output": {"text": "hello"}}}, {"n1": "agent"}, "run-1"
     )
-    assert ok is True and reason is None
+    assert ok is True
+    assert reason is None
     assert new_outputs["n1"] == {"text": "hello"}
     assert not new_telemetry["n1"]
 
@@ -181,7 +183,8 @@ def test_split_row_skipped_recovery_marker_is_telemetry_only():
     ok, new_outputs, new_telemetry, reason = backfill._split_row(
         {"n1": {"input": {"q": 1}, "output": {}, "skipped": True}}, {"n1": "agent"}, "run-1"
     )
-    assert ok is True and reason is None
+    assert ok is True
+    assert reason is None
     assert "n1" not in new_outputs
     assert new_telemetry["n1"] == {"skipped": True}
 
@@ -200,7 +203,8 @@ def test_split_row_skipped_flag_with_artifacts_keeps_return():
         "skipped": True,
     }
     ok, new_outputs, new_telemetry, reason = backfill._split_row({"n1": envelope}, {"n1": "sandbox_agent"}, "run-1")
-    assert ok is True and reason is None
+    assert ok is True
+    assert reason is None
     assert "n1" in new_outputs
     assert new_outputs["n1"] == {"answer": 42}
     assert new_telemetry["n1"]["skipped"] is True
@@ -208,11 +212,15 @@ def test_split_row_skipped_flag_with_artifacts_keeps_return():
 
 def test_split_row_empty_outputs_splits_trivially():
     ok, new_outputs, new_telemetry, reason = backfill._split_row(None, None, "run-1")
-    assert ok is True and reason is None
-    assert new_outputs is None and new_telemetry == {}
+    assert ok is True
+    assert reason is None
+    assert new_outputs is None
+    assert new_telemetry == {}
     ok, new_outputs, new_telemetry, reason = backfill._split_row({}, None, "run-1")
-    assert ok is True and reason is None
-    assert new_outputs == {} and new_telemetry == {}
+    assert ok is True
+    assert reason is None
+    assert new_outputs == {}
+    assert new_telemetry == {}
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +236,8 @@ def test_split_row_unknown_node_type_skips_whole_row():
     ok, new_outputs, new_telemetry, reason = backfill._split_row(outputs, {"n1": "sandbox_agent"}, "run-1")
     assert ok is False
     assert "mystery" in (reason or "")
-    assert new_outputs == {} and new_telemetry == {}
+    assert new_outputs == {}
+    assert new_telemetry == {}
 
 
 def test_split_row_malformed_node_value_skips_whole_row():
@@ -280,7 +289,9 @@ def test_loop_apply_issues_conditional_parameterised_update():
     sql, params = updates[0]
     # Parameterised (no run id interpolated into the SQL text) + idempotent.
     assert "r1" not in sql
-    assert ":new" in sql and ":tel" in sql and ":rid" in sql
+    assert ":new" in sql
+    assert ":tel" in sql
+    assert ":rid" in sql
     assert "node_telemetry_json IS NULL" in sql
     assert params["rid"] == "r1"
     # Postgres dialect -> the JSON dicts are Jsonb-wrapped at the bind site.
@@ -511,4 +522,5 @@ def test_verify_legacy_found_returns_one_and_lists_ids():
     assert "legacy rows remaining: 2" in text
     assert "envelope-pattern: 1" in text
     assert "NULL both: 1" in text
-    assert "r1" in text and "r2" in text
+    assert "r1" in text
+    assert "r2" in text
