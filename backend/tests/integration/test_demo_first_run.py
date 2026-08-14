@@ -304,7 +304,7 @@ async def test_seed_demo_data_creates_demo_user(db_engine: AsyncEngine, db_url: 
     deps._session_factory = None
 
 
-async def test_seed_demo_data_no_org_no_crash(db_engine: AsyncEngine, db_url: str) -> None:
+async def test_seed_demo_data_runs_to_completion(db_engine: AsyncEngine, db_url: str) -> None:
     """_seed_demo_data should complete without crashing.
 
     The shared integration database always contains at least the
