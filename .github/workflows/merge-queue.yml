@@ -544,9 +544,13 @@ jobs:
               # (best-effort: a delete failure must never fail the queue). Use the
               # GitHub API to delete the remote ref -- gh pr merge --delete-branch
               # would also try to delete the LOCAL branch, which is unreliable from
-              # a checkout on merge-queue. Never delete main.
+              # a checkout on merge-queue. Never delete main, and never delete a
+              # branch for a fork PR: headRefName names the fork's branch, and
+              # deleting it on THIS repo could remove an unrelated branch here that
+              # happens to share the same name.
               HEAD_REF=$(gh pr view "$NUM" --json headRefName --jq '.headRefName' 2>/dev/null || echo "")
-              if [ -n "$HEAD_REF" ] && [ "$HEAD_REF" != "main" ]; then
+              HEAD_REPO=$(gh pr view "$NUM" --json headRepositoryOwner --jq '.headRepositoryOwner.login' 2>/dev/null || echo "")
+              if [ -n "$HEAD_REF" ] && [ "$HEAD_REF" != "main" ] && [ "$HEAD_REPO" = "${{ github.repository_owner }}" ]; then
                 gh api -X DELETE "repos/${{ github.repository }}/git/refs/heads/$HEAD_REF" 2>/dev/null && echo "    Deleted source branch $HEAD_REF for PR #$NUM" || echo "    Could not delete branch $HEAD_REF (may already be gone)"
               fi
             else
@@ -621,8 +625,10 @@ jobs:
           # failure can never fail the queue. Never delete main, and never delete
           # a branch that is the head of an OPEN PR (a merged branch can be reused).
           echo "Sweeping for branches whose PRs are already merged..."
-          # List merged PRs (paginated) and collect their head branches
-          gh api "repos/${{ github.repository }}/pulls?state=closed&per_page=100&sort=updated&direction=desc" --paginate --jq '.[] | select(.merged_at != null) | .head.ref' 2>/dev/null | sort -u > /tmp/merged_heads.txt || true
+          # List merged PRs (paginated) and collect their head branches -- but only
+          # branches that live on THIS repo (skip fork PRs: a fork head ref may
+          # collide with an unrelated same-named branch here).
+          gh api "repos/${{ github.repository }}/pulls?state=closed&per_page=100&sort=updated&direction=desc" --paginate --jq '.[] | select(.merged_at != null) | select(.head.repo.id == .base.repo.id) | .head.ref' 2>/dev/null | sort -u > /tmp/merged_heads.txt || true
           # Branches that still exist on origin
           gh api "repos/${{ github.repository }}/branches" --paginate --jq '.[].name' 2>/dev/null | sort -u > /tmp/remote_branches.txt || true
           # Open PR head refs -- never delete a branch an open PR points at
