@@ -59,7 +59,7 @@ class TestConstructionErrors:
 
     def test_secrets_may_be_empty(self) -> None:
         settings = _make_settings(modulo_break_glass_secret="", modulo_break_glass_standby_secret="")
-        assert settings.modulo_break_glass_secret == ""
+        assert not settings.modulo_break_glass_secret
 
     def test_minimum_length_primary(self) -> None:
         with pytest.raises(ValueError, match="at least 24 characters"):

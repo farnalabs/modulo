@@ -407,7 +407,7 @@ async def test_write_unsupported_resource(connector):
 
 def test_constructor_defaults():
     c = TrivyConnector()
-    assert c._token == ""
+    assert not c._token
     assert c._base_url == "http://localhost:8080"
 
 

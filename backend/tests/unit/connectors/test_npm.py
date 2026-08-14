@@ -393,7 +393,7 @@ async def test_write_raises_error(connector):
 
 def test_constructor_defaults():
     c = NpmConnector()
-    assert c._token == ""
+    assert not c._token
 
 
 def test_constructor_with_token():

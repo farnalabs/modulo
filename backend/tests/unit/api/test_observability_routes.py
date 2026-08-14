@@ -199,7 +199,7 @@ class TestDefaultConfig:
         assert "langsmith_api_key_ciphertext" in _DEFAULT_OTEL_CONFIG
 
     def test_default_endpoint_is_empty(self) -> None:
-        assert _DEFAULT_OTEL_CONFIG["otlp_endpoint"] == ""
+        assert not _DEFAULT_OTEL_CONFIG["otlp_endpoint"]
 
 
 # ── GET /api/v1/settings/observability — timeout / error resilience ────────
@@ -227,7 +227,7 @@ class TestObservabilityGetEndpoint:
             resp = free_client.get("/api/v1/settings/observability")
         assert resp.status_code == 200
         body = resp.json()
-        assert body["otlp_endpoint"] == ""
+        assert not body["otlp_endpoint"]
         assert body["export_interval_seconds"] == 10
         assert body["langsmith_enabled"] is False
         assert body["env_override_active"] is False
@@ -239,7 +239,7 @@ class TestObservabilityGetEndpoint:
             resp = free_client.get("/api/v1/settings/observability")
         assert resp.status_code == 200
         body = resp.json()
-        assert body["otlp_endpoint"] == ""
+        assert not body["otlp_endpoint"]
         assert body["has_langsmith_api_key"] is False
 
     def test_get_uses_stale_cache_on_timeout(self, free_client: TestClient) -> None:
@@ -291,7 +291,7 @@ class TestObservabilityPreviewEndpoint:
         body = resp.json()
         assert "sample_span" in body
         assert "config_used" in body
-        assert body["config_used"]["otlp_endpoint"] == ""
+        assert not body["config_used"]["otlp_endpoint"]
         assert body["config_used"]["export_interval_seconds"] == 10
         assert body["config_used"]["langsmith_enabled"] is False
 
@@ -312,7 +312,7 @@ class TestObservabilityPreviewEndpoint:
             resp = free_client.get("/api/v1/settings/observability/preview")
         assert resp.status_code == 200
         body = resp.json()
-        assert body["config_used"]["otlp_endpoint"] == ""
+        assert not body["config_used"]["otlp_endpoint"]
 
 
 # ── PUT /api/v1/settings/observability — timeout / error resilience ────────

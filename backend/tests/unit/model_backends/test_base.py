@@ -50,7 +50,7 @@ class TestOpenAICompatibleHealthCheck:
                 api_key="sk-test",
             )
         assert result.ok is True
-        assert result.detail == ""
+        assert not result.detail
 
     async def test_success_with_extra_headers(self):
         captured = {}
@@ -147,7 +147,7 @@ class TestModelBackendBaseHealthCheck:
         backend._invoke_impl = lambda: AIMessage(content="pong")
         result = await backend.health_check()
         assert result.ok is True
-        assert result.detail == ""
+        assert not result.detail
 
     async def test_timeout_returns_timed_out_detail(self):
         backend = _StubBackend()

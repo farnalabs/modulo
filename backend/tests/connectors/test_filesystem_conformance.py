@@ -17,7 +17,7 @@ class TestFilesystemConnector:
     async def test_health_check_ok(self, fs_connector: FilesystemConnector) -> None:
         result = await fs_connector.health_check()
         assert result.ok is True
-        assert result.detail == ""
+        assert not result.detail
 
     async def test_health_check_fails_on_missing_base(self, tmp_path: Path) -> None:
         c = FilesystemConnector(base_path=str(tmp_path / "missing"))

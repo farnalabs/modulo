@@ -84,7 +84,7 @@ class TestGetEffectiveSetting:
         with pytest.MonkeyPatch().context() as m:
             m.setattr("modulo.db.settings_resolver.get_organisation", AsyncMock(return_value=_Org({"name": ""})))
             m.setattr("modulo.db.settings_resolver.get_config", AsyncMock(return_value=None))
-            assert await get_effective_setting(session, _ORG_ID, "name", default="fallback") == ""
+            assert not await get_effective_setting(session, _ORG_ID, "name", default="fallback")
 
     async def test_org_read_error_falls_through_to_system_config(self) -> None:
         """A SQLAlchemyError resolving the org must NOT abort resolution — the

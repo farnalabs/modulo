@@ -285,14 +285,14 @@ class TestRemyContextSourceServiceQueries:
         assert by_key["page_context"].is_overridden is False
         assert by_key["page_context"].source_mode == "always_on"
         assert by_key["product_docs"].is_overridden is True
-        assert by_key["product_docs"].description != ""
+        assert by_key["product_docs"].description
 
     def test_build_effective_items_handles_unknown_keys(self) -> None:
         service = RemyContextSourceService.__new__(RemyContextSourceService)
         items = service.build_effective_items({"custom_source": "tool"}, {})
         assert len(items) == 1
         assert items[0].name == "Custom Source"
-        assert items[0].description == ""
+        assert not items[0].description
 
 
 class TestRemyContextSourceServiceResetUserOverrides:
