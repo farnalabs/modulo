@@ -313,9 +313,15 @@ def _delete_static_path(payload: dict[str, Any], path: str) -> dict[str, Any]:
 
 def _resolve_top_level_detection(config: dict[str, Any]) -> str:
     detection_type = config.get("type")
-    if detection_type not in GUARDRAIL_DETECTION_TYPES and isinstance(config.get("schema"), dict):
-        detection_type = EvalType.JSON_SCHEMA
-    return str(detection_type or "regex")
+    if detection_type is None:
+        # Legacy lenient form: a top-level ``schema`` dict with no declared
+        # ``type`` implies json_schema; otherwise default to regex. A DECLARED
+        # type outside the allowed set is returned as-is so validation fails
+        # closed — it is never silently downgraded to another detector.
+        if isinstance(config.get("schema"), dict):
+            return str(EvalType.JSON_SCHEMA)
+        return str(EvalType.REGEX)
+    return str(detection_type)
 
 
 def _resolve_detection(eval_def: EvalDefinition) -> tuple[str, dict[str, Any]]:
@@ -394,6 +400,28 @@ def _interpret_violation(detection_type: str, result: EvalResult) -> bool:
     return result.passed
 
 
+def _sanitise_guardrail_detail(
+    detection_type: str,
+    effective_config: dict[str, Any],
+    result: EvalResult,
+) -> EvalResult:
+    """Return *result* with a value-free detail for a json_schema violation.
+
+    jsonschema's ``ValidationError.message`` embeds the raw offending value
+    (``'SECRET_ABC12345' is not of type 'boolean'``). The no-raw-persist
+    contract says guardrail detail is count-only / pattern-descriptive — NEVER
+    raw payload — so a json_schema failure detail is rewritten to a fixed,
+    field-descriptive descriptor before it can reach persisted columns
+    (``eval_results.detail`` and ``runs.error_detail``). Regex details are
+    already pattern-descriptive (no payload) and are left untouched.
+    """
+    if detection_type != EvalType.JSON_SCHEMA or result.passed:
+        return result
+    field = effective_config.get("field") or ""
+    detail = f"json_schema validation failed on field {field!r}" if field else "json_schema validation failed"
+    return result.model_copy(update={"detail": detail})
+
+
 def evaluate_guardrails(
     engine: EvalEngine,
     definitions: Sequence[EvalDefinition],
@@ -422,6 +450,7 @@ def evaluate_guardrails(
             }
         )
         result = engine.evaluate(payload, mirrored)
+        result = _sanitise_guardrail_detail(detection_type, effective_config, result)
         results.append(result)
         if _interpret_violation(detection_type, result) and eval_def.config.get("action") == GuardrailAction.BLOCK:
             violations.append((eval_def, result))
@@ -572,12 +601,13 @@ def run_interception_pass(
         if cfg.action != GuardrailAction.REDACT or not cfg.redaction:
             continue
         try:
-            redacted, entries = apply_redaction_masks(
+            redacted, batch_entries = apply_redaction_masks(
                 redacted,
                 cfg.redaction,
                 raise_on_block=True,
                 guardrail_name=eval_def.name,
             )
+            entries.extend(batch_entries)
         except GuardrailBlockedError as exc:
             if not blocked:
                 blocked = True

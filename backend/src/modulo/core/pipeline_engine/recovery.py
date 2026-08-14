@@ -14,7 +14,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.audit_logger import append_audit_event
-from modulo.db.crud.run import get_run
+from modulo.db.crud.run import _input_hash, get_run
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
@@ -317,6 +317,13 @@ async def guardrail_override(
     run.error_code = None
     run.error_detail = None
     run.input_payload = outcome.payload
+    # The stored payload changed on override, so the persisted ``input_hash``
+    # (computed from the original blocked payload at create) must be recomputed
+    # from the post-redaction payload actually stored — the stored hash must
+    # always match the stored payload. The block-time ``completed_at`` stamp is
+    # cleared because the run is no longer terminal.
+    run.input_hash = _input_hash(run.input_payload)
+    run.completed_at = None
     run.is_replay = True
     await session.flush()
 

@@ -203,3 +203,29 @@ async def test_create_run_observe_mode_stamps_observed(session: AsyncSession):
     rows = (await session.execute(select(EvalResult).where(EvalResult.run_id == run.id))).scalars().all()
     assert len(rows) == 1
     assert rows[0].observed is True
+
+
+async def test_create_run_json_schema_block_detail_never_round_trips_raw_payload(session: AsyncSession):
+    # jsonschema's ValidationError.message embeds the raw offending value
+    # ('SECRET_ABC12345' is not of type 'boolean'). The no-raw-persist
+    # contract must hold for json_schema detections too: neither the persisted
+    # eval_results.detail nor runs.error_detail may carry the raw payload.
+    await _seed(session)
+    await _seed_guardrail(
+        session,
+        name="schema-guard",
+        action="block",
+        config={
+            "type": "json_schema",
+            "field": "body",
+            "schema": {"type": "object", "required": ["safe"], "properties": {"safe": {"type": "boolean"}}},
+        },
+    )
+    run = await _create(session, input_payload={"body": {"safe": "SECRET_ABC12345"}})
+    assert run.status == "eval_failed"
+    assert run.error_code == "eval_blocked"
+    assert "schema-guard" in (run.error_detail or "")
+    assert "SECRET_ABC12345" not in (run.error_detail or "")
+    rows = (await session.execute(select(EvalResult).where(EvalResult.run_id == run.id))).scalars().all()
+    assert len(rows) == 1
+    assert "SECRET_ABC12345" not in (rows[0].detail or "")

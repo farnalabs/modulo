@@ -708,7 +708,12 @@ class CompareEvalsRequest(BaseModel):
 class CreateEvalFromRunRequest(BaseModel):
     run_id: uuid.UUID
     node_id: uuid.UUID
-    eval_type: str = Field(pattern=r"^(llm_judge|regex|json_schema|custom_function|guardrail)$")
+    # NOTE: ``guardrail`` is deliberately absent from the from-run vocabulary.
+    # The from-run endpoint pre-populates a definition from run OUTPUT — a
+    # guardrail is a deny-rule (regex pattern / json_schema) that cannot be
+    # derived from a sample, and a stub config would be silently-inert
+    # (fail-open) for a data-safety control. Guardrails are authored directly.
+    eval_type: str = Field(pattern=r"^(llm_judge|regex|json_schema|custom_function)$")
     name: str = Field(min_length=1, max_length=255)
 
 

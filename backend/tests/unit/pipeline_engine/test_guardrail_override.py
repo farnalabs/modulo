@@ -21,6 +21,7 @@ from modulo.core.pipeline_engine.recovery import (
     GuardrailOverrideRejectedError,
     guardrail_override,
 )
+from modulo.db.crud.run import _input_hash
 
 _ORG_ID = uuid.uuid4()
 _PIPELINE_ID = uuid.uuid4()
@@ -45,6 +46,8 @@ def _make_run(
     run.error_code = error_code
     run.error_detail = "Guardrail 'no-secrets' blocked"
     run.input_payload = input_payload
+    run.input_hash = "stale-hash-of-original-blocked-payload"
+    run.completed_at = "2026-01-01T00:00:00+00:00"
     run.is_replay = False
     return run
 
@@ -117,6 +120,12 @@ async def test_guardrail_override_clean_input_flips_to_pending():
     assert result.error_code is None
     assert result.is_replay is True
     assert result.input_payload == {"body": "clean replacement text"}
+    # The stored payload changed, so the persisted input_hash must be recomputed
+    # from the post-redaction payload actually stored, and the block-time
+    # completed_at stamp must be cleared (the run is no longer terminal).
+    assert result.input_hash == _input_hash({"body": "clean replacement text"})
+    assert result.input_hash != "stale-hash-of-original-blocked-payload"
+    assert result.completed_at is None
     mock_audit.assert_awaited_once()
 
 

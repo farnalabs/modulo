@@ -20,6 +20,7 @@ from modulo.core.guardrails import (
     evaluate_guardrails,
     resolve_static_path,
     run_guardrail_pass,
+    run_interception_pass,
     set_static_path,
 )
 
@@ -200,6 +201,22 @@ def test_guardrail_config_requires_deterministic_detection():
         evaluate_guardrails(EvalEngine(), [bad], {})
 
 
+def test_guardrail_top_level_forbidden_type_with_schema_fails_closed():
+    # A top-level ``type`` outside regex|json_schema must NOT be silently
+    # downgraded to json_schema merely because a ``schema`` dict is present —
+    # the module's fail-closed rule applies to any DECLARED detection type.
+    bad = EvalDefinition(
+        id=uuid.uuid4(),
+        org_id=_ORG_ID,
+        name="llm-with-schema",
+        eval_type=EvalType.GUARDRAIL,
+        config={"action": "block", "type": "llm_judge", "schema": {"type": "object"}},
+        failure_behaviour="block",
+    )
+    with pytest.raises(GuardrailConfigError):
+        evaluate_guardrails(EvalEngine(), [bad], {})
+
+
 def test_guardrail_regex_requires_pattern_and_field_fail_closed():
     # A block guardrail whose detector cannot run (regex without pattern/field)
     # must fail closed at validation, never silently pass through.
@@ -318,6 +335,38 @@ def test_guardrail_json_schema_detection_violation_is_validation_failure():
     assert results[0].passed is True
 
 
+def test_guardrail_json_schema_detail_is_value_free():
+    # jsonschema's ValidationError.message embeds the raw offending value
+    # ('SECRET_ABC12345' is not of type 'boolean'). Guardrail detail is
+    # count-only / pattern-descriptive — NEVER raw payload — so the detail
+    # must be sanitised to a value-free descriptor even when the block fires.
+    eval_def = EvalDefinition(
+        id=uuid.uuid4(),
+        org_id=_ORG_ID,
+        name="schema-guard",
+        eval_type=EvalType.GUARDRAIL,
+        config={
+            "action": "block",
+            "type": "json_schema",
+            "field": "body",
+            "schema": {"type": "object", "required": ["safe"], "properties": {"safe": {"type": "boolean"}}},
+        },
+        failure_behaviour="block",
+    )
+    engine = EvalEngine()
+    with pytest.raises(GuardrailBlockedError) as exc_info:
+        evaluate_guardrails(engine, [eval_def], {"body": {"safe": "SECRET_ABC12345"}})
+    assert "SECRET_ABC12345" not in str(exc_info.value)
+    assert "json_schema validation failed" in str(exc_info.value)
+    # The persisted eval_results.detail path is the non-raising variant: assert
+    # the sanitised result detail directly.
+    warn_def = eval_def.model_copy(update={"config": {**eval_def.config, "action": "warn"}})
+    results = evaluate_guardrails(engine, [warn_def], {"body": {"safe": "SECRET_ABC12345"}})
+    assert results[0].passed is False
+    assert "SECRET_ABC12345" not in results[0].detail
+    assert "json_schema validation failed" in results[0].detail
+
+
 # ---------------------------------------------------------------------------
 # Two-phase pass
 # ---------------------------------------------------------------------------
@@ -354,6 +403,30 @@ def test_run_guardrail_pass_block_fires_before_any_mask():
     )
     with pytest.raises(GuardrailBlockedError):
         run_guardrail_pass(EvalEngine(), [block, redact], {"body": "leak SECRET_ABC12345"})
+
+
+def test_run_interception_pass_multiple_redact_guardrails_accumulate_entries():
+    # Each redact-action guardrail contributes its own RedactionEntry batch;
+    # the audit list must accumulate ALL of them, not just the last one's.
+    first = _guardrail(
+        name="redact-a",
+        action="redact",
+        failure_behaviour="warn",
+        redaction=[{"path": "credentials.api_key", "mode": "transform"}],
+    )
+    second = _guardrail(
+        name="redact-b",
+        action="redact",
+        failure_behaviour="warn",
+        redaction=[{"path": "body", "mode": "transform"}],
+    )
+    payload = {"credentials": {"api_key": "sk-live-123"}, "body": "clean text"}
+    outcome = run_interception_pass(EvalEngine(), [first, second], payload)
+    assert len(outcome.redactions) == 2
+    assert [e.path for e in outcome.redactions] == ["credentials.api_key", "body"]
+    assert all(e.applied for e in outcome.redactions)
+    assert outcome.payload["credentials"]["api_key"] == REDACTION_MASK
+    assert outcome.payload["body"] == REDACTION_MASK
 
 
 # ---------------------------------------------------------------------------

@@ -5,7 +5,9 @@ The allowed eval_type vocabulary lives in exactly five places:
   (a) ``EvalType`` StrEnum (modulo.core.eval_engine) — the full universe,
       now including ``guardrail``.
   (b) the three Pydantic request regexes in ``modulo.api.routes.evals`` —
-      create / update / from-run.
+      create / update accept the FULL universe (including ``guardrail``);
+      from-run deliberately EXCLUDES ``guardrail`` (a deny-rule cannot be
+      pre-populated from run output — a stub would be fail-open).
   (c) ``graph_validator`` composite ``valid_types`` — composite-eligible
       subset; guardrail is NOT composite-eligible (like custom_function).
   (d) ``composite_binding.EvalDefinitionConfig.type`` Literal — same
@@ -13,8 +15,9 @@ The allowed eval_type vocabulary lives in exactly five places:
   (e) DB CHECK ``ck_eval_definitions_type`` (ORM model + migration 0100) —
       must include ``guardrail``.
 
-Sites (a), (b), (e) must agree on the FULL universe. Sites (c), (d) must agree
-on the composite-eligible subset and MUST NOT contain ``guardrail``.
+Sites (a), (b create/update), (e) must agree on the FULL universe. Sites (c),
+(d) must agree on the composite-eligible subset and MUST NOT contain
+``guardrail``.
 """
 
 import re
@@ -37,12 +40,26 @@ def test_site_b_evals_regexes_accept_guardrail():
 
     create_pattern = evals.CreateEvalRequest.model_fields["eval_type"].metadata[0].pattern
     update_pattern = evals.UpdateEvalRequest.model_fields["eval_type"].metadata[0].pattern
-    from_run_pattern = evals.CreateEvalFromRunRequest.model_fields["eval_type"].metadata[0].pattern
-    for pattern in (create_pattern, update_pattern, from_run_pattern):
+    for pattern in (create_pattern, update_pattern):
         assert re.match(f"^{pattern}$", "guardrail"), pattern
-    # The full universe must be expressible through the API edge.
+    # The full universe must be expressible through the create/update API edge.
     for value in FULL_UNIVERSE:
         assert re.match(f"^{create_pattern}$", value), value
+
+
+def test_site_b_from_run_regex_excludes_guardrail():
+    # ``guardrail`` is deliberately absent from the from-run vocabulary: the
+    # from-run endpoint pre-populates a definition from run OUTPUT, and a
+    # guardrail deny-rule (regex pattern / json_schema) cannot be derived from a
+    # sample. A stub config would be silently-inert (fail-open) for a
+    # data-safety control, so the API edge rejects it outright.
+    import modulo.api.routes.evals as evals
+
+    from_run_pattern = evals.CreateEvalFromRunRequest.model_fields["eval_type"].metadata[0].pattern
+    assert not re.match(f"^{from_run_pattern}$", "guardrail"), from_run_pattern
+    # The pre-populatable subset remains expressible.
+    for value in ("llm_judge", "regex", "json_schema", "custom_function"):
+        assert re.match(f"^{from_run_pattern}$", value), value
 
 
 def test_site_c_graph_validator_composite_valid_types_exclude_guardrail():
