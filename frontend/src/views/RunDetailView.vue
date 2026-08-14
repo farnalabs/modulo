@@ -136,6 +136,17 @@
         >
           {{ copied ? $t('views.RunDetailView.copied') : $t('views.RunDetailView.copy') }}
         </button>
+        <a
+          v-if="run.trace_url"
+          :href="run.trace_url"
+          target="_blank"
+          rel="noopener noreferrer"
+          data-testid="run-detail-view-trace"
+          class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+          {{ $t('views.RunDetailView.view_trace') }}
+        </a>
       </div>
 
       <div v-if="run?.status === 'complete' && lastNodeOutput" class="card p-5 mb-6">
@@ -232,7 +243,7 @@
                 <button
                   v-if="node.traceId"
                   data-testid="run-detail-node-trace-id"
-                  :aria-label="$t('views.RunDetailView.copy_node_trace_id')"
+                  :aria-label="node.isNodeSpanId ? $t('views.RunDetailView.copy_node_span_id') : $t('views.RunDetailView.copy_node_trace_id')"
                   class="cursor-pointer rounded bg-muted px-1.5 py-0.5 font-mono text-xs"
                   :title="node.traceId"
                   @click="copyText(node.traceId!)"
@@ -554,6 +565,7 @@ interface NodeEntry {
   outputTokens: number | null
   cost: number | null
   traceId: string | null
+  isNodeSpanId: boolean
   io: { input: unknown; output: unknown } | null
   telemetry: Record<string, unknown> | null
   hasLogs: boolean
@@ -1121,6 +1133,15 @@ const nodeEntries = computed<NodeEntry[]>(() => {
       ((typeof nodeTelemetry.agent_stdout === 'string' && nodeTelemetry.agent_stdout.length > 0)
         || (typeof nodeTelemetry.agent_stderr === 'string' && nodeTelemetry.agent_stderr.length > 0))
     )
+    // FAR-198: prefer the node's REAL span id (stamped into node telemetry at
+    // execution time); fall back to the run trace id so the column never
+    // shows a duplicate run value when no per-node span is available.
+    const nodeSpanId = nodeTelemetry && typeof nodeTelemetry.otel_span_id === 'string' && nodeTelemetry.otel_span_id.length > 0
+      ? nodeTelemetry.otel_span_id
+      : null
+    const nodeTraceId = nodeTelemetry && typeof nodeTelemetry.otel_trace_id === 'string' && nodeTelemetry.otel_trace_id.length > 0
+      ? nodeTelemetry.otel_trace_id
+      : null
 
     return {
       name,
@@ -1129,7 +1150,8 @@ const nodeEntries = computed<NodeEntry[]>(() => {
       inputTokens: usage?.input_tokens ?? null,
       outputTokens: usage?.output_tokens ?? null,
       cost: usage?.model_cost_display_usd ?? usage?.cost_usd ?? null,
-      traceId: run.value?.trace_id ?? null,
+      traceId: nodeSpanId ?? nodeTraceId ?? run.value?.trace_id ?? null,
+      isNodeSpanId: nodeSpanId !== null,
       io: resolveNodeIO(nodeOutput),
       telemetry: nodeTelemetry,
       hasLogs,

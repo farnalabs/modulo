@@ -1062,6 +1062,8 @@ export default {
       "total_tokens": "{count} total tokens",
       "share_summary": "Share Summary",
       "copy_node_trace_id": "Copy node trace ID",
+      "copy_node_span_id": "Copy node span ID",
+      "view_trace": "View trace",
       "execution_trace": "Execution Trace",
       "no_run_id_provided": "No run ID provided",
       "otel_trace_id": "OTel Trace ID:",

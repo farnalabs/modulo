@@ -36,6 +36,8 @@ from typing import Any
 
 from langchain_core.messages import BaseMessage
 from langgraph.errors import GraphInterrupt, NodeCancelledError
+from opentelemetry import context as context_api
+from opentelemetry.trace import set_span_in_context
 from sqlalchemy import Boolean, Uuid, bindparam, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -99,7 +101,7 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES, Run
 from modulo.db.rls import set_rls_org
-from modulo.otel_bridge import LangGraphOtelBridge
+from modulo.otel_bridge import LangGraphOtelBridge, trace_id_for_thread
 
 _WORKER_ID: str = f"{socket.gethostname()}:{os.getpid()}"
 
@@ -2142,6 +2144,19 @@ class PipelineExecutor:
         # UX, phase 1): such a run must NEVER land 'complete'. Only published
         # at terminalization; never twice.
         agent_failure_reason: str | None = None
+        # FAR-198: seed the OTel context with the run's deterministic trace id
+        # so every span exported during graph execution carries the SAME
+        # trace_id the API reports on RunResponse. The root span is stored on
+        # the bridge (its spans inherit it) AND attached to the current
+        # context (spans created outside the bridge inherit it too). Both are
+        # cleaned up in the finally block below.
+        thread_id = (config.get("configurable") or {}).get("thread_id")
+        run_trace_id = trace_id_for_thread(thread_id) if thread_id else None
+        run_root_span = None
+        run_root_token = None
+        if thread_id:
+            run_root_span = self._otel_bridge.start_run_root(thread_id)
+            run_root_token = context_api.attach(set_span_in_context(run_root_span))
         try:
             async for lg_event in compiled.astream_events(initial_state, lg_config, version="v2"):
                 if guard is not None:
@@ -2196,6 +2211,20 @@ class PipelineExecutor:
                             data = lg_event.get("data", {})
                             output = data.get("output") if isinstance(data, dict) else None
                             if output is not None:
+                                # FAR-198: stamp the node's real OTel span id
+                                # (and the run's trace id) onto a shallow copy of
+                                # the envelope. The node_output_split splitter
+                                # folds unknown top-level envelope keys into the
+                                # node_telemetry entry, so these surface in the
+                                # per-node span column — never in the pure return.
+                                node_span_id = self._otel_bridge.span_id_for_run(lg_event.get("run_id"))
+                                if isinstance(output, dict) and (node_span_id or run_trace_id):
+                                    stamped = dict(output)
+                                    if node_span_id:
+                                        stamped["otel_span_id"] = node_span_id
+                                    if run_trace_id:
+                                        stamped["otel_trace_id"] = run_trace_id
+                                    output = stamped
                                 completed_node_outputs[name] = output
                                 stall_reason = _node_output_stall_reason(output)
                                 if stall_reason:
@@ -2390,3 +2419,9 @@ class PipelineExecutor:
             )
             broker.publish("run_failed", {"error": type(exc).__name__, "detail": _tb})
             return "failed", type(exc).__name__, _tb, node_token_usage or None
+        finally:
+            # FAR-198: tear down the seeded OTel context + run root span on
+            # every exit path (returns, exceptions, cancellation).
+            if run_root_token is not None:
+                context_api.detach(run_root_token)
+            self._otel_bridge.end_run_root()
