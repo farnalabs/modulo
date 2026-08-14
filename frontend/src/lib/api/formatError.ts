@@ -67,6 +67,15 @@ export function formatApiError(err: unknown): string {
   if (typeof err === 'object') {
     const obj = err as Record<string, unknown>
     if (typeof obj.detail === 'string') return obj.detail
+    // FastAPI validation errors return detail as an array of {loc, msg, type}
+    // entries (e.g. a Pydantic 422); surface the human-readable messages
+    // instead of falling through to a raw JSON dump.
+    if (Array.isArray(obj.detail)) {
+      const msgs = obj.detail
+        .filter((d): d is { msg?: string } => typeof d === 'object' && d !== null && typeof d.msg === 'string')
+        .map((d) => d.msg)
+      if (msgs.length > 0) return msgs.join('; ')
+    }
     if (typeof obj.message === 'string') return obj.message
     if (typeof obj.error === 'string') return obj.error
     if (typeof obj.title === 'string') return obj.title

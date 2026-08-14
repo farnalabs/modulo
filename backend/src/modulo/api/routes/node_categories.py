@@ -13,6 +13,7 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.node_category import (
+    NodeCategoryInUseError,
     create_node_category,
     get_node_category,
     list_node_categories,
@@ -285,6 +286,13 @@ async def delete_node_category_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Cannot delete: the category is referenced by one or more nodes.",
+        ) from None
+    except NodeCategoryInUseError as e:
+        logger.warning("node_categories.delete.referenced_by_nodes", exc_info=False)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot delete: the category is referenced by {len(e.pipelines)} "
+            f"pipeline(s): {', '.join(str(p.get('name')) for p in e.pipelines)}",
         ) from None
     except SQLAlchemyError:
         logger.warning("node_categories.delete.database_error", exc_info=True)

@@ -8,6 +8,7 @@ from typing import Any, cast
 import httpx
 
 from modulo.connectors._retry_headers import parse_retry_after as _parse_retry_after
+from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -727,7 +728,7 @@ class LinearConnector(ConnectorBase):
                 search_issues = data.get("searchIssues", {})
                 nodes = search_issues.get("nodes", [])
                 page_info = search_issues.get("pageInfo", {})
-                next_cursor = page_info.get("endCursor") if page_info.get("hasNextPage") else None
+                next_cursor = _safe_cursor(page_info.get("endCursor")) if page_info.get("hasNextPage") else None
                 return ConnectorResult(records=nodes, next_cursor=next_cursor, total=len(nodes))
             case "issue_comments":
                 issue_id = q.filters.get("issueId")

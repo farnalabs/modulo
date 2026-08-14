@@ -5,6 +5,7 @@ from typing import Any, cast
 
 import httpx
 
+from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -112,7 +113,7 @@ class N8NConnector(ConnectorBase):
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
-            next_cursor=body.get("nextCursor"),
+            next_cursor=_safe_cursor(body.get("nextCursor")),
         )
 
     async def _get_workflow(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -141,7 +142,7 @@ class N8NConnector(ConnectorBase):
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
-            next_cursor=body.get("nextCursor"),
+            next_cursor=_safe_cursor(body.get("nextCursor")),
         )
 
     async def _get_execution(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -167,7 +168,7 @@ class N8NConnector(ConnectorBase):
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
-            next_cursor=body.get("nextCursor"),
+            next_cursor=_safe_cursor(body.get("nextCursor")),
         )
 
     async def _list_credentials(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -183,7 +184,7 @@ class N8NConnector(ConnectorBase):
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
-            next_cursor=body.get("nextCursor"),
+            next_cursor=_safe_cursor(body.get("nextCursor")),
         )
 
     async def _get_credential(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -209,7 +210,7 @@ class N8NConnector(ConnectorBase):
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
-            next_cursor=body.get("nextCursor"),
+            next_cursor=_safe_cursor(body.get("nextCursor")),
         )
 
     async def _list_nodes(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -225,7 +226,7 @@ class N8NConnector(ConnectorBase):
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
-            next_cursor=body.get("nextCursor"),
+            next_cursor=_safe_cursor(body.get("nextCursor")),
         )
 
     async def _create_workflow(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
