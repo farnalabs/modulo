@@ -12,8 +12,8 @@ idempotency (UNIQUE(run_id)), and re-terminalization refresh (upsert).
 import builtins
 import uuid
 from collections.abc import AsyncGenerator
-from typing import Any, cast
-from unittest.mock import AsyncMock, patch
+from typing import Any, Self, cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy import StaticPool, Table, event, select
@@ -460,6 +460,45 @@ class TestPersistenceHook:
         assert record["value"] == "no_delivery"
         assert record["work_intact"] is True
 
+    async def test_executor_ordering_persists_work_intact_after_refresh(
+        self,
+        engine: AsyncEngine,
+        session: AsyncSession,
+    ) -> None:
+        """FIX 3 (round-2): the EXECUTOR terminalization ordering must leave the
+        classification record carrying the REAL work_intact.
+
+        The executor calls ``finalize_cost`` (terminal write → inline classify
+        reading ``run.work_intact``) BEFORE ``_apply_work_intact``, so the first
+        record persists ``work_intact=None``. The fix re-persists the
+        classification AFTER the work_intact write, in the same transaction, so
+        the record carries the real value. This test reproduces that exact
+        ordering against a real DB and asserts the final record is corrected —
+        without the reclassify-after-write step the assertion fails."""
+        from modulo.core.pipeline_engine.executor import _apply_work_intact, _reclassify_after_work_intact
+
+        run_id = uuid.uuid4()
+        # 1. Terminalize WITHOUT work_intact set — finalize_cost's inline
+        #    classify runs before the work_intact write, persisting None.
+        async with session.begin():
+            await _seed_run(session, run_id, status="complete", work_intact=None)
+            await update_run_status(session, run_id, "complete")
+        record = await _read_classification(engine, run_id)
+        assert record is not None
+        assert record["work_intact"] is None
+
+        # 2. The executor's work_intact write + reclassify, in ONE transaction
+        #    (the same transaction finalize_cost and _apply_work_intact share).
+        maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+        async with maker() as s, s.begin():
+            await _apply_work_intact(s, run_id, True, claim_token=None)
+            await _reclassify_after_work_intact(s, run_id)
+
+        record = await _read_classification(engine, run_id)
+        assert record is not None
+        assert record["work_intact"] is True
+        assert record["value"] == "no_delivery"
+
 
 class TestCrossTenantIsolation:
     async def test_cross_tenant_terminalization_never_classifies_other_org(
@@ -741,6 +780,101 @@ class TestSweep:
         assert summary["scanned"] == 0
 
 
+class _MockBegin:
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+
+class _MockSession:
+    """Minimal session double for dispatcher_reconcile's row loop.
+
+    Mirrors ``test_dispatcher_reconcile.py``'s ``_MockSession``: pops canned
+    results in order, tolerates the org-id select, ``set_config``, and the
+    terminalizer UPDATE statements, and returns zero terminalized rows by
+    default.
+    """
+
+    def __init__(self, results: list[Any]) -> None:
+        self._results = list(results)
+        self.terminalizer_rows: dict[str, list[uuid.UUID]] = {}
+        self.begin_cm = _MockBegin()
+        bind = MagicMock()
+        bind.dialect.name = "postgresql"
+        self._get_bind = MagicMock(return_value=bind)
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+    def begin(self) -> _MockBegin:
+        return self.begin_cm
+
+    def get_bind(self) -> Any:
+        return self._get_bind()
+
+    async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
+        s = str(stmt)
+        if "set_config" in s:
+            return MagicMock()
+        if "UPDATE runs SET" in s:
+            ids = self.terminalizer_rows.get("executor_superseded", [])
+            if "claim_cap_exhausted" in s:
+                ids = self.terminalizer_rows.get("claim_cap_exhausted", [])
+            r = MagicMock()
+            r.all.return_value = [(uid,) for uid in ids]
+            r.rowcount = len(ids)
+            return r
+        if not self._results:
+            return MagicMock()
+        return self._results.pop(0)
+
+
+def _org_result(org_ids: list[uuid.UUID]) -> MagicMock:
+    r = MagicMock()
+    r.scalars.return_value = org_ids
+    return r
+
+
+def _rows_result(rows: list[Any]) -> MagicMock:
+    r = MagicMock()
+    r.all.return_value = rows
+    return r
+
+
+def _settings(**overrides: object) -> MagicMock:
+    base: dict[str, object] = {
+        "saq_runs_queue": "runs",
+        "saq_reenqueue_window": 600,
+        "saq_job_heartbeat": 300,
+        "saq_claimed_nodeless_minutes": 45,
+        "redis_url": "redis://localhost:6379/0",
+        "saq_redis_pool_size": 5,
+        "saq_run_claim_cap": 20,
+        "modulo_telemetry_enabled": False,
+    }
+    base.update(overrides)
+    return MagicMock(**base)
+
+
+def _make_queue(redis_client: MagicMock) -> MagicMock:
+    q = MagicMock()
+    q.name = "runs"
+    q.job_id.side_effect = lambda key: f"saq:job:runs:{key}"
+    q.job = AsyncMock(return_value=None)
+    return q
+
+
+def _patch_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
+    monkeypatch.setenv("SECRET_KEY", "a" * 40)
+    monkeypatch.setenv("FERNET_KEY", "b" * 44)
+
+
 class TestPeriodicWiring:
     """FIX 1: the reconciliation sweep is wired into a periodic production path."""
 
@@ -761,6 +895,56 @@ class TestPeriodicWiring:
             summary = await cron_helpers.run_classification_reconcile()
         assert sweep_mock.await_count == 1
         assert summary == {"scanned": 0, "classified": 0, "unclassified": 0, "errors": 0}
+
+    async def test_dispatcher_reconcile_invokes_classification_sweep(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FIX 2 (round-2): the SWEEP wiring is regression-tested at the real
+        integration point — ``dispatcher_reconcile`` itself (not just the
+        ``run_classification_reconcile`` entrypoint) must invoke the sweep.
+
+        Deleting the ``await run_classification_reconcile()`` line from
+        ``cron_helpers.dispatcher_reconcile`` must leave this test red — the
+        round-1 dead-code critical that a direct entrypoint-call test cannot
+        catch. Follows the ``test_dispatcher_reconcile.py`` ``_run_reconcile``
+        fixture pattern: the session factory, Redis client, and queue are mocked
+        the same way, then ``dispatcher_reconcile`` is awaited for real and the
+        sweep call is asserted.
+        """
+        from modulo.core import cron_helpers as ch
+
+        _patch_env(monkeypatch)
+        session = _MockSession([_org_result([_ORG]), _rows_result([])])
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+        q = _make_queue(redis_client)
+        redis_cls = MagicMock()
+        redis_cls.from_url.return_value = redis_client
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis", redis_cls),
+            patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
+            patch.object(
+                ch,
+                "run_classification_reconcile",
+                new=AsyncMock(return_value={"scanned": 0, "classified": 0, "unclassified": 0, "errors": 0}),
+            ) as sweep_mock,
+            patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock, return_value=("enqueued", "new-job-id")),
+            patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock),
+            patch.object(
+                ch,
+                "_awaiting_human_has_committed_decision",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock),
+            patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0),
+        ):
+            summary = await ch.dispatcher_reconcile()
+
+        assert sweep_mock.await_count == 1
+        assert summary["classification_classified"] == 0
+        assert summary["classification_unclassified"] == 0
 
     async def test_run_classification_reconcile_classifies_through_periodic_path(
         self,

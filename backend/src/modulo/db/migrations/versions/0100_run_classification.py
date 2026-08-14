@@ -14,11 +14,20 @@ the write is an upsert/refresh so re-terminalization (a retry policy re-flips a
 classified run back to pending, then re-runs) overwrites the stale verdict.
 
 The ORM model maps the column as generic JSON for SQLite/MariaDB parity (the
-``raw_output_markers`` precedent, migration 0099). No index: the record is
-written once per terminalization and read by the streak engine per run — not
-queried in bulk.
+``raw_output_markers`` precedent, migration 0099).
 
-Downgrade drops the column (additive, nullable, never backfilled — safe).
+A partial index (``ix_runs_unclassified_terminal``) backs the reconciliation
+sweep (:func:`modulo.core.pipeline_engine.classify.reconcile_missing_classifications`),
+which runs every 60s inside the production ``dispatcher_reconcile`` SAQ cron
+(BYPASSRLS, all orgs): ``WHERE status IN (TERMINAL_STATUSES) AND
+run_classification IS NULL ORDER BY completed_at DESC LIMIT 50``. Without it
+that sweep is a full seq-scan of the wide-row ``runs`` table every minute even
+in steady state (few unclassified rows, most already written by the inline
+hook). The predicate ``run_classification IS NULL`` + ``(status, completed_at
+DESC)`` keys the exact scan the sweep performs.
+
+Downgrade drops the index and the column (additive, nullable, never backfilled —
+safe).
 """
 
 from __future__ import annotations
@@ -37,7 +46,20 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     op.add_column("runs", sa.Column("run_classification", JSONB(), nullable=True))
+    # FAR-189 round-2 FIX 1: the every-60s dispatcher_reconcile sweep
+    # (reconcile_missing_classifications) scans (status, completed_at DESC)
+    # where run_classification IS NULL — index it so steady state never
+    # seq-scans the wide runs table. Same style as sibling index creation in
+    # 0094 (ix_runs_trigger_id_*).
+    op.create_index(
+        "ix_runs_unclassified_terminal",
+        "runs",
+        ["status", sa.text("completed_at DESC")],
+        unique=False,
+        postgresql_where=sa.text("run_classification IS NULL"),
+    )
 
 
 def downgrade() -> None:
+    op.drop_index("ix_runs_unclassified_terminal", table_name="runs")
     op.drop_column("runs", "run_classification")
