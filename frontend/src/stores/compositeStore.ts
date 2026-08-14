@@ -35,6 +35,7 @@ export const useCompositeStore = defineStore("composite", () => {
       hasLoadedOnce = true;
     } catch (e: unknown) {
       error.value = asErrorMessage(e);
+      if (!hasLoadedOnce) composites.value = [];
     } finally {
       loading.value = false;
     }
