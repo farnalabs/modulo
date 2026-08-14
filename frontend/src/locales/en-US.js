@@ -212,6 +212,7 @@ export default {
     },
     "SettingsRateLimitsView": {
       "rate_limits": "Rate Limits",
+      "redis": "Redis",
       "window_s": "Window (s)",
       "rate_limiting_uses_inmemory_token_buckets_redis_not_configur": "Rate limiting uses in-memory token buckets (Redis not configured).",
       "view_perroute_rate_limiting_rules_and_current_usage": "View per-route rate limiting rules and current usage",

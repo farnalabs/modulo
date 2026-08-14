@@ -4,7 +4,21 @@
 
     <FeatureGate feature-name="rate_limits" required-tier="team" show-disabled>
 
-    <LoadingSpinner v-if="loading" />
+    <div v-if="loading" class="space-y-6">
+      <div class="card p-6 animate-pulse">
+        <div class="mb-4 flex items-center justify-between">
+          <div class="h-5 w-24 bg-muted rounded" />
+          <div class="h-5 w-20 bg-muted rounded" />
+        </div>
+        <div class="h-4 w-64 bg-muted rounded" />
+      </div>
+      <div class="card p-6 animate-pulse">
+        <div class="mb-4 h-5 w-20 bg-muted rounded" />
+        <div class="h-4 w-full bg-muted rounded" />
+        <div class="mt-3 h-4 w-3/4 bg-muted rounded" />
+        <div class="mt-3 h-4 w-1/2 bg-muted rounded" />
+      </div>
+    </div>
 
     <ErrorAlert v-else-if="loadError && !featureRequired" :message="loadError" :on-retry="loadRules" />
 
@@ -16,17 +30,21 @@
             class="rounded-full px-3 py-1 text-xs font-medium"
             :class="mode === 'redis' ? 'badge badge-status-success' : 'badge badge-status-warning'"
           >
-            {{ mode === 'redis' ? 'Redis' : 'In-Memory' }}
+            {{ mode === 'redis' ? $t('views.SettingsRateLimitsView.redis') : $t('views.SettingsRateLimitsView.inmemory') }}
           </span>
         </div>
         <p class="text-sm text-muted-foreground">
-          {{ mode === 'redis' ? 'Rate limiting is backed by Redis.' : 'Rate limiting uses in-memory token buckets (Redis not configured).' }}
+          {{ mode === 'redis' ? $t('views.SettingsRateLimitsView.rate_limiting_is_backed_by_redis') : $t('views.SettingsRateLimitsView.rate_limiting_uses_inmemory_token_buckets_redis_not_configur') }}
         </p>
       </div>
 
       <div data-testid="rate-limits-rules" class="rounded-lg border bg-card p-6 shadow-sm">
         <h2 class="mb-4 text-base font-semibold">{{ $t('views.SettingsRateLimitsView.rules') }}</h2>
-        <div v-if="rules.length > 0" class="overflow-x-auto">
+        <EmptyState
+          v-if="rules.length === 0"
+          :title="$t('views.SettingsRateLimitsView.no_rate_limit_rules_configured')"
+        />
+        <div v-else class="overflow-x-auto">
           <table data-testid="rate-limits-table" class="w-full text-sm">
           <thead>
             <tr class="border-b text-left text-muted-foreground">
@@ -44,7 +62,6 @@
           </tbody>
         </table>
         </div>
-        <div v-else class="text-sm text-muted-foreground">{{ $t('views.SettingsRateLimitsView.no_rate_limit_rules_configured') }}</div>
       </div>
     </div>
     </FeatureGate>
@@ -57,7 +74,7 @@ import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import PageHeader from '../components/shared/PageHeader.vue'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 
