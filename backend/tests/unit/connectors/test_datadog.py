@@ -204,6 +204,55 @@ async def test_query_logs_with_cursor(connector: DatadogConnector) -> None:
 
 
 @respx.mock
+async def test_query_logs_non_dict_meta(connector: DatadogConnector) -> None:
+    respx.post(f"{_BASE}/api/v2/logs/events/search").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [{"id": "log1"}], "meta": "garbage"},
+        )
+    )
+    result = await connector.query(ConnectorQuery(resource="logs"))
+    assert len(result.records) == 1
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_logs_non_dict_page(connector: DatadogConnector) -> None:
+    respx.post(f"{_BASE}/api/v2/logs/events/search").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [{"id": "log1"}], "meta": {"page": "garbage"}},
+        )
+    )
+    result = await connector.query(ConnectorQuery(resource="logs"))
+    assert len(result.records) == 1
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_logs_non_string_after(connector: DatadogConnector) -> None:
+    respx.post(f"{_BASE}/api/v2/logs/events/search").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [{"id": "log1"}], "meta": {"page": {"after": 123}}},
+        )
+    )
+    result = await connector.query(ConnectorQuery(resource="logs"))
+    assert len(result.records) == 1
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_logs_missing_meta(connector: DatadogConnector) -> None:
+    respx.post(f"{_BASE}/api/v2/logs/events/search").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "log1"}]})
+    )
+    result = await connector.query(ConnectorQuery(resource="logs"))
+    assert len(result.records) == 1
+    assert result.next_cursor is None
+
+
+@respx.mock
 async def test_write_event(connector: DatadogConnector) -> None:
     respx.post(f"{_BASE}/api/v1/events").mock(
         return_value=httpx.Response(
