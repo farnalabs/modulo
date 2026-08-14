@@ -1,6 +1,6 @@
 # Personas
 
-Six user personas covering the Modulo ICP spectrum — solo developer to regulated enterprise — plus the community contributor who drives library growth.
+Six user personas covering the Modulo ICP spectrum, from solo developer to regulated enterprise, plus the community contributor who drives library growth.
 
 ## Summary
 

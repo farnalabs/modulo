@@ -2,7 +2,7 @@
 
 Welcome to Modulo. Get up and running with a demo pipeline in under 10 minutes. No external API keys required.
 
-Modulo is a self-hosted orchestration layer for agentic SDLC pipelines. You run it on your own infrastructure — there is no hosted SaaS version yet. See [`docs/system-requirements.md`](./system-requirements.md) for supported platforms and minimum resource requirements.
+Modulo is a self-hosted orchestration layer for agentic SDLC pipelines. You run it on your own infrastructure; there is no hosted SaaS version yet. See [`docs/system-requirements.md`](./system-requirements.md) for supported platforms and minimum resource requirements.
 
 ## Prerequisites
 
@@ -16,7 +16,7 @@ Modulo is a self-hosted orchestration layer for agentic SDLC pipelines. You run 
 ## 1. Start infrastructure
 
 ```powershell
-# From Development/Product/
+# From the repository root
 docker compose -f docker-compose.local.yml up -d
 ```
 
@@ -27,7 +27,7 @@ This starts:
 ## 2. Set up the backend
 
 ```powershell
-cd Development/Product/backend
+cd backend
 uv sync
 
 # Create .env (these values work with the local Docker containers)
@@ -63,24 +63,24 @@ Modulo executes pipeline runs through SAQ workers (Celery was removed). Start
 them in separate terminals:
 
 ```powershell
-# Runs worker — executes run jobs (queue: runs)
+# Runs worker: executes run jobs (queue: runs)
 uv run python -m saq modulo.core.saq_worker.runs_settings
 
-# System worker — scheduler (fire_due_triggers) + reconcile + system crons
+# System worker: scheduler (fire_due_triggers) + reconcile + system crons
 $env:SAQ_AUTH_USERNAME = "admin"
 $env:SAQ_AUTH_PASSWORD = "admin"
 uv run python -m modulo.core.saq_worker
 ```
 
 Notes:
-- `python -m saq` takes the **settings module** as its only positional arg — there is no `worker` subcommand in SAQ 0.26.4.
+- `python -m saq` takes the **settings module** as its only positional arg; there is no `worker` subcommand in SAQ 0.26.4.
 - A local Redis is required (`REDIS_URL`, e.g. `redis://localhost:6380/0` from the compose `redis-local` service).
 - The compose stack (`docker-compose.local.yml`) ships `saq-runner` + `saq-system` services that launch both workers; `saq-system` is **required** for local cron/triggers to fire.
 
 ## 4. Start the frontend (optional)
 
 ```powershell
-cd Development/Product/frontend
+cd frontend
 pnpm install --frozen-lockfile
 pnpm run dev
 ```
@@ -93,10 +93,10 @@ With `MODULO_SEED_DEMO_DATA=true` (set in your `.env`; legacy name `MODULO_DEMO_
 
 1. Open the dashboard at `http://localhost:5173`
 2. Click the **Demo pipeline** card
-3. Click **Run** — the pipeline reads a sample PRD and extracts structured requirements
+3. Click **Run**; the pipeline reads a sample PRD and extracts structured requirements
 4. View the output in the run inspection panel
 
-No external API keys are needed — the demo uses `StubModelBackend`.
+No external API keys are needed; the demo uses `StubModelBackend`.
 
 ## Next steps
 
