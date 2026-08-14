@@ -109,37 +109,37 @@ class TestLocalRuntimeProvider:
 
         await tight_provider.destroy_workspace(ref)
 
-    async def test_supports_local_hint(self, provider: LocalRuntimeProvider) -> None:
+    def test_supports_local_hint(self, provider: LocalRuntimeProvider) -> None:
         class FakeProfile:
             provider_hint = "local"
 
         assert provider.supports(FakeProfile()) is True
 
-    async def test_supports_e2b_hint(self, provider: LocalRuntimeProvider) -> None:
+    def test_supports_e2b_hint(self, provider: LocalRuntimeProvider) -> None:
         class FakeProfile:
             provider_hint = "e2b"
             image_ref = ""
 
         assert provider.supports(FakeProfile()) is False
 
-    async def test_supports_no_hint(self, provider: LocalRuntimeProvider) -> None:
+    def test_supports_no_hint(self, provider: LocalRuntimeProvider) -> None:
         class FakeProfile:
             provider_hint = ""
             image_ref = ""
 
         assert provider.supports(FakeProfile()) is True
 
-    async def test_create_local_provider_from_env_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_create_local_provider_from_env_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MODULO_MAX_LOCAL_CONCURRENCY", raising=False)
         p = create_local_provider_from_env()
         assert p._max_concurrency == 2
 
-    async def test_create_local_provider_from_env_custom(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_create_local_provider_from_env_custom(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MODULO_MAX_LOCAL_CONCURRENCY", "10")
         p = create_local_provider_from_env()
         assert p._max_concurrency == 10
 
-    async def test_create_local_provider_from_env_invalid(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_create_local_provider_from_env_invalid(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MODULO_MAX_LOCAL_CONCURRENCY", "not-a-number")
         p = create_local_provider_from_env()
         assert p._max_concurrency == 2

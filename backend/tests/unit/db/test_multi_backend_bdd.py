@@ -226,7 +226,7 @@ class TestCrossOrgIsolationGeneric:
         assert session_a.info[_TENANT_KEY] == _ORG_ID
         assert session_b.info[_TENANT_KEY] == _ALT_ORG_ID
 
-    async def test_apply_tenant_filter_still_injects_when_session_lacks_org_context(
+    def test_apply_tenant_filter_still_injects_when_session_lacks_org_context(
         self,
         repo: GenericRepository,
     ) -> None:

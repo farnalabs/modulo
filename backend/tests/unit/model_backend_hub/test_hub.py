@@ -170,7 +170,7 @@ async def test_aexit_clears_backends():
         await hub.get(bid)
 
 
-async def test_backend_ids_property():
+def test_backend_ids_property():
     hub = ModelBackendHub()
     id1, id2 = uuid.uuid4(), uuid.uuid4()
     hub.register(id1, _FakeBackend())
@@ -651,7 +651,7 @@ async def test_aexit_logs_and_clears_on_error():
     assert not hub.backend_ids
 
 
-async def test_register_overwrite_logs_warning():
+def test_register_overwrite_logs_warning():
     """Re-registering the same ID logs a warning and replaces the backend."""
     hub = ModelBackendHub()
     bid = uuid.uuid4()
@@ -970,7 +970,7 @@ async def test_failover_event_audit_logger_cancelled_propagates():
 # ---------------------------------------------------------------------------
 
 
-async def test_mark_unhealthy_unknown_backend_raises():
+def test_mark_unhealthy_unknown_backend_raises():
     hub = ModelBackendHub()
     with pytest.raises(BackendNotFoundError):
         hub.mark_unhealthy(uuid.uuid4())
@@ -981,49 +981,49 @@ async def test_mark_unhealthy_unknown_backend_raises():
 # ---------------------------------------------------------------------------
 
 
-async def test_build_backend_bedrock_missing_credentials():
+def test_build_backend_bedrock_missing_credentials():
     from modulo.core.model_backend_hub import _build_backend
 
     with pytest.raises(ValueError, match="aws_access_key_id"):
         _build_backend("bedrock", "model", {}, {})
 
 
-async def test_build_backend_bedrock_missing_secret():
+def test_build_backend_bedrock_missing_secret():
     from modulo.core.model_backend_hub import _build_backend
 
     with pytest.raises(ValueError, match="aws_secret_access_key"):
         _build_backend("bedrock", "model", {"aws_access_key_id": "x"}, {})
 
 
-async def test_build_backend_vertexai_missing_project():
+def test_build_backend_vertexai_missing_project():
     from modulo.core.model_backend_hub import _build_backend
 
     with pytest.raises(ValueError, match="project"):
         _build_backend("vertexai", "model", {}, {})
 
 
-async def test_build_backend_api_key_provider_missing_key():
+def test_build_backend_api_key_provider_missing_key():
     from modulo.core.model_backend_hub import _build_backend
 
     with pytest.raises(ValueError, match="api_key"):
         _build_backend("cohere", "model", {}, {})
 
 
-async def test_build_backend_azure_missing_endpoint():
+def test_build_backend_azure_missing_endpoint():
     from modulo.core.model_backend_hub import _build_backend
 
     with pytest.raises(ValueError, match="azure_endpoint"):
         _build_backend("azure_openai", "model", {"api_key": "x"}, {})
 
 
-async def test_build_backend_watsonx_missing_project_id():
+def test_build_backend_watsonx_missing_project_id():
     from modulo.core.model_backend_hub import _build_backend
 
     with pytest.raises(ValueError, match="project_id"):
         _build_backend("watsonx", "model", {"api_key": "x"}, {})
 
 
-async def test_build_backend_bedrock_success():
+def test_build_backend_bedrock_success():
     from modulo.core.model_backend_hub import _build_backend
 
     with patch("modulo.core.model_backend_hub._backend_class") as mock_cls:
@@ -1038,7 +1038,7 @@ async def test_build_backend_bedrock_success():
     mock_cls.assert_called_once_with("bedrock", "BedrockBackend")
 
 
-async def test_build_backend_vertexai_success():
+def test_build_backend_vertexai_success():
     from modulo.core.model_backend_hub import _build_backend
 
     with patch("modulo.core.model_backend_hub._backend_class") as mock_cls:
@@ -1048,7 +1048,7 @@ async def test_build_backend_vertexai_success():
     mock_cls.assert_called_once_with("vertexai", "VertexAIBackend")
 
 
-async def test_build_backend_azure_success():
+def test_build_backend_azure_success():
     from modulo.core.model_backend_hub import _build_backend
 
     with patch("modulo.core.model_backend_hub._backend_class") as mock_cls:
@@ -1063,7 +1063,7 @@ async def test_build_backend_azure_success():
     mock_cls.assert_called_once_with("azure_openai", "AzureOpenAIBackend")
 
 
-async def test_build_backend_watsonx_success():
+def test_build_backend_watsonx_success():
     from modulo.core.model_backend_hub import _build_backend
 
     with patch("modulo.core.model_backend_hub._backend_class") as mock_cls:
@@ -1073,7 +1073,7 @@ async def test_build_backend_watsonx_success():
     mock_cls.assert_called_once_with("watsonx", "WatsonXBackend")
 
 
-async def test_build_backend_openai_compatible_default_base_url():
+def test_build_backend_openai_compatible_default_base_url():
     from modulo.core.model_backend_hub import _build_backend
     from modulo.model_backends.module import OpenAICompatibleBackend
 
@@ -1082,7 +1082,7 @@ async def test_build_backend_openai_compatible_default_base_url():
     assert backend.base_url == "http://localhost:11434/v1"
 
 
-async def test_build_backend_openai_no_default_base_url():
+def test_build_backend_openai_no_default_base_url():
     from modulo.core.model_backend_hub import _build_backend
     from modulo.model_backends.module import OpenAICompatibleBackend
 
@@ -1091,7 +1091,7 @@ async def test_build_backend_openai_no_default_base_url():
     assert backend.base_url is None
 
 
-async def test_build_backend_plugin_missing_api_key_raises():
+def test_build_backend_plugin_missing_api_key_raises():
     from modulo.core.model_backend_hub import _build_backend
     from modulo.core.plugin_registry import PluginManifest, PluginRegistry
 
@@ -1108,7 +1108,7 @@ async def test_build_backend_plugin_missing_api_key_raises():
         _build_backend("plugin_no_key", "model", {}, {})
 
 
-async def test_build_backend_plugin_cancelled_propagates():
+def test_build_backend_plugin_cancelled_propagates():
     from modulo.core.model_backend_hub import _build_backend
     from modulo.core.plugin_registry import PluginManifest, PluginRegistry
 
@@ -1128,14 +1128,14 @@ async def test_build_backend_plugin_cancelled_propagates():
         _build_backend("plugin_cancel", "model", {"api_key": "x"}, {})
 
 
-async def test_build_backend_unknown_provider():
+def test_build_backend_unknown_provider():
     from modulo.core.model_backend_hub import _build_backend
 
     with pytest.raises(ValueError, match="Unknown model backend provider"):
         _build_backend("no_such_provider", "model", {"api_key": "x"}, {})
 
 
-async def test_build_backend_forwards_default_params_to_class_backend():
+def test_build_backend_forwards_default_params_to_class_backend():
     """default_params must be forwarded to non-OpenAI-compatible backends
     (e.g. cohere) alongside api_key and model_id."""
     from modulo.core.model_backend_hub import _build_backend
@@ -1158,7 +1158,7 @@ async def test_build_backend_forwards_default_params_to_class_backend():
     mock_cls.assert_called_once_with("cohere", "CohereBackend")
 
 
-async def test_build_backend_forwards_default_params_to_bedrock():
+def test_build_backend_forwards_default_params_to_bedrock():
     """default_params must be forwarded to the bedrock backend."""
     from modulo.core.model_backend_hub import _build_backend
 
@@ -1180,7 +1180,7 @@ async def test_build_backend_forwards_default_params_to_bedrock():
     }
 
 
-async def test_build_backend_openai_compatible_uses_explicit_base_url():
+def test_build_backend_openai_compatible_uses_explicit_base_url():
     """A creds-supplied base_url must override the provider default."""
     from modulo.core.model_backend_hub import _build_backend
     from modulo.model_backends.module import OpenAICompatibleBackend
@@ -1195,7 +1195,7 @@ async def test_build_backend_openai_compatible_uses_explicit_base_url():
     assert backend.base_url == "http://custom:9999/v1"
 
 
-async def test_build_backend_openai_compatible_forwards_default_params():
+def test_build_backend_openai_compatible_forwards_default_params():
     """default_params must reach the OpenAI-compatible backend constructor."""
     from modulo.core.model_backend_hub import _build_backend
     from modulo.model_backends.module import OpenAICompatibleBackend
@@ -1335,7 +1335,7 @@ async def test_initialise_custom_provider_with_invalid_ciphertext_skips_backend(
 # ---------------------------------------------------------------------------
 
 
-async def test_error_classes_expose_backend_id():
+def test_error_classes_expose_backend_id():
     bid = uuid.uuid4()
     assert BackendNotFoundError(bid).backend_id == bid
     assert BackendUnavailableError(bid).backend_id == bid
@@ -1345,31 +1345,31 @@ async def test_error_classes_expose_backend_id():
     assert str(bid) in str(BackendDecryptError(bid))
 
 
-async def test_register_marks_backend_healthy():
+def test_register_marks_backend_healthy():
     hub = ModelBackendHub()
     bid = uuid.uuid4()
     hub.register(bid, _FakeBackend())
     assert hub._healthy[bid] is True
 
 
-async def test_extract_fixture_map_prefers_default_params():
+def test_extract_fixture_map_prefers_default_params():
     result = _extract_fixture_map({"fixture_map": {"a": "1"}}, {"fixture_map": {"b": "2"}})
     assert result == {"b": "2"}
 
 
-async def test_extract_fixture_map_falls_back_to_creds():
+def test_extract_fixture_map_falls_back_to_creds():
     result = _extract_fixture_map({"fixture_map": {"a": "1"}}, {})
     assert result == {"a": "1"}
 
 
-async def test_extract_fixture_map_empty_when_absent():
+def test_extract_fixture_map_empty_when_absent():
     assert not _extract_fixture_map({}, {})
 
 
-async def test_extract_fixture_map_ignores_non_dict():
+def test_extract_fixture_map_ignores_non_dict():
     assert not _extract_fixture_map({"fixture_map": "nope"}, {})
 
 
-async def test_backend_class_lazy_import():
+def test_backend_class_lazy_import():
     cls = _backend_class("stub", "StubModelBackend")
     assert cls.__name__ == "StubModelBackend"

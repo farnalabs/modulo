@@ -223,14 +223,14 @@ class TestRequireTargetOrgRoleMutations:
         assert excinfo.value.status_code == 403
 
     @pytest.mark.asyncio
-    async def test_invalid_min_role_is_configuration_error(self) -> None:
+    def test_invalid_min_role_is_configuration_error(self) -> None:
         from modulo.auth.permissions import PermissionConfigurationError
 
         with pytest.raises(PermissionConfigurationError):
             require_target_org_role("org.email.manage", "superadmin")
 
     @pytest.mark.asyncio
-    async def test_min_role_mismatch_with_registry_is_configuration_error(self) -> None:
+    def test_min_role_mismatch_with_registry_is_configuration_error(self) -> None:
         from modulo.auth.permissions import PermissionConfigurationError
 
         with pytest.raises(PermissionConfigurationError):

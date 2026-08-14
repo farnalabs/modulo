@@ -230,7 +230,7 @@ async def test_start_and_stop_lifecycle() -> None:
     assert job._task is None
 
 
-async def test_notifier_passed_through_constructor() -> None:
+def test_notifier_passed_through_constructor() -> None:
     """Notifier is stored as _notifier on the job."""
     engine = MagicMock()
     notifier = object()
@@ -238,7 +238,7 @@ async def test_notifier_passed_through_constructor() -> None:
     assert job._notifier is notifier
 
 
-async def test_no_notifier_defaults_to_none() -> None:
+def test_no_notifier_defaults_to_none() -> None:
     """When notifier is not provided, _notifier is None."""
     engine = MagicMock()
     job = ClaimExpiryJob(engine)

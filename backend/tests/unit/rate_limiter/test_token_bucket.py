@@ -45,13 +45,13 @@ class TestTokenBucket:
         with pytest.raises(ValueError, match="tokens must be > 0"):
             await bucket.consume(0)
 
-    async def test_constructor_validates_rate(self) -> None:
+    def test_constructor_validates_rate(self) -> None:
         with pytest.raises(ValueError, match="rate must be > 0"):
             TokenBucket(rate=0, burst=1)
         with pytest.raises(ValueError, match="rate must be > 0"):
             TokenBucket(rate=-1, burst=1)
 
-    async def test_constructor_validates_burst(self) -> None:
+    def test_constructor_validates_burst(self) -> None:
         with pytest.raises(ValueError, match="burst must be > 0"):
             TokenBucket(rate=1.0, burst=0)
         with pytest.raises(ValueError, match="burst must be > 0"):

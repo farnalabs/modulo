@@ -216,7 +216,7 @@ def hub_global_exporter() -> InMemorySpanExporter:
     return exporter
 
 
-async def test_traced_connector_getattr_proxies_to_inner(traced: _TracedConnector) -> None:
+def test_traced_connector_getattr_proxies_to_inner(traced: _TracedConnector) -> None:
     """Unknown attributes are proxied to the inner connector."""
     inner = traced._inner
     inner.custom_method = lambda: "proxied"  # type: ignore[attr-defined]

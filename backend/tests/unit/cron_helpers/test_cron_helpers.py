@@ -2617,7 +2617,7 @@ class TestCatchupReviewFindings:
         assert marker_key.endswith(str(int(due.timestamp())))
 
     @pytest.mark.asyncio
-    async def test_marker_ttl_covers_worst_case_inflight(self) -> None:
+    def test_marker_ttl_covers_worst_case_inflight(self) -> None:
         """Finding 3: the marker TTL covers the worst-case fire-job in-flight
         window (timeout x (retries+1)) so a pending job cannot outlive its
         marker and get re-fired."""

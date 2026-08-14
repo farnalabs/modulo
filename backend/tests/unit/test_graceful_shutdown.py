@@ -90,7 +90,7 @@ class TestShutdownManager:
         await m.shutdown()
         assert calls == ["b", "a"]
 
-    async def test_request_finished_without_started(self, manager: ShutdownManager) -> None:
+    def test_request_finished_without_started(self, manager: ShutdownManager) -> None:
         manager.request_finished()
         assert manager._active_requests == -1
 

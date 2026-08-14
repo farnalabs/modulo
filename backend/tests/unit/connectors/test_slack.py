@@ -1278,7 +1278,7 @@ async def test_query_channels_json_error(connector):
 
 
 @respx.mock
-async def test_parse_retry_after_valid():
+def test_parse_retry_after_valid():
     resp = httpx.Response(429, headers={"Retry-After": "12.5"})
     assert _parse_retry_after(resp) == 12.5
 

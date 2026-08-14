@@ -100,7 +100,7 @@ async def test_advisory_lock_acquire_contention_then_release(lock_service):
     assert lock_service._resource_id is None
 
 
-async def test_uuid_to_lock_keys_round_trip():
+def test_uuid_to_lock_keys_round_trip():
     """_uuid_to_lock_keys produces stable int4 keys for the same UUID."""
     from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 
@@ -114,7 +114,7 @@ async def test_uuid_to_lock_keys_round_trip():
     assert key2 == key2b
 
 
-async def test_uuid_to_lock_keys_different_uuids_differ():
+def test_uuid_to_lock_keys_different_uuids_differ():
     """Different UUIDs produce different lock key pairs."""
     from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 
@@ -126,7 +126,7 @@ async def test_uuid_to_lock_keys_different_uuids_differ():
     assert not (k1a == k1b and k2a == k2b)
 
 
-async def test_uuid_to_lock_keys_rejects_non_uuid():
+def test_uuid_to_lock_keys_rejects_non_uuid():
     """_uuid_to_lock_keys raises TypeError for non-UUID input."""
     from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 
@@ -134,7 +134,7 @@ async def test_uuid_to_lock_keys_rejects_non_uuid():
         _uuid_to_lock_keys("not-a-uuid")  # type: ignore[arg-type]
 
 
-async def test_uuid_to_lock_keys_within_int4_range():
+def test_uuid_to_lock_keys_within_int4_range():
     """_uuid_to_lock_keys produces signed 32-bit keys accepted by pg_try_advisory_lock."""
     from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 

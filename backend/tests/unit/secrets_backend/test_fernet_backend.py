@@ -212,7 +212,7 @@ class TestDeleteSecret:
 
 
 class TestSetSession:
-    async def test_set_session_after_construction(self):
+    def test_set_session_after_construction(self):
         backend = FernetSecretsBackend(fernet_key=_KEY)
         session = MagicMock()
         session.execute = AsyncMock()

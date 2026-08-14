@@ -100,6 +100,13 @@ regression that silently weakens the suite:
   ``frozenset()``) — the call-based twin of the ``== []``/``== {}`` literal
   lens. Every such builtin returns a falsy container, so these should read
   ``assert not x`` / ``assert x``
+- ``async def test_*`` functions whose body contains *no* async construct at
+  all — no ``await``, no ``async with``, no ``async for``, no ``yield``. An
+  async test that never suspends runs plain synchronous code on the event
+  loop for no reason, and the coroutine boundary is a silent-false-green
+  hazard: anyone who later calls an ``async`` function and forgets the
+  ``await`` will find the assertion comparing against a coroutine object
+  (always truthy) instead of failing. Declare such tests as a plain ``def``.
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -2336,3 +2343,120 @@ def test_negated_comparison_lens_flags_reversed_asserts():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _negated_comparison_assert_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+_ASYNC_CONSTRUCTS = (ast.Await, ast.AsyncWith, ast.AsyncFor, ast.Yield)
+"""Node types that make a function genuinely async. ``async def`` alone is not
+one of them — a test can be declared ``async def`` and still never suspend if
+its body contains none of these (an ``await`` expression, an ``async with``
+block, an ``async for`` loop, or a ``yield`` that turns the function into an
+async generator). Async *comprehensions* (``[x async for x in y]``) are not a
+distinct node type — they are a plain comprehension whose ``comprehension``
+clause carries ``is_async=1`` — so they are detected separately."""
+
+
+def _function_is_async(node: ast.AST) -> bool:
+    """True when ``node`` (an ``async def``) actually suspends anywhere: it
+    contains an ``await``, ``async with``, ``async for``, ``yield``, or an
+    async comprehension. A nested ``async def`` helper is walked too — it is
+    only a coroutine if it actually awaits, so a test that merely *defines*
+    an async helper without awaiting it is still synchronous in the way that
+    matters here."""
+    for sub in ast.walk(node):
+        if isinstance(sub, _ASYNC_CONSTRUCTS):
+            return True
+        if isinstance(sub, ast.comprehension) and sub.is_async:
+            return True
+    return False
+
+
+def _async_test_without_async_behavior_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``async def test_*`` whose
+    body contains no async construct at all (including async comprehensions)."""
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AsyncFunctionDef):
+            continue
+        if any(_decorator_name(d) == "fixture" for d in node.decorator_list):
+            continue
+        if not (node.name.startswith("test_") or any(_decorator_name(d) == "mark" for d in node.decorator_list)):
+            continue
+        if _function_is_async(node):
+            continue
+        effective_body = [s for s in node.body if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant))]
+        if all(isinstance(s, ast.Pass) for s in effective_body):
+            continue
+        found.append(
+            (
+                node.lineno,
+                f"async def {node.name}() — body never awaits, declares no async with/for, "
+                "yields nothing, and has no async comprehension; declare it a plain def",
+            )
+        )
+    return found
+
+
+def test_no_async_test_without_async_behavior():
+    """``async def test_*`` whose body contains no async construct — no
+    ``await``, ``async with``, ``async for``, or ``yield`` — runs plain
+    synchronous code on the event loop and gains nothing from being a
+    coroutine. Worse, the ``async`` boundary is a silent-false-green hazard:
+    the first time someone edits the test to call an ``async`` function and
+    forgets the ``await``, the assertion compares against a coroutine object
+    (always truthy) and reports green without exercising the code under test.
+    The suite runs with ``asyncio_mode = "auto"``, so declaring such tests as
+    a plain ``def`` costs nothing and removes the boundary entirely. Tests
+    that genuinely suspend (``await``/``async with``/``async for``/``yield``
+    or an async comprehension) are left alone."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _async_test_without_async_behavior_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} async test function(s) that never suspend.\n"
+        "An async test whose body contains no await/async with/async for/yield is a "
+        "needless coroutine boundary — and a future unawaited call inside it would "
+        "assert against a coroutine object (always truthy) instead of failing.\n"
+        "Declare it a plain 'def' so the call cannot silently pass.\n" + "\n".join(violations)
+    )
+
+
+def test_async_test_lens_flags_needlessly_async_tests():
+    """Synthetic positive/negative control for the needlessly-async lens: must
+    flag ``async def test_*`` whose body contains no async construct (asserts,
+    raises-contexts, and bare calls alike) and ignore tests that actually
+    suspend (``await``, ``async with``, ``async for``), async generators
+    (``yield``), sync tests, and fixtures."""
+    positive_sources = [
+        "async def test_foo():\n    assert foo() == 1\n",
+        "async def test_foo(self):\n    return self.x\n",
+        "async def test_foo():\n    with pytest.raises(ValueError):\n        foo()\n",
+        "async def test_foo():\n    assert await_unaware_call()\n",
+        "async def test_foo():\n    def helper():\n        return 1\n    assert helper() == 1\n",
+        "async def test_foo():\n"
+        "    class Helper:\n"
+        "        async def run(self):\n"
+        "            return 1\n"
+        "    assert Helper().run() is not None\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _async_test_without_async_behavior_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "async def test_foo():\n    await foo()\n",
+        "async def test_foo():\n    async with foo():\n        pass\n",
+        "async def test_foo():\n    async for x in foo():\n        pass\n",
+        "async def test_foo():\n    chunks = [x async for x in foo()]\n",
+        "async def test_foo():\n    yield 1\n",
+        "def test_foo():\n    assert foo() == 1\n",
+        "@pytest.fixture\nasync def make_thing():\n    return 1\n",
+        "async def helper():\n    await foo()\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _async_test_without_async_behavior_violations(tree), f"lens should NOT flag:\n{source}"

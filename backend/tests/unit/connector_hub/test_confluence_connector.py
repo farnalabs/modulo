@@ -333,7 +333,7 @@ async def test_http_error_propagation(connector):
 # ---------------------------------------------------------------------------
 
 
-async def test_raises_on_missing_creds():
+def test_raises_on_missing_creds():
     with pytest.raises(ValueError, match="must contain either"):
         ConfluenceConnector(instance=INSTANCE, creds={})
 

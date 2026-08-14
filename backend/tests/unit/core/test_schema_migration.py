@@ -395,7 +395,7 @@ class TestMigrationRegistry:
         await registry.register("2.0.0", "3.0.0", lambda d: d)
         assert len(registry) == 2
 
-    async def test_get_migration_nonexistent(self) -> None:
+    def test_get_migration_nonexistent(self) -> None:
         registry = MigrationRegistry()
         assert registry.get_migration("1.0.0", "9.9.9") is None
 

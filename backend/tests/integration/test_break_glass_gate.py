@@ -153,7 +153,7 @@ async def test_rogue_rolsuper_and_privileged_membership_fail_boot(migrated_db_ur
         await conn.close()
 
 
-async def test_allow_list_constant_is_the_ten_writable_columns() -> None:
+def test_allow_list_constant_is_the_ten_writable_columns() -> None:
     """Schema-evolution tripwire: the allow-list constant is exactly the 10 columns."""
     assert tuple(sorted(ACCOUNTS_WRITABLE_COLUMNS)) == (
         "active",
@@ -209,7 +209,7 @@ async def test_connectivity_exhaustion_respects_boot_failure_mode() -> None:
     assert attempts == 4
 
 
-async def test_pinned_backoff_is_1_2_4() -> None:
+def test_pinned_backoff_is_1_2_4() -> None:
     """The boot-gate backoff profile is pinned to 1s->2s->4s."""
     assert _BOOT_BACKOFF_SECONDS == (1.0, 2.0, 4.0)
 

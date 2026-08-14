@@ -276,14 +276,14 @@ class TestResolveLogLevel:
 
 
 class TestLogAsyncEmitError:
-    async def test_logs_exception_when_present(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_logs_exception_when_present(self, caplog: pytest.LogCaptureFixture) -> None:
         future: asyncio.Future[None] = asyncio.Future()
         future.set_exception(ValueError("boom"))
         with caplog.at_level(logging.ERROR, logger="modulo.core.logging_config"):
             _log_async_emit_error(future)
         assert any("async_emit_failed" in r.getMessage() for r in caplog.records)
 
-    async def test_no_exception_no_log(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_no_exception_no_log(self, caplog: pytest.LogCaptureFixture) -> None:
         future: asyncio.Future[None] = asyncio.Future()
         future.set_result(None)
         with caplog.at_level(logging.ERROR, logger="modulo.core.logging_config"):
