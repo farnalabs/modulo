@@ -239,7 +239,7 @@ async def test_create_workspace_propagates_container_failure(
             )
         )
 
-    assert provider._workspaces == {}
+    assert not provider._workspaces
 
 
 # ------------------------------------------------------------------
@@ -512,7 +512,7 @@ async def test_close_destroys_all_workspaces(
     await provider.close()
 
     assert provider._client is None
-    assert provider._workspaces == {}
+    assert not provider._workspaces
     assert mock_container.stop.await_count == 2
 
 
@@ -552,7 +552,7 @@ async def test_create_workspace_cancellation_propagates(
             )
         )
 
-    assert provider._workspaces == {}
+    assert not provider._workspaces
 
 
 async def test_exec_command_failure_propagates(

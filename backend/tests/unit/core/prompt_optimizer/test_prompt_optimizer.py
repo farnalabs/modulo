@@ -69,14 +69,14 @@ class TestEnsureDict:
         assert _ensure_dict(value) == {"pattern": "x"}
 
     def test_json_string_non_dict_returns_empty(self) -> None:
-        assert _ensure_dict("[1, 2, 3]") == {}
+        assert not _ensure_dict("[1, 2, 3]")
 
     def test_invalid_json_string_returns_empty(self) -> None:
-        assert _ensure_dict("{not json") == {}
+        assert not _ensure_dict("{not json")
 
     def test_wrong_type_returns_empty(self) -> None:
-        assert _ensure_dict(42) == {}
-        assert _ensure_dict(None) == {}
+        assert not _ensure_dict(42)
+        assert not _ensure_dict(None)
 
 
 class TestBuildFailureContext:

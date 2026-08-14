@@ -323,12 +323,12 @@ async def test_input_schema_check_mismatched_payload_errors():
 
 def test_validate_payload_missing_schema_definition():
     gv = GraphValidator()
-    assert gv._validate_payload({"a": 1}, None) == []
+    assert not gv._validate_payload({"a": 1}, None)
 
 
 def test_validate_payload_non_dict_properties():
     gv = GraphValidator()
-    assert gv._validate_payload({"a": 1}, {"type": "object", "properties": "nope"}) == []
+    assert not gv._validate_payload({"a": 1}, {"type": "object", "properties": "nope"})
 
 
 def test_validate_payload_non_dict_field_def():

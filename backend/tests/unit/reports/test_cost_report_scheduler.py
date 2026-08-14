@@ -228,7 +228,7 @@ async def test_cost_crud_filters_and_cannot_delete_quality_report() -> None:
     session = MockSession([listed])
     org_id = uuid.uuid4()
 
-    assert await list_scheduled_reports(cast(AsyncSession, session), organisation_id=org_id) == []
+    assert not await list_scheduled_reports(cast(AsyncSession, session), organisation_id=org_id)
     list_sql = str(session.execute.await_args_list[0].args[0])
     assert "scheduled_reports.report_type =" in list_sql
 

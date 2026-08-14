@@ -98,7 +98,7 @@ def test_list_providers_returns_copy() -> None:
     assert providers["a"] is a
     # Mutating returned dict should not affect hub
     providers.clear()
-    assert hub.list_providers() != {}
+    assert hub.list_providers() == {"a": a, "b": b}
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +392,7 @@ class TestInitialise:
     async def test_empty_config_is_noop(self) -> None:
         hub = RuntimeProviderHub()
         await hub.initialise({})
-        assert hub.list_providers() == {}
+        assert not hub.list_providers()
 
     async def test_local_docker_register_race_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         """If a concurrent task registers the name first, log instead of crashing."""
@@ -437,7 +437,7 @@ class TestCreateLease:
         lease = await hub.create_lease(_lease_profile(), run_id, session)
 
         assert lease is existing
-        assert provider.created == []
+        assert not provider.created
         session.add.assert_not_called()
 
     async def test_creates_lease_from_profile(self) -> None:

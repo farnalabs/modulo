@@ -52,7 +52,7 @@ def test_applies_xfail_with_reason(tmp_path: Path) -> None:
     marker = items[0]._markers[0]
     assert marker.name == "xfail"
     assert marker.kwargs["reason"] == "race"
-    assert items[1]._markers == []
+    assert not items[1]._markers
 
 
 def test_unlisted_items_untouched(tmp_path: Path) -> None:
@@ -65,7 +65,7 @@ def test_unlisted_items_untouched(tmp_path: Path) -> None:
 
     quarantine_plugin.pytest_collection_modifyitems(_FakeConfig(qfile), items)
 
-    assert items[0]._markers == []
+    assert not items[0]._markers
 
 
 def test_default_reason_used_when_omitted(tmp_path: Path) -> None:
@@ -98,7 +98,7 @@ def test_missing_file_is_noop(tmp_path: Path) -> None:
 
     quarantine_plugin.pytest_collection_modifyitems(_FakeConfig(tmp_path / "nope.yml"), items)
 
-    assert items[0]._markers == []
+    assert not items[0]._markers
 
 
 def test_empty_quarantine_section_is_noop(tmp_path: Path) -> None:
@@ -108,7 +108,7 @@ def test_empty_quarantine_section_is_noop(tmp_path: Path) -> None:
 
     quarantine_plugin.pytest_collection_modifyitems(_FakeConfig(qfile), items)
 
-    assert items[0]._markers == []
+    assert not items[0]._markers
 
 
 def test_invalid_expiry_ignored(tmp_path: Path) -> None:

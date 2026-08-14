@@ -98,8 +98,8 @@ def _compiled_sql(statement: object) -> str:
 
 
 def test_normalize_content_empty_payload_stays_empty() -> None:
-    assert normalize_content({}) == {}
-    assert normalize_content(None) == {}
+    assert not normalize_content({})
+    assert not normalize_content(None)
 
 
 def test_normalize_content_accepts_canonical_shape() -> None:
@@ -243,7 +243,7 @@ def test_normalize_content_accepts_transitions_alias() -> None:
 
 def test_normalize_content_drops_transitions_when_edges_absent() -> None:
     result = normalize_content({"transitions": [], "notes": "plan"})
-    assert result["edges"] == []
+    assert not result["edges"]
     assert "transitions" not in result
     assert result["notes"] == "plan"
 
@@ -759,7 +759,7 @@ class TestLifecycleMapConcurrentSaves:
                     snapshot = await get_lifecycle_map(session_b, _MAP_ID)
                 assert snapshot is not None
                 assert snapshot.version == 2, "reader must not see the uncommitted save"
-                assert snapshot.content_json["stages"] == []
+                assert not snapshot.content_json["stages"]
 
             async with maker() as s, s.begin():
                 final = await get_lifecycle_map(s, _MAP_ID)

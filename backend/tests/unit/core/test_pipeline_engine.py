@@ -51,7 +51,7 @@ class TestSeedState:
         assert state["run_context"]["input"] == {"key": "value"}
         assert state["run_context"]["cancelled"] is False
         assert state["run_context"]["branch"] == "main"
-        assert state["artifacts"] == []
+        assert not state["artifacts"]
 
     def test_feedback_correction_is_promoted(self) -> None:
         snapshot = _make_snapshot(run_context_defaults={})

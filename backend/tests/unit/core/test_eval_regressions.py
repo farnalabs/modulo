@@ -262,7 +262,7 @@ class TestDetectRegressionsDirect:
 
         alerts = await detect_regressions(session, _ORG_ID, days=7, threshold=0.15)
         assert len(alerts) == 1
-        assert alerts[0].affected_run_ids == []
+        assert not alerts[0].affected_run_ids
 
     # ── recent_window_ratio ──────────────────────────────────────────────
 
@@ -549,4 +549,4 @@ class TestRegressionAlertsEndpoint:
         resp = TestClient(app).get(self.URL)
         data = resp.json()
         assert data["total_regressions"] == 0
-        assert data["alerts"] == []
+        assert not data["alerts"]

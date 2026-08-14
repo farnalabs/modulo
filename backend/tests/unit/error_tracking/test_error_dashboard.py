@@ -89,7 +89,7 @@ class TestListErrorGroups:
             resp = client.get("/api/v1/errors")
             assert resp.status_code == 200
             data = resp.json()
-            assert data["items"] == []
+            assert not data["items"]
             assert data["total"] == 0
             assert data["limit"] == 20
 

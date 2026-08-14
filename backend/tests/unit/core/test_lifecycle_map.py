@@ -107,14 +107,14 @@ async def test_create_lifecycle_map_defaults(session: AsyncMock) -> None:
     assert kwargs["owner_team_id"] is None
     assert kwargs["visibility"] == "org"
     assert kwargs["version"] == 1
-    assert kwargs["content_json"] == {}
+    assert not kwargs["content_json"]
 
 
 async def test_create_lifecycle_map_none_content_becomes_empty_dict(session: AsyncMock) -> None:
     with patch("modulo.core.lifecycle_map.service.LifecycleMap", return_value=_make_map()) as model_cls:
         await create_lifecycle_map(session, org_id=_ORG_ID, name="Empty", account_id=_ACCOUNT_ID, content_json=None)
 
-    assert model_cls.call_args.kwargs["content_json"] == {}
+    assert not model_cls.call_args.kwargs["content_json"]
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +226,7 @@ async def test_list_lifecycle_maps_returns_empty_page_on_programming_error(sessi
     result = await list_lifecycle_maps(session, page=1, page_size=20)
 
     assert isinstance(result, PageResult)
-    assert result.items == []
+    assert not result.items
     assert result.total == 0
     assert result.page == 1
     assert result.page_size == 20

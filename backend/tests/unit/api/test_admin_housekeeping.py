@@ -159,7 +159,7 @@ class TestListHousekeeping:
         assert resp.status_code == 200
         body = resp.json()
         assert body["total_count"] == 0
-        assert body["categories"] == []
+        assert not body["categories"]
 
     def test_returns_403_for_non_admin(self, viewer_client: TestClient) -> None:
         resp = viewer_client.get(self.URL)
@@ -224,7 +224,7 @@ class TestPerformCleanup:
         assert resp.status_code == 200
         body = resp.json()
         assert body["deleted_count"] == 1
-        assert body["errors"] == []
+        assert not body["errors"]
         session.delete.assert_awaited_once_with(obj)
 
     def test_unknown_entity_type_reports_error(self, client: TestClient) -> None:

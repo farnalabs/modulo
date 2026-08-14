@@ -172,8 +172,8 @@ class TestGetIntegrationStatus:
         assert "No connectors configured." in result["results"]
         assert "No model backends configured." in result["results"]
         assert "Total triggers: 0" in result["results"]
-        assert result["connectors"] == []
-        assert result["model_backends"] == []
+        assert not result["connectors"]
+        assert not result["model_backends"]
         assert result["trigger_count"] == 0
 
     async def test_returns_connector_and_backend_rows(self) -> None:

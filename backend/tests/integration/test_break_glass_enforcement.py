@@ -167,7 +167,7 @@ async def test_allow_list_positive_control(migrated_db_url: str) -> None:
     allow-list assertion detect a violation (iteration-17 positive control)."""
     conn = await _pg_connect(migrated_db_url)
     try:
-        assert await _find_allow_list_violations(conn, "modulo_app") == []
+        assert not await _find_allow_list_violations(conn, "modulo_app")
 
         await conn.execute("GRANT UPDATE ON public.accounts TO PUBLIC")
         try:
@@ -176,7 +176,7 @@ async def test_allow_list_positive_control(migrated_db_url: str) -> None:
         finally:
             await conn.execute("REVOKE UPDATE ON public.accounts FROM PUBLIC")
 
-        assert await _find_allow_list_violations(conn, "modulo_app") == []
+        assert not await _find_allow_list_violations(conn, "modulo_app")
     finally:
         await conn.close()
 

@@ -99,7 +99,7 @@ async def test_clean_boot_passes_allow_list_assertion(migrated_db_url: str) -> N
     """A clean post-bootstrap config passes every boot-time assertion."""
     conn = await _pg_connect(migrated_db_url)
     try:
-        assert await _find_allow_list_violations(conn, "modulo_app") == []
+        assert not await _find_allow_list_violations(conn, "modulo_app")
         await _assert_role_posture(conn, "modulo_app")  # must not raise
     finally:
         await conn.close()
@@ -115,7 +115,7 @@ async def test_rogue_table_level_grant_fails_boot(migrated_db_url: str) -> None:
     """
     conn = await _pg_connect(migrated_db_url)
     try:
-        assert await _find_allow_list_violations(conn, "modulo_app") == []
+        assert not await _find_allow_list_violations(conn, "modulo_app")
         await conn.execute("GRANT UPDATE ON public.accounts TO modulo_app")
         try:
             violations = await _find_allow_list_violations(conn, "modulo_app")
@@ -125,7 +125,7 @@ async def test_rogue_table_level_grant_fails_boot(migrated_db_url: str) -> None:
         finally:
             await conn.execute("REVOKE UPDATE ON public.accounts FROM modulo_app")
             await _apply_accounts_allow_list(conn, "modulo_app")
-        assert await _find_allow_list_violations(conn, "modulo_app") == []
+        assert not await _find_allow_list_violations(conn, "modulo_app")
     finally:
         await conn.close()
 
@@ -148,7 +148,7 @@ async def test_rogue_rolsuper_and_privileged_membership_fail_boot(migrated_db_ur
         finally:
             await conn.execute("REVOKE modulo_migrate FROM modulo_app")
 
-        assert await _find_allow_list_violations(conn, "modulo_app") == []
+        assert not await _find_allow_list_violations(conn, "modulo_app")
     finally:
         await conn.close()
 

@@ -975,8 +975,8 @@ def jordan_bundle_includes_topology_schemas_prompts(ctx):
     bundle = ctx.get("exported_bundle", {})
     pipeline = bundle.get("pipeline", {})
     assert "graph_nodes_json" in pipeline, "Missing node topology"
-    assert len(pipeline["graph_nodes_json"]) >= 1, "Empty node topology"
-    assert len(bundle.get("schemas", [])) >= 1, "Missing schemas"
+    assert pipeline["graph_nodes_json"], "Empty node topology"
+    assert bundle.get("schemas", []), "Missing schemas"
     agents = bundle.get("agents", [])
     assert len(agents) >= 1, "Missing agents"
     for agent in agents:

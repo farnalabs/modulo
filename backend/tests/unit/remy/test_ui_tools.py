@@ -157,7 +157,7 @@ class TestDestructivePatternDetection:
 class TestRemyConfigDefaults:
     def test_default_tool_permissions_empty(self):
         config = RemyConfig()
-        assert config.tool_permissions == {}
+        assert not config.tool_permissions
 
     def test_default_permission_mode_is_safe(self):
         config = RemyConfig()
@@ -495,7 +495,7 @@ class TestAgenticLoopRouting:
             0: {"id": "call_x", "name": "click", "args": "not valid json"},
         }
         result = _reconstruct_tool_calls(buffers)
-        assert result[0]["args"] == {}
+        assert not result[0]["args"]
 
     def test_reconstruct_handles_empty_and_none_args(self):
         buffers = {
@@ -503,8 +503,8 @@ class TestAgenticLoopRouting:
             1: {"id": "call_2", "name": "click", "args": None},
         }
         result = _reconstruct_tool_calls(buffers)
-        assert result[0]["args"] == {}
-        assert result[1]["args"] == {}
+        assert not result[0]["args"]
+        assert not result[1]["args"]
 
     def test_reconstruct_sorts_buffers_by_index(self):
         buffers = {

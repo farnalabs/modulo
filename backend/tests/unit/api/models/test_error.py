@@ -351,7 +351,7 @@ class TestErrorListResponse:
 
     def test_empty_items(self) -> None:
         resp = ErrorListResponse(items=[], total=0, limit=10, offset=0)
-        assert resp.items == []
+        assert not resp.items
 
 
 class TestErrorEventListResponse:
@@ -373,4 +373,4 @@ class TestErrorEventListResponse:
 
     def test_empty_items(self) -> None:
         resp = ErrorEventListResponse(items=[], total=0, limit=25, offset=0)
-        assert resp.items == []
+        assert not resp.items

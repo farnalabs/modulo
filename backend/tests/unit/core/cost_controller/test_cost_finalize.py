@@ -374,7 +374,7 @@ async def test_finalize_cost_fallback_de_trusts_cost_estimate_usd() -> None:
     kwargs = mock_urs.await_args.kwargs
     assert kwargs["total_cost_usd"] == Decimal("0.1332")
     # The fallback persists the UN-ENRICHED merged set (cumulative write-back invariant).
-    assert kwargs["node_token_usage"] == {}
+    assert not kwargs["node_token_usage"]
     # Both output columns are written SHAPE-IDENTICAL — never an un-split envelope.
     assert kwargs["outputs_json"] == stored_outputs
     assert kwargs["node_telemetry_json"] == stored_telemetry

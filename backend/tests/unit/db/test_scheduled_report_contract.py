@@ -41,7 +41,7 @@ def test_non_cost_report_does_not_invent_cost_compatibility_values() -> None:
     assert report.group_by is None
     assert report.format is None
     assert report.schedule_type is None
-    assert report.recipients == []
+    assert not report.recipients
 
 
 @pytest.mark.parametrize(

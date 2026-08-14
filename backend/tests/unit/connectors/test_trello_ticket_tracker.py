@@ -64,17 +64,17 @@ class TestToTicket:
         assert ticket.id == "min1"
         assert ticket.title == "Minimal"
         assert ticket.status == "open"
-        assert ticket.labels == []
+        assert not ticket.labels
 
     def test_handles_empty_labels(self, tracker: TrelloTicketTracker) -> None:
         raw = _make_mock_card({"labels": None})
         ticket = tracker._to_ticket(raw)
-        assert ticket.labels == []
+        assert not ticket.labels
 
     def test_missing_labels_key(self, tracker: TrelloTicketTracker) -> None:
         raw = {"id": "no-labels", "name": "No Labels", "closed": False}
         ticket = tracker._to_ticket(raw)
-        assert ticket.labels == []
+        assert not ticket.labels
 
 
 class TestListTickets:

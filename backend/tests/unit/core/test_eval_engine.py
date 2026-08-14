@@ -797,7 +797,7 @@ class TestEvaluateSuiteEdgeCases:
         assert result.aggregate_score == 1.0
         assert result.total_evals == 4
         assert result.passed_evals == 4
-        assert result.blocking_failures == []
+        assert not result.blocking_failures
 
     def test_passing_suite_at_threshold(self) -> None:
         results = [_make_result(passed=True) for _ in range(3)] + [_make_result(passed=False)]
@@ -842,4 +842,4 @@ class TestEvaluateSuiteEdgeCases:
         assert result.aggregate_score == 0.0
         assert result.total_evals == 0
         assert result.passed_evals == 0
-        assert result.blocking_failures == []
+        assert not result.blocking_failures

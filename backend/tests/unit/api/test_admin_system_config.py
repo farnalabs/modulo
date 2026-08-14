@@ -83,7 +83,7 @@ class TestAdminListConfig:
     async def test_system_admin_can_list(self, client_sys_admin, mock_session):
         resp = await client_sys_admin.get("/api/v1/system-admin/config")
         assert resp.status_code == 200
-        assert resp.json() == []
+        assert not resp.json()
 
     @pytest.mark.anyio
     async def test_regular_admin_gets_403(self, client_regular_admin):

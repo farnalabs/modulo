@@ -91,7 +91,7 @@ async def test_programming_error_returns_empty_result() -> None:
     result = await list_connector_instances(session)
 
     assert result.total == 0
-    assert result.items == []
+    assert not result.items
 
 
 async def test_programming_error_on_items_query_returns_empty_result() -> None:
@@ -104,7 +104,7 @@ async def test_programming_error_on_items_query_returns_empty_result() -> None:
     result = await list_connector_instances(session)
 
     assert result.total == 0
-    assert result.items == []
+    assert not result.items
 
 
 async def test_cursor_pagination_applies_filter() -> None:

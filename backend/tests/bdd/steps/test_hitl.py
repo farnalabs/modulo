@@ -421,7 +421,7 @@ def get_feedback_list(client, request):
 def response_has_feedback_item(request):
     body = request.node._resp.json()
     assert "items" in body
-    assert len(body["items"]) >= 1
+    assert body["items"]
 
 
 @when(parsers.parse('I PATCH the feedback record status to "{new_status}"'))

@@ -44,10 +44,10 @@ def test_derive_node_agent_map_reads_graph_nodes() -> None:
 
 
 def test_derive_node_agent_map_malformed_degrades_empty() -> None:
-    assert derive_node_agent_map(None) == {}
-    assert derive_node_agent_map({"nodes": "not-a-list"}) == {}
-    assert derive_node_agent_map({"nodes": [{"id": "a"}]}) == {}
-    assert derive_node_agent_map("not-a-dict") == {}
+    assert not derive_node_agent_map(None)
+    assert not derive_node_agent_map({"nodes": "not-a-list"})
+    assert not derive_node_agent_map({"nodes": [{"id": "a"}]})
+    assert not derive_node_agent_map("not-a-dict")
 
 
 # ---------------------------------------------------------------------------

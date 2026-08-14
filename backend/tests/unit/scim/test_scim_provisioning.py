@@ -284,7 +284,7 @@ class TestPaginationEdgeCases:
         assert resp.status_code == 200
         data = resp.json()
         assert data["totalResults"] == 0
-        assert data["Resources"] == []
+        assert not data["Resources"]
 
     def test_second_page_returns_empty(self, client: TestClient) -> None:
         with (
@@ -301,7 +301,7 @@ class TestPaginationEdgeCases:
         assert resp.status_code == 200
         data = resp.json()
         assert data["totalResults"] == 1
-        assert data["Resources"] == []
+        assert not data["Resources"]
 
     def test_groups_filter_no_match(self, client: TestClient) -> None:
         with (

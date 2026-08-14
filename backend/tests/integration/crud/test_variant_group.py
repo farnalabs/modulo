@@ -259,7 +259,7 @@ async def test_coverage_gaps_detects_missing_evals(
     gaps = await get_coverage_gaps(rls_session, group)
     assert len(gaps) == 1
     assert gaps[0]["variant"]["name"] == "no-evals"
-    assert len(gaps[0]["missing_evals"]) >= 1
+    assert gaps[0]["missing_evals"]
 
 
 async def test_no_coverage_gaps_when_all_evals_present(

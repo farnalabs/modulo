@@ -203,7 +203,7 @@ def _make_begin_nested() -> MagicMock:
 def _bdd_check_cleanup_deleted(request) -> None:
     data = request.node._resp.json()
     assert data["deleted_count"] == 2
-    assert data["errors"] == []
+    assert not data["errors"]
 
 
 @then("the cleanup deletes items scoped to the organisation")

@@ -141,7 +141,7 @@ def test_get_run_events_empty_when_no_broker(client: TestClient) -> None:
         resp = client.get(f"/api/v1/runs/{_RUN_ID}/events")
 
     assert resp.status_code == 200
-    assert resp.json()["events"] == []
+    assert not resp.json()["events"]
 
 
 def test_get_run_events_404_when_run_not_found(client: TestClient) -> None:
