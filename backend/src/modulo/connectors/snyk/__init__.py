@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
 from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors.base import (
     ConnectorBase,
@@ -19,11 +20,10 @@ _API_BASE = "https://api.snyk.io/rest"
 
 
 def _next_cursor(body: dict[str, Any]) -> str | None:
-    links = body.get("links", {})
-    if isinstance(links, dict) and "next" in links:
-        nxt = links["next"]
-        return str(nxt) if nxt is not None else None
-    return None
+    links = body.get("links")
+    if not isinstance(links, dict):
+        return None
+    return _safe_cursor(links.get("next"))
 
 
 def _meta_total(body: dict[str, Any], fallback: int) -> int:
