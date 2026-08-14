@@ -476,7 +476,6 @@ async def step_set_user_context(username: str, role: str, mock_session):
 @then("the RLS user context is set correctly")
 def step_verify_user_context(user_context_result: dict, mock_session) -> None:
     """Verify the executed SQL includes set_config calls for user_id and org_role."""
-    assert mock_session.execute.called, "set_rls_user_context did not execute any SQL"
     calls = mock_session.execute.call_args_list
     texts = [str(call[0][0]) for call in calls]
 

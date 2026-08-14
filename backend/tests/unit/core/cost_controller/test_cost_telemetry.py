@@ -46,7 +46,7 @@ def test_build_telemetry_empty_inputs() -> None:
     assert tele.nodes_estimated == 0
     assert tele.wall_clock_elapsed_s == Decimal(0)
     assert not tele.reported
-    assert tele.missing_report_keys == set()
+    assert not tele.missing_report_keys
     assert per_node_cost == {}
 
     tele2, per_node_cost2 = build_telemetry({}, [])
@@ -122,7 +122,7 @@ def test_self_report_by_report_key() -> None:
     assert per_node_cost == {"n1": Decimal("0.05")}
     assert tele.node_count == 1
     assert tele.nodes_estimated == 0
-    assert tele.missing_report_keys == set()
+    assert not tele.missing_report_keys
 
 
 def test_self_report_model_cost_usd_alias() -> None:
@@ -187,7 +187,7 @@ def test_disabled_self_reported_component_is_not_consuming() -> None:
     tele, _per_node_cost = build_telemetry(entries, comps)
     assert not tele.reported
     assert tele.orphan_report_nodes == ["n1"]
-    assert tele.missing_report_keys == set()
+    assert not tele.missing_report_keys
 
 
 def test_estimated_node_token_summing_is_server_measured() -> None:

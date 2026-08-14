@@ -70,14 +70,18 @@ class LifecycleMapTransfer(BaseModel):
 
     This is the primitive shape ``GET .../export`` returns and ``POST
     /import`` accepts: ``content_json`` holds the canonical stages/edges/notes
-    graph and is validated with the same rules as an editor save.
+    graph and is validated with the same rules as an editor save. ``format_version``
+    is ``2`` and the optional ``versions`` array carries the version history
+    (each version's stages/edges/notes + metadata); a v1 envelope without
+    ``versions`` still imports as a single-version map.
     """
 
     primitive_type: Literal["lifecycle_map"] = "lifecycle_map"
-    format_version: str = "1"
+    format_version: str = "2"
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
     content_json: dict[str, Any] = Field(default_factory=dict)
+    versions: list[dict[str, Any]] | None = None
 
 
 class LifecycleMapResponse(BaseModel):

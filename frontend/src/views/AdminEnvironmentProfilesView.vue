@@ -284,7 +284,7 @@
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, reactive, computed } from 'vue'
-import { api } from '../lib/api/client'
+import { api, getAccessToken } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
@@ -576,7 +576,7 @@ async function testConnection(profile: ProfileItem) {
     const response = await fetch(`/api/v1/environments/${profile.id}/test`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${localStorage.getItem('modulo_access_token') ?? ''}`,
+        Authorization: `Bearer ${getAccessToken() ?? ''}`,
       },
     })
     if (!response.ok) {

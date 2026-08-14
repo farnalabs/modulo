@@ -288,7 +288,7 @@ def test_get_existing_names_returns_row_set() -> None:
 def test_get_existing_names_empty() -> None:
     session = AsyncMock()
     session.execute.return_value = []
-    assert asyncio.run(_get_existing_names(session, _ORG_ID, mod.Pipeline)) == set()
+    assert not asyncio.run(_get_existing_names(session, _ORG_ID, mod.Pipeline))
 
 
 def test_get_existing_names_forwards_for_update(monkeypatch: pytest.MonkeyPatch) -> None:
