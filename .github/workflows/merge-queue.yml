@@ -540,6 +540,15 @@ jobs:
 
             if gh pr merge --squash "$NUM" 2>&1; then
               echo "    PR #$NUM merged --"
+              # Delete the PR's source branch right after a successful merge
+              # (best-effort: a delete failure must never fail the queue). Use the
+              # GitHub API to delete the remote ref -- gh pr merge --delete-branch
+              # would also try to delete the LOCAL branch, which is unreliable from
+              # a checkout on merge-queue. Never delete main.
+              HEAD_REF=$(gh pr view "$NUM" --json headRefName --jq '.headRefName' 2>/dev/null || echo "")
+              if [ -n "$HEAD_REF" ] && [ "$HEAD_REF" != "main" ]; then
+                gh api -X DELETE "repos/${{ github.repository }}/git/refs/heads/$HEAD_REF" 2>/dev/null && echo "    Deleted source branch $HEAD_REF for PR #$NUM" || echo "    Could not delete branch $HEAD_REF (may already be gone)"
+              fi
             else
               echo "    PR #$NUM failed to merge via gh -- will close with comment"
               FAILED="$FAILED $NUM"
@@ -599,6 +608,37 @@ jobs:
             -d "$PAYLOAD" 2>/dev/null \
             && echo "Self-report delivered to Modulo." \
             || echo "::warning::Modulo self-report POST failed - merged PRs recorded in log only (fail-open)."
+
+      - name: Delete branches whose PRs are already merged (defense-in-depth)
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          # Defense-in-depth sweep: catch (a) branches whose PR was merged outside
+          # this queue run (e.g. manual merges) and (b) any branch whose delete
+          # failed in the per-PR step above. Every delete is best-effort so a
+          # failure can never fail the queue. Never delete main, and never delete
+          # a branch that is the head of an OPEN PR (a merged branch can be reused).
+          echo "Sweeping for branches whose PRs are already merged..."
+          # List merged PRs (paginated) and collect their head branches
+          gh api "repos/${{ github.repository }}/pulls?state=closed&per_page=100&sort=updated&direction=desc" --paginate --jq '.[] | select(.merged_at != null) | .head.ref' 2>/dev/null | sort -u > /tmp/merged_heads.txt || true
+          # Branches that still exist on origin
+          gh api "repos/${{ github.repository }}/branches" --paginate --jq '.[].name' 2>/dev/null | sort -u > /tmp/remote_branches.txt || true
+          # Open PR head refs -- never delete a branch an open PR points at
+          gh api "repos/${{ github.repository }}/pulls?state=open&per_page=100" --paginate --jq '.[].head.ref' 2>/dev/null | sort -u > /tmp/open_heads.txt || true
+          # Delete every branch that has a merged PR (guard each delete; never fail the queue)
+          while IFS= read -r branch; do
+            [ -z "$branch" ] && continue
+            [ "$branch" = "main" ] && continue
+            if grep -qx "$branch" /tmp/open_heads.txt 2>/dev/null; then
+              continue
+            fi
+            if grep -qx "$branch" /tmp/merged_heads.txt 2>/dev/null; then
+              gh api -X DELETE "repos/${{ github.repository }}/git/refs/heads/$branch" 2>/dev/null && echo "  Deleted merged branch: $branch" || echo "  Could not delete $branch (may already be gone)"
+            fi
+          done < /tmp/remote_branches.txt
+          echo "Merged-branch sweep complete."
 
       - name: Trigger main CI and deploy after merge
         if: success() && steps.merge.outputs.merged_count != '0'
