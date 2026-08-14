@@ -272,3 +272,43 @@ class TestDeleteNodeCategory:
         ):
             resp = client.delete(f"/api/v1/node-categories/{uuid.uuid4()}")
         assert resp.status_code == 404
+
+    def test_in_use_returns_409(self, client: TestClient) -> None:
+        from modulo.db.crud.node_category import NodeCategoryInUseError
+
+        def _raise_in_use(*_args: object, **_kwargs: object) -> object:
+            raise NodeCategoryInUseError(
+                category_id=_CATEGORY_ID,
+                pipelines=[{"id": str(uuid.uuid4()), "name": "Onboarding flow"}],
+            )
+
+        with (
+            patch("modulo.api.routes.node_categories.soft_delete_node_category", side_effect=_raise_in_use),
+            patch("modulo.api.routes.node_categories.set_rls_org"),
+            patch("modulo.api.routes.node_categories.set_rls_user_context"),
+        ):
+            resp = client.delete(f"/api/v1/node-categories/{_CATEGORY_ID}")
+        assert resp.status_code == 409
+        assert "referenced by 1 pipeline(s): Onboarding flow" in resp.json()["detail"]
+
+    def test_in_use_409_lists_all_pipelines(self, client: TestClient) -> None:
+        from modulo.db.crud.node_category import NodeCategoryInUseError
+
+        def _raise_in_use(*_args: object, **_kwargs: object) -> object:
+            raise NodeCategoryInUseError(
+                category_id=_CATEGORY_ID,
+                pipelines=[
+                    {"id": str(uuid.uuid4()), "name": "Onboarding flow"},
+                    {"id": str(uuid.uuid4()), "name": "Daily report"},
+                ],
+            )
+
+        with (
+            patch("modulo.api.routes.node_categories.soft_delete_node_category", side_effect=_raise_in_use),
+            patch("modulo.api.routes.node_categories.set_rls_org"),
+            patch("modulo.api.routes.node_categories.set_rls_user_context"),
+        ):
+            resp = client.delete(f"/api/v1/node-categories/{_CATEGORY_ID}")
+        assert resp.status_code == 409
+        assert "Onboarding flow" in resp.json()["detail"]
+        assert "Daily report" in resp.json()["detail"]
