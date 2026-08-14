@@ -4,8 +4,9 @@ The script lives at .github/scripts/pr-review-dedup.py and is invoked by the
 ci.yml notify-pr-review job to decide whether the PR Reviewer webhook should
 fire for a given head. It must be tested because the decision is subtle:
 multi-line review bodies and pipe characters in body text break naive
-line-oriented shell parsing, and the merge-conflict-CHANGES_REQUESTED case
-must never be skipped (that would deadlock the PR).
+line-oriented shell parsing, and ANY CHANGES_REQUESTED followed by a
+merge-only head move must dispatch a re-review (skipping would deadlock the
+PR in CHANGES_REQUESTED).
 
 Run: pytest backend/tests/unit/scripts/test_pr_review_dedup.py
 """
@@ -96,20 +97,33 @@ def test_merge_only_approved_skips(tmp_path):
     assert "skip=true" in result.stdout
 
 
-def test_merge_only_code_cr_skips(tmp_path):
-    # Head moved only via merge commits and prior review was a code-findings
-    # CHANGES_REQUESTED: findings still stand, skip (no deadlock - the merge
-    # queue re-verifies and keeps it blocked until a real fix lands).
+def test_merge_only_code_cr_dispatches(tmp_path):
+    # Head moved only via merge commits after a code-findings
+    # CHANGES_REQUESTED: fail open. The merge may have resolved the CI
+    # failure or realigned a stale base, so a re-review is required - a
+    # re-review can only re-confirm the CR or approve, never wrongly unblock.
     reviews = [make_review("b" * 40, "CHANGES_REQUESTED", "delete_pipeline has no team check")]
     result = run_script(tmp_path, reviews, make_history())
-    assert "skip=true" in result.stdout
+    assert "skip=false" in result.stdout
 
 
 def test_merge_only_conflict_cr_dispatches(tmp_path):
-    # Head moved only via merge commits but the prior review was a
-    # merge-conflict CHANGES_REQUESTED: the merge may have resolved it, so a
-    # re-review is required or the PR deadlocks.
+    # Head moved only via merge commits after a merge-conflict
+    # CHANGES_REQUESTED: the merge may have resolved it, so a re-review is
+    # required or the PR deadlocks. (Subsumed by the general fail-open rule
+    # above but kept as an explicit case.)
     reviews = [make_review("b" * 40, "CHANGES_REQUESTED", "PR has merge conflicts with main")]
+    result = run_script(tmp_path, reviews, make_history())
+    assert "skip=false" in result.stdout
+
+
+def test_merge_only_cr_without_conflict_text_dispatches(tmp_path):
+    # Regression for PRs #1263/#1271: a CHANGES_REQUESTED whose body does NOT
+    # mention a merge conflict, followed by a merge-only head move, must STILL
+    # dispatch. The old rule only failed open on bodies containing "merge
+    # conflict", which suppressed the re-review and deadlocked both PRs in
+    # CHANGES_REQUESTED with green CI.
+    reviews = [make_review("b" * 40, "CHANGES_REQUESTED", "some non-conflict finding")]
     result = run_script(tmp_path, reviews, make_history())
     assert "skip=false" in result.stdout
 

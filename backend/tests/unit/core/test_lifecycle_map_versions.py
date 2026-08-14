@@ -22,9 +22,11 @@ from modulo.api.routes.lifecycle_maps import (
     LifecycleMapUpdate,
     VersionSaveRequest,
     create_lifecycle_map_endpoint,
+    delete_lifecycle_map_endpoint,
     graduate_lifecycle_map_stage_endpoint,
     save_lifecycle_map_version_endpoint,
     update_lifecycle_map_endpoint,
+    update_lifecycle_map_version_endpoint,
 )
 from modulo.api.routes.lifecycle_maps import (
     router as lifecycle_maps_router,
@@ -128,7 +130,12 @@ def test_normalize_content_normalizes_editor_aliases() -> None:
                     "external_url": "https://ci.example.com",
                     "owner": "platform",
                     "graduated": True,
-                }
+                },
+                {
+                    "id": "s2",
+                    "name": "Approve",
+                    "stage_type": "manual",
+                },
             ],
             "edges": [{"id": "e1", "source_stage_id": "s1", "target_stage_id": "s2", "trigger_type": "manual"}],
         }
@@ -144,7 +151,15 @@ def test_normalize_content_normalizes_editor_aliases() -> None:
 
 
 def test_normalize_content_accepts_from_to_edge_keys() -> None:
-    result = normalize_content({"edges": [{"id": "e1", "from_stage_id": "a", "to_stage_id": "b"}]})
+    result = normalize_content(
+        {
+            "stages": [
+                {"id": "a", "name": "Alpha", "type": "manual"},
+                {"id": "b", "name": "Beta", "type": "manual"},
+            ],
+            "edges": [{"id": "e1", "from_stage_id": "a", "to_stage_id": "b"}],
+        }
+    )
     assert result["edges"][0]["source"] == "a"
     assert result["edges"][0]["target"] == "b"
 
@@ -236,7 +251,15 @@ def test_normalize_content_rejects_edge_without_target() -> None:
 
 
 def test_normalize_content_accepts_transitions_alias() -> None:
-    result = normalize_content({"transitions": [{"id": "e1", "source": "s1", "target": "s2"}]})
+    result = normalize_content(
+        {
+            "stages": [
+                {"id": "s1", "name": "Build", "type": "modulo"},
+                {"id": "s2", "name": "Approve", "type": "manual"},
+            ],
+            "transitions": [{"id": "e1", "source": "s1", "target": "s2"}],
+        }
+    )
     assert result["edges"] == [{"id": "e1", "source": "s1", "target": "s2"}]
     assert "transitions" not in result
 
@@ -265,6 +288,79 @@ def test_normalize_content_accepts_acyclic_transition_chain() -> None:
     assert [e["target"] for e in result["edges"]] == ["s2", "s3"]
 
 
+# ---------------------------------------------------------------------------
+# invalid graph structure — duplicate ids + dangling edges (FAR-175)
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_content_rejects_duplicate_stage_ids() -> None:
+    with pytest.raises(LifecycleMapContentError, match="duplicate stage id 's1'"):
+        normalize_content(
+            {
+                "stages": [
+                    {"id": "s1", "name": "Build", "type": "modulo"},
+                    {"id": "s1", "name": "Build again", "type": "manual"},
+                ]
+            }
+        )
+
+
+def test_normalize_content_rejects_duplicate_stage_ids_with_no_edges() -> None:
+    """Duplicate stage ids are invalid even when no edges reference them."""
+    with pytest.raises(LifecycleMapContentError, match="duplicate stage id 's1'"):
+        normalize_content(
+            {
+                "stages": [
+                    {"id": "s1", "name": "Build", "type": "modulo"},
+                    {"id": "s1", "name": "Build again", "type": "manual"},
+                ],
+                "edges": [],
+            }
+        )
+
+
+def test_normalize_content_rejects_duplicate_edge_ids() -> None:
+    with pytest.raises(LifecycleMapContentError, match="duplicate edge id 'e1'"):
+        normalize_content(
+            {
+                "stages": [
+                    {"id": "s1", "name": "Build", "type": "modulo"},
+                    {"id": "s2", "name": "Approve", "type": "manual"},
+                ],
+                "edges": [
+                    {"id": "e1", "source": "s1", "target": "s2"},
+                    {"id": "e1", "source": "s1", "target": "s2"},
+                ],
+            }
+        )
+
+
+def test_normalize_content_rejects_dangling_edge_source() -> None:
+    with pytest.raises(LifecycleMapContentError, match="source stage 'ghost' is not defined"):
+        normalize_content(
+            {
+                "stages": [{"id": "s1", "name": "Build", "type": "modulo"}],
+                "edges": [{"id": "e1", "source": "ghost", "target": "s1"}],
+            }
+        )
+
+
+def test_normalize_content_rejects_dangling_edge_target() -> None:
+    with pytest.raises(LifecycleMapContentError, match="target stage 'ghost' is not defined"):
+        normalize_content(
+            {
+                "stages": [{"id": "s1", "name": "Build", "type": "modulo"}],
+                "edges": [{"id": "e1", "source": "s1", "target": "ghost"}],
+            }
+        )
+
+
+def test_normalize_content_rejects_edge_without_stages() -> None:
+    """A payload with edges but no stages has nothing for them to connect to."""
+    with pytest.raises(LifecycleMapContentError, match="source stage 'a' is not defined"):
+        normalize_content({"edges": [{"id": "e1", "source": "a", "target": "b"}]})
+
+
 def test_normalize_content_rejects_circular_transitions() -> None:
     with pytest.raises(LifecycleMapContentError, match="transitions form a cycle"):
         normalize_content(
@@ -283,17 +379,26 @@ def test_normalize_content_rejects_circular_transitions() -> None:
 
 def test_normalize_content_rejects_self_loop_transition() -> None:
     with pytest.raises(LifecycleMapContentError, match="transitions form a cycle"):
-        normalize_content({"edges": [{"id": "e1", "source": "s1", "target": "s1"}]})
+        normalize_content(
+            {
+                "stages": [{"id": "s1", "name": "Build", "type": "modulo"}],
+                "edges": [{"id": "e1", "source": "s1", "target": "s1"}],
+            }
+        )
 
 
 def test_normalize_content_rejects_cycle_in_transitions_alias() -> None:
     with pytest.raises(LifecycleMapContentError, match="transitions form a cycle"):
         normalize_content(
             {
+                "stages": [
+                    {"id": "a", "name": "Alpha", "type": "manual"},
+                    {"id": "b", "name": "Beta", "type": "manual"},
+                ],
                 "transitions": [
                     {"id": "e1", "source": "a", "target": "b"},
                     {"id": "e2", "source": "b", "target": "a"},
-                ]
+                ],
             }
         )
 
@@ -302,11 +407,16 @@ def test_normalize_content_rejects_three_node_cycle() -> None:
     with pytest.raises(LifecycleMapContentError, match=r"cycle: s1 -> s2 -> s3 -> s1"):
         normalize_content(
             {
+                "stages": [
+                    {"id": "s1", "name": "Build", "type": "modulo"},
+                    {"id": "s2", "name": "Approve", "type": "manual"},
+                    {"id": "s3", "name": "Deploy", "type": "external"},
+                ],
                 "edges": [
                     {"id": "e1", "source": "s1", "target": "s2"},
                     {"id": "e2", "source": "s2", "target": "s3"},
                     {"id": "e3", "source": "s3", "target": "s1"},
-                ]
+                ],
             }
         )
 
@@ -315,11 +425,16 @@ def test_normalize_content_cycle_error_names_the_path() -> None:
     with pytest.raises(LifecycleMapContentError, match=r"cycle: s2 -> s3 -> s2"):
         normalize_content(
             {
+                "stages": [
+                    {"id": "s1", "name": "Build", "type": "modulo"},
+                    {"id": "s2", "name": "Approve", "type": "manual"},
+                    {"id": "s3", "name": "Deploy", "type": "external"},
+                ],
                 "edges": [
                     {"id": "e1", "source": "s1", "target": "s2"},
                     {"id": "e2", "source": "s2", "target": "s3"},
                     {"id": "e3", "source": "s3", "target": "s2"},
-                ]
+                ],
             }
         )
 
@@ -327,11 +442,17 @@ def test_normalize_content_cycle_error_names_the_path() -> None:
 def test_normalize_content_accepts_unconnected_and_parallel_edges() -> None:
     result = normalize_content(
         {
+            "stages": [
+                {"id": "s1", "name": "Build", "type": "modulo"},
+                {"id": "s2", "name": "Approve", "type": "manual"},
+                {"id": "s3", "name": "Review", "type": "manual"},
+                {"id": "s4", "name": "Deploy", "type": "external"},
+            ],
             "edges": [
                 {"id": "e1", "source": "s1", "target": "s2"},
                 {"id": "e2", "source": "s3", "target": "s4"},
                 {"id": "e3", "source": "s1", "target": "s2"},
-            ]
+            ],
         }
     )
     assert len(result["edges"]) == 3
@@ -408,6 +529,61 @@ async def test_save_map_version_validates_and_rejects_bad_stage_type(session: As
             _MAP_ID,
             stages=[{"id": "s1", "name": "Build", "type": "nope"}],
             edges=[],
+            notes="",
+        )
+
+
+async def test_save_map_version_rejects_dangling_edge(session: AsyncMock) -> None:
+    """The versions save path (POST and PUT both call save_map_version) must
+    run the graph-structure checks, not just the per-stage shape checks."""
+    lm = _make_map()
+    session.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=lm))
+
+    with pytest.raises(LifecycleMapContentError, match="target stage 'ghost' is not defined"):
+        await save_map_version(
+            session,
+            _MAP_ID,
+            stages=[{"id": "s1", "name": "Build", "type": "modulo"}],
+            edges=[{"id": "e1", "source": "s1", "target": "ghost"}],
+            notes="",
+        )
+
+
+async def test_save_map_version_rejects_duplicate_stage_ids(session: AsyncMock) -> None:
+    """Duplicate stage ids are rejected on the versions save path."""
+    lm = _make_map()
+    session.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=lm))
+
+    with pytest.raises(LifecycleMapContentError, match="duplicate stage id 's1'"):
+        await save_map_version(
+            session,
+            _MAP_ID,
+            stages=[
+                {"id": "s1", "name": "Build", "type": "modulo"},
+                {"id": "s1", "name": "Build again", "type": "manual"},
+            ],
+            edges=[],
+            notes="",
+        )
+
+
+async def test_save_map_version_rejects_duplicate_edge_ids(session: AsyncMock) -> None:
+    """Duplicate edge ids are rejected on the versions save path."""
+    lm = _make_map()
+    session.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=lm))
+
+    with pytest.raises(LifecycleMapContentError, match="duplicate edge id 'e1'"):
+        await save_map_version(
+            session,
+            _MAP_ID,
+            stages=[
+                {"id": "s1", "name": "Build", "type": "modulo"},
+                {"id": "s2", "name": "Approve", "type": "manual"},
+            ],
+            edges=[
+                {"id": "e1", "source": "s1", "target": "s2"},
+                {"id": "e1", "source": "s1", "target": "s2"},
+            ],
             notes="",
         )
 
@@ -813,6 +989,22 @@ async def test_create_lifecycle_map_without_pipeline_ids_skips_uniqueness_query(
     session.flush.assert_awaited()
 
 
+async def test_create_lifecycle_map_validates_content_when_provided(session: AsyncMock) -> None:
+    """A map created WITH content must run the graph-structure checks: a
+    dangling edge is rejected up-front, not silently stored."""
+    with pytest.raises(LifecycleMapContentError, match="source stage 'ghost' is not defined"):
+        await create_lifecycle_map(
+            session,
+            org_id=_ORG_ID,
+            name="Broken",
+            account_id=_ACCOUNT_ID,
+            content_json={
+                "stages": [{"id": "s1", "name": "Build", "type": "modulo"}],
+                "edges": [{"id": "e1", "source": "ghost", "target": "s1"}],
+            },
+        )
+
+
 # ---------------------------------------------------------------------------
 # derive_lifecycle_map_stages — tolerant of shape-incompatible rows
 # ---------------------------------------------------------------------------
@@ -865,6 +1057,10 @@ def _route_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=session)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    nested_cm = AsyncMock()
+    nested_cm.__aenter__ = AsyncMock(return_value=session)
+    nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=nested_cm)
     return session
 
 
@@ -962,6 +1158,254 @@ async def test_save_version_route_maps_content_error_to_422() -> None:
             principal=_RoutePrincipal(),
         )
     assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
+async def test_update_version_route_maps_content_error_to_422() -> None:
+    """The versions PUT route (update_lifecycle_map_version_endpoint) must map
+    a content-validation error to 422 exactly like the POST route — it shares
+    the same save_map_version path."""
+    with (
+        patch(
+            "modulo.api.routes.lifecycle_maps.save_map_version",
+            AsyncMock(side_effect=LifecycleMapContentError("lifecycle-map stage #1: duplicate stage id 's1'")),
+        ),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        pytest.raises(HTTPException) as excinfo,
+    ):
+        await update_lifecycle_map_version_endpoint(
+            lifecycle_map_id=_MAP_ID,
+            version_id=_MAP_ID,
+            req=VersionSaveRequest(stages=[], edges=[]),
+            session=_route_session(),
+            principal=_RoutePrincipal(),
+        )
+    assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
+async def test_create_route_maps_content_error_to_422_when_content_provided() -> None:
+    """Creating a map with invalid content must surface a 422, not store it —
+    the route maps the content validator's LifecycleMapContentError to 422."""
+    with (
+        patch(
+            "modulo.api.routes.lifecycle_maps.create_lifecycle_map",
+            AsyncMock(
+                side_effect=LifecycleMapContentError(
+                    "lifecycle-map edge/transition #0: source stage 'ghost' is not defined"
+                )
+            ),
+        ),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        pytest.raises(HTTPException) as excinfo,
+    ):
+        await create_lifecycle_map_endpoint(
+            req=LifecycleMapCreate(name="Broken", content_json={"stages": [], "edges": []}),
+            session=_route_session(),
+            principal=_RoutePrincipal(),
+        )
+    assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
+# ---------------------------------------------------------------------------
+# Audit logging on mutation routes (FAR-175) — create/update/delete/graduate
+#
+# Each mutation route appends an AuditEvent via append_audit_event (fail-open).
+# These tests pin the event_type + resource identity per route and FAIL if a
+# route drops its audit write.
+# ---------------------------------------------------------------------------
+
+
+async def test_create_route_writes_audit_event() -> None:
+    created = _make_map()
+    session = _route_session()
+    with (
+        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch(
+            "modulo.api.routes.lifecycle_maps.create_lifecycle_map",
+            AsyncMock(return_value=created),
+        ),
+        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
+    ):
+        resp = await create_lifecycle_map_endpoint(
+            req=LifecycleMapCreate(name="SDLC", content_json={"stages": []}),
+            session=session,
+            principal=_RoutePrincipal(),
+        )
+    assert resp.name == "SDLC Workflow"
+    mock_audit.assert_awaited_once()
+    kwargs = mock_audit.await_args.kwargs
+    assert kwargs["event_type"] == "lifecycle_map.created"
+    assert kwargs["resource_type"] == "lifecycle_map"
+    assert kwargs["resource_id"] == created.id
+    assert kwargs["actor_user_id"] == _RoutePrincipal.account_id
+
+
+async def test_update_route_writes_audit_event() -> None:
+    session = _route_session()
+    with (
+        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch(
+            "modulo.api.routes.lifecycle_maps.update_lifecycle_map",
+            AsyncMock(return_value=_make_map()),
+        ),
+        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
+    ):
+        await update_lifecycle_map_endpoint(
+            lifecycle_map_id=_MAP_ID,
+            req=LifecycleMapUpdate(name="Renamed"),
+            session=session,
+            principal=_RoutePrincipal(),
+        )
+    mock_audit.assert_awaited_once()
+    kwargs = mock_audit.await_args.kwargs
+    assert kwargs["event_type"] == "lifecycle_map.updated"
+    assert kwargs["resource_id"] == _MAP_ID
+    assert kwargs["payload_json"]["content_changed"] is False
+
+
+async def test_delete_route_writes_audit_event() -> None:
+    session = _route_session()
+    with (
+        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch(
+            "modulo.api.routes.lifecycle_maps.delete_lifecycle_map",
+            AsyncMock(return_value=True),
+        ),
+        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
+    ):
+        result = await delete_lifecycle_map_endpoint(
+            lifecycle_map_id=_MAP_ID,
+            session=session,
+            principal=_RoutePrincipal(),
+        )
+    assert result is None
+    mock_audit.assert_awaited_once()
+    kwargs = mock_audit.await_args.kwargs
+    assert kwargs["event_type"] == "lifecycle_map.deleted"
+    assert kwargs["resource_id"] == _MAP_ID
+
+
+async def test_graduate_route_writes_audit_event() -> None:
+    session = _route_session()
+    with (
+        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch(
+            "modulo.api.routes.lifecycle_maps.graduate_stage",
+            AsyncMock(return_value=_make_map()),
+        ),
+        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
+    ):
+        await graduate_lifecycle_map_stage_endpoint(
+            lifecycle_map_id=_MAP_ID,
+            version_id=_MAP_ID,
+            stage_id="s1",
+            req=GraduateStageRequest(pipeline_id=str(_PIPE_ID)),
+            session=session,
+            principal=_RoutePrincipal(),
+        )
+    mock_audit.assert_awaited_once()
+    kwargs = mock_audit.await_args.kwargs
+    assert kwargs["event_type"] == "lifecycle_map.stage_graduated"
+    assert kwargs["resource_id"] == _MAP_ID
+    assert kwargs["payload_json"]["stage_id"] == "s1"
+    assert kwargs["payload_json"]["pipeline_id"] == str(_PIPE_ID)
+
+
+async def test_save_version_route_writes_audit_event() -> None:
+    """POST /versions — the editor's primary content-save path — must append an
+    audit event just like the other map mutations (FAR-175)."""
+    lm = _make_map()
+    session = _route_session()
+    with (
+        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch(
+            "modulo.api.routes.lifecycle_maps.save_map_version",
+            AsyncMock(return_value=lm),
+        ),
+        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
+    ):
+        await save_lifecycle_map_version_endpoint(
+            lifecycle_map_id=_MAP_ID,
+            req=VersionSaveRequest(
+                stages=[{"id": "s1", "name": "Build", "type": "modulo"}],
+                edges=[],
+                notes="saved from editor",
+            ),
+            session=session,
+            principal=_RoutePrincipal(),
+        )
+    mock_audit.assert_awaited_once()
+    kwargs = mock_audit.await_args.kwargs
+    assert kwargs["event_type"] == "lifecycle_map.updated"
+    assert kwargs["resource_type"] == "lifecycle_map"
+    assert kwargs["resource_id"] == lm.id
+    assert kwargs["actor_user_id"] == _RoutePrincipal.account_id
+    assert kwargs["payload_json"]["stages"] == 1
+    assert kwargs["payload_json"]["edges"] == 0
+
+
+async def test_update_version_route_writes_audit_event() -> None:
+    """PUT /versions/{version_id} — the editor's in-place save path — must append
+    an audit event just like the other map mutations (FAR-175)."""
+    lm = _make_map()
+    session = _route_session()
+    with (
+        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch(
+            "modulo.api.routes.lifecycle_maps.save_map_version",
+            AsyncMock(return_value=lm),
+        ),
+        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
+    ):
+        await update_lifecycle_map_version_endpoint(
+            lifecycle_map_id=_MAP_ID,
+            version_id=_MAP_ID,
+            req=VersionSaveRequest(
+                stages=[{"id": "s1", "name": "Build", "type": "modulo"}],
+                edges=[{"id": "e1", "source": "s1", "target": "s2", "trigger_type": "pipeline_completed"}],
+                notes="saved from editor",
+            ),
+            session=session,
+            principal=_RoutePrincipal(),
+        )
+    mock_audit.assert_awaited_once()
+    kwargs = mock_audit.await_args.kwargs
+    assert kwargs["event_type"] == "lifecycle_map.updated"
+    assert kwargs["resource_type"] == "lifecycle_map"
+    assert kwargs["resource_id"] == lm.id
+    assert kwargs["actor_user_id"] == _RoutePrincipal.account_id
+    assert kwargs["payload_json"]["stages"] == 1
+    assert kwargs["payload_json"]["edges"] == 1
+
+
+async def test_create_route_audit_failure_does_not_fail_create() -> None:
+    """Audit is fail-open: a write failure must never turn create into an error."""
+    session = _route_session()
+    with (
+        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch(
+            "modulo.api.routes.lifecycle_maps.create_lifecycle_map",
+            AsyncMock(return_value=_make_map()),
+        ),
+        patch(
+            "modulo.api.routes.lifecycle_maps.append_audit_event",
+            AsyncMock(side_effect=RuntimeError("audit down")),
+        ),
+    ):
+        resp = await create_lifecycle_map_endpoint(
+            req=LifecycleMapCreate(name="SDLC", content_json={"stages": []}),
+            session=session,
+            principal=_RoutePrincipal(),
+        )
+    assert resp.name == "SDLC Workflow"
 
 
 # ---------------------------------------------------------------------------

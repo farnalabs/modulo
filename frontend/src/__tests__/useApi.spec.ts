@@ -214,6 +214,25 @@ describe('useApi error mapping', () => {
     await expect(api.get('/api/v1/widgets')).rejects.toThrow('name is required')
   })
 
+  it('collapses FastAPI array-typed 422 detail into a readable message', async () => {
+    // A Pydantic 422 arrives as { detail: [{loc, msg, type}, ...] }. The Error
+    // thrown by useApi must carry the joined msg text — not "[object Object]"
+    // (what `new Error(array)` stringifies to). Fails without the formatApiError
+    // call in request().
+    fetchMock.mockResolvedValue(
+      jsonResponse(422, {
+        detail: [
+          { loc: ['body', 'stages', 1, 'id'], msg: 'lifecycle-map stage #1: duplicate stage id', type: 'value_error' },
+        ],
+      }),
+    )
+
+    const api = useApi()
+    await expect(api.get('/api/v1/widgets')).rejects.toThrow(
+      'lifecycle-map stage #1: duplicate stage id',
+    )
+  })
+
   it('falls back to the HTTP status text when the error body is not JSON', async () => {
     fetchMock.mockResolvedValue({
       status: 500,

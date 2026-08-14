@@ -14,6 +14,7 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission, require_permission_any_credential
 from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_logger import append_audit_event
 from modulo.core.lifecycle_map.advancement import advance_journeys, confirm_reported_refs
 from modulo.core.lifecycle_map.import_export import (
     LifecycleMapBundleError,
@@ -276,6 +277,43 @@ def _content_dict(lm: Any) -> dict[str, Any]:
     return content if isinstance(content, dict) else {}
 
 
+async def _record_audit(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    event_type: str,
+    account_id: uuid.UUID,
+    resource_id: uuid.UUID,
+    payload_json: dict[str, Any] | None = None,
+) -> None:
+    """Best-effort audit write for a lifecycle-map mutation (fail-open).
+
+    Audit is a side channel: a failure here must never turn a committed map
+    mutation into an error response. The event is appended in a savepoint
+    nested inside the caller's transaction, so a rollback discards only the
+    audit write — never the map mutation or any ORM state the caller still
+    reads (an outer rollback would expire them). Audit errors are logged and
+    swallowed, following the fail-open route audit convention.
+    """
+    try:
+        async with session.begin_nested():
+            await append_audit_event(
+                session,
+                org_id=org_id,
+                event_type=event_type,
+                actor_user_id=account_id,
+                resource_type="lifecycle_map",
+                resource_id=resource_id,
+                payload_json=payload_json,
+            )
+    except ProgrammingError:
+        _log.exception("lifecycle_maps.audit_failed")
+    except SQLAlchemyError:
+        _log.exception("lifecycle_maps.audit_failed")
+    except Exception:
+        _log.exception("lifecycle_maps.audit_failed")
+
+
 def _build_version_entry(lm: Any) -> LifecycleMapVersionResponse:
     """Serialize the active map state as a version entry.
 
@@ -445,6 +483,14 @@ async def create_lifecycle_map_endpoint(
                 version=req.version,
                 content_json=req.content_json,
             )
+            await _record_audit(
+                session,
+                org_id=principal.organisation_id,
+                event_type="lifecycle_map.created",
+                account_id=principal.account_id,
+                resource_id=lifecycle_map.id,
+                payload_json={"name": lifecycle_map.name},
+            )
     except LifecycleMapPipelineConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
     except LifecycleMapContentError as exc:
@@ -502,6 +548,14 @@ async def import_lifecycle_map_endpoint(
                 envelope=req.model_dump(),
             )
             await session.refresh(lifecycle_map)
+            await _record_audit(
+                session,
+                org_id=principal.organisation_id,
+                event_type="lifecycle_map.created",
+                account_id=principal.account_id,
+                resource_id=lifecycle_map.id,
+                payload_json={"name": lifecycle_map.name, "imported": True},
+            )
     except LifecycleMapPipelineConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
     except (LifecycleMapBundleError, LifecycleMapContentError) as exc:
@@ -628,6 +682,14 @@ async def update_lifecycle_map_endpoint(
             if lifecycle_map is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map not found")
             await session.refresh(lifecycle_map)
+            await _record_audit(
+                session,
+                org_id=principal.organisation_id,
+                event_type="lifecycle_map.updated",
+                account_id=principal.account_id,
+                resource_id=lifecycle_map.id,
+                payload_json={"version": lifecycle_map.version, "content_changed": "content_json" in updates},
+            )
     except LifecycleMapPipelineConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
     except LifecycleMapContentError as exc:
@@ -673,6 +735,15 @@ async def delete_lifecycle_map_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             deleted = await delete_lifecycle_map(session, lifecycle_map_id)
+            if deleted:
+                await _record_audit(
+                    session,
+                    org_id=principal.organisation_id,
+                    event_type="lifecycle_map.deleted",
+                    account_id=principal.account_id,
+                    resource_id=lifecycle_map_id,
+                    payload_json={},
+                )
     except ProgrammingError as exc:
         _log.exception("lifecycle_maps.delete_lifecycle_map_endpoint")
         raise HTTPException(
@@ -804,6 +875,18 @@ async def save_lifecycle_map_version_endpoint(
             )
             if lifecycle_map is not None:
                 await session.refresh(lifecycle_map)
+                await _record_audit(
+                    session,
+                    org_id=principal.organisation_id,
+                    event_type="lifecycle_map.updated",
+                    account_id=principal.account_id,
+                    resource_id=lifecycle_map.id,
+                    payload_json={
+                        "version": lifecycle_map.version,
+                        "stages": len(req.stages),
+                        "edges": len(req.edges),
+                    },
+                )
     except LifecycleMapPipelineConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
     except LifecycleMapContentError as exc:
@@ -865,6 +948,18 @@ async def update_lifecycle_map_version_endpoint(
             )
             if lifecycle_map is not None:
                 await session.refresh(lifecycle_map)
+                await _record_audit(
+                    session,
+                    org_id=principal.organisation_id,
+                    event_type="lifecycle_map.updated",
+                    account_id=principal.account_id,
+                    resource_id=lifecycle_map.id,
+                    payload_json={
+                        "version": lifecycle_map.version,
+                        "stages": len(req.stages),
+                        "edges": len(req.edges),
+                    },
+                )
     except LifecycleMapPipelineConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
     except LifecycleMapContentError as exc:
@@ -963,6 +1058,14 @@ async def graduate_lifecycle_map_stage_endpoint(
             )
             if lifecycle_map is not None:
                 await session.refresh(lifecycle_map)
+                await _record_audit(
+                    session,
+                    org_id=principal.organisation_id,
+                    event_type="lifecycle_map.stage_graduated",
+                    account_id=principal.account_id,
+                    resource_id=lifecycle_map.id,
+                    payload_json={"stage_id": stage_id, "pipeline_id": req.pipeline_id},
+                )
     except LifecycleMapPipelineConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
     except LifecycleMapContentError as exc:

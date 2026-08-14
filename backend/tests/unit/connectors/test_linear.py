@@ -114,6 +114,38 @@ async def test_query_search(connector):
 
 
 @respx.mock
+async def test_query_search_non_string_cursor_not_emitted(connector):
+    """A corrupt non-string endCursor must not be emitted as a pagination cursor."""
+    search_data = {
+        "data": {
+            "searchIssues": {
+                "nodes": [
+                    {
+                        "id": "issue-3",
+                        "identifier": "PROJ-789",
+                        "title": "Corrupt cursor",
+                        "description": None,
+                        "priority": 1,
+                        "state": {"id": "state-1", "name": "Todo"},
+                        "assignee": None,
+                        "team": {"id": "team-1", "name": "Engineering", "key": "PROJ"},
+                        "labels": {"nodes": []},
+                        "createdAt": "2024-01-04T00:00:00Z",
+                        "updatedAt": "2024-01-04T00:00:00Z",
+                        "url": "https://linear.app/team/issue/PROJ-789",
+                    }
+                ],
+                "pageInfo": {"hasNextPage": True, "endCursor": {"cursor": "abc"}},
+            }
+        }
+    }
+    respx.post(_GRAPHQL).mock(return_value=_mock_response(search_data))
+    result = await connector.query(ConnectorQuery(resource="search", filters={"query": "bug"}))
+    assert len(result.records) == 1
+    assert result.next_cursor is None
+
+
+@respx.mock
 async def test_write_create_issue(connector):
     create_data = {
         "data": {

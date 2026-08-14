@@ -4,6 +4,7 @@ import {
   clearAccessToken,
   redirectToLogin,
 } from '../lib/api/auth'
+import { formatApiError } from '../lib/api/formatError'
 
 const BASE = ''
 
@@ -52,7 +53,7 @@ async function request<T>(method: string, path: string, body?: unknown, options?
 
   if (!res.ok) {
     const detail = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(detail.detail ?? `Request failed: ${res.status}`)
+    throw new Error(formatApiError(detail) || `Request failed: ${res.status}`)
   }
   if (res.status === 204) return undefined as T
   return res.json()

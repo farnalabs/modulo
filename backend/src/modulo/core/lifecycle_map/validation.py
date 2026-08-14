@@ -167,6 +167,62 @@ def _find_transition_cycle(edges: list[dict[str, Any]]) -> list[str] | None:
     return None
 
 
+def _validate_graph_structure(stages: list[dict[str, Any]], edges: list[dict[str, Any]]) -> None:
+    """Reject invalid stage/transition graph structure with specific messages.
+
+    Runs after the per-stage/per-edge shape checks so the graph invariants are
+    validated on canonical keys (``type``/``source``/``target``). A lifecycle
+    map is a DAG of uniquely-identified stages (PRD §8.31.4), so this enforces:
+
+    * unique stage ids (a duplicate breaks stage identity and junction rows)
+    * unique edge ids (a duplicate breaks editor selection and round-trips)
+    * every edge endpoint names a defined stage (no dangling references)
+    * acyclic transitions (back-edge detection, existing ``_find_transition_cycle``)
+
+    Each violation raises :class:`LifecycleMapContentError` naming the
+    offending ids so the routes surface a specific 422 rather than a generic
+    "invalid content" message.
+    """
+    seen_stage_ids: dict[str, int] = {}
+    for index, stage in enumerate(stages):
+        stage_id = stage["id"]
+        if stage_id in seen_stage_ids:
+            raise LifecycleMapContentError(
+                f"lifecycle-map stage #{index}: duplicate stage id {stage_id!r} "
+                f"(already used by stage #{seen_stage_ids[stage_id]})"
+            )
+        seen_stage_ids[stage_id] = index
+
+    seen_edge_ids: dict[str, int] = {}
+    for index, edge in enumerate(edges):
+        edge_id = edge["id"]
+        if edge_id in seen_edge_ids:
+            raise LifecycleMapContentError(
+                f"lifecycle-map edge/transition #{index}: duplicate edge id {edge_id!r} "
+                f"(already used by edge/transition #{seen_edge_ids[edge_id]})"
+            )
+        seen_edge_ids[edge_id] = index
+
+    stage_ids = frozenset(seen_stage_ids)
+    for index, edge in enumerate(edges):
+        source = edge["source"]
+        target = edge["target"]
+        if source not in stage_ids:
+            raise LifecycleMapContentError(
+                f"lifecycle-map edge/transition #{index} (id {edge['id']!r}): source stage {source!r} "
+                "is not defined in stages"
+            )
+        if target not in stage_ids:
+            raise LifecycleMapContentError(
+                f"lifecycle-map edge/transition #{index} (id {edge['id']!r}): target stage {target!r} "
+                "is not defined in stages"
+            )
+
+    cycle = _find_transition_cycle(edges)
+    if cycle is not None:
+        raise LifecycleMapContentError("lifecycle-map content: stage transitions form a cycle: " + " -> ".join(cycle))
+
+
 def normalize_content(content: dict[str, Any] | None) -> dict[str, Any]:
     """Validate and canonicalise a lifecycle-map ``content_json`` payload.
 
@@ -201,11 +257,9 @@ def normalize_content(content: dict[str, Any] | None) -> dict[str, Any]:
             raise LifecycleMapContentError("content_json.edges/transitions must be an array")
         result["edges"] = [_normalise_edge(e, i) for i, e in enumerate(edges_raw)]
         result.pop("transitions", None)
-        cycle = _find_transition_cycle(result["edges"])
-        if cycle is not None:
-            raise LifecycleMapContentError(
-                "lifecycle-map content: stage transitions form a cycle: " + " -> ".join(cycle)
-            )
+
+    if "stages" in content or "edges" in content or "transitions" in content:
+        _validate_graph_structure(result.get("stages", []), result.get("edges", []))
 
     if "notes" in content:
         notes = content["notes"]

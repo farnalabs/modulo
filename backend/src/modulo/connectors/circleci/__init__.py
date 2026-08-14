@@ -4,6 +4,7 @@ from typing import Any, cast
 
 import httpx
 
+from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
 from modulo.connectors.base import (
     CIRun,
     CIRunLog,
@@ -199,7 +200,7 @@ class CircleCIConnector(CIRunnerBase):
                     records = data.get("items", [])
                     return ConnectorResult(
                         records=records,
-                        next_cursor=data.get("next_page_token"),
+                        next_cursor=_safe_cursor(data.get("next_page_token")),
                         total=len(records),
                     )
             case "workflows":
@@ -211,7 +212,7 @@ class CircleCIConnector(CIRunnerBase):
                     records = data.get("items", [])
                     return ConnectorResult(
                         records=records,
-                        next_cursor=data.get("next_page_token"),
+                        next_cursor=_safe_cursor(data.get("next_page_token")),
                         total=len(records),
                     )
             case "jobs":
@@ -223,7 +224,7 @@ class CircleCIConnector(CIRunnerBase):
                     records = data.get("items", [])
                     return ConnectorResult(
                         records=records,
-                        next_cursor=data.get("next_page_token"),
+                        next_cursor=_safe_cursor(data.get("next_page_token")),
                         total=len(records),
                     )
             case "runs":
@@ -235,7 +236,7 @@ class CircleCIConnector(CIRunnerBase):
                     records = data.get("items", [])
                     return ConnectorResult(
                         records=records,
-                        next_cursor=data.get("next_page_token"),
+                        next_cursor=_safe_cursor(data.get("next_page_token")),
                         total=len(records),
                     )
             case _:

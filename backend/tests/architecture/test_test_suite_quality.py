@@ -50,6 +50,11 @@ regression that silently weakens the suite:
   ``assert 3 > 5``, ``assert 'a' not in {'b': 1}``) — the outcome is fixed at
   source time, so the assertion either always passes (dead green) or always
   fails (unconditionally red) regardless of the behaviour under test
+- ``is``/``is not`` identity comparisons against a mutable container literal
+  (``assert x is []``, ``assert result is {}``, ``assert x is not {1}``) —
+  list/dict/set literals are freshly allocated on every evaluation, so the
+  comparison can never hold (``is``) or can never fail (``is not``) and is
+  dead either way (Python 3.8+ also emits a SyntaxWarning for it)
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -748,10 +753,12 @@ def test_no_empty_container_literal_equality():
     """``assert x == []`` / ``assert x == {}`` compare a value against an empty
     container literal — the equality-based twin of the ``len(x) == 0`` idiom.
     An empty list/dict is falsy, so ``assert not x`` reads the same intent
-    with less noise and no literal-type coupling. Operands whose type is
-    statically a container (attribute access, subscript, call, or await) are
-    flagged; a bare name is left alone because it may bind a ``__bool__``- or
-    ``__eq__``-overloading object whose emptiness is not ``not``."""
+    with less noise and no literal-type coupling. The ``!=`` mirror
+    (``assert x != []``) is the empty-container twin of ``len(x) > 0`` and
+    should read ``assert x``. Operands whose type is statically a container
+    (attribute access, subscript, call, or await) are flagged; a bare name is
+    left alone because it may bind a ``__bool__``- or ``__eq__``-overloading
+    object whose emptiness is not ``not``."""
     violations = []
     for path in _iter_test_modules():
         tree = _parse(path)
@@ -764,7 +771,7 @@ def test_no_empty_container_literal_equality():
             test = node.test
             if not isinstance(test, ast.Compare) or len(test.ops) != 1:
                 continue
-            if not isinstance(test.ops[0], ast.Eq):
+            if not isinstance(test.ops[0], (ast.Eq, ast.NotEq)):
                 continue
             sides = [(test.left, test.comparators[0]), (test.comparators[0], test.left)]
             for operand, literal in sides:
@@ -777,15 +784,17 @@ def test_no_empty_container_literal_equality():
                     continue
                 if not isinstance(operand, (ast.Attribute, ast.Subscript, ast.Call, ast.Await)):
                     continue
+                op_name = "==" if isinstance(test.ops[0], ast.Eq) else "!="
+                prefer = "assert not ..." if isinstance(test.ops[0], ast.Eq) else "assert ..."
                 violations.append(
-                    f"  {rel}:{node.lineno}  asserts value == {'[]' if isinstance(literal, ast.List) else '{}'} "
-                    "— prefer 'assert not ...'"
+                    f"  {rel}:{node.lineno}  asserts value {op_name} {'[]' if isinstance(literal, ast.List) else '{}'} "
+                    f"— prefer '{prefer}'"
                 )
                 break
     assert not violations, (
         f"Found {len(violations)} empty-container literal comparison(s).\n"
         "An empty list/dict is falsy; write 'assert not <expr>' instead of "
-        "'assert <expr> == []/{}'.\n" + "\n".join(violations)
+        "'assert <expr> == []/{}' and 'assert <expr>' instead of 'assert <expr> != []/{}'.\n" + "\n".join(violations)
     )
 
 
@@ -1283,3 +1292,97 @@ def test_self_comparison_lens_flags_tautologies():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _self_comparison_tautologies(tree), f"lens should NOT flag:\n{source}"
+
+
+_IDENTITY_LITERAL_CONTAINERS = (ast.List, ast.Dict, ast.Set)
+"""Mutable container literal node types. A list/dict/set literal is freshly
+allocated on every evaluation, so ``is`` identity against one can never hold
+(and ``is not`` against one always holds). Tuples are deliberately excluded:
+``()`` is interned and non-empty tuple literals are compiled as constants, so
+identity against a tuple literal *can* legitimately hold."""
+
+
+def _identity_literal_tautologies(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``is``/``is not`` comparison
+    whose operand is a mutable container literal (list/dict/set)."""
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare) or len(node.ops) != 1:
+            continue
+        op = node.ops[0]
+        if not isinstance(op, (ast.Is, ast.IsNot)):
+            continue
+        for side in (node.left, *node.comparators):
+            if not isinstance(side, _IDENTITY_LITERAL_CONTAINERS):
+                continue
+            op_name = "is" if isinstance(op, ast.Is) else "is not"
+            kind = type(side).__name__.lower()
+            verdict = "always FAILS" if isinstance(op, ast.Is) else "always PASSES"
+            found.append(
+                (
+                    node.lineno,
+                    f"compares value {op_name} {kind} literal — freshly allocated each time, "
+                    f"{verdict} (use ==/!= for value equality)",
+                )
+            )
+            break
+    return found
+
+
+def test_no_identity_comparison_with_container_literal():
+    """``assert x is []`` / ``assert result is {}`` / ``assert x is not {1}``
+    compare *identity* against a mutable container literal. The literal is
+    freshly allocated every time the expression runs, so the comparison can
+    never hold (``is`` → always FAILS) or can never fail (``is not`` → always
+    PASSES) — dead code that reports red or green regardless of behaviour.
+    Python 3.8+ even emits a SyntaxWarning for it, and what the assertion
+    actually means is value equality (``==``/``!=``).
+
+    Tuples are deliberately excluded: ``()`` is interned and non-empty tuple
+    literals are compiled as constants, so identity against them can
+    legitimately hold."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _identity_literal_tautologies(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} identity comparison(s) against container literal(s).\n"
+        "A list/dict/set literal is freshly allocated on every evaluation, so 'is'/'is not' "
+        "against it is dead code.\n"
+        "Use value equality (== / !=) instead.\n" + "\n".join(violations)
+    )
+
+
+def test_identity_literal_lens_flags_tautologies():
+    """Synthetic positive/negative control for the identity-vs-container-literal
+    lens: must flag ``is``/``is not`` against list/dict/set literals (either
+    operand order) and ignore identity against variables, calls, non-mutable
+    types, and equality comparisons."""
+    positive_sources = [
+        "def test_foo():\n    assert x is []\n",
+        "def test_foo():\n    assert x is not []\n",
+        "def test_foo():\n    assert x is {}\n",
+        "def test_foo():\n    assert x is not {1, 2}\n",
+        "def test_foo():\n    assert {} is x\n",
+        "def test_foo():\n    assert result.value is [1, 2]\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _identity_literal_tautologies(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert x is y\n",
+        "def test_foo():\n    assert x is None\n",
+        "def test_foo():\n    assert x == []\n",
+        "def test_foo():\n    assert x is ()\n",
+        "def test_foo():\n    assert x is (1, 2)\n",
+        "def test_foo():\n    assert x is make_list()\n",
+        "def test_foo():\n    assert x is 'abc'\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _identity_literal_tautologies(tree), f"lens should NOT flag:\n{source}"
