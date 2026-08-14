@@ -1853,11 +1853,13 @@ def test_empty_container_membership_lens_flags_impossible_membership():
         assert not _empty_container_membership_tautologies(tree), f"lens should NOT flag:\n{source}"
 
 
-def _single_case_parametrize_violations(tree: ast.AST) -> list[tuple[int, str]]:
-    """Return ``(lineno, detail)`` pairs for every ``@...parametrize``
-    decorator whose ``argvalues`` holds exactly one case. Only decorator
-    applications are considered — a bare ``parametrize(...)`` call inside a
-    body is not pytest parametrization and belongs to a different lens."""
+def _parametrize_argvalue_counts(tree: ast.AST) -> list[tuple[int, int]]:
+    """Return ``(lineno, n_cases)`` for every ``@...parametrize`` decorator
+    whose ``argvalues`` is a statically-known ``list``/``tuple`` literal. Only
+    decorator applications are considered — a bare ``parametrize(...)`` call
+    inside a body is not pytest parametrization and belongs to a different
+    lens. The parametrize-adjacent lenses filter on ``n_cases`` (``== 0``,
+    ``== 1``, ...) so a new lens never re-copies the decorator walk."""
     found = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -1865,27 +1867,28 @@ def _single_case_parametrize_violations(tree: ast.AST) -> list[tuple[int, str]]:
         for dec in node.decorator_list:
             if not isinstance(dec, ast.Call):
                 continue
-            f = dec.func
-            name = f.attr if isinstance(f, ast.Attribute) else (f.id if isinstance(f, ast.Name) else None)
-            if name != "parametrize":
+            if _decorator_name(dec) != "parametrize":
                 continue
             if len(dec.args) >= 2:
                 argvalues = dec.args[1]
             else:
                 argvalues = next((kw.value for kw in dec.keywords if kw.arg == "argvalues"), None)
-            if argvalues is None:
-                continue
             if not isinstance(argvalues, (ast.List, ast.Tuple)):
                 continue
-            if len(argvalues.elts) != 1:
-                continue
-            found.append(
-                (
-                    dec.lineno,
-                    "parametrize with a single case in argvalues — collapse to a plain test",
-                )
-            )
+            found.append((dec.lineno, len(argvalues.elts)))
     return found
+
+
+def _single_case_parametrize_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``@...parametrize``
+    decorator whose ``argvalues`` holds exactly one case. Only decorator
+    applications are considered — a bare ``parametrize(...)`` call inside a
+    body is not pytest parametrization and belongs to a different lens."""
+    return [
+        (lineno, "parametrize with a single case in argvalues — collapse to a plain test")
+        for lineno, n_cases in _parametrize_argvalue_counts(tree)
+        if n_cases == 1
+    ]
 
 
 def test_no_single_value_parametrize():
@@ -1946,34 +1949,11 @@ def _empty_parametrize_violations(tree: ast.AST) -> list[tuple[int, str]]:
     decorator whose ``argvalues`` holds zero cases. Only decorator applications
     are considered — a bare ``parametrize(...)`` call inside a body is not
     pytest parametrization and belongs to a different lens."""
-    found = []
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            continue
-        for dec in node.decorator_list:
-            if not isinstance(dec, ast.Call):
-                continue
-            f = dec.func
-            name = f.attr if isinstance(f, ast.Attribute) else (f.id if isinstance(f, ast.Name) else None)
-            if name != "parametrize":
-                continue
-            if len(dec.args) >= 2:
-                argvalues = dec.args[1]
-            else:
-                argvalues = next((kw.value for kw in dec.keywords if kw.arg == "argvalues"), None)
-            if argvalues is None:
-                continue
-            if not isinstance(argvalues, (ast.List, ast.Tuple)):
-                continue
-            if len(argvalues.elts) != 0:
-                continue
-            found.append(
-                (
-                    dec.lineno,
-                    "parametrize with an empty argvalues — the test is collected as zero items and never runs",
-                )
-            )
-    return found
+    return [
+        (lineno, "parametrize with an empty argvalues — the test is collected as zero items and never runs")
+        for lineno, n_cases in _parametrize_argvalue_counts(tree)
+        if n_cases == 0
+    ]
 
 
 def test_no_empty_parametrize():
