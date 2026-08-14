@@ -102,7 +102,8 @@ class TestFanOutExecution:
         )
         elapsed = time.monotonic() - start
         node_ids = [a["node_id"] for a in result["artifacts"]]
-        assert "branch-a" in node_ids and "branch-b" in node_ids
+        assert "branch-a" in node_ids
+        assert "branch-b" in node_ids
         assert elapsed < 0.9, f"branches did not run in parallel: elapsed={elapsed:.3f}s"
 
 

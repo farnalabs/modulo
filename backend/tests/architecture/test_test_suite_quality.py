@@ -62,6 +62,14 @@ regression that silently weakens the suite:
 - ``@pytest.mark.parametrize`` with a single case in ``argvalues`` — a
   parametrize that adds no matrix coverage; indistinguishable from an ordinary
   test body and almost always a leftover from trimming the case list down
+- ``assert A and B`` where every operand is a comparison — a compound boolean
+  assertion that should be one ``assert`` per condition; when the conjunction
+  fails, pytest reports the whole expression and cannot say which operand broke
+  (``or`` conjunctions are deliberately left alone: they are the intentional
+  "any of these" idiom and cannot be split without changing semantics)
+- ``assert bool(x)`` / ``assert not bool(x)`` — ``bool()`` is a no-op inside an
+  ``assert``, which already tests truthiness (and inverts it under ``not``);
+  the wrapper adds noise without changing the outcome
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -1594,3 +1602,149 @@ def test_single_value_parametrize_lens_flags_redundant_cases():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _single_case_parametrize_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _compound_boolean_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert A and B`` whose
+    operands are all comparisons (including nested comparison ``and``s). ``or``
+    conjunctions are deliberately NOT flagged: they are the intentional "any of
+    these" idiom (error-message vocabularies, optional API fields) and cannot
+    be split into independent asserts without changing semantics."""
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if not isinstance(test, ast.BoolOp) or not isinstance(test.op, ast.And):
+            continue
+        if len(test.values) < 2:
+            continue
+        if not all(isinstance(v, ast.Compare) for v in test.values):
+            continue
+        found.append(
+            (
+                node.lineno,
+                f"asserts {ast.unparse(test)} — compound 'and'; split into separate asserts "
+                "so a failure reports which condition broke",
+            )
+        )
+    return found
+
+
+def test_no_compound_boolean_assertions():
+    """``assert A and B`` where every operand is a comparison is a compound
+    boolean assertion: when it fails, pytest reports the whole conjunction and
+    cannot say which condition broke, so the first green run hides which half
+    of the check regressed. Split it into one ``assert`` per condition — the
+    suite keeps the same guarantees and each failure names its own operand.
+    ``or`` conjunctions are left alone: they are the intentional "any of these"
+    idiom (error-message vocabularies, optional API fields) and cannot be split
+    without changing semantics."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _compound_boolean_assert_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} compound 'and' assertion(s).\n"
+        "Each comparison should be its own assert so a failure names the broken condition.\n" + "\n".join(violations)
+    )
+
+
+def test_compound_boolean_lens_flags_split_able_conjunctions():
+    """Synthetic positive/negative control for the compound-``and`` lens: must
+    flag every ``assert`` whose top-level ``and`` joins only comparisons (and
+    nested comparison ``and``s) and ignore pure truthiness conjunctions, ``or``
+    conjunctions, single comparisons, De Morgan ``not (A and B)``, and mixes
+    where an ``or`` component makes the conjunction intentional."""
+    positive_sources = [
+        "def test_foo():\n    assert a == 1 and b == 2\n",
+        "def test_foo():\n    assert x is not None and y is not None\n",
+        "def test_foo():\n    assert 'a' in x and 'b' in x and 'c' in x\n",
+        "def test_foo():\n    assert a == 1 and b == 2 and c == 3\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _compound_boolean_assert_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert a and b\n",
+        "def test_foo():\n    assert a == 1 or b == 2\n",
+        "def test_foo():\n    assert a == 1\n",
+        "def test_foo():\n    assert not (a == 1 and b == 2)\n",
+        "def test_foo():\n    assert a == 1 and (b or c)\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _compound_boolean_assert_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _redundant_bool_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert bool(x)`` /
+    ``assert not bool(x)`` where the ``bool()`` wrapper is redundant."""
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        negated = isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not)
+        target = test.operand if negated else test
+        if not (
+            isinstance(target, ast.Call)
+            and isinstance(target.func, ast.Name)
+            and target.func.id == "bool"
+            and len(target.args) == 1
+            and not target.keywords
+        ):
+            continue
+        found.append((node.lineno, f"assert {ast.unparse(test)} — bool() is redundant inside an assert"))
+    return found
+
+
+def test_no_redundant_bool_in_assert():
+    """``assert bool(x)`` / ``assert not bool(x)`` wrap the value in a no-op:
+    ``assert`` already tests truthiness (and inverts it under ``not``), so the
+    ``bool()`` call adds noise without changing behavior. Assert the value
+    directly — the same outcome with one less call and no misdirection about an
+    explicit conversion being needed."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _redundant_bool_assert_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} redundant bool() assertion(s).\n"
+        "assert already tests truthiness; drop the bool() wrapper.\n" + "\n".join(violations)
+    )
+
+
+def test_redundant_bool_lens_flags_noop_wrappers():
+    """Synthetic positive/negative control for the redundant-``bool`` lens:
+    must flag ``assert bool(x)`` and ``assert not bool(x)`` (either operand
+    shape) and ignore ``bool()`` used inside a comparison — where the explicit
+    conversion to a real bool is meaningful — and plain truthiness asserts."""
+    positive_sources = [
+        "def test_foo():\n    assert bool(x)\n",
+        "def test_foo():\n    assert not bool(x)\n",
+        "def test_foo():\n    assert bool(result.value)\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _redundant_bool_assert_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert x\n",
+        "def test_foo():\n    assert not x\n",
+        "def test_foo():\n    assert bool(x) is True\n",
+        "def test_foo():\n    assert bool(x) == True\n",
+        "def test_foo():\n    assert bool(x) == bool(y)\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _redundant_bool_assert_violations(tree), f"lens should NOT flag:\n{source}"
