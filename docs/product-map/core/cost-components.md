@@ -2,6 +2,7 @@
 id: feat-core-cost-components
 prd: 8.10
 delivery-tasks: []
+bdd: []
 code:
   - backend/src/modulo/api/routes/cost_components.py
   - backend/src/modulo/core/cost_controller/breakdown/formula.py
@@ -75,3 +76,4 @@ that feeds the engine.
 - Per-agent `token_budget` and per-run `run_budget` (PRD 8.10) not yet implemented — see `cost-breakdown.md`
 - `rate_usd` environment-fallback resolution for calculated components
 - Formula evaluation is eval-time only for `calculated`; `self_reported` formulas are implicit `reported`
+- No BDD feature file covers cost-component CRUD/formula/self-report extraction — `costs/cost_controls.feature` covers spend limits and the admin cost report (linked to `feat-core-cost-breakdown`), not component management. Coverage is via the unit suites listed in `unit-tests:`.
