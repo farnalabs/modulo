@@ -41,8 +41,12 @@ BeforeAll {
     }
 
     function Invoke-GraphQuery {
-        param([string[]]$Args)
-        $output = & $testQuery @Args *>&1
+        param([switch]$Uncovered, [string]$Impact, [string]$Depends)
+        $splat = @{}
+        if ($Uncovered) { $splat["Uncovered"] = $true }
+        if ($Impact) { $splat["Impact"] = $Impact }
+        if ($Depends) { $splat["Depends"] = $Depends }
+        $output = & $testQuery @splat *>&1
         return @{ Output = $output; ExitCode = $LASTEXITCODE }
     }
 
@@ -57,26 +61,26 @@ AfterAll {
 
 Describe "graph-query -Uncovered" {
     It "lists entries with empty or missing bdd coverage" {
-        $result = Invoke-GraphQuery -Args @("-Uncovered")
+        $result = Invoke-GraphQuery -Uncovered
         $result.ExitCode | Should -Be 1
         $result.Output | Select-String -SimpleMatch "feat-uncovered" | Should -Not -Be $null
     }
 
     It "does not list entries with bdd coverage" {
-        $result = Invoke-GraphQuery -Args @("-Uncovered")
+        $result = Invoke-GraphQuery -Uncovered
         $result.Output | Select-String -SimpleMatch "feat-covered" | Should -Be $null
     }
 }
 
 Describe "graph-query -Impact" {
     It "lists downstream dependents of a feat id" {
-        $result = Invoke-GraphQuery -Args @("-Impact", "feat-covered")
+        $result = Invoke-GraphQuery -Impact "feat-covered"
         $result.ExitCode | Should -Be 0
         $result.Output | Select-String -SimpleMatch "feat-leaf" | Should -Not -Be $null
     }
 
     It "reports an unknown id with exit 1" {
-        $result = Invoke-GraphQuery -Args @("-Impact", "feat-unknown")
+        $result = Invoke-GraphQuery -Impact "feat-unknown"
         $result.ExitCode | Should -Be 1
         $result.Output | Select-String -SimpleMatch "not a known" | Should -Not -Be $null
     }
@@ -84,7 +88,7 @@ Describe "graph-query -Impact" {
 
 Describe "graph-query -Depends" {
     It "lists upstream dependencies of a feat id" {
-        $result = Invoke-GraphQuery -Args @("-Depends", "feat-leaf")
+        $result = Invoke-GraphQuery -Depends "feat-leaf"
         $result.ExitCode | Should -Be 0
         $result.Output | Select-String -SimpleMatch "feat-covered" | Should -Not -Be $null
     }

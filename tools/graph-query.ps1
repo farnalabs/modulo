@@ -45,15 +45,15 @@ Get-ChildItem -Recurse -Filter "*.md" -LiteralPath $productMap | Where-Object { 
 
 if ($Uncovered) {
     Write-Host "Entries needing attention (empty or missing bdd coverage):" -ForegroundColor Cyan
-    $uncovered = $entries | Where-Object { -not $_.id -or $_.bdd.Count -eq 0 } | Sort-Object name
-    if ($uncovered.Count -eq 0) {
+    $uncoveredEntries = @($entries | Where-Object { -not $_.id -or -not $_.bdd -or $_.bdd.Count -eq 0 } | Sort-Object name)
+    if ($uncoveredEntries.Count -eq 0) {
         Write-Host "  None - every entry has bdd coverage." -ForegroundColor Green
         exit 0
     }
-    foreach ($e in $uncovered) {
+    foreach ($e in $uncoveredEntries) {
         Write-Host "  $($e.name) ($($e.id))"
     }
-    Write-Host "$($uncovered.Count) entry(ies) need attention." -ForegroundColor Yellow
+    Write-Host "$($uncoveredEntries.Count) entry(ies) need attention." -ForegroundColor Yellow
     exit 1
 }
 
@@ -61,7 +61,7 @@ if ($Impact -or $Depends) {
     if ($Impact) {
         $target = $Impact
         Write-Host "Downstream dependents of ${target}:" -ForegroundColor Cyan
-        $dependents = $entries | Where-Object { $_.depends -contains $target } | Sort-Object id
+        $dependents = @($entries | Where-Object { $_.depends -contains $target } | Sort-Object id)
         if ($dependents.Count -eq 0) {
             if (-not ($entries.id -contains $target)) {
                 Write-Host "  '$target' is not a known product map id." -ForegroundColor Red
