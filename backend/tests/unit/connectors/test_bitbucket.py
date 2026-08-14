@@ -5,7 +5,7 @@ import pytest
 import respx
 
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.bitbucket import BitbucketConnector
+from modulo.connectors.bitbucket import BitbucketConnector, _paging_total
 
 TOKEN = "bitbucket_test_token"
 _API = "https://api.bitbucket.org/2.0"
@@ -161,6 +161,27 @@ async def test_unsupported_write_resource(connector):
 
 def test_connector_type(connector):
     assert connector.connector_type == ConnectorType.BITBUCKET
+
+
+@respx.mock
+async def test_query_repos_corrupt_total(connector):
+    """A non-finite ``size`` must not poison the reported total."""
+    respx.get(f"{_API}/repositories/myteam").mock(
+        return_value=httpx.Response(200, content=b'{"values": [{"uuid": "{1}"}], "size": 1e999}')
+    )
+    result = await connector.query(ConnectorQuery(resource="repos", filters={"workspace": "myteam"}))
+    assert len(result.records) == 1
+    assert result.total == 0
+
+
+def test_paging_total() -> None:
+    assert _paging_total({"size": 25}) == 25
+    assert _paging_total({"size": "25"}) == 25
+    assert _paging_total({"size": 1e999}) == 0
+    assert _paging_total({"size": float("nan")}) == 0
+    assert _paging_total({"size": True}) == 0
+    assert _paging_total({"size": "garbage"}) == 0
+    assert _paging_total({}) is None
 
 
 def test_app_password_auth():
