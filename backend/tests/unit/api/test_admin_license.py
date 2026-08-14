@@ -415,7 +415,7 @@ class TestIssueLicense:
         assert data["features"] == ["sso"]
 
     def test_issues_with_email_sends_background_email(self, issue_client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_license.email_enterprise_license", new=AsyncMock()) as mock_email:
+        with patch("modulo.api.routes.admin_license.email_team_license", new=AsyncMock()) as mock_email:
             resp = issue_client.post(self.URL, json={"org_name": "Acme", "email": "bob@acme.com"})
         assert resp.status_code == 201
         mock_email.assert_awaited_once()

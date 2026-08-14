@@ -65,7 +65,7 @@ Uses the `qa-iterate` skill (`qa-iterate <target-path>` from project root) to ru
 ## Phase 5 — Frontend
 
 17. **shadcn-vue component library init** — install `radix-vue`, `shadcn-vue`, `lucide-vue-next`, `class-variance-authority`, `clsx`, `tailwind-merge`; run `shadcn-vue init`; install baseline primitives (`Button`, `Badge`, `Dialog`, `Tooltip`, `DropdownMenu`, `Input`, `Label`, `Separator`) into `src/components/ui/`. Must be complete before any feature UI is built.
-18. **Vue 3 + Pinia scaffold** — org context in all stores; `planStore` hydrated from `GET /api/v1/license` on page load; theme system (`data-theme`, `standard` + `agent`), `?theme=<name>` override; sidebar nav with tier badge (Free/Enterprise pill in footer, reads `planStore`).
+18. **Vue 3 + Pinia scaffold** — org context in all stores; `planStore` hydrated from `GET /api/v1/license` on page load; theme system (`data-theme`, `standard` + `agent`), `?theme=<name>` override; sidebar nav with tier badge (Free/Team pill in footer, reads `planStore`).
 19. **`/settings/license` page** — tier card, active feature checklist, license key paste/verify/apply UI, upgrade CTA.
 20. **Pipeline canvas** — Vue Flow, node/edge serialisation, connector binding picker, HITL gate edge type.
 21. **HITL review UI** — claim, approve, reject, overdue badge, claimed-by indicator.

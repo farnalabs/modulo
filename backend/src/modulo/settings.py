@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     # Ed25519 public key (hex) for license signature verification.
     # Defaults to dev/test key — set MODULO_LICENSE_PUBLIC_KEY in production.
     modulo_license_public_key: str = Field("")
-    # Ed25519 private key (hex) used to SIGN enterprise license keys issued via
+    # Ed25519 private key (hex) used to SIGN team license keys issued via
     # the admin license-issue endpoint and the Stripe purchase fulfilment
     # webhook (FAR-179). Empty (default) disables issuance — signing fails
     # closed until the operator configures it.
@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     # SSO / OIDC — JSON array of {provider_id, client_id, client_secret, discovery_url}
     modulo_oidc_providers: str = Field("[]")
 
-    # SSO / SAML 2.0 (enterprise, requires license key)
+    # SSO / SAML 2.0 (team tier, requires license key)
     modulo_saml_enabled: bool = Field(False)
     modulo_saml_idp_metadata_url: str = Field("")
     modulo_saml_idp_metadata_xml: str = Field("")

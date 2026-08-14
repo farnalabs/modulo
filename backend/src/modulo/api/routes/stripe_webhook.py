@@ -33,7 +33,7 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
-from modulo.core.stripe_fulfilment import fulfil_enterprise_purchase
+from modulo.core.stripe_fulfilment import fulfil_team_purchase
 from modulo.core.trigger_engine import TimestampExpiredError, verify_timestamp
 from modulo.settings import Settings, get_settings
 
@@ -112,7 +112,7 @@ def _extract_customer(event: dict[str, Any]) -> tuple[str | None, str]:
 
     # Prefer a stable org identifier. The Stripe customer id never changes for a
     # given buyer, whereas a display name or email can vary between purchases —
-    # build_enterprise_payload derives org_id from org_name, so an unstable name
+    # build_team_payload derives org_id from org_name, so an unstable name
     # would fragment a customer into multiple orgs across purchases.
     customer_id = obj.get("customer")
     if name:
@@ -122,7 +122,7 @@ def _extract_customer(event: dict[str, Any]) -> tuple[str | None, str]:
     elif email:
         org_name = f"Customer {email}"
     else:
-        org_name = "Modulo Enterprise customer"
+        org_name = "Modulo Team License customer"
     return email, org_name
 
 
@@ -169,7 +169,7 @@ async def stripe_webhook(
         if customer_email:
             _log.info("stripe.webhook.fulfilling event=%s event_id=%s", event_type, event["id"])
             background_tasks.add_task(
-                fulfil_enterprise_purchase,
+                fulfil_team_purchase,
                 settings,
                 event_id=event["id"],
                 customer_email=customer_email,

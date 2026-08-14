@@ -1,4 +1,4 @@
-"""Tests for modulo.core.license_signing — enterprise license generation."""
+"""Tests for modulo.core.license_signing — team license generation."""
 
 import base64
 import json
@@ -11,11 +11,11 @@ import pytest
 
 from modulo.core.license import _LICENSE_PUBLIC_KEY_HEX, parse_and_verify, set_public_key
 from modulo.core.license_signing import (
-    ENTERPRISE_FEATURES,
+    TEAM_FEATURES,
     LicenseSigningError,
-    build_enterprise_payload,
+    build_team_payload,
     encode_license_key,
-    generate_enterprise_license,
+    generate_team_license,
 )
 from modulo.core.registry.crypto import generate_keypair
 
@@ -84,37 +84,37 @@ class TestEncodeLicenseKeyRoundTrip:
         assert result.error == "Signature verification failed"
 
 
-class TestBuildEnterprisePayload:
+class TestBuildTeamPayload:
     def test_defaults(self) -> None:
-        payload = build_enterprise_payload("Acme")
+        payload = build_team_payload("Acme")
         assert payload["tier"] == "team"
-        assert payload["features"] == ENTERPRISE_FEATURES
+        assert payload["features"] == TEAM_FEATURES
         assert payload["org_id"]
         expiry = datetime.fromisoformat(payload["expires_at"])
         assert expiry > datetime.now(UTC)
 
     def test_org_id_derived_stably_from_org_name(self) -> None:
-        p1 = build_enterprise_payload("Acme")
-        p2 = build_enterprise_payload("Acme")
+        p1 = build_team_payload("Acme")
+        p2 = build_team_payload("Acme")
         assert p1["org_id"] == p2["org_id"]
-        assert p1["org_id"] != build_enterprise_payload("Other")["org_id"]
+        assert p1["org_id"] != build_team_payload("Other")["org_id"]
 
     def test_custom_features_and_org_id(self) -> None:
-        payload = build_enterprise_payload("Acme", features=["sso"], org_id="my-org")
+        payload = build_team_payload("Acme", features=["sso"], org_id="my-org")
         assert payload["features"] == ["sso"]
         assert payload["org_id"] == "my-org"
 
     def test_term_months_advances_expiry(self) -> None:
-        p12 = build_enterprise_payload("Acme", term_months=12)
-        p24 = build_enterprise_payload("Acme", term_months=24)
+        p12 = build_team_payload("Acme", term_months=12)
+        p24 = build_team_payload("Acme", term_months=24)
         assert datetime.fromisoformat(p24["expires_at"]) > datetime.fromisoformat(p12["expires_at"])
 
 
-class TestGenerateEnterpriseLicense:
+class TestGenerateTeamLicense:
     def test_private_key_param_signs_verifiable_license(self) -> None:
         kp = generate_keypair()
         set_public_key(kp["public_key"])
-        key = generate_enterprise_license("Acme", private_key_hex=kp["private_key"])
+        key = generate_team_license("Acme", private_key_hex=kp["private_key"])
         result = parse_and_verify(key)
         assert result.valid is True
         assert result.license_data is not None
@@ -126,7 +126,7 @@ class TestGenerateEnterpriseLicense:
         set_public_key(kp["public_key"])
         fake_settings = SimpleNamespace(modulo_license_private_key=kp["private_key"])
         with patch("modulo.core.license_signing.get_settings", return_value=fake_settings):
-            key = generate_enterprise_license("Acme")
+            key = generate_team_license("Acme")
         assert parse_and_verify(key).valid is True
 
     def test_no_private_key_raises(self) -> None:
@@ -136,8 +136,8 @@ class TestGenerateEnterpriseLicense:
             ),
             pytest.raises(LicenseSigningError, match="MODULO_LICENSE_PRIVATE_KEY"),
         ):
-            generate_enterprise_license("Acme")
+            generate_team_license("Acme")
 
     def test_malformed_private_key_raises(self) -> None:
         with pytest.raises(ValueError, match="invalid private key hex"):
-            generate_enterprise_license("Acme", private_key_hex="not-hex")
+            generate_team_license("Acme", private_key_hex="not-hex")

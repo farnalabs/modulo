@@ -9,7 +9,7 @@ import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 with contextlib.suppress(FileNotFoundError, OSError):
-    scenarios("../features/licensing/enterprise_gates.feature")
+    scenarios("../features/licensing/team_gates.feature")
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _TEAM_ID = uuid.UUID("10000000-0000-0000-0000-000000000001")

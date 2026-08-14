@@ -221,7 +221,7 @@ def call_get_available_features(request, ctx) -> None:
         "| Feature | Required Tier | Available |\n"
         "|---------|---------------|-----------|\n"
         "| remy_chat | core | yes |\n"
-        "| custom_skills | enterprise | no |\n"
+        "| custom_skills | team | no |\n"
     )
 
 

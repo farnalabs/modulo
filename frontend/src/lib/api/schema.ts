@@ -712,7 +712,7 @@ export interface paths {
         put?: never;
         /**
          * Issue License
-         * @description Manually issue (sign) an enterprise license key for a customer.
+         * @description Manually issue (sign) a team license key for a customer.
          *
          *     Uses the same signing service as the Stripe purchase fulfilment webhook.
          *     When ``email`` is provided, the license key is also emailed to the customer
