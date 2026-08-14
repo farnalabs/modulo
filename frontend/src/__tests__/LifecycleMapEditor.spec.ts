@@ -142,11 +142,13 @@ describe('LifecycleMapEditor version loading', () => {
 
   it('surfaces the backend 422 validation detail in saveError', async () => {
     // FastAPI returns a Pydantic 422 as { detail: [{loc, msg, type}, ...] };
-    // formatApiError must collapse it to readable text inside the editor.
+    // useApi collapses it to readable text and rejects with an Error whose
+    // message is that text. The editor must surface the real Error message
+    // rather than the raw "[object Object]" the API error body would stringify to.
     const validationDetail = { detail: [
       { loc: ['body', 'stages', 1, 'id'], msg: 'lifecycle-map stage #1: duplicate stage id', type: 'value_error' },
     ] }
-    putMock.mockRejectedValueOnce(validationDetail)
+    putMock.mockRejectedValueOnce(new Error(formatApiError(validationDetail)))
 
     const wrapper = mountEditor()
     await flushPromises()

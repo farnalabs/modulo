@@ -308,7 +308,6 @@ async def _record_audit(
             )
     except ProgrammingError:
         _log.exception("lifecycle_maps.audit_failed")
-        _log.warning("lifecycle_maps.audit_failed: audit event not recorded (audit table missing)")
     except SQLAlchemyError:
         _log.exception("lifecycle_maps.audit_failed")
     except Exception:
@@ -876,6 +875,18 @@ async def save_lifecycle_map_version_endpoint(
             )
             if lifecycle_map is not None:
                 await session.refresh(lifecycle_map)
+                await _record_audit(
+                    session,
+                    org_id=principal.organisation_id,
+                    event_type="lifecycle_map.updated",
+                    account_id=principal.account_id,
+                    resource_id=lifecycle_map.id,
+                    payload_json={
+                        "version": lifecycle_map.version,
+                        "stages": len(req.stages),
+                        "edges": len(req.edges),
+                    },
+                )
     except LifecycleMapPipelineConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
     except LifecycleMapContentError as exc:
@@ -937,6 +948,18 @@ async def update_lifecycle_map_version_endpoint(
             )
             if lifecycle_map is not None:
                 await session.refresh(lifecycle_map)
+                await _record_audit(
+                    session,
+                    org_id=principal.organisation_id,
+                    event_type="lifecycle_map.updated",
+                    account_id=principal.account_id,
+                    resource_id=lifecycle_map.id,
+                    payload_json={
+                        "version": lifecycle_map.version,
+                        "stages": len(req.stages),
+                        "edges": len(req.edges),
+                    },
+                )
     except LifecycleMapPipelineConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
     except LifecycleMapContentError as exc:

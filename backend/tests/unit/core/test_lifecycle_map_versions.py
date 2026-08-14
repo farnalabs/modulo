@@ -1316,6 +1316,75 @@ async def test_graduate_route_writes_audit_event() -> None:
     assert kwargs["payload_json"]["pipeline_id"] == str(_PIPE_ID)
 
 
+async def test_save_version_route_writes_audit_event() -> None:
+    """POST /versions — the editor's primary content-save path — must append an
+    audit event just like the other map mutations (FAR-175)."""
+    lm = _make_map()
+    session = _route_session()
+    with (
+        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch(
+            "modulo.api.routes.lifecycle_maps.save_map_version",
+            AsyncMock(return_value=lm),
+        ),
+        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
+    ):
+        await save_lifecycle_map_version_endpoint(
+            lifecycle_map_id=_MAP_ID,
+            req=VersionSaveRequest(
+                stages=[{"id": "s1", "name": "Build", "type": "modulo"}],
+                edges=[],
+                notes="saved from editor",
+            ),
+            session=session,
+            principal=_RoutePrincipal(),
+        )
+    mock_audit.assert_awaited_once()
+    kwargs = mock_audit.await_args.kwargs
+    assert kwargs["event_type"] == "lifecycle_map.updated"
+    assert kwargs["resource_type"] == "lifecycle_map"
+    assert kwargs["resource_id"] == lm.id
+    assert kwargs["actor_user_id"] == _RoutePrincipal.account_id
+    assert kwargs["payload_json"]["stages"] == 1
+    assert kwargs["payload_json"]["edges"] == 0
+
+
+async def test_update_version_route_writes_audit_event() -> None:
+    """PUT /versions/{version_id} — the editor's in-place save path — must append
+    an audit event just like the other map mutations (FAR-175)."""
+    lm = _make_map()
+    session = _route_session()
+    with (
+        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch(
+            "modulo.api.routes.lifecycle_maps.save_map_version",
+            AsyncMock(return_value=lm),
+        ),
+        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
+    ):
+        await update_lifecycle_map_version_endpoint(
+            lifecycle_map_id=_MAP_ID,
+            version_id=_MAP_ID,
+            req=VersionSaveRequest(
+                stages=[{"id": "s1", "name": "Build", "type": "modulo"}],
+                edges=[{"id": "e1", "source": "s1", "target": "s2", "trigger_type": "pipeline_completed"}],
+                notes="saved from editor",
+            ),
+            session=session,
+            principal=_RoutePrincipal(),
+        )
+    mock_audit.assert_awaited_once()
+    kwargs = mock_audit.await_args.kwargs
+    assert kwargs["event_type"] == "lifecycle_map.updated"
+    assert kwargs["resource_type"] == "lifecycle_map"
+    assert kwargs["resource_id"] == lm.id
+    assert kwargs["actor_user_id"] == _RoutePrincipal.account_id
+    assert kwargs["payload_json"]["stages"] == 1
+    assert kwargs["payload_json"]["edges"] == 1
+
+
 async def test_create_route_audit_failure_does_not_fail_create() -> None:
     """Audit is fail-open: a write failure must never turn create into an error."""
     session = _route_session()

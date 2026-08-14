@@ -81,7 +81,7 @@ work without acting as a pipeline execution engine.
 - [x] Auth required for all map endpoints
 - [x] Org-scoped — cross-org access returns 404
 - [x] Team visibility enforces team membership for access
-- [x] Map CRUD operations are written to the org audit chain (`append_audit_event`, fail-open) — create/import, metadata update, delete, and stage graduation each record `lifecycle_map.*` events keyed by map id and actor
+- [x] Map CRUD operations are written to the org audit chain (`append_audit_event`, fail-open) — create/import, metadata update, editor version save (POST/PUT `/versions`), delete, and stage graduation each record `lifecycle_map.*` events keyed by map id and actor
 
 ## Known Gaps
 
@@ -91,7 +91,7 @@ work without acting as a pipeline execution engine.
 
 ## QA History
 
-- 2026-08-14 — FAR-175: extended `normalize_content` graph validation to reject dangling edges and duplicate stage/edge ids (in addition to the existing cycle detection) with 422, and added best-effort audit logging (`lifecycle_map.created/.updated/.deleted/.stage_graduated`) to the map mutation routes. Added unit tests (duplicate ids, dangling edges, edge-without-stages) + route audit tests + 2 BDD scenarios; frontend `formatApiError` now surfaces FastAPI array-typed 422 `detail` messages and the editor shows the backend validation message in `saveError`.
+- 2026-08-14 — FAR-175: extended `normalize_content` graph validation to reject dangling edges and duplicate stage/edge ids (in addition to the existing cycle detection) with 422, and added best-effort audit logging (`lifecycle_map.created/.updated/.deleted/.stage_graduated`) to the map mutation routes — including the editor's version-save endpoints (POST/PUT `/versions`). Added unit tests (duplicate ids, dangling edges, edge-without-stages) + route audit tests + 2 BDD scenarios; frontend `useApi` now throws `formatApiError`-formatted errors so FastAPI array-typed 422 `detail` reaches the editor's `saveError` as readable text instead of `[object Object]`.
 - 2026-08-13 — FAR-174: marked export/import + `lifecycle_map` library primitive behaviour as implemented (active-version envelope export, import with editor-save validation, copy-to-adapt via /libraries/{id}/create-lifecycle-map).
 - 2026-08-13 — improve-architecture: **RESOLVED** the "circular stage transitions" gap. `normalize_content` (`core/lifecycle_map/validation.py`) now runs DFS-based cycle detection over the normalised `edges` (back-edge detection with three-state colouring; self-loops reported as `[n, n]`); any cycle raises `LifecycleMapContentError` naming the offending stage path (`s1 -> s2 -> s1`), which the create/update/version-save routes map to 422. Added 7 unit tests (`test_normalize_content_*` in `test_lifecycle_map_versions.py`: acyclic chain accepted, 2-node cycle, self-loop, transitions-alias cycle, 3-node cycle path, cycle-path naming, unconnected/parallel edges) + 1 BDD scenario (`Circular stage transitions are rejected as invalid content` in `versioning.feature`) with a new step definition. 63/63 `test_lifecycle_map_versions.py` + 181 focused lifecycle-map unit/BDD tests pass, ruff clean, mypy --strict clean.
 - 2026-08-12 — Product-state sync: added Journeys section (FAR-141–145), marked version persistence + graduation implemented, updated code paths.
