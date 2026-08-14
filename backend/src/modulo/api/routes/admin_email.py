@@ -12,12 +12,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_target_org_role
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.email_service import EmailSendingError, _effective_timeout, send_email
+from modulo.core.email_service import (
+    EmailSendingError,
+    EmailSendLimiter,
+    _effective_timeout,
+    _is_valid_recipient,
+    send_email,
+)
 from modulo.db.crud.organisation import get_organisation, update_organisation
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/org", tags=["admin"])
+
+# The test-send endpoint relays mail to an arbitrary recipient, so it is a
+# potential SMTP-relay abuse vector (see the product map's "test-send relay
+# abuse" gap). Per-org budget: 3 test emails per rolling 60-minute window.
+test_send_limiter = EmailSendLimiter(limit=3, window_seconds=3600)
 
 
 class EmailSettingsResponse(BaseModel):
@@ -40,7 +51,7 @@ class EmailSettingsUpdate(BaseModel):
 
 
 class TestEmailRequest(BaseModel):
-    to: str = Field(min_length=1)
+    to: str = Field(min_length=1, max_length=320)
 
 
 @router.get("/{org_id}/email-settings", response_model=EmailSettingsResponse)
@@ -217,6 +228,12 @@ async def admin_test_email_settings(
     if org is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
 
+    if not _is_valid_recipient(req.to):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Invalid test email recipient. Provide a single email address such as admin@example.com.",
+        )
+
     cfg = org.settings_json or {}
     email_cfg = cfg.get("email", {})
     smtp_host = email_cfg.get("smtp_host", "")
@@ -224,6 +241,22 @@ async def admin_test_email_settings(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="SMTP is not configured. Save email settings before testing.",
+        )
+
+    try:
+        retry_after = await test_send_limiter.acquire(org_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # A limiter failure must never break a legitimate test-send — fail open.
+        logger.exception("admin_email.test_send_limiter_failed")
+        retry_after = 0
+
+    if retry_after > 0:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many test emails. Try again in {retry_after} seconds.",
+            headers={"Retry-After": str(retry_after)},
         )
 
     temp_settings = type("TempSettings", (), {})()
