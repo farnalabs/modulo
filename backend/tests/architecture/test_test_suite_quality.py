@@ -905,3 +905,53 @@ def test_noop_lens_recognizes_verification_patterns():
     for source in non_verifying_sources:
         tree = ast.parse(source)
         assert not _noop_lens_verifies(tree.body[0]), f"lens should NOT count as verifying:\n{source}"
+
+
+_SELF_COMPARISON_OPS = (ast.Eq, ast.NotEq, ast.Is, ast.IsNot, ast.Lt, ast.LtE, ast.Gt, ast.GtE)
+"""Comparison operators where ``<operand> OP <identical operand>`` is a
+tautology: ``x == x``/``x <= x``/``x >= x``/``x is x`` always PASS, while
+``x != x``/``x < x``/``x > x``/``x is not x`` always FAIL — regardless of
+what ``x`` evaluates to. Either way the assertion is dead code."""
+
+
+def test_no_self_comparison_tautology():
+    """An assertion comparing a value with *itself* — ``assert x == x``,
+    ``assert result.value != result.value``, ``assert row['key'] is row['key']``
+    — is a tautology: it can never exercise the behaviour under test, yet it
+    reports green (or, for ``!=``/``<``/``>``/``is not``, red) no matter how
+    broken the code under test is. These are almost always copy-paste or
+    leftover-debugging artefacts.
+
+    The lens only flags syntactically identical operands whose type is a
+    variable, attribute path, or subscript — expressions that re-evaluate to
+    the same object. ``Call`` operands are deliberately NOT flagged: ``assert
+    signal_fingerprint(a) == signal_fingerprint(a)`` is a legitimate
+    determinism/stability check of a (pure) function, so the lens cannot know
+    a call is redundant without interprocedural analysis.
+    """
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Compare) or len(node.ops) != 1:
+                continue
+            if not isinstance(node.ops[0], _SELF_COMPARISON_OPS):
+                continue
+            left, right = node.left, node.comparators[0]
+            if not isinstance(left, (ast.Name, ast.Attribute, ast.Subscript)):
+                continue
+            if ast.dump(left) != ast.dump(right):
+                continue
+            op_name = node.ops[0].__class__.__name__
+            expr = ast.unparse(left)
+            violations.append(
+                f"  {rel}:{node.lineno}  compares {expr} {op_name} {expr} — identical operands, always the same result"
+            )
+    assert not violations, (
+        f"Found {len(violations)} self-comparison tautolog(ies).\n"
+        "Comparing a value with itself can never fail (or never pass); it is dead code.\n"
+        "Assert against the expected value instead: 'assert x == <expected>'.\n" + "\n".join(violations)
+    )
