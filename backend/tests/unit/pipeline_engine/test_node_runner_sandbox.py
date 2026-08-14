@@ -1117,6 +1117,43 @@ async def test_agent_command_undefined_error_skips():
     sandbox.commands.run.assert_not_called()
 
 
+async def test_agent_command_invalid_template_falls_back_verbatim():
+    """A legacy command with Jinja-like syntax that is NOT a valid template
+    (e.g. an empty ``{{ }}`` or an unclosed ``{{``) must NOT crash the run with
+    TemplateSyntaxError — it executes verbatim, as it did before #1291."""
+    node_def = _model_node_def(
+        "opencode run --model deepseek-v4-flash {{ }} --auto --format json < /home/user/prompt.md"
+    )
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    wrapped = sandbox.commands.run.call_args.args[0]
+    assert "{{ }}" in wrapped
+    assert sandbox.commands.run.call_count == 1
+
+
+async def test_agent_command_unclosed_template_falls_back_verbatim():
+    """An unclosed ``{{`` in a legacy command is a TemplateSyntaxError — falls
+    back to verbatim execution instead of crashing the run."""
+    node_def = _model_node_def(
+        "opencode run --model {{ --auto --format json < /home/user/prompt.md"
+    )
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    wrapped = sandbox.commands.run.call_args.args[0]
+    assert "{{" in wrapped
+    assert sandbox.commands.run.call_count == 1
+
+
 async def test_agent_command_empty_after_render_fails():
     """A command that renders to empty (e.g. `{{ input.model }}` with no default
     and no value) fails with a clear ValueError and NO sandbox command executes."""

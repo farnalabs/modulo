@@ -1139,6 +1139,18 @@ def make_sandbox_agent_fn(
                 "agent_stderr": "",
                 "exit_code": 0,
             }
+        except jinja2.TemplateSyntaxError as e:
+            # Legacy commands that contain Jinja-like syntax without being valid
+            # templates (e.g. ``${{ }}`` shell fragments or an unclosed ``{{``)
+            # predate #1291 and must keep running verbatim. Rendering them as
+            # templates would crash the run with an uncaught TemplateSyntaxError.
+            _log.warning(
+                "agent_command is not a valid template for run %s node %s; using verbatim: %s",
+                run_id,
+                node_id,
+                e,
+            )
+            rendered_agent_command = agent_command
         if not rendered_agent_command.strip():
             raise ValueError(
                 f"sandbox_agent node '{node_id}' rendered agent_command is empty after template resolution"
