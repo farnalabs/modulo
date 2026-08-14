@@ -47,6 +47,7 @@ from modulo.core.trigger_engine import (
     _extract_field,
     _extract_work_item_refs,
     _is_unique_violation,
+    _matches_event_filters,
     sha256_hex,
     verify_hmac,
     verify_timestamp,
@@ -1024,6 +1025,145 @@ async def test_handle_webhook_event_type_accepted_passes() -> None:
     assert te.validation_result == "accepted"
 
 
+# ---------------------------------------------------------------------------
+# TriggerEngine._matches_event_filters — dotted-path value filtering
+# ---------------------------------------------------------------------------
+
+
+def test_matches_event_filters_helper() -> None:
+    """The helper accepts matching values and rejects every non-match shape."""
+    payload = {"review": {"state": "changes_requested"}, "action": "opened"}
+
+    # Matching value at a dotted path.
+    assert _matches_event_filters(payload, {"review.state": ["changes_requested", "commented"]})
+    # Non-matching value rejects.
+    assert not _matches_event_filters(payload, {"review.state": ["approved"]})
+    # Missing key rejects (no crash).
+    assert not _matches_event_filters(payload, {"review.author": ["octocat"]})
+    # Missing top-level key rejects (no crash).
+    assert not _matches_event_filters(payload, {"missing.key": ["x"]})
+    # Non-dict intermediate value rejects gracefully.
+    assert not _matches_event_filters(payload, {"review.state.value": ["x"]})
+    # Non-list allowlist rejects (fail closed — never substring-matches a string).
+    assert not _matches_event_filters(payload, {"review.state": "approved"})
+    # Non-dict event_filters rejects (fail closed).
+    assert not _matches_event_filters(payload, ["review.state"])
+    assert not _matches_event_filters(payload, "review.state")
+    # Every configured filter must match.
+    assert _matches_event_filters(payload, {"review.state": ["changes_requested"], "action": ["opened"]})
+    assert not _matches_event_filters(payload, {"review.state": ["changes_requested"], "action": ["closed"]})
+
+
+# TriggerEngine.handle_webhook — value-based event filtering
+
+
+async def test_handle_webhook_event_value_filter_rejects() -> None:
+    """event_filters configured and payload value outside allowlist -> no run created."""
+    trigger = _make_trigger(extra_config={"event_filters": {"review.state": ["changes_requested", "commented"]}})
+    session = _make_session(trigger=trigger, active_run_count=0)
+
+    with (
+        patch("modulo.core.trigger_engine.create_run") as mock_create,
+        patch("modulo.core.trigger_engine.TriggerEngine._try_insert_dedup") as mock_dedup,
+        pytest.raises(RuntimeError, match="event value filters"),
+    ):
+        await TriggerEngine().handle_webhook(
+            session,
+            trigger_id=trigger.id,
+            org_id=_ORG,
+            raw_body=b'{"action": "submitted", "review": {"state": "approved"}}',
+            raw_payload={"action": "submitted", "review": {"state": "approved"}},
+            hmac_signature=None,
+            modulo_timestamp=str(_VALID_TS),
+            snapshot_id=_SNAP,
+        )
+
+    # Rejected before run creation and before dedup.
+    mock_create.assert_not_called()
+    mock_dedup.assert_not_called()
+    assert any(
+        getattr(c[0][0], "validation_result", None) == "event_type_not_accepted" for c in session.add.call_args_list
+    )
+
+
+async def test_handle_webhook_event_value_filter_missing_key_rejects() -> None:
+    """event_filters path absent from the payload rejects without crashing, no run created."""
+    trigger = _make_trigger(extra_config={"event_filters": {"review.state": ["changes_requested"]}})
+    session = _make_session(trigger=trigger, active_run_count=0)
+
+    with (
+        patch("modulo.core.trigger_engine.create_run") as mock_create,
+        pytest.raises(RuntimeError, match="event value filters"),
+    ):
+        await TriggerEngine().handle_webhook(
+            session,
+            trigger_id=trigger.id,
+            org_id=_ORG,
+            raw_body=b'{"action": "submitted"}',
+            raw_payload={"action": "submitted"},
+            hmac_signature=None,
+            modulo_timestamp=str(_VALID_TS),
+            snapshot_id=_SNAP,
+        )
+
+    mock_create.assert_not_called()
+    assert any(
+        getattr(c[0][0], "validation_result", None) == "event_type_not_accepted" for c in session.add.call_args_list
+    )
+
+
+async def test_handle_webhook_event_value_filter_matches_passes() -> None:
+    """event_filters with a matching payload value passes and creates a run."""
+    trigger = _make_trigger(extra_config={"event_filters": {"review.state": ["changes_requested", "commented"]}})
+    session = _make_session(trigger=trigger, active_run_count=0)
+    raw_payload = {"action": "submitted", "review": {"state": "changes_requested"}}
+
+    run_mock = MagicMock(id=uuid.uuid4())
+    with (
+        patch("modulo.core.trigger_engine.create_run", return_value=run_mock),
+        patch("modulo.core.trigger_engine.time.time", return_value=_VALID_TS),
+    ):
+        run, te, _ = await TriggerEngine().handle_webhook(
+            session,
+            trigger_id=trigger.id,
+            org_id=_ORG,
+            raw_body=b'{"action": "submitted", "review": {"state": "changes_requested"}}',
+            raw_payload=raw_payload,
+            hmac_signature=None,
+            modulo_timestamp=str(_VALID_TS),
+            snapshot_id=_SNAP,
+        )
+
+    assert run is run_mock
+    assert te.validation_result == "accepted"
+
+
+async def test_handle_webhook_event_value_filter_absent_unchanged() -> None:
+    """No event_filters configured -> presence-only accepted_events behaviour is unchanged."""
+    trigger = _make_trigger(accepted_events=["pull_request"])
+    session = _make_session(trigger=trigger, active_run_count=0)
+    raw_payload = {"action": "opened", "pull_request": {"number": 7}}
+
+    run_mock = MagicMock(id=uuid.uuid4())
+    with (
+        patch("modulo.core.trigger_engine.create_run", return_value=run_mock),
+        patch("modulo.core.trigger_engine.time.time", return_value=_VALID_TS),
+    ):
+        run, te, _ = await TriggerEngine().handle_webhook(
+            session,
+            trigger_id=trigger.id,
+            org_id=_ORG,
+            raw_body=b'{"action": "opened", "pull_request": {"number": 7}}',
+            raw_payload=raw_payload,
+            hmac_signature=None,
+            modulo_timestamp=str(_VALID_TS),
+            snapshot_id=_SNAP,
+        )
+
+    assert run is run_mock
+    assert te.validation_result == "accepted"
+
+
 async def test_handle_webhook_rate_limit_exceeded() -> None:
     """Pipeline rate limit exceeded -> PipelineRateLimitError + rate_limited event logged."""
     trigger = _make_trigger()
@@ -1398,6 +1538,34 @@ async def test_replay_event_event_type_not_accepted() -> None:
             org_id=_ORG,
             snapshot_id=_SNAP,
         )
+
+
+async def test_replay_event_value_filter_not_accepted() -> None:
+    """A replayed payload outside the event_filters allowlist is rejected."""
+    trigger = _make_trigger(extra_config={"event_filters": {"review.state": ["changes_requested", "commented"]}})
+    event = MagicMock()
+    event.id = uuid.uuid4()
+    event.trigger_id = trigger.id
+    session = _make_replay_session(
+        event=event,
+        trigger=trigger,
+        stored_payload=_make_stored_payload(raw_payload={"action": "submitted", "review": {"state": "approved"}}),
+        active_run_count=0,
+    )
+    with (
+        patch("modulo.core.trigger_engine.create_run") as mock_create,
+        pytest.raises(RuntimeError, match="event value filters"),
+    ):
+        await TriggerEngine().replay_event(
+            session,
+            event_id=event.id,
+            org_id=_ORG,
+            snapshot_id=_SNAP,
+        )
+    mock_create.assert_not_called()
+    assert any(
+        getattr(c[0][0], "validation_result", None) == "event_type_not_accepted" for c in session.add.call_args_list
+    )
 
 
 async def test_replay_event_accepted_event_present_passes() -> None:
