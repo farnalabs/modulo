@@ -162,7 +162,8 @@ async def _insert_cost_component(session: AsyncSession, org_id: uuid.UUID) -> No
         text(
             "INSERT INTO cost_components (id, organisation_id, name, display_name, kind, rate_usd, "
             "formula, enabled, sort_order) "
-            "VALUES (:id, :oid, 'llm_tokens', 'LLM Tokens', 'calculated', NULL, :formula, true, 0)",
+            "VALUES (:id, :oid, 'llm_tokens', 'LLM Tokens', 'calculated', NULL, :formula, true, 0) "
+            "ON CONFLICT (organisation_id, name) WHERE deleted_at IS NULL DO NOTHING",
         ),
         {
             "id": str(uuid.uuid4()),
