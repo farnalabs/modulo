@@ -520,7 +520,7 @@ def test_clean_legacy_content_drops_dangling_edges() -> None:
             ],
         }
     )
-    assert cleaned["edges"] == []
+    assert not cleaned["edges"]
     assert any("dangling edge 'e1'" in c and "source 'ghost'" in c for c in changes)
     assert any("dangling edge 'e2'" in c and "target 'ghost'" in c for c in changes)
     _assert_clean_passes(cleaned)
@@ -551,7 +551,7 @@ def test_clean_legacy_content_drops_self_loop() -> None:
             "edges": [{"id": "e1", "source": "s1", "target": "s1"}],
         }
     )
-    assert cleaned["edges"] == []
+    assert not cleaned["edges"]
     assert any("cycle-closing edge 'e1'" in c for c in changes)
     _assert_clean_passes(cleaned)
 
@@ -600,7 +600,7 @@ def test_clean_legacy_content_drops_non_dict_stage_and_edge() -> None:
         }
     )
     assert [s["id"] for s in cleaned["stages"]] == ["s1"]
-    assert cleaned["edges"] == []
+    assert not cleaned["edges"]
     assert any("stage #0 (not an object)" in c for c in changes)
     assert any("edge #0 (not an object)" in c for c in changes)
     _assert_clean_passes(cleaned)
@@ -1941,7 +1941,7 @@ class TestLegacyBackfillScript:
         assert summary["mode"] == "apply"
         assert summary["maps_scanned"] == 1
         assert summary["maps_repaired"] == 1
-        assert summary["skips"] == []
+        assert not summary["skips"]
 
         check_engine = create_engine(f"sqlite:///{tmp_path / 'lm_backfill.db'}")
         try:
@@ -1988,7 +1988,7 @@ class TestLegacyBackfillScript:
 
         assert summary["mode"] == "dry-run"
         assert summary["maps_repaired"] == 1
-        assert summary["skips"] == []
+        assert not summary["skips"]
 
         check_engine = create_engine(f"sqlite:///{tmp_path / 'lm_backfill.db'}")
         try:

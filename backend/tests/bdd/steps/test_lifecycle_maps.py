@@ -523,7 +523,7 @@ def repaired_map_content_accepted(ctx: dict[str, Any]) -> None:
     assert cleaned is not None, "The backfill step did not run"
     assert ctx.get("backfill_changes"), "The backfill made no changes to the legacy content"
     normalize_content(cleaned)  # raises LifecycleMapContentError if still invalid
-    assert ctx["cleaned_content"]["edges"] == [], "the dangling edge must be dropped"
+    assert not ctx["cleaned_content"]["edges"], "the dangling edge must be dropped"
 
 
 @then(parsers.parse("the version list contains exactly {count:d} version at version {version:d}"))
