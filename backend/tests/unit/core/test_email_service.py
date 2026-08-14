@@ -586,7 +586,7 @@ def _await_acquire(limiter: EmailSendLimiter, org_id: int) -> int:
     return asyncio.run(_run())
 
 
-class EmailSendLimiter:
+class TestEmailSendLimiter:
     async def test_allows_up_to_limit_then_blocks(self) -> None:
         clock = [1000.0]
         limiter = EmailSendLimiter(limit=3, window_seconds=60, now_fn=lambda: clock[0])
@@ -599,6 +599,7 @@ class EmailSendLimiter:
         clock = [1000.0]
         limiter = EmailSendLimiter(limit=1, window_seconds=60, now_fn=lambda: clock[0])
         assert limiter._now() == 1000.0
+        assert _await_acquire(limiter, 1) == 0
         with pytest.raises(EmailTestSendRateError) as exc_info:
             _await_acquire(limiter, 1)
         assert exc_info.value.retry_after_seconds > 0

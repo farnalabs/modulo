@@ -234,6 +234,15 @@ async def admin_test_email_settings(
             detail="Invalid test email recipient. Provide a single email address such as admin@example.com.",
         )
 
+    cfg = org.settings_json or {}
+    email_cfg = cfg.get("email", {})
+    smtp_host = email_cfg.get("smtp_host", "")
+    if not smtp_host:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="SMTP is not configured. Save email settings before testing.",
+        )
+
     try:
         retry_after = await test_send_limiter.acquire(org_id)
     except asyncio.CancelledError:
@@ -248,15 +257,6 @@ async def admin_test_email_settings(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Too many test emails. Try again in {retry_after} seconds.",
             headers={"Retry-After": str(retry_after)},
-        )
-
-    cfg = org.settings_json or {}
-    email_cfg = cfg.get("email", {})
-    smtp_host = email_cfg.get("smtp_host", "")
-    if not smtp_host:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="SMTP is not configured. Save email settings before testing.",
         )
 
     temp_settings = type("TempSettings", (), {})()
