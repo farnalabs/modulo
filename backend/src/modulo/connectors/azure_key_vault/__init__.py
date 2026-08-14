@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -102,7 +103,7 @@ class AzureKeyVaultConnector(ConnectorBase):
         body: dict[str, Any] = resp.json()
         records = body.get("value", [])
         next_link = body.get("nextLink")
-        next_cursor = str(next_link) if next_link else None
+        next_cursor = _safe_cursor(next_link)
         return ConnectorResult(records=records[: q.limit] if q.limit else records, total=None, next_cursor=next_cursor)
 
     async def _get_secret(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -128,7 +129,7 @@ class AzureKeyVaultConnector(ConnectorBase):
         body: dict[str, Any] = resp.json()
         records = body.get("value", [])
         next_link = body.get("nextLink")
-        next_cursor = str(next_link) if next_link else None
+        next_cursor = _safe_cursor(next_link)
         return ConnectorResult(records=records[: q.limit] if q.limit else records, next_cursor=next_cursor)
 
     async def _get_secret_by_version(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -154,7 +155,7 @@ class AzureKeyVaultConnector(ConnectorBase):
         body: dict[str, Any] = resp.json()
         records = body.get("value", [])
         next_link = body.get("nextLink")
-        next_cursor = str(next_link) if next_link else None
+        next_cursor = _safe_cursor(next_link)
         return ConnectorResult(records=records[: q.limit] if q.limit else records, next_cursor=next_cursor)
 
     async def _get_key(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -177,7 +178,7 @@ class AzureKeyVaultConnector(ConnectorBase):
         body: dict[str, Any] = resp.json()
         records = body.get("value", [])
         next_link = body.get("nextLink")
-        next_cursor = str(next_link) if next_link else None
+        next_cursor = _safe_cursor(next_link)
         return ConnectorResult(records=records[: q.limit] if q.limit else records, next_cursor=next_cursor)
 
     async def _get_certificate(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:

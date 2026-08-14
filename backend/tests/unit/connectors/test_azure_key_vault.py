@@ -92,6 +92,24 @@ async def test_query_secrets_with_cursor(connector: AzureKeyVaultConnector) -> N
 
 
 @respx.mock
+async def test_query_secrets_corrupt_next_link(connector: AzureKeyVaultConnector) -> None:
+    secrets = {"value": [{"id": "s3"}], "nextLink": {"href": "https://evil.example/secrets"}}
+    respx.get(f"{_BASE}/secrets", params={"api-version": "7.4"}).mock(return_value=httpx.Response(200, json=secrets))
+    result = await connector.query(ConnectorQuery(resource="secrets"))
+    assert len(result.records) == 1
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_secrets_non_string_next_link(connector: AzureKeyVaultConnector) -> None:
+    secrets = {"value": [{"id": "s3"}], "nextLink": 12345}
+    respx.get(f"{_BASE}/secrets", params={"api-version": "7.4"}).mock(return_value=httpx.Response(200, json=secrets))
+    result = await connector.query(ConnectorQuery(resource="secrets"))
+    assert len(result.records) == 1
+    assert result.next_cursor is None
+
+
+@respx.mock
 async def test_query_secret(connector: AzureKeyVaultConnector) -> None:
     secret_data = {"value": "my-secret-value", "id": "https://myvault.vault.azure.net/secrets/my-secret"}
     respx.get(f"{_BASE}/secrets/my-secret", params={"api-version": "7.4"}).mock(

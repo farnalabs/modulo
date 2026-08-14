@@ -125,9 +125,9 @@ status: partial
 - [x] Admin can read group mappings per provider: `GET /api/v1/admin/sso/providers/{id}/group-mappings`
 - [x] Group mapping format: `{idp_group, team_id, team_role}`
 
-### Enterprise feature gating
+### Team feature gating
 
-- [x] SSO is flagged as enterprise-tier feature through `require_feature("sso")` dependency
+- [x] SSO is flagged as team-tier feature through `require_feature("sso")` dependency
 - [x] OIDC login/callback does not require license key (unlike SAML)
 - [x] Admin SSO endpoints all require admin `org_role`
 

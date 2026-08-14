@@ -24,13 +24,13 @@ CSV/JSONL export, and chain verification.
 
 ## Feature Gating
 
-The audit viewer is split into free and enterprise tiers:
+The audit viewer is split into free and team tiers:
 
 - **Free tier:** read-only recent-events view (`GET /api/v1/admin/audit`,
   max 50 events, no export) and chain verification
   (`GET /api/v1/admin/audit/verify`). Always available to all orgs —
   audit capability must be verifiable during evaluation for regulated teams.
-- **Enterprise tier** (requires `audit_viewer` in license key): bulk export
+- **Team tier** (requires `audit_viewer` in license key): bulk export
   (`GET /api/v1/admin/audit/export` as CSV/JSONL) and batch-detail
   (`POST /api/v1/admin/audit/batch-detail`). Recording stays free on all
   tiers.
@@ -40,7 +40,7 @@ Only the export and batch-detail endpoints are behind
 
 ## Behaviours
 
-### Viewing (free + enterprise)
+### Viewing (free + team)
 
 - [x] Cursor-paginated event listing via `GET /api/v1/admin/audit`
 - [x] Events ordered newest-first by default
@@ -60,7 +60,7 @@ Only the export and batch-detail endpoints are behind
 - [x] Summary column: action noun + resource type + optional name from payload
 - [x] Chevron icon rotates on expanded row
 
-### Filtering (free + enterprise)
+### Filtering (free + team)
 
 - [x] Event type dropdown filter grouped by category
 - [x] Actor (user_id) text input filter
@@ -76,9 +76,9 @@ Only the export and batch-detail endpoints are behind
 - [x] Success result: green banner with event count
 - [x] Failure result: red banner with error message
 - [x] Loading state: button shows "Verifying..." and is disabled
-- [x] No enterprise license needed — chain verification is always available
+- [x] No team license needed — chain verification is always available
 
-### Export (enterprise-gated)
+### Export (team-gated)
 
 - [x] CSV export button downloads all events matching current filters
 - [x] JSONL export button downloads all events matching current filters

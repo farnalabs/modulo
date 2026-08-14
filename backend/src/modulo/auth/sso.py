@@ -446,7 +446,7 @@ async def saml_get_auth_url(
     if not settings.modulo_saml_enabled:
         raise ValueError("SAML is not enabled")
     if not settings.modulo_license_key:
-        raise ValueError("SAML requires a license key (enterprise feature)")
+        raise ValueError("SAML requires a license key (Team feature)")
 
     try:
         idp_metadata = await _saml_fetch_idp_metadata(settings)
@@ -483,7 +483,7 @@ async def saml_process_response(
     if not settings.modulo_saml_enabled:
         raise ValueError("SAML is not enabled")
     if not settings.modulo_license_key:
-        raise ValueError("SAML requires a license key (enterprise feature)")
+        raise ValueError("SAML requires a license key (Team feature)")
 
     try:
         idp_metadata = await _saml_fetch_idp_metadata(settings)

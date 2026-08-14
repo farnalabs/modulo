@@ -21,7 +21,7 @@ from modulo.settings import Settings, get_settings
 _VALID_32 = "a" * 32
 _TEST_SECRET = "whsec_test_123"
 
-_FULFIL_MODULE = "modulo.api.routes.stripe_webhook.fulfil_enterprise_purchase"
+_FULFIL_MODULE = "modulo.api.routes.stripe_webhook.fulfil_team_purchase"
 
 
 def _make_stripe_settings(secret_key: str = "sk_test_123", webhook_secret: str = _TEST_SECRET) -> Settings:

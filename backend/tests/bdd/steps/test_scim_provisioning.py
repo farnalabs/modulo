@@ -123,7 +123,7 @@ def _make_scim_settings() -> Settings:
         secret_key=_VALID_32,
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
-        modulo_license_key="enterprise-license",
+        modulo_license_key="team-license",
         modulo_scim_token=_SCIM_TOKEN,
         modulo_public_url="http://localhost:8000",
     )
@@ -196,7 +196,8 @@ def scim_client() -> Generator[TestClient, None, None]:
 
     from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
     from modulo.api.main import app
-    from modulo.core.feature_flags import LicenseData, LicenseKeyTier, PlanContext
+    from modulo.auth.scim_auth import get_scim_plan_context
+    from modulo.core.feature_flags import DbPlanContext, FeatureFlagRegistry, LicenseData, LicenseKeyTier, PlanContext
 
     _plan: PlanContext = LicenseKeyTier(
         LicenseData(
@@ -214,6 +215,7 @@ def scim_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
     app.dependency_overrides[get_plan_context] = lambda: _plan
+    app.dependency_overrides[get_scim_plan_context] = lambda: DbPlanContext(FeatureFlagRegistry(current_tier="team"))
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -228,15 +230,15 @@ def _given_scim_auth(org: str) -> None:
     """Context step — SCIM auth is handled by the scim_client fixture."""
 
 
-@given("the enterprise license is valid")
-def _given_enterprise_license_valid() -> None:
-    """Context step — the scim_client fixture sets an enterprise license."""
+@given("the team license is valid")
+def _given_team_license_valid() -> None:
+    """Context step — the scim_client fixture sets a team license."""
 
 
-@given("I do not have an enterprise license")
-def _given_no_enterprise_license(ctx: dict[str, Any]) -> None:
+@given("I do not have a team license")
+def _given_no_team_license(ctx: dict[str, Any]) -> None:
     """Signals to the When step to use no-license settings."""
-    ctx["_no_enterprise_license"] = True
+    ctx["_no_team_license"] = True
 
 
 @given(parsers.parse('a SCIM user exists with id "{user_id}"'))
@@ -380,6 +382,11 @@ def _when_delete_user(user_id: str, scim_client: Any, request: Any, ctx: dict[st
     with (
         patch("modulo.api.routes.scim.scim_delete_user_by_id", return_value=MagicMock()),
         patch("modulo.api.routes.scim.assert_not_last_admin", new_callable=AsyncMock),
+        patch(
+            "modulo.api.routes.scim._resolve_scim_admin_caller",
+            new_callable=AsyncMock,
+            return_value=_USER_ID,
+        ),
         patch("modulo.api.routes.scim.set_rls_org"),
     ):
         headers = {"Authorization": f"Bearer {_SCIM_TOKEN}"}
@@ -405,7 +412,16 @@ def _when_patch_user_deactivate(user_id: str, scim_client: Any, request: Any, ct
     with (
         patch("modulo.api.routes.scim.scim_get_user", return_value=patched_user),
         patch("modulo.api.routes.scim.assert_not_last_admin", new_callable=AsyncMock),
-        patch("modulo.api.routes.scim.scim_update_user", return_value=patched_user),
+        patch(
+            "modulo.api.routes.scim._resolve_scim_admin_caller",
+            new_callable=AsyncMock,
+            return_value=_USER_ID,
+        ),
+        patch(
+            "modulo.api.routes.scim.scim_deactivate_user",
+            new_callable=AsyncMock,
+            return_value=patched_user,
+        ),
         patch("modulo.api.routes.scim.set_rls_org"),
     ):
         headers = {"Authorization": f"Bearer {_SCIM_TOKEN}"}
@@ -433,6 +449,7 @@ def _when_post_group(display_name: str, user_id: str, scim_client: Any, request:
     with (
         patch("modulo.db.crud.team.get_team_by_name", return_value=None),
         patch("modulo.db.crud.user.list_users_for_org", create=True, return_value=[_MOCK_USER]),
+        patch("modulo.db.crud.org_membership.list_memberships_for_org", return_value=[]),
         patch("modulo.api.routes.scim.scim_create_group", return_value=mock_team),
         patch("modulo.api.routes.scim.set_rls_org"),
     ):
@@ -495,12 +512,14 @@ def _when_patch_group_remove_member(
 @when("I GET /scim/v2/Users")
 def _when_get_users_list(scim_client: Any, request: Any, ctx: dict[str, Any]) -> None:
     """GET /scim/v2/Users to list SCIM users."""
-    if ctx.get("_no_enterprise_license"):
+    if ctx.get("_no_team_license"):
         from modulo.api.dependencies import get_plan_context
         from modulo.api.main import app
+        from modulo.auth.scim_auth import get_scim_plan_context
         from modulo.core.feature_flags import CommunityTier
 
         app.dependency_overrides[get_plan_context] = lambda: CommunityTier()
+        app.dependency_overrides[get_scim_plan_context] = lambda: CommunityTier()
         app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
         headers = {"Authorization": f"Bearer {_SCIM_TOKEN}"}
         resp = TestClient(app).get("/scim/v2/Users", headers=headers)

@@ -144,7 +144,7 @@ def _make_fwd_app():
             return []
 
         def tier(self) -> str:
-            return "enterprise"
+            return "team"
 
         def has_license_key(self) -> bool:
             return True

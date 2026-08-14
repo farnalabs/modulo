@@ -68,6 +68,6 @@ Feature: SCIM 2.0 Provisioning
     Then the response status is 401
 
   Scenario: SCIM feature gate blocks access without scim feature flag
-    Given I do not have an enterprise license
+    Given I do not have a team license
     When I GET /scim/v2/Users
     Then the response status is 402

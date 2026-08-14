@@ -53,10 +53,10 @@ Group-to-team mapping from OIDC/SAML identity provider group claims to Modulo te
 - [x] Group mapping applied on JIT provision (new user creation)
 - [x] Group mapping applied on existing user re-authentication (re-linking)
 
-### Enterprise feature gating
-- [x] SSO is flagged as enterprise-tier feature (`feature_flags.py` name: `sso`)
+### Team feature gating
+- [x] SSO is flagged as team-tier feature (`feature_flags.py` name: `sso`)
 - [x] Group mapping admin endpoints require admin `org_role`
-- [x] Group mapping only available when enterprise license key is present
+- [x] Group mapping only available when team license key is present
 
 ### Error Handling
 - [x] Admin group mapping endpoints return 401 for unauthenticated requests

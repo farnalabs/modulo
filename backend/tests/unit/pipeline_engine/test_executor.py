@@ -18,6 +18,7 @@ from modulo.core.pipeline_engine.executor import (
     _node_output_stall_reason,
     _seed_state,
 )
+from modulo.otel_bridge import trace_id_for_thread
 
 
 class _InterruptState(TypedDict, total=False):
@@ -219,6 +220,86 @@ async def test_resume_routes_completed_outputs_to_finalize_cost():
     assert call.kwargs["is_terminal"] is True
     assert call.kwargs["node_type_map"] == {"node-a": ""}
     assert "node-a" in call.kwargs["segment_completed_node_outputs"]
+
+
+# ---------------------------------------------------------------------------
+# FAR-198 — deterministic OTel trace context seeding + per-node span stamps
+# ---------------------------------------------------------------------------
+
+
+async def test_stream_graph_seeds_deterministic_trace_context_and_stamps_nodes():
+    """_stream_graph seeds the run root span from the thread id, attaches the
+    context, stamps completed-node envelopes with the trace id + span id, and
+    tears everything down on exit."""
+    node_run_id = uuid.uuid4()
+    events = [
+        {
+            "event": "on_chain_end",
+            "name": "node-a",
+            "run_id": node_run_id,
+            "data": {"output": {"output": {"status": "completed"}}},
+        }
+    ]
+    compiled = _mock_compiled(events)
+    broker = _mock_registry().get_or_create.return_value
+
+    executor = PipelineExecutor(MagicMock())
+    executor._otel_bridge = MagicMock()
+    executor._otel_bridge.span_id_for_run.return_value = "0123456789abcdef"
+    executor._otel_bridge.start_run_root.return_value = MagicMock()
+
+    completed: dict[str, Any] = {}
+    with (
+        patch("modulo.core.pipeline_engine.executor.context_api.attach", return_value="tok") as attach,
+        patch("modulo.core.pipeline_engine.executor.context_api.detach") as detach,
+    ):
+        status, error_code, _detail, _ntu = await executor._stream_graph(
+            compiled,
+            {"input": 1},
+            {"configurable": {"thread_id": "org:run"}},
+            {"node-a"},
+            broker,
+            uuid.uuid4(),
+            completed_node_outputs=completed,
+        )
+
+    executor._otel_bridge.start_run_root.assert_called_once_with("org:run")
+    assert status == "complete"
+    assert error_code is None
+    assert completed["node-a"]["otel_trace_id"] == trace_id_for_thread("org:run")
+    assert completed["node-a"]["otel_span_id"] == "0123456789abcdef"
+    executor._otel_bridge.end_run_root.assert_called_once()
+    attach.assert_called_once()
+    detach.assert_called_once()
+
+
+async def test_stream_graph_detaches_context_on_exception():
+    """The seeded context is detached and the run root ended even when the
+    stream raises (the finally path)."""
+    compiled = _mock_compiled_raising(RuntimeError("boom"))
+    broker = _mock_registry().get_or_create.return_value
+
+    executor = PipelineExecutor(MagicMock())
+    executor._otel_bridge = MagicMock()
+    executor._otel_bridge.start_run_root.return_value = MagicMock()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.context_api.attach", return_value="tok") as attach,
+        patch("modulo.core.pipeline_engine.executor.context_api.detach") as detach,
+    ):
+        status, _code, _detail, _ntu = await executor._stream_graph(
+            compiled,
+            None,
+            {"configurable": {"thread_id": "org:run"}},
+            {"node-a"},
+            broker,
+            uuid.uuid4(),
+        )
+
+    assert status == "failed"
+    executor._otel_bridge.end_run_root.assert_called_once()
+    attach.assert_called_once()
+    detach.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

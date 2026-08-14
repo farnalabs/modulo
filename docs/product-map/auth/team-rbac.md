@@ -141,7 +141,7 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - [x] The admin UI documents the 15-min stale membership window alongside the "Remove from team" action
 - [x] required_team_id HITL enforcement bypasses JWT claims and always performs a DB-live check
 
-### Enterprise gating
+### Team gating
 - [x] team_rbac is behind a team-tier feature flag
 - [x] The feature flag disables team RBAC endpoints for non-team tiers (teams.py router-level `require_feature("team_rbac")` blocks all routes — returns 402 Payment Required)
 - [ ] Free tier sees the feature as locked/locked-badge in the UI (frontend concern — sidebar link visibility depends on plan store feature flags)

@@ -321,8 +321,10 @@ class TestGrantBreakGlass:
         conn.tables = {"org_memberships", "token_families", "org_api_keys", "organisations"}
         await _grant_break_glass(conn, "modulo_breakglass")
         joined = " ".join(conn.executed)
-        assert "public.org_memberships" in joined and "public.token_families" in joined
-        assert "public.org_api_keys" in joined and "public.organisations" in joined
+        assert "public.org_memberships" in joined
+        assert "public.token_families" in joined
+        assert "public.org_api_keys" in joined
+        assert "public.organisations" in joined
 
     async def test_skips_missing_tables(self, conn: _FakeConn) -> None:
         await _grant_break_glass(conn, "modulo_breakglass")
