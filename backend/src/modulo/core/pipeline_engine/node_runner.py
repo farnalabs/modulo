@@ -397,6 +397,82 @@ async def _fetch_sandbox_log_tail(sandbox_id: str | None, limit: int = 60) -> st
         return raw[:4000]
 
 
+_PR_URL_PATTERN = _re.compile(r"https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+")
+
+
+def _extract_pr_url(raw_text: str) -> str:
+    """Best-effort GitHub PR URL extraction from raw sandbox output.
+
+    FAR-188: when ``output.json`` fails to parse, the run record retains the RAW
+    content so a ``pr_url`` the agent created inside the sandbox is never lost.
+    Classification (FAR-189) reads the marker directly instead of re-parsing.
+    """
+    if not raw_text:
+        return ""
+    match = _PR_URL_PATTERN.search(raw_text)
+    return match.group(0) if match else ""
+
+
+async def _persist_raw_output_marker(
+    session_factory: Callable[..., Any] | None,
+    *,
+    run_id: str,
+    org_id_raw: Any,
+    node_id: str,
+    marker: dict[str, Any],
+) -> None:
+    """Best-effort persist of a raw-output retention marker onto ``runs.outputs_json``.
+
+    FAR-188: called ONLY when the sandbox agent's ``output.json`` could not be
+    read/parsed (or the command stalled/timed out), so a ``pr_url`` the agent
+    created in the sandbox survives even though the node raises
+    ``SandboxNodeFailedError``. The marker is merged keyed by ``node_id`` into
+    BOTH ``outputs_json`` and ``node_telemetry_json`` (lockstep, mirroring the
+    Agent Return Contract split) so the finalize merge treats the row as
+    already-pure and passes it through verbatim.
+
+    NEVER raises (except cancellation): a persistence failure must not block the
+    node's retryable raise — run terminalization depends on it.
+    """
+    if session_factory is None or not run_id:
+        return
+    org_uuid: uuid.UUID | None = None
+    try:
+        org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
+    except (TypeError, ValueError):
+        org_uuid = None
+    if org_uuid is None:
+        return
+
+    from sqlalchemy import select as _sql_select
+
+    from modulo.db.models.run import Run as _RunModel
+    from modulo.db.rls import set_rls_org
+
+    try:
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, org_uuid)
+            run = (
+                await session.execute(_sql_select(_RunModel).where(_RunModel.id == run_id).with_for_update())
+            ).scalar_one_or_none()
+            if run is None:
+                return
+            outputs = dict(run.outputs_json) if isinstance(run.outputs_json, dict) else {}
+            outputs[node_id] = marker
+            telemetry = dict(run.node_telemetry_json) if isinstance(run.node_telemetry_json, dict) else {}
+            telemetry[node_id] = marker
+            run.outputs_json = outputs
+            run.node_telemetry_json = telemetry
+            await session.flush()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "sandbox_agent.raw_output_marker_persist_failed",
+            extra={"run_id": run_id, "node_id": node_id},
+        )
+
+
 def _evaluate_eval_condition(score: float, threshold: float, operator: str) -> bool:
     """Evaluate an eval-reference condition using the given operator.
 
@@ -1634,12 +1710,33 @@ def make_sandbox_agent_fn(
                     )
                 # A6: a stall or total timeout is a retryable sandbox-infra
                 # failure — RAISE (never a silent completed/wrong-success node).
+                # FAR-188: output.json was never read, so retain the captured
+                # stdout as the raw evidence — a pr_url created before the stall
+                # must not be lost either.
+                await _persist_raw_output_marker(
+                    session_factory,
+                    run_id=run_id,
+                    org_id_raw=org_id,
+                    node_id=node_id,
+                    marker={
+                        "status": "failed",
+                        "summary": "Sandbox agent command stalled/timed out — raw stdout retained",
+                        "raw_output": agent_stdout_raw[:_MAX_ARTIFACT_LOG],
+                        "parse_error": command_error,
+                        "pr_url": _extract_pr_url(agent_stdout_raw),
+                        "exit_code": exit_code,
+                        "stdout_length": _stdout_len,
+                        "stderr_length": _stderr_len,
+                        "attempt_key": attempt_key,
+                    },
+                )
                 raise SandboxNodeFailedError(
                     command_error or f"Sandbox agent command failed (no output within {sandbox_timeout}s)"
                 )
 
             raw_output: str = ""
             output_json: Any = None
+            output_read_error: str = ""
             if cmd_result is not None:
                 try:
                     _remaining_after_cmd = max(_OUTPUT_READ_TIMEOUT, sandbox_timeout - (time.monotonic() - start_time))
@@ -1651,16 +1748,49 @@ def make_sandbox_agent_fn(
                         timeout=_remaining_after_cmd,
                     )
                     output_json = json.loads(raw_output)
-                except Exception:
+                except asyncio.CancelledError:
+                    raise
+                except Exception as _read_exc:
+                    output_read_error = f"{type(_read_exc).__name__}: {str(_read_exc)[:_MAX_ERROR_MSG]}"
                     _log.info(
                         "sandbox_agent.no_output_json",
-                        extra={"node_id": node_id, "exit_code": exit_code, "command_error": command_error},
+                        extra={
+                            "node_id": node_id,
+                            "exit_code": exit_code,
+                            "command_error": command_error,
+                            "output_read_error": output_read_error,
+                        },
                     )
 
             # A6: an agent that produced no parseable output.json (regardless of
             # exit code) is a retryable sandbox-infra failure — a node with zero
             # usable work must never complete the run silently.
             if output_json is None:
+                # FAR-188: retain the RAW output so a pr_url created inside the
+                # sandbox is never lost when output.json fails to parse. The raw
+                # file content (or the captured stdout that carried it) plus the
+                # parse/read error ride on the run record as a marker; the
+                # node still raises so retry semantics are unchanged.
+                raw_retained = raw_output or agent_stdout_raw
+                if isinstance(raw_retained, bytes):
+                    raw_retained = raw_retained.decode("utf-8", errors="replace")
+                await _persist_raw_output_marker(
+                    session_factory,
+                    run_id=run_id,
+                    org_id_raw=org_id,
+                    node_id=node_id,
+                    marker={
+                        "status": "failed",
+                        "summary": "Sandbox agent produced no parseable output.json — raw output retained",
+                        "raw_output": raw_retained[:_MAX_ARTIFACT_LOG],
+                        "parse_error": output_read_error,
+                        "pr_url": _extract_pr_url(raw_retained),
+                        "exit_code": exit_code,
+                        "stdout_length": _stdout_len,
+                        "stderr_length": _stderr_len,
+                        "attempt_key": attempt_key,
+                    },
+                )
                 raise SandboxNodeFailedError(
                     "Sandbox agent produced no parseable output.json"
                     + (f" (exit code {exit_code})" if cmd_result is not None else "")
