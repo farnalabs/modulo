@@ -235,4 +235,4 @@ def step_draft_has_no_nodes(ctx):
 def step_draft_has_automation_suggestions(ctx):
     draft = ctx.get("pipeline_draft")
     assert draft is not None, "No draft generated"
-    assert len(draft.automation_suggestions) > 0, "Draft has no automation suggestions"
+    assert draft.automation_suggestions, "Draft has no automation suggestions"

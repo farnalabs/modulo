@@ -725,7 +725,7 @@ def test_validate_schema_invalid_returns_valid_false(client: TestClient) -> None
     )
     assert resp.status_code == 200
     assert resp.json()["valid"] is False
-    assert len(resp.json()["errors"]) > 0
+    assert resp.json()["errors"]
 
 
 # ---------------------------------------------------------------------------

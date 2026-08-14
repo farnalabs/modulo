@@ -131,7 +131,7 @@ def has_access_token(request: Any) -> None:
     body = request.node.response.json()
     assert "access_token" in body, f"Response missing access_token: {body}"
     assert isinstance(body["access_token"], str), f"access_token is not a string: {body['access_token']}"
-    assert len(body["access_token"]) > 0, "access_token is empty"
+    assert body["access_token"], "access_token is empty"
 
 
 @then("the response contains a refresh_token")
@@ -139,7 +139,7 @@ def has_refresh_token(request: Any) -> None:
     body = request.node.response.json()
     assert "refresh_token" in body, f"Response missing refresh_token: {body}"
     assert isinstance(body["refresh_token"], str), f"refresh_token is not a string: {body['refresh_token']}"
-    assert len(body["refresh_token"]) > 0, "refresh_token is empty"
+    assert body["refresh_token"], "refresh_token is empty"
 
 
 # ===========================================================================
