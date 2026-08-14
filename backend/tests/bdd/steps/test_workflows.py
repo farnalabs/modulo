@@ -337,7 +337,7 @@ def _response_has_available_teams(ctx: dict[str, Any]) -> None:
 def _response_has_bundle_json(ctx: dict[str, Any]) -> None:
     data = ctx["response"].json()
     assert "bundle_json" in data, "Missing bundle_json"
-    assert len(data["bundle_json"]) > 0, "bundle_json should not be empty"
+    assert data["bundle_json"], "bundle_json should not be empty"
 
 
 @when("the user sends POST /api/v1/libraries/import/analyse with a bundle")

@@ -545,7 +545,7 @@ def _then_scim_user_has_id(request: Any) -> None:
     body = resp.json()
     user_id = body.get("id")
     assert user_id is not None, "SCIM user id is None"
-    assert len(str(user_id)) > 0, "SCIM user id is empty"
+    assert str(user_id), "SCIM user id is empty"
     # Verify it's a valid UUID
     uuid.UUID(str(user_id))
 

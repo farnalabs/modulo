@@ -184,7 +184,7 @@ class TestGetManifestPathFiltering:
         assert "routes" in manifest
         assert "elements" in manifest
         assert "sidebar_groups" in manifest
-        assert len(manifest["routes"]) > 0
+        assert manifest["routes"]
 
     def test_returns_route_and_elements_for_known_path(self):
         self._reset_manifest()

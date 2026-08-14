@@ -121,7 +121,7 @@ def has_access_token(request: Any) -> None:
     body = request.node.response.json()
     assert "access_token" in body, f"Response missing access_token: {body}"
     assert isinstance(body["access_token"], str), f"access_token is not a string: {body['access_token']}"
-    assert len(body["access_token"]) > 0, "access_token is empty"
+    assert body["access_token"], "access_token is empty"
 
 
 @then("the token encodes org_id")

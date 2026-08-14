@@ -289,4 +289,4 @@ def response_contains_expires_at(request: Any) -> None:
     resp = request.node._resp
     data = resp.json()
     assert data.get("expires_at") is not None, "Expected expires_at to be present"
-    assert len(data["expires_at"]) > 0, "Expected non-empty expires_at"
+    assert data["expires_at"], "Expected non-empty expires_at"

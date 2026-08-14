@@ -114,7 +114,7 @@ def test_login_success(client: TestClient) -> None:
     assert "access_token" in body
     assert "refresh_token" in body
     assert body["token_type"] == "bearer"
-    assert len(body["access_token"]) > 0
+    assert body["access_token"]
 
 
 def test_login_wrong_password(client: TestClient) -> None:

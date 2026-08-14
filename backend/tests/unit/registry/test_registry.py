@@ -164,7 +164,7 @@ class TestRegistryCRUD:
     def test_builtin_primitives_have_valid_signatures(self):
         for slug, entry in _BUILTIN_REGISTRY.items():
             assert verify_primitive_signature(entry), f"Signature check failed for {slug}"
-            assert len(entry.ed25519_signature_hex) > 0
+            assert entry.ed25519_signature_hex
 
     def test_builtin_primitives_have_checksums(self):
         for entry in _BUILTIN_REGISTRY.values():

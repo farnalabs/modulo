@@ -51,7 +51,7 @@ class TestDeploymentInfo:
         resp = client.get("/api/v1/deployment")
         body = resp.json()
         assert isinstance(body["version"], str)
-        assert len(body["version"]) > 0
+        assert body["version"]
 
     def test_uptime_is_positive_int(self, client: TestClient) -> None:
         resp = client.get("/api/v1/deployment")
