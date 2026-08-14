@@ -1713,6 +1713,12 @@ class PipelineExecutor:
                     "Sandbox node cancelled (transient) after retries exhausted: " + str(exc), limit=5000
                 )
             else:
+                # SandboxNodeFailedError: the FAR-197 no-output diagnostic is a
+                # fully bounded message designed to survive this surface in
+                # full — keep the limit at the sanitizer/column cap (5000), not
+                # the 500 used for the short NodeCancelledError string, or the
+                # kill-reason log tail would be the first thing truncated
+                # (FAR-197 review).
                 error_detail = _sanitize_detail(
                     "Sandbox node failed (transient) after retries exhausted: " + str(exc), limit=5000
                 )
