@@ -21,9 +21,7 @@ pytestmark = pytest.mark.connector_conformance
 
 
 class TestConnectorInitialisation:
-    def test_connector_type_returns_valid_enum(
-        self, connector_type: str, conformance_connector: ConnectorBase
-    ) -> None:
+    def test_connector_type_returns_valid_enum(self, connector_type: str, conformance_connector: ConnectorBase) -> None:
         t = conformance_connector.connector_type
         assert isinstance(t, ConnectorType), f"Expected ConnectorType, got {type(t).__name__}"
         assert t in ConnectorType, f"{t!r} is not a known ConnectorType member"

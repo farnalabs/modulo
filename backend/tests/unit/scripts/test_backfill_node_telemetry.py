@@ -295,7 +295,8 @@ def test_loop_apply_issues_conditional_parameterised_update():
     assert "node_telemetry_json IS NULL" in sql
     assert params["rid"] == "r1"
     # Postgres dialect -> the JSON dicts are Jsonb-wrapped at the bind site.
-    assert isinstance(params["new"], Jsonb) and isinstance(params["tel"], Jsonb)
+    assert isinstance(params["new"], Jsonb)
+    assert isinstance(params["tel"], Jsonb)
     assert params["new"].obj["n1"] == {"answer": 42}
     assert params["tel"].obj["n1"]["tokens"] == 3
     assert conn.commits == 1
