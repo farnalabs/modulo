@@ -508,7 +508,7 @@ def response_contains_created_backend(request):
 def response_has_credentials_true(request):
     body = request.node._resp_body
     if hasattr(body, "credentials_ciphertext"):
-        assert bool(body.credentials_ciphertext), "Expected has_credentials to be true"
+        assert body.credentials_ciphertext, "Expected has_credentials to be true"
     elif isinstance(body, dict):
         assert body.get("has_credentials", False) is True
     else:
