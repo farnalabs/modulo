@@ -3492,6 +3492,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{run_id}/guardrail-override": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Guardrail Override Run
+         * @description Remediate a guardrail-blocked run with operator-supplied input.
+         *
+         *     A guardrail block is TERMINAL ``eval_failed`` (error_code ``eval_blocked``)
+         *     with NO HITL gate, and the generic recover endpoint refuses such runs. The
+         *     override is the ONLY remediation: it re-runs the guardrail pass on the
+         *     supplied ``input_data`` (re-block safe default — a still-violating input is
+         *     refused with 422 and the run stays terminal), persists the post-redaction
+         *     payload, flips the run to ``pending`` with ``is_replay=True``, and
+         *     re-dispatches it from run start (execute_run — the blocked run never
+         *     executed, so there is no checkpoint to resume).
+         *
+         *     Requires operator or admin role.
+         */
+        post: operations["guardrail_override_run_api_v1_runs__run_id__guardrail_override_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{run_id}/nodes/{node_id}/prompt/reveal": {
         parameters: {
             query?: never;
@@ -9675,6 +9706,28 @@ export interface components {
         GroupMappingsResponse: {
             /** Mappings */
             mappings: components["schemas"]["GroupMappingItem"][];
+        };
+        /** GuardrailOverrideRequest */
+        GuardrailOverrideRequest: {
+            /** Input Data */
+            input_data: {
+                [key: string]: unknown;
+            };
+        };
+        /** GuardrailOverrideResponse */
+        GuardrailOverrideResponse: {
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Status */
+            status: string;
+            /**
+             * Action
+             * @default override
+             */
+            action: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -23510,6 +23563,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NodeRecoverResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    guardrail_override_run_api_v1_runs__run_id__guardrail_override_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GuardrailOverrideRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GuardrailOverrideResponse"];
                 };
             };
             /** @description Validation Error */

@@ -279,6 +279,101 @@ def test_guardrail_detection_envelope_json_schema_blocks():
     assert results[0].passed is True
 
 
+def test_guardrail_nested_regex_field_blocks_on_violating_nested_payload():
+    """MAJOR-2: a guardrail detection ``field`` may be a nested static path
+    (``config.credentials.api_key``) — it must resolve against the payload and
+    actually block on a violating nested value. A top-level-only lookup would
+    silently never fire (fail-open)."""
+    gr = EvalDefinition(
+        id=uuid.uuid4(),
+        org_id=_ORG_ID,
+        name="nested-credential",
+        eval_type=EvalType.GUARDRAIL,
+        config={
+            "action": "block",
+            "interception_point": "input",
+            "type": "regex",
+            "field": "config.credentials.api_key",
+            "pattern": r"sk-[a-z]+-\d{6}",
+        },
+        failure_behaviour="block",
+    )
+    engine = EvalEngine()
+    with pytest.raises(GuardrailBlockedError):
+        evaluate_guardrails(
+            engine,
+            [gr],
+            {"config": {"credentials": {"api_key": "sk-live-123456"}}, "body": "clean"},
+        )
+    # A clean nested value does not fire the guardrail.
+    results = evaluate_guardrails(
+        engine,
+        [gr],
+        {"config": {"credentials": {"api_key": "not-a-secret"}}, "body": "clean"},
+    )
+    assert results[0].passed is False  # raw eval: regex did not match
+
+
+def test_guardrail_nested_json_schema_field_blocks_on_violating_nested_payload():
+    """MAJOR-2: a json_schema guardrail with a nested detection field resolves
+    the dotted path and blocks when the nested payload violates the schema."""
+    gr = EvalDefinition(
+        id=uuid.uuid4(),
+        org_id=_ORG_ID,
+        name="nested-schema",
+        eval_type=EvalType.GUARDRAIL,
+        config={
+            "action": "block",
+            "interception_point": "input",
+            "type": "json_schema",
+            "field": "config.credentials.api_key",
+            "schema": {"type": "string", "pattern": r"^(?!sk-).+$"},
+        },
+        failure_behaviour="block",
+    )
+    engine = EvalEngine()
+    with pytest.raises(GuardrailBlockedError):
+        evaluate_guardrails(
+            engine,
+            [gr],
+            {"config": {"credentials": {"api_key": "sk-live-123456"}}, "body": "clean"},
+        )
+    results = evaluate_guardrails(
+        engine,
+        [gr],
+        {"config": {"credentials": {"api_key": "not-a-secret"}}, "body": "clean"},
+    )
+    assert results[0].passed is True
+
+
+def test_guardrail_nested_field_in_detection_envelope_blocks():
+    """MAJOR-2: a nested detection field inside the ``detection`` envelope form
+    resolves the same way (envelope merge + nested resolution compose)."""
+    gr = EvalDefinition(
+        id=uuid.uuid4(),
+        org_id=_ORG_ID,
+        name="envelope-nested",
+        eval_type=EvalType.GUARDRAIL,
+        config={
+            "action": "block",
+            "interception_point": "input",
+            "detection": {
+                "type": "regex",
+                "field": "config.credentials.api_key",
+                "pattern": r"sk-[a-z]+-\d{6}",
+            },
+        },
+        failure_behaviour="block",
+    )
+    engine = EvalEngine()
+    with pytest.raises(GuardrailBlockedError):
+        evaluate_guardrails(
+            engine,
+            [gr],
+            {"config": {"credentials": {"api_key": "sk-live-123456"}}, "body": "clean"},
+        )
+
+
 def test_guardrail_detection_envelope_forbidden_type_fails_closed():
     # An envelope that declares a detection type outside the allowed set is
     # rejected — never silently downgraded to another detector.

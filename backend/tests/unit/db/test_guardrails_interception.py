@@ -23,6 +23,12 @@ import pytest
 from sqlalchemy import Table, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from modulo.core.pipeline_engine.recovery import (
+    GuardrailOverrideRejectedError,
+    GuardrailOverrideRequiredError,
+    guardrail_override,
+    recover_node,
+)
 from modulo.db.crud.run import create_run
 from modulo.db.models.account import Account
 from modulo.db.models.base import Base
@@ -203,6 +209,83 @@ async def test_create_run_observe_mode_stamps_observed(session: AsyncSession):
     rows = (await session.execute(select(EvalResult).where(EvalResult.run_id == run.id))).scalars().all()
     assert len(rows) == 1
     assert rows[0].observed is True
+
+
+async def test_create_run_nested_detection_field_blocks(session: AsyncSession):
+    """MAJOR-2 integration: a block guardrail whose detection ``field`` is a
+    nested static path (``config.credentials.api_key``) must actually fire at
+    the ingestion edge — a top-level-only lookup would silently pass (fail-open)
+    and create a pending run."""
+    await _seed(session)
+    await _seed_guardrail(
+        session,
+        name="nested-credential",
+        action="block",
+        config={
+            "type": "regex",
+            "field": "config.credentials.api_key",
+            "pattern": r"sk-[a-z]+-\d{6}",
+        },
+    )
+    run = await _create(
+        session,
+        input_payload={"config": {"credentials": {"api_key": "sk-live-123456"}}, "body": "clean"},
+    )
+    assert run.status == "eval_failed"
+    assert run.error_code == "eval_blocked"
+    assert "nested-credential" in (run.error_detail or "")
+
+
+async def test_guardrail_blocked_run_cannot_be_resurrected_via_generic_recover(session: AsyncSession):
+    """MAJOR-1 integration: a guardrail-blocked terminal run cannot be
+    resurrected through the generic recover_node path — it raises
+    GuardrailOverrideRequiredError and stays terminal. The ONLY remediation is
+    the guardrail-override path, which re-runs the guardrail pass (re-block
+    safe) and flips the run to pending on clean input."""
+    await _seed(session)
+    await _seed_guardrail(session, name="no-secrets", action="block")
+    run = await _create(session, input_payload={"body": "leak SECRET_ABC12345"})
+    assert run.status == "eval_failed"
+    assert run.error_code == "eval_blocked"
+
+    # Generic recover is refused — the blocked payload must never flow into the
+    # pipeline via the generic path.
+    with pytest.raises(GuardrailOverrideRequiredError):
+        await recover_node(
+            session,
+            org_id=_ORG,
+            run_id=run.id,
+            node_id="manual-node-1",
+            input_data={"body": "clean replacement text"},
+        )
+    assert run.status == "eval_failed"
+    assert run.error_code == "eval_blocked"
+
+    # The override is re-block safe: a still-violating input is refused and the
+    # run stays terminal.
+    with pytest.raises(GuardrailOverrideRejectedError):
+        await guardrail_override(
+            session,
+            org_id=_ORG,
+            run_id=run.id,
+            input_data={"body": "leak SECRET_ABC12345"},
+        )
+    assert run.status == "eval_failed"
+    assert run.error_code == "eval_blocked"
+
+    # Clean input through the dedicated override is the ONLY remediation — the
+    # run flips to pending with is_replay=True and the post-redaction payload
+    # stored.
+    override_run = await guardrail_override(
+        session,
+        org_id=_ORG,
+        run_id=run.id,
+        input_data={"body": "clean replacement text"},
+    )
+    assert override_run.status == "pending"
+    assert override_run.error_code is None
+    assert override_run.is_replay is True
+    assert override_run.input_payload == {"body": "clean replacement text"}
 
 
 async def test_create_run_json_schema_block_detail_never_round_trips_raw_payload(session: AsyncSession):

@@ -257,6 +257,26 @@ class EvalEngine:
         "u": re.UNICODE,
     }
 
+    @staticmethod
+    def _resolve_output_field(output: dict[str, Any], field: str) -> tuple[bool, Any]:
+        """Resolve a (possibly dotted) ``field`` path against *output*.
+
+        Returns ``(found, value)``. Segment matching is an EXACT key lookup —
+        never a substring match. A single-segment field behaves exactly like a
+        top-level ``output.get(field)`` lookup. Guardrail detection reuses this
+        so an author can write ``field: "config.credentials.api_key"`` for a
+        credential guardrail and have it actually fire (FAR-208 review MAJOR-2)
+        instead of silently never resolving to a value.
+        """
+        if not field:
+            return False, None
+        current: Any = output
+        for segment in field.split("."):
+            if not segment or not isinstance(current, dict) or segment not in current:
+                return False, None
+            current = current[segment]
+        return True, current
+
     def _evaluate_regex(
         self,
         output: dict[str, Any],
@@ -296,8 +316,8 @@ class EvalEngine:
                 eval_id=eval_def.id,
                 detail="Regex eval missing 'field' in config",
             )
-        raw_value = output.get(field)
-        value = "" if raw_value is None else str(raw_value)
+        found, raw_value = self._resolve_output_field(output, field)
+        value = "" if not found or raw_value is None else str(raw_value)
         flags = 0
         flags_str = eval_def.config.get("flags", "")
         if flags_str:
@@ -343,7 +363,8 @@ class EvalEngine:
             )
         field = eval_def.config.get("field", "")
         if field:
-            if field not in output:
+            found, data = self._resolve_output_field(output, field)
+            if not found:
                 _log.warning("JSON Schema eval %s field %r not found in output", eval_def.id, field)
                 return _fail_result(
                     run_id=run_id,
@@ -351,7 +372,6 @@ class EvalEngine:
                     eval_id=eval_def.id,
                     detail=f"Field {field!r} not found in output for JSON Schema validation",
                 )
-            data = output[field]
         else:
             data = output
         try:

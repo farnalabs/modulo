@@ -108,6 +108,8 @@ EXEMPT: dict[tuple[str, str], str] = {
     # Runs: node observe/recover carry inline admin/operator checks in the handler.
     ("POST", "/api/v1/runs/{run_id}/nodes/{node_id}/observe"): "inline admin/operator check in handler",
     ("POST", "/api/v1/runs/{run_id}/nodes/{node_id}/recover"): "inline admin/operator check in handler",
+    # Runs: guardrail-override carries an inline admin/operator check in the handler.
+    ("POST", "/api/v1/runs/{run_id}/guardrail-override"): "inline admin/operator check in handler",
     # Webhooks: HMAC/shared-secret is the authorization (exempt channel).
     ("POST", "/api/v1/triggers/{trigger_id}/webhook"): "HMAC/shared-secret channel",
     # Stripe: Stripe-Signature (HMAC-SHA256 of the raw body with the webhook

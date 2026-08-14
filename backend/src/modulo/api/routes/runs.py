@@ -36,9 +36,13 @@ from modulo.core.pipeline_engine.error_codes import present_error, sanitize_erro
 from modulo.core.pipeline_engine.event_broker import get_registry
 from modulo.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
+    GuardrailOverrideError,
+    GuardrailOverrideRejectedError,
+    GuardrailOverrideRequiredError,
     NodeAlreadyCompletedError,
     NodeNotFoundInGraphError,
     RecoveryNotAllowedError,
+    guardrail_override,
     recover_node,
 )
 from modulo.core.trigger_engine import TriggerEngine
@@ -1445,6 +1449,8 @@ async def recover_run_node(
                 )
             except RecoveryNotAllowedError as exc:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)[:200]) from exc
+            except GuardrailOverrideRequiredError as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)[:200]) from exc
             except NodeNotFoundInGraphError as exc:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
             except NodeAlreadyCompletedError as exc:
@@ -1521,6 +1527,128 @@ async def recover_run_node(
         action=action,
         status=run.status,
     )
+
+
+# ---------------------------------------------------------------------------
+# Guardrail override (FAR-208 item 6) — the ONLY remediation for a
+# guardrail-blocked terminal run (recover_node refuses eval_blocked runs)
+# ---------------------------------------------------------------------------
+
+
+class GuardrailOverrideRequest(BaseModel):
+    input_data: dict[str, Any]
+
+
+class GuardrailOverrideResponse(BaseModel):
+    run_id: uuid.UUID
+    status: str
+    action: str = "override"
+
+
+@router.post(
+    "/{run_id}/guardrail-override",
+    response_model=GuardrailOverrideResponse,
+    status_code=status.HTTP_200_OK,
+)
+@handle_db_errors("runs.guardrail_override")
+async def guardrail_override_run(
+    run_id: uuid.UUID,
+    req: GuardrailOverrideRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> GuardrailOverrideResponse:
+    """Remediate a guardrail-blocked run with operator-supplied input.
+
+    A guardrail block is TERMINAL ``eval_failed`` (error_code ``eval_blocked``)
+    with NO HITL gate, and the generic recover endpoint refuses such runs. The
+    override is the ONLY remediation: it re-runs the guardrail pass on the
+    supplied ``input_data`` (re-block safe default — a still-violating input is
+    refused with 422 and the run stays terminal), persists the post-redaction
+    payload, flips the run to ``pending`` with ``is_replay=True``, and
+    re-dispatches it from run start (execute_run — the blocked run never
+    executed, so there is no checkpoint to resume).
+
+    Requires operator or admin role.
+    """
+    if principal.org_role not in ("admin", "operator"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only operators and admins can override guardrail blocks",
+        )
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            try:
+                run = await guardrail_override(
+                    session,
+                    org_id=principal.organisation_id,
+                    run_id=run_id,
+                    input_data=req.input_data,
+                    actor_id=principal.account_id,
+                )
+            except GuardrailOverrideRejectedError as exc:
+                # Still-violating supplied input — re-block safe default. The
+                # run stays terminal eval_failed; 422 = the supplied input is
+                # unprocessable for this run.
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)[:200]) from exc
+            except GuardrailOverrideError as exc:
+                # Not a guardrail-blocked terminal run — nothing to override.
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)[:200]) from exc
+            except ConcurrentRecoveryError as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except IntegrityError:
+        _log.exception("runs.guardrail_override")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        ) from None
+    except ProgrammingError:
+        _log.exception("runs.guardrail_override")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
+        ) from None
+
+    except SQLAlchemyError:
+        _log.warning("route.db_error", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("pipeline_execution.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
+
+    # Re-dispatch the pending run from run start (execute_run). The blocked run
+    # never executed, so there is no checkpoint to resume from — dispatch_run
+    # enqueues the default execute_run job with no resume data.
+    try:
+        outcome, _job_id = await dispatch_run(
+            str(run_id),
+            str(principal.organisation_id),
+            queue="runs",
+        )
+    except Exception as exc:
+        _log.exception("run.guardrail_override_dispatch_failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to dispatch pipeline after guardrail override",
+        ) from exc
+
+    if outcome in ("deferred", "enqueue_failed"):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to enqueue pipeline after guardrail override",
+        )
+
+    return GuardrailOverrideResponse(run_id=run_id, status=run.status)
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,10 @@
 """Recovery handler for failed manual-input nodes.
 
 Provides the core logic to replay or skip a manual node that failed or
-is awaiting human input.  Used by the ``POST /recover`` API endpoint.
+is awaiting human input (``POST /recover``), plus the guardrail-override
+remediation for guardrail-blocked terminal runs (``POST /guardrail-override``).
+A guardrail-blocked run (``eval_failed``/``eval_blocked``) is REFUSED by the
+generic recovery path — the override endpoint is the only remediation.
 """
 
 from __future__ import annotations
@@ -26,9 +29,7 @@ class RecoveryNotAllowedError(RuntimeError):
     """Raised when the run state does not permit recovery."""
 
     def __init__(self, run_id: uuid.UUID, status: str) -> None:
-        super().__init__(
-            f"Run {run_id} is in status {status!r} — recovery requires 'failed', 'awaiting_human', or 'eval_failed'"
-        )
+        super().__init__(f"Run {run_id} is in status {status!r} — recovery requires 'failed' or 'awaiting_human'")
         self.run_id = run_id
         self.status = status
 
@@ -82,7 +83,28 @@ class GuardrailOverrideRejectedError(GuardrailOverrideError):
         self.detail = detail
 
 
-_RECOVERABLE_STATUSES = frozenset({"failed", "awaiting_human", "eval_failed"})
+class GuardrailOverrideRequiredError(RuntimeError):
+    """Raised when a guardrail-blocked run is routed through the generic recovery path.
+
+    A guardrail-blocked run (terminal ``eval_failed`` / ``error_code``
+    ``eval_blocked``) must NEVER be resurrected through :func:`recover_node`:
+    the generic path does NOT re-run the guardrail pass on the supplied input,
+    does not set ``is_replay=True``, and would resume execution on the blocked
+    payload. The ONLY remediation is the guardrail-override endpoint
+    (:func:`guardrail_override`), which re-runs the guardrail pass on the
+    operator-supplied input (re-block safe default).
+    """
+
+    def __init__(self, run_id: uuid.UUID) -> None:
+        super().__init__(
+            f"Run {run_id} is blocked by a guardrail (eval_blocked) — the generic recovery path would not "
+            "re-run the guardrail pass on the supplied input. Use the guardrail-override endpoint instead "
+            "(it is re-block safe)."
+        )
+        self.run_id = run_id
+
+
+_RECOVERABLE_STATUSES = frozenset({"failed", "awaiting_human"})
 
 
 async def recover_node(
@@ -109,6 +131,8 @@ async def recover_node(
 
     Raises:
         RecoveryNotAllowedError — run is not in a recoverable state.
+        GuardrailOverrideRequiredError — run is guardrail-blocked (eval_blocked)
+            and must be remediated via the guardrail-override endpoint instead.
         NodeNotFoundInGraphError — node_id does not exist in the graph.
         NodeAlreadyCompletedError — node has already been completed.
         ConcurrentRecoveryError — another recovery won the race.
@@ -128,6 +152,12 @@ async def recover_node(
         raise RecoveryNotAllowedError(run_id, "not_found")
 
     if run.status not in _RECOVERABLE_STATUSES:
+        if run.status == "eval_failed" and run.error_code == "eval_blocked":
+            # A guardrail-blocked run must never be resurrected through the
+            # generic recovery path (no guardrail re-pass, no is_replay=True —
+            # the blocked payload would flow into the pipeline anyway). Point
+            # the caller at the re-block-safe override endpoint.
+            raise GuardrailOverrideRequiredError(run_id)
         raise RecoveryNotAllowedError(run_id, run.status)
 
     snapshot_result = await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.id == run.snapshot_id))
@@ -225,10 +255,11 @@ async def guardrail_override(
 ) -> Run:
     """Remediate a guardrail-blocked run with operator-supplied input.
 
-    Guardrail remediation is an EXTENSION of :func:`recover_node` (FAR-208
-    item 6). A guardrail block is TERMINAL ``eval_failed`` with NO HITL gate
-    (deliver_manual is 404 on such runs — see the guardrails spike tests), so
-    the ONLY remediation is this override:
+    Guardrail remediation is the DEDICATED counterpart of :func:`recover_node`
+    (FAR-208 item 6). :func:`recover_node` refuses guardrail-blocked runs
+    (:class:`GuardrailOverrideRequiredError`); a guardrail block is TERMINAL
+    ``eval_failed`` with NO HITL gate (deliver_manual is 404 on such runs — see
+    the guardrails spike tests), so the ONLY remediation is this override:
 
     1. Pipeline ``FOR UPDATE`` lock + optimistic status UPDATE (single-flight
        by run_id) — mirrors ``recover_node``.
