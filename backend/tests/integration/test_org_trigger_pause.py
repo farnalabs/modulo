@@ -533,9 +533,9 @@ async def test_validation_result_constraint_accepts_full_vocabulary(
     # Every vocabulary value must actually have been accepted and persisted.
     async with db_engine.connect() as conn:
         result = await conn.execute(
-            text(
-                "SELECT validation_result FROM trigger_events WHERE id IN (:ids) ORDER BY validation_result"
-            ).bindparams(bindparam("ids", expanding=True)),
+            text("SELECT validation_result FROM trigger_events WHERE id IN :ids ORDER BY validation_result").bindparams(
+                bindparam("ids", expanding=True)
+            ),
             {"ids": inserted_ids},
         )
         persisted = {row[0] for row in result.fetchall()}
