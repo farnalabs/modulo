@@ -4,6 +4,7 @@ from typing import Any, cast
 
 import httpx
 
+from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -102,7 +103,7 @@ class NotionConnector(ConnectorBase):
                     return ConnectorResult(
                         records=records,
                         total=len(records),
-                        next_cursor=body.get("next_cursor"),
+                        next_cursor=_safe_cursor(body.get("next_cursor")),
                     )
 
                 case "database":
@@ -134,7 +135,7 @@ class NotionConnector(ConnectorBase):
                     return ConnectorResult(
                         records=records,
                         total=len(records),
-                        next_cursor=body.get("next_cursor"),
+                        next_cursor=_safe_cursor(body.get("next_cursor")),
                     )
 
                 case "page":
@@ -162,7 +163,7 @@ class NotionConnector(ConnectorBase):
                     return ConnectorResult(
                         records=records,
                         total=len(records),
-                        next_cursor=body.get("next_cursor"),
+                        next_cursor=_safe_cursor(body.get("next_cursor")),
                     )
 
                 case "users":
@@ -178,7 +179,7 @@ class NotionConnector(ConnectorBase):
                     return ConnectorResult(
                         records=records,
                         total=len(records),
-                        next_cursor=body.get("next_cursor"),
+                        next_cursor=_safe_cursor(body.get("next_cursor")),
                     )
 
                 case _:

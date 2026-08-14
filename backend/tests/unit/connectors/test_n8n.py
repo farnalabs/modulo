@@ -120,6 +120,28 @@ async def test_query_workflows_with_cursor(connector: N8NConnector) -> None:
     assert result.next_cursor == "page3"
 
 
+@respx.mock
+async def test_query_workflows_non_string_cursor_not_emitted(connector: N8NConnector) -> None:
+    """A corrupt non-string nextCursor must not be emitted as a pagination cursor."""
+    respx.get(f"{BASE_URL}/rest/workflows").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "W1"}], "nextCursor": 123})
+    )
+    result = await connector.query(ConnectorQuery(resource="workflows"))
+    assert len(result.records) == 1
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_workflows_dict_cursor_not_emitted(connector: N8NConnector) -> None:
+    """A dict nextCursor must not crash or leak into the result cursor."""
+    respx.get(f"{BASE_URL}/rest/workflows").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "W1"}], "nextCursor": {"page": 2}})
+    )
+    result = await connector.query(ConnectorQuery(resource="workflows"))
+    assert len(result.records) == 1
+    assert result.next_cursor is None
+
+
 # -- query: single workflow -- #
 
 
