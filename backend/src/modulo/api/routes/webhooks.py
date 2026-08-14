@@ -34,7 +34,7 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.permissions import PermissionDenied, assert_org_role
 from modulo.core.dispatch import dispatch_run
 from modulo.core.error_tracking import ErrorIngestionService
-from modulo.core.exceptions import TriggersPausedError
+from modulo.core.exceptions import SnapshotLockNotAvailableError, TriggersPausedError
 
 # Deprecated private aliases — kept importable so legacy patch targets and
 # callers referencing the underscore names keep working (M5 public-API fix).
@@ -288,6 +288,13 @@ async def receive_webhook(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=str(exc),
         ) from exc
+    except SnapshotLockNotAvailableError:
+        _log.info(
+            "webhooks.receive_webhook.snapshot_lock_busy trigger=%s pipeline=%s",
+            trigger_id,
+            getattr(locals().get("trigger", None), "pipeline_id", None),
+        )
+        return {"run_id": None, "status": "queued", "detail": "Pipeline busy — queued for retry"}
     except ProgrammingError:
         _log.exception("webhooks.receive_webhook")
         raise HTTPException(
@@ -480,6 +487,13 @@ async def replay_webhook(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Concurrent run limit of {exc.limit} reached",
         ) from exc
+    except SnapshotLockNotAvailableError:
+        _log.info(
+            "webhooks.replay_webhook.snapshot_lock_busy trigger=%s pipeline=%s",
+            trigger_id,
+            getattr(locals().get("trigger", None), "pipeline_id", None),
+        )
+        return {"run_id": None, "status": "queued", "detail": "Pipeline busy — queued for retry"}
     except ProgrammingError:
         _log.exception("webhooks.replay_webhook")
         raise HTTPException(
