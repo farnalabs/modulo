@@ -39,6 +39,10 @@ regression that silently weakens the suite:
 - ``assert x == ""`` / ``assert x != ""`` against an empty string literal — the
   string twin of the empty-container lens; an empty string is falsy, so these
   should read ``assert not x`` / ``assert x``
+- ``assert x == ()`` / ``assert x != ()`` against an empty tuple literal — the
+  tuple twin of the empty-container lens; an empty tuple is falsy, so these
+  should read ``assert not x`` / ``assert x`` (``is``/``is not`` against ``()``
+  is deliberately left alone because ``()`` is interned)
 - hand-rolled ``try: ... raise AssertionError(...) except X: pass`` instead of
   ``pytest.raises`` (the success path is only guarded by the ``raise`` line)
 - ``assert`` nested inside ``except`` handlers (a failing assert masks the
@@ -867,6 +871,102 @@ def test_no_empty_string_equality():
         "An empty string is falsy; write 'assert not <expr>' instead of "
         "'assert <expr> == \"\"' and 'assert <expr>' instead of 'assert <expr> != \"\"'.\n" + "\n".join(violations)
     )
+
+
+_EMPTY_TUPLE_OPERANDS = (ast.Attribute, ast.Subscript, ast.Call, ast.Await)
+"""Operand node types the empty-tuple lens flags. A bare name is left alone
+because it may bind ``None`` or a non-tuple object, and a ``.get(...)`` lookup
+is left alone because it returns ``None`` for a missing key — ``()`` vs
+``None`` is a meaningful distinction (empty result vs. no result) that
+truthiness silently conflates."""
+
+
+def _empty_tuple_comparisons(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert`` that compares a
+    value against an empty tuple literal with ``==``/``!=``."""
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+            continue
+        if not isinstance(test.ops[0], (ast.Eq, ast.NotEq)):
+            continue
+        sides = [(test.left, test.comparators[0]), (test.comparators[0], test.left)]
+        for operand, literal in sides:
+            if not (isinstance(literal, ast.Tuple) and not literal.elts):
+                continue
+            if isinstance(operand, ast.Name):
+                continue
+            if isinstance(operand, ast.Call) and isinstance(operand.func, ast.Attribute) and operand.func.attr == "get":
+                continue
+            if not isinstance(operand, _EMPTY_TUPLE_OPERANDS):
+                continue
+            op_name = "==" if isinstance(test.ops[0], ast.Eq) else "!="
+            prefer = "assert not ..." if isinstance(test.ops[0], ast.Eq) else "assert ..."
+            found.append((node.lineno, f"asserts value {op_name} () — prefer '{prefer}'"))
+            break
+    return found
+
+
+def test_no_empty_tuple_equality():
+    """``assert x == ()`` / ``assert x != ()`` compare a value against an empty
+    tuple literal — the tuple twin of the empty-container lens above. An empty
+    tuple is falsy, so ``assert x == ()`` should read ``assert not x`` and
+    ``assert x != ()`` should read ``assert x`` — the same intent with less
+    noise and no literal-type coupling. Unlike the ``is``/``is not`` identity
+    lens (which deliberately leaves tuple literals alone because ``()`` is
+    interned), equality against ``()`` has no identity wrinkle. Operands whose
+    type is statically a container (attribute access, subscript, call, or
+    await) are flagged; a bare name is left alone because it may bind ``None``
+    or a non-tuple object, and a ``.get(...)`` lookup is left alone because it
+    returns ``None`` for a missing key — ``()`` vs ``None`` is a meaningful
+    distinction for APIs that signal "empty result" vs "no result"."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _empty_tuple_comparisons(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} empty-tuple comparison(s).\n"
+        "An empty tuple is falsy; write 'assert not <expr>' instead of "
+        "'assert <expr> == ()' and 'assert <expr>' instead of 'assert <expr> != ()'.\n" + "\n".join(violations)
+    )
+
+
+def test_empty_tuple_lens_flags_empty_tuple():
+    """Synthetic positive/negative control for the empty-tuple lens: must flag
+    ``== ()``/``!= ()`` on attribute/subscript/call/await operands (either
+    operand order) and ignore ``is ()``, bare names, ``.get(...)``, non-empty
+    tuple literals, and list/dict literals."""
+    positive_sources = [
+        "def test_foo():\n    assert result.items == ()\n",
+        "def test_foo():\n    assert result['items'] != ()\n",
+        "def test_foo():\n    assert fetch_items() == ()\n",
+        "def test_foo():\n    assert await fetch_items() == ()\n",
+        "def test_foo():\n    assert () != result.items\n",
+        "def test_foo():\n    assert result.items[0] == ()\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _empty_tuple_comparisons(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert x == ()\n",
+        "def test_foo():\n    assert x is ()\n",
+        "def test_foo():\n    assert config.get('items') == ()\n",
+        "def test_foo():\n    assert result.items == (1, 2)\n",
+        "def test_foo():\n    assert result.items == []\n",
+        "def test_foo():\n    assert result.items == {}\n",
+        "def test_foo():\n    assert () == ()\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _empty_tuple_comparisons(tree), f"lens should NOT flag:\n{source}"
 
 
 def test_no_precision_fragile_float_equality():
