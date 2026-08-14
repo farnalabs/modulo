@@ -483,10 +483,6 @@ def _build_no_output_message(
     if read_snippet:
         parts.append(f"--- output.json read ({len(read_raw)} chars) ---")
         parts.append(read_snippet)
-    stdout_tail = _bounded_tail(stdout_raw, _NO_OUTPUT_STDOUT_TAIL)
-    if stdout_tail:
-        parts.append("--- stdout tail ---")
-        parts.append(stdout_tail)
 
     return "\n".join(parts)
 

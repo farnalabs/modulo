@@ -1128,6 +1128,52 @@ async def test_no_output_json_message_is_bounded_for_huge_stdout():
     assert message.index("--- stderr tail ---") < message.index("--- stdout tail ---")
 
 
+async def test_no_output_json_message_bounded_with_huge_raw_readback():
+    """Worst case: huge stdout/stderr AND a huge invalid output.json readback
+    still yields one bounded message < 5000 chars with no duplicated sections
+    (FAR-197 merge-conflict regression guard).
+
+    The read snippet documents itself LAST (per the section ordering), and each
+    section header must appear exactly once — a duplicated stdout block (from a
+    botched conflict resolution) inflated the message past the 5000-char
+    sanitizer/column cap and silently truncated the diagnostic tail.
+    """
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+    huge = "z" * 200_000
+    # Huge stdout/stderr AND a huge invalid output.json readback — the exact
+    # invalid-JSON worst case that must stay bounded.
+    sandbox = await _completed_sandbox(
+        1,
+        stdout=huge,
+        stderr=huge,
+        output_json="<<< not json >>>" + "y" * 200_000,
+    )
+    sandbox.sandbox_id = "sbx-huge-raw"
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch(
+            "modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail",
+            new=AsyncMock(return_value="x" * 50_000),
+        ),
+        pytest.raises(SandboxNodeFailedError) as excinfo,
+    ):
+        await fn(_run_state())
+
+    message = str(excinfo.value)
+    assert len(message) < 5_000
+    # Every section header appears exactly once — no duplicated blocks.
+    assert message.count("--- stdout tail ---") == 1
+    assert message.count("--- stderr tail ---") == 1
+    assert message.count("--- sandbox log tail ---") == 1
+    assert message.count("--- output.json read") == 1
+    # Documented ordering: log tail (kill reason) -> stderr -> stdout -> raw readback last.
+    assert message.index("--- sandbox log tail ---") < message.index("--- stderr tail ---")
+    assert message.index("--- stderr tail ---") < message.index("--- stdout tail ---")
+    assert message.index("--- stdout tail ---") < message.index("--- output.json read")
+
+
 async def test_no_output_log_tail_fetched_before_kill():
     """On the no-output.json path the E2B log tail is fetched BEFORE the
     finally-block sandbox kill — the logs endpoint only serves live sandboxes
