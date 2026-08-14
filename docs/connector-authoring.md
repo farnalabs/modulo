@@ -17,50 +17,76 @@ ConnectorBase (ABC)          ← modulo/connectors/base.py
 
 ## ConnectorBase interface
 
+The abstract interface in `modulo/connectors/base.py` separates **reads**
+(`query`) from **writes** (`write`):
+
 ```python
 class ConnectorBase(ABC):
     """Abstract base for all connector implementations."""
 
     @property
     @abstractmethod
-    def connector_type(self) -> str:
-        """Unique type identifier (e.g. 'git-host', 'issue-tracker')."""
-
-    @property
-    @abstractmethod
-    def supported_operations(self) -> list[str]:
-        """Operations this connector supports (e.g. ['read', 'write'])."""
+    def connector_type(self) -> ConnectorType:
+        """Type identifier for this connector (a ConnectorType enum)."""
 
     @abstractmethod
     async def health_check(self) -> HealthResult:
         """Verify the connector's external service is reachable."""
 
     @abstractmethod
-    async def execute(self, query: ConnectorQuery) -> ConnectorResult:
-        """Execute a single operation."""
+    async def query(self, q: ConnectorQuery) -> ConnectorResult:
+        """Read data from the external tool."""
+
+    @abstractmethod
+    async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
+        """Write data to the external tool. Returns the created/updated resource."""
+```
+
+The payload types are simple dataclasses:
+
+```python
+@dataclass
+class ConnectorQuery:
+    resource: str
+    filters: dict[str, Any] = field(default_factory=dict)
+    limit: int = 100
+    cursor: str | None = None
+
+@dataclass
+class ConnectorPayload:
+    resource: str
+    data: dict[str, Any]
+
+@dataclass
+class ConnectorResult:
+    records: list[dict[str, Any]] = field(default_factory=list)
+    next_cursor: str | None = None
+    total: int | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 ```
 
 ## Capability contract
 
-Each connector type declares its capabilities via `connector_type` and
-`supported_operations`. The graph validator checks that pipeline node
-requirements are satisfied by the bound connector at save-time and run-time.
+Each connector type is identified by its `connector_type` enum member, which
+the graph validator uses to bind pipeline node requirements to the bound
+connector at save-time and run-time. Read/write permissions are enforced by
+the `ConnectorPermissionError` checks in `modulo/connectors/base.py`.
 
-**Connector type naming convention:** `kebab-case` identifiers like `git-host`,
-`issue-tracker`, `ci-runner`, `shell`.
+**Connector type naming convention:** mostly lowercase `kebab-case`
+identifiers like `filesystem`, `github`, `ci-runner`, `ticket-tracker`, though
+some members use `snake_case` (e.g. `azure_repos`, `dropbox_paper`,
+`microsoft_teams`).
 
 ## Credential handling
 
-Credentials are **never** stored in the connector class itself. The
-`ConnectorHub` decrypts credentials once at run-start and passes them to a
-run-scoped context object:
+Credentials are **never** stored as literal values in the connector source.
+The `ConnectorHub` decrypts credentials once at run-start and passes them into
+the connector **constructor**:
 
 ```python
 class YourConnector(ConnectorBase):
-    async def execute(self, query: ConnectorQuery) -> ConnectorResult:
-        # Access pre-decrypted credentials from run context
-        token = query.context.get_decrypted_credential("api_token")
-        ...
+    def __init__(self, api_key: str) -> None:
+        self._api_key = api_key
 ```
 
 ## Swappable binding
@@ -77,31 +103,42 @@ the real connector against test fixtures (e.g., local Git repositories for
 
 ```python
 async def test_your_connector():
-    connector = YourConnector(config={"base_url": "https://example.com"})
-    result = await connector.execute(
-        ConnectorQuery(
-            operation="read",
-            params={"path": "/test"},
-            context=MockContext(),
-        )
+    connector = YourConnector(api_key="test-token")  # creds passed to the constructor
+    result = await connector.query(
+        ConnectorQuery(resource="issues", filters={"state": "open"})
     )
-    assert result.status == "ok"
+    assert result.total is None or len(result.records) <= result.total
 ```
 
 ## Registration
 
-Connectors auto-register via Python entry points in `pyproject.toml`:
+An entry point must point to a **builder function**, not to the class directly.
+The builder receives `(config, creds)` and returns a connector instance:
+
+```python
+def build_your_connector(config: dict, creds: dict) -> ConnectorBase:
+    return YourConnector(api_key=creds["api_key"])
+```
 
 ```toml
 [project.entry-points."modulo.connectors"]
-your_connector = "your_package.connector:YourConnector"
+your_connector = "your_package.connector:build_your_connector"
 ```
 
-Or register manually in the plugin system:
+Or register the builder manually. Registration requires a `PluginManifest`:
 
 ```python
-from modulo.core.plugin_registry import get_plugin_registry
+from modulo.core.plugin_registry import PluginManifest, get_plugin_registry
 
 registry = get_plugin_registry()
-registry.register_connector_type("custom", YourConnector)
+registry.register_connector_type(
+    "your_connector",
+    build_your_connector,
+    PluginManifest(
+        PLUGIN_ID="my-plugins",
+        display_name="My Plugins",
+        description="Custom connector plugin",
+        version="0.1.0",
+    ),
+)
 ```
