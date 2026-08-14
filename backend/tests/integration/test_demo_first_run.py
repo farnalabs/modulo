@@ -305,13 +305,14 @@ async def test_seed_demo_data_creates_demo_user(db_engine: AsyncEngine, db_url: 
 
 
 async def test_seed_demo_data_runs_to_completion(db_engine: AsyncEngine, db_url: str) -> None:
-    """_seed_demo_data should complete without crashing.
+    """_seed_demo_data should complete without crashing and create the demo user.
 
     The shared integration database always contains at least the
     session-scoped ``test_org`` organisation (pulled in by the module's
     autouse onboarding-cleanup fixture), so the org-free early-return path in
-    ``_seed_demo_data`` cannot be exercised here — this test only verifies the
-    seeder runs to completion without raising.
+    ``_seed_demo_data`` cannot be exercised here — this test verifies the
+    seeder runs to completion and actually seeds the demo account when demo
+    mode is enabled.
     """
     from modulo.api.main import _seed_demo_data
     from modulo.settings import Settings
@@ -324,12 +325,31 @@ async def test_seed_demo_data_runs_to_completion(db_engine: AsyncEngine, db_url:
         modulo_csrf_enabled=False,
     )
 
+    # Start from a known state so the completion assertion below is meaningful.
+    async with db_engine.connect() as conn:
+        await _delete_demo_accounts(conn)
+        await conn.commit()
+
     import modulo.api.dependencies as deps
 
     deps._engine = None
     deps._session_factory = None
 
     await _seed_demo_data(settings)
+
+    async with db_engine.connect() as conn:
+        result = await conn.execute(
+            text("SELECT email, display_name FROM accounts WHERE email = 'demo'"),
+        )
+        row = result.one_or_none()
+        assert row is not None, "Demo user was not created by _seed_demo_data"
+        _email, display_name = row
+        assert display_name == "Demo User"
+
+    # Clean up the seed-created user to avoid cross-test contamination
+    async with db_engine.connect() as conn:
+        await _delete_demo_accounts(conn)
+        await conn.commit()
 
     deps._engine = None
     deps._session_factory = None
