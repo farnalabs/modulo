@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+import modulo.api.routes.admin_email as admin_email_mod
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
@@ -94,6 +95,14 @@ def client_system_admin(mock_session):
     client = AsyncClient(transport=transport, base_url="http://test")
     yield client
     app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def _reset_test_send_limiter():
+    """Ensure the module-level test-send limiter starts fresh for every test."""
+    admin_email_mod.test_send_limiter.reset()
+    yield
+    admin_email_mod.test_send_limiter.reset()
 
 
 class TestGetEmailSettings:
@@ -502,6 +511,123 @@ class TestTestEmail:
             assert "10.0.0.1" not in data["message"]
             assert "secret internal" not in data["message"]
             assert data["message"] == "Unexpected error while sending the test email"
+        finally:
+            admin_email.get_organisation = original_get
+            admin_email.send_email = original_send
+
+    async def test_email_test_invalid_recipient_422(self, client_admin, mock_session):
+        import modulo.api.routes.admin_email as admin_email
+        from modulo.db.models.organisation import Organisation
+
+        org = Organisation(
+            id=ORG_ID,
+            name="Test",
+            slug="test",
+            settings_json={"email": {"smtp_host": "smtp.example.com", "smtp_port": 587}},
+        )
+        original_get = admin_email.get_organisation
+        admin_email.get_organisation = AsyncMock(return_value=org)
+        original_send = admin_email.send_email
+        admin_email.send_email = MagicMock(return_value=True)
+        try:
+            resp = await client_admin.post(
+                f"/api/v1/admin/org/{ORG_ID}/email-settings/test",
+                json={"to": "not-an-email"},
+            )
+            assert resp.status_code == 422
+            assert "recipient" in resp.json()["detail"].lower()
+            admin_email.send_email.assert_not_called()
+        finally:
+            admin_email.get_organisation = original_get
+            admin_email.send_email = original_send
+
+    async def test_email_test_requires_email_shape(self, client_admin, mock_session):
+        import modulo.api.routes.admin_email as admin_email
+        from modulo.db.models.organisation import Organisation
+
+        org = Organisation(
+            id=ORG_ID,
+            name="Test",
+            slug="test",
+            settings_json={"email": {"smtp_host": "smtp.example.com", "smtp_port": 587}},
+        )
+        original_get = admin_email.get_organisation
+        admin_email.get_organisation = AsyncMock(return_value=org)
+        original_send = admin_email.send_email
+        admin_email.send_email = MagicMock(return_value=True)
+        try:
+            for bad in ("https://example.com", "Admin <admin@example.com>", "a@example.com, b@example.com"):
+                resp = await client_admin.post(
+                    f"/api/v1/admin/org/{ORG_ID}/email-settings/test",
+                    json={"to": bad},
+                )
+                assert resp.status_code == 422
+            admin_email.send_email.assert_not_called()
+        finally:
+            admin_email.get_organisation = original_get
+            admin_email.send_email = original_send
+
+    async def test_email_test_rate_limited_429_with_retry_after(self, client_admin, mock_session):
+        import modulo.api.routes.admin_email as admin_email
+        from modulo.db.models.organisation import Organisation
+
+        org = Organisation(
+            id=ORG_ID,
+            name="Test",
+            slug="test",
+            settings_json={"email": {"smtp_host": "smtp.example.com", "smtp_port": 587}},
+        )
+        original_get = admin_email.get_organisation
+        admin_email.get_organisation = AsyncMock(return_value=org)
+        original_send = admin_email.send_email
+        admin_email.send_email = MagicMock(return_value=True)
+        try:
+            url = f"/api/v1/admin/org/{ORG_ID}/email-settings/test"
+            for _ in range(admin_email.test_send_limiter.limit):
+                resp = await client_admin.post(url, json={"to": "admin@example.com"})
+                assert resp.status_code == 200
+            resp = await client_admin.post(url, json={"to": "admin@example.com"})
+            assert resp.status_code == 429
+            assert resp.headers.get("retry-after")
+            assert "Too many test emails" in resp.json()["detail"]
+            assert admin_email.send_email.call_count == admin_email.test_send_limiter.limit
+        finally:
+            admin_email.get_organisation = original_get
+            admin_email.send_email = original_send
+
+    async def test_email_test_rate_limit_is_per_org(self, client_admin, mock_session):
+        import modulo.api.routes.admin_email as admin_email
+        from modulo.db.models.organisation import Organisation
+
+        org = Organisation(
+            id=ORG_ID,
+            name="Test",
+            slug="test",
+            settings_json={"email": {"smtp_host": "smtp.example.com", "smtp_port": 587}},
+        )
+        other_org = Organisation(
+            id=uuid4(),
+            name="Other",
+            slug="other",
+            settings_json={"email": {"smtp_host": "smtp.example.com", "smtp_port": 587}},
+        )
+        original_get = admin_email.get_organisation
+        original_send = admin_email.send_email
+        admin_email.send_email = MagicMock(return_value=True)
+        try:
+            url = f"/api/v1/admin/org/{ORG_ID}/email-settings/test"
+            for _ in range(admin_email.test_send_limiter.limit):
+                admin_email.get_organisation = AsyncMock(return_value=org)
+                resp = await client_admin.post(url, json={"to": "admin@example.com"})
+                assert resp.status_code == 200
+            admin_email.get_organisation = AsyncMock(return_value=org)
+            resp = await client_admin.post(url, json={"to": "admin@example.com"})
+            assert resp.status_code == 429
+
+            admin_email.get_organisation = AsyncMock(return_value=other_org)
+            other_url = f"/api/v1/admin/org/{other_org.id}/email-settings/test"
+            resp = await client_admin.post(other_url, json={"to": "admin@example.com"})
+            assert resp.status_code == 200
         finally:
             admin_email.get_organisation = original_get
             admin_email.send_email = original_send
