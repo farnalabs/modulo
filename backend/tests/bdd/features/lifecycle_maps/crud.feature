@@ -50,3 +50,9 @@ Feature: Lifecycle Map CRUD
   Scenario: Team visibility requires owner_team_id
     When I create a lifecycle map named "Team Map" with visibility "team"
     Then the response status is 422
+
+  Scenario: Restoring a deleted lifecycle map is recorded in the audit chain
+    Given a lifecycle map named "SDLC Workflow" exists
+    When I restore the lifecycle map
+    Then the response status is 200
+    And a "lifecycle_map.restored" audit event was recorded for the map
