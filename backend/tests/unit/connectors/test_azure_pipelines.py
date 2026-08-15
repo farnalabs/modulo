@@ -405,6 +405,95 @@ async def test_query_pipelines_corrupt_total(ap_runner):
     assert result.total == 0
 
 
+@respx.mock
+async def test_query_projects_corrupt_body_no_crash(ap_runner):
+    """A corrupt/hostile response returning a non-dict body must not crash the
+    connector — it falls back to an empty page with no total."""
+    respx.get(f"{_AZURE_DEVOPS_API}/myorg/_apis/projects", params={"api-version": "7.0"}).mock(
+        return_value=httpx.Response(200, json=["garbage"])
+    )
+    result = await ap_runner.query(ConnectorQuery(resource="projects"))
+    assert not result.records
+    assert result.total is None
+
+
+@respx.mock
+async def test_query_pipelines_corrupt_body_no_crash(ap_runner):
+    """A non-dict pipelines body must degrade to an empty page, not crash."""
+    respx.get(f"{_AZURE_DEVOPS_API}/myorg/myproject/_apis/pipelines", params={"api-version": "7.0"}).mock(
+        return_value=httpx.Response(200, json=["garbage"])
+    )
+    result = await ap_runner.query(ConnectorQuery(resource="pipelines"))
+    assert not result.records
+    assert result.total is None
+
+
+@respx.mock
+async def test_query_pipelines_non_list_value_no_crash(ap_runner):
+    """A corrupt body placing a non-list in ``value`` must fall back to an
+    empty page instead of returning a bare string as the records list."""
+    respx.get(f"{_AZURE_DEVOPS_API}/myorg/myproject/_apis/pipelines", params={"api-version": "7.0"}).mock(
+        return_value=httpx.Response(200, json={"value": "not-a-list", "count": 2})
+    )
+    result = await ap_runner.query(ConnectorQuery(resource="pipelines"))
+    assert not result.records
+    assert result.total == 2
+
+
+@respx.mock
+async def test_query_runs_corrupt_body_no_crash(ap_runner):
+    """A non-dict runs body must degrade to an empty page, not crash."""
+    respx.get(f"{_AZURE_DEVOPS_API}/myorg/myproject/_apis/pipelines/1/runs", params={"api-version": "7.0"}).mock(
+        return_value=httpx.Response(200, json=["garbage"])
+    )
+    result = await ap_runner.query(ConnectorQuery(resource="runs", filters={"pipeline_id": "1"}))
+    assert not result.records
+    assert result.total is None
+
+
+@respx.mock
+async def test_query_releases_corrupt_body_no_crash(ap_runner):
+    """A non-dict releases body must degrade to an empty page, not crash."""
+    respx.get(f"{_AZURE_DEVOPS_API}/myorg/myproject/_apis/release/releases", params={"api-version": "7.0"}).mock(
+        return_value=httpx.Response(200, json=["garbage"])
+    )
+    result = await ap_runner.query(ConnectorQuery(resource="releases"))
+    assert not result.records
+    assert result.total is None
+
+
+@respx.mock
+async def test_list_runs_corrupt_body_no_crash(ap_runner):
+    """A non-dict runs body must degrade to an empty list, not crash."""
+    respx.get(f"{_AZURE_DEVOPS_API}/myorg/myproject/_apis/pipelines/1/runs", params={"api-version": "7.0"}).mock(
+        return_value=httpx.Response(200, json=["garbage"])
+    )
+    runs = await ap_runner.list_runs(pipeline_id="1")
+    assert not runs
+
+
+@respx.mock
+async def test_get_run_logs_corrupt_body_no_crash(ap_runner):
+    """A non-dict, non-list logs body must degrade to empty log lines, not crash."""
+    respx.get(
+        f"{_AZURE_DEVOPS_API}/myorg/myproject/_apis/pipelines/1/runs/101/logs",
+        params={"api-version": "7.0"},
+    ).mock(return_value=httpx.Response(200, json="garbage"))
+    logs = await ap_runner.get_run_logs("1/101")
+    assert not logs.lines
+
+
+@respx.mock
+async def test_get_run_logs_list_body_skips_non_dict_entries(ap_runner):
+    """A list logs body carrying non-dict entries must skip them, not crash."""
+    respx.get(
+        f"{_AZURE_DEVOPS_API}/myorg/myproject/_apis/pipelines/1/runs/101/logs",
+        params={"api-version": "7.0"},
+    ).mock(return_value=httpx.Response(200, json=["garbage"]))
+    logs = await ap_runner.get_run_logs("1/101")
+    assert not logs.lines
+
+
 # ---------------------------------------------------------------------------
 # Pagination helpers — direct unit coverage
 # ---------------------------------------------------------------------------
@@ -418,6 +507,7 @@ def test_paging_total() -> None:
     assert _paging_total({"count": True}) == 0
     assert _paging_total({"count": "garbage"}) == 0
     assert _paging_total({}) is None
+    assert _paging_total(["garbage"]) is None
 
 
 # ---------------------------------------------------------------------------
