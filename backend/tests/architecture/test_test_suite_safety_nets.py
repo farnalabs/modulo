@@ -64,7 +64,6 @@ PINNED_AWAITING_IMPLEMENTATION: dict[str, frozenset[str]] = {
     "tests/bdd/features/personas/elena-engineering-director.feature": frozenset(
         {
             "Elena sees a consolidated org dashboard",
-            "Elena compares eval pass rates across teams",
             "Elena sees token spend by team and pipeline",
             "Elena spots a quality regression in her eval dashboard",
             "Elena decides between models based on eval comparison",

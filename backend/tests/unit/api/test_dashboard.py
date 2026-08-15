@@ -889,14 +889,14 @@ class TestDashboardSummaryEdgeCases:
         assert body["total_runs"] == 0
         assert body["active_pipelines"] == 0
         assert body["run_counts_by_status"] == {"running": 0, "awaiting_human": 0, "failed": 0, "idle": 0}
-        assert body["teams"] == []
+        assert not body["teams"]
         assert body["eval_pass_rate"] is None
         assert len(body["trend"]) == 7
         for point in body["trend"]:
             assert point["run_count"] == 0
             assert point["token_spend_usd"] == 0.0
             assert point["eval_pass_rate"] is None
-        assert body["recent_runs"] == []
+        assert not body["recent_runs"]
 
     def test_many_teams_summary_returns_all_teams(self) -> None:
         """100+ teams are all returned with correct per-team structure.
