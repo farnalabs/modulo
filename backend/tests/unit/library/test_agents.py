@@ -57,7 +57,7 @@ def _agent(name: str) -> dict[str, Any]:
 
 def test_all_agents_exported() -> None:
     """Every exported agent constant is a dict definition."""
-    assert len(agent_exports) == 22
+    assert len(agent_exports) == 24
     for name in agent_exports:
         assert isinstance(_agent(name), dict), name
 

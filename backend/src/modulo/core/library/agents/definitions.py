@@ -1509,3 +1509,163 @@ SPEC_IMPLEMENTER: dict[str, Any] = {
     "version": "1.0.0",
     "author": "Modulo",
 }
+
+# ---------------------------------------------------------------------------
+# 23. main-reviewer
+# ---------------------------------------------------------------------------
+MAIN_REVIEWER: dict[str, Any] = {
+    "name": "Main Reviewer",
+    "description": (
+        "Collection-level reviewer of a codebase's main branch over the last "
+        "24 hours. Reviews all merged commits as a whole — not PR-by-PR — and "
+        "runs collection-level lenses (logical conflicts across PRs, DRY "
+        "violations between PRs, scattered cohesion) that cannot be seen at "
+        "single-PR scope. Emits structured findings for downstream grouping."
+    ),
+    "node_type": "agent",
+    "role": "reviewer",
+    "prompt_template": (
+        "You are a collection-level code reviewer.\n\n"
+        "Review the following commits merged into main in the last 24 hours "
+        "as a single coherent change-set. Your job is to find issues that a "
+        "PR-by-PR review cannot see.\n\n"
+        "Commits (with per-commit diffstat):\n"
+        "---\n"
+        "{commits}\n"
+        "---\n\n"
+        "Run the following collection-level lenses:\n"
+        "1. logical_conflict — two merged PRs touch the same concept "
+        "inconsistently (e.g. one renames a field, another still uses the old "
+        "name; two stores write the same key differently).\n"
+        "2. dry_across_prs — two merged PRs each introduce a similar "
+        "util/helper/pattern that should be one shared abstraction.\n"
+        "3. cohesion — merged work is scattered across unrelated files in a "
+        "way that will make future maintenance harder.\n\n"
+        "Respond with a JSON object:\n"
+        "- summary: string — one-paragraph overview of the change-set\n"
+        "- findings: array of objects with:\n"
+        "  - id: string — unique finding id\n"
+        "  - lens: string — one of 'logical_conflict', 'dry_across_prs', 'cohesion'\n"
+        "  - severity: string — 'critical', 'major', or 'minor'\n"
+        "  - description: string — what is wrong\n"
+        "  - files: array of strings — affected file paths\n"
+        "  - suggested_action: string — proposed remediation"
+    ),
+    "input_schema": {
+        "type": "object",
+        "required": ["commits"],
+        "properties": {
+            "commits": {
+                "type": "string",
+                "minLength": 1,
+                "description": "git log of commits merged in the last 24h with per-commit diffstat",
+            },
+        },
+    },
+    "output_schema": {
+        "type": "object",
+        "required": ["summary", "findings"],
+        "properties": {
+            "summary": {"type": "string", "description": "One-paragraph overview of the change-set"},
+            "findings": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["id", "lens", "severity", "description", "files", "suggested_action"],
+                    "properties": {
+                        "id": {"type": "string"},
+                        "lens": {
+                            "type": "string",
+                            "enum": ["logical_conflict", "dry_across_prs", "cohesion"],
+                        },
+                        "severity": {"type": "string", "enum": ["critical", "major", "minor"]},
+                        "description": {"type": "string"},
+                        "files": {"type": "array", "items": {"type": "string"}},
+                        "suggested_action": {"type": "string"},
+                    },
+                },
+                "description": "Collection-level findings emitted by the review",
+            },
+        },
+    },
+    "tags": ["reviewer", "canonical", "library", "code-review", "daily-reviewer", "main"],
+    "version": "1.0.0",
+    "author": "Modulo",
+}
+
+# ---------------------------------------------------------------------------
+# 24. finding-grouper
+# ---------------------------------------------------------------------------
+FINDING_GROUPER: dict[str, Any] = {
+    "name": "Finding Grouper",
+    "description": (
+        "Groups collection-level review findings into appropriately sized work "
+        "batches and drafts one ticket per batch. Batches are sized S/M/L (at "
+        "most ~3 findings or ~1 file footprint per batch) and grouped by "
+        "logical section or overlapping file footprint so coders working on "
+        "different batches do not conflict."
+    ),
+    "node_type": "agent",
+    "role": "analyzer",
+    "prompt_template": (
+        "You are a findings grouper for a daily main-branch review pipeline.\n\n"
+        "Group the following findings into work batches. Each batch becomes one "
+        "ticket in the issue tracker.\n\n"
+        "Findings:\n"
+        "---\n"
+        "{findings}\n"
+        "---\n\n"
+        "Rules:\n"
+        "- Size batches S/M/L — at most ~3 findings per batch, or ~1 file "
+        "footprint (files touched by the same finding).\n"
+        "- Group by logical section or overlapping file footprint so coders "
+        "working on different batches do not conflict.\n"
+        "- A 'critical' finding gets its own batch.\n\n"
+        "Respond with a JSON object:\n"
+        "- batches: array of objects with:\n"
+        "  - title: string — concise ticket title\n"
+        "  - size: string — 'S', 'M', or 'L'\n"
+        "  - finding_ids: array of strings — finding ids in this batch\n"
+        "  - files: array of strings — union of affected files\n"
+        "  - description: string — ticket body describing the work\n"
+        "  - labels: array of strings — suggested labels (include 'groomed')\n"
+        "- summary: string — short explanation of the grouping"
+    ),
+    "input_schema": {
+        "type": "object",
+        "required": ["findings"],
+        "properties": {
+            "findings": {
+                "type": "string",
+                "minLength": 1,
+                "description": "JSON-serialised findings emitted by the collection-level reviewer",
+            },
+        },
+    },
+    "output_schema": {
+        "type": "object",
+        "required": ["batches", "summary"],
+        "properties": {
+            "batches": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["title", "size", "finding_ids", "files", "description", "labels"],
+                    "properties": {
+                        "title": {"type": "string"},
+                        "size": {"type": "string", "enum": ["S", "M", "L"]},
+                        "finding_ids": {"type": "array", "items": {"type": "string"}},
+                        "files": {"type": "array", "items": {"type": "string"}},
+                        "description": {"type": "string"},
+                        "labels": {"type": "array", "items": {"type": "string"}},
+                    },
+                },
+                "description": "Work batches, one ticket per batch",
+            },
+            "summary": {"type": "string", "description": "Short explanation of the grouping"},
+        },
+    },
+    "tags": ["analyzer", "canonical", "library", "grouping", "daily-reviewer", "ticket"],
+    "version": "1.0.0",
+    "author": "Modulo",
+}

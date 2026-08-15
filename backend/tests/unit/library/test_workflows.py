@@ -55,7 +55,7 @@ def _workflow(name: str) -> dict[str, Any]:
 
 def test_all_workflows_exported() -> None:
     """Every exported workflow constant is a dict definition."""
-    assert len(workflow_exports) == 14
+    assert len(workflow_exports) == 15
     for name in workflow_exports:
         assert isinstance(_workflow(name), dict), name
 
