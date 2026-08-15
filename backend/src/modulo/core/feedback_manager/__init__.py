@@ -65,11 +65,12 @@ class ValidationError(FeedbackManagerError):
 
 
 _VALID_STATUS_TRANSITIONS: dict[str, set[str]] = {
-    "pending": {"routing", "correcting", "resolved"},
-    "routing": {"escalated", "correcting", "resolved"},
-    "correcting": {"correcting", "resolved", "escalated"},
-    "escalated": {"resolved"},
+    "pending": {"routing", "correcting", "resolved", "dismissed"},
+    "routing": {"escalated", "correcting", "resolved", "dismissed"},
+    "correcting": {"correcting", "resolved", "escalated", "dismissed"},
+    "escalated": {"resolved", "dismissed"},
     "resolved": set(),
+    "dismissed": set(),
 }
 
 
@@ -295,6 +296,36 @@ class FeedbackManager:
         logger.info("Linked correction run %s to FeedbackRecord %s", correction_run_id, record_id)
         return updated
 
+    @staticmethod
+    def _normalise_eval_def(eval_def: Any) -> Any:
+        """Normalise an ORM ``EvalDefinition`` row to the engine's DTO shape.
+
+        ``EvalEngine.evaluate`` reads ``eval_def.config``, but the ORM model
+        exposes ``config_json`` and no ``config`` property. Without this
+        conversion every ORM eval_def raises AttributeError inside ``evaluate()``,
+        which the generic handler swallows and reports as ``eval_gap=True`` for
+        every record (FAR-233 review MAJOR-1). Raw config dicts and already-DTO
+        definitions pass through unchanged.
+        """
+        if isinstance(eval_def, dict) or hasattr(eval_def, "config"):
+            return eval_def
+        if hasattr(eval_def, "config_json"):
+            from modulo.core.eval_engine import EvalDefinition as EvalDefinitionDTO
+
+            return EvalDefinitionDTO(
+                id=eval_def.id,
+                org_id=eval_def.organisation_id,
+                pipeline_id=eval_def.pipeline_id,
+                node_id=str(eval_def.node_id) if eval_def.node_id else None,
+                name=eval_def.name,
+                eval_type=eval_def.eval_type,
+                config=eval_def.config_json,
+                failure_behaviour=eval_def.failure_behaviour,
+                pass_threshold=float(eval_def.pass_threshold) if eval_def.pass_threshold is not None else None,
+                suite_id=eval_def.suite_id,
+            )
+        return eval_def
+
     @_rls
     async def detect_eval_gap(
         self,
@@ -315,12 +346,14 @@ class FeedbackManager:
             return True
         processed_count = 0
         for eval_def in eval_suite:
-            if not isinstance(eval_def, dict) and not hasattr(eval_def, "passed"):
+            # A valid eval_def is either a raw config dict or an EvalDefinition
+            # (ORM or DTO) carrying an ``eval_type`` — anything else is malformed.
+            if not isinstance(eval_def, dict) and not hasattr(eval_def, "eval_type"):
                 logger.warning("Malformed eval_def in eval_suite: %s", eval_def)
                 continue
             processed_count += 1
             try:
-                result = eval_engine.evaluate(record.rejected_output, eval_def)
+                result = eval_engine.evaluate(record.rejected_output, self._normalise_eval_def(eval_def))
             except asyncio.CancelledError:
                 raise
             except Exception:

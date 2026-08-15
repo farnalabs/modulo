@@ -253,6 +253,26 @@ class TestUpdateStatus:
         )
         assert resp.status_code == 422
 
+    def test_accepts_dismissed_status(self, client: TestClient) -> None:
+        """'dismissed' is a valid terminal status per PRD 8.20 — PATCH must accept it."""
+        mock_record = _make_mock_record(feedback_status="dismissed")
+
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+        ):
+            mock_update.return_value = mock_record
+
+            resp = client.patch(
+                f"/api/v1/feedback/{_RECORD_ID}/status",
+                json={"status": "dismissed"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["feedback_status"] == "dismissed"
+        call_args, _call_kwargs = mock_update.call_args
+        assert call_args[1] == "dismissed"
+
     def test_returns_404_when_not_found(self, client: TestClient) -> None:
         with (
             patch("modulo.api.routes.feedback.set_rls_org"),
@@ -295,6 +315,59 @@ class TestDetectEvalGap:
             resp = client.post(f"/api/v1/feedback/{uuid.uuid4()}/detect-gap")
 
         assert resp.status_code == 404
+
+    def test_round_trips_orm_eval_definitions_through_endpoint(self, client: TestClient) -> None:
+        """ORM EvalDefinition rows loaded by /detect-gap are converted to the DTO shape
+        before EvalEngine runs (FAR-233 review MAJOR-1). A failing regex eval must report
+        eval_gap=False — before the fix the ORM row raised AttributeError inside
+        evaluate(), was swallowed, and every record came back eval_gap=True."""
+        from modulo.db.models.eval_definition import EvalDefinition
+
+        pipeline_id = uuid.uuid4()
+        run_mock = MagicMock()
+        run_mock.pipeline_id = pipeline_id
+        run_result = MagicMock()
+        run_result.scalar_one_or_none.return_value = run_mock
+        eval_result = MagicMock()
+        eval_result.scalars.return_value.all.return_value = [
+            EvalDefinition(
+                id=uuid.uuid4(),
+                organisation_id=_ORG_ID,
+                pipeline_id=pipeline_id,
+                name="answer-must-mention-42",
+                eval_type="regex",
+                config_json={"pattern": "42", "field": "answer"},
+                failure_behaviour="warn",
+            )
+        ]
+
+        def execute_side_effect(stmt: object, *args: object, **kwargs: object) -> MagicMock:
+            stmt_str = str(stmt)
+            if "authz_enforce" in stmt_str:
+                return MagicMock(scalar_one_or_none=MagicMock(return_value=None))
+            if "eval_definitions" in stmt_str:
+                return eval_result
+            return run_result
+
+        mock_session = _make_mock_session()
+        mock_session.execute = AsyncMock(side_effect=execute_side_effect)
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+
+        mock_record = _make_mock_record()
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+        ):
+            mock_get.return_value = mock_record
+
+            resp = client.post(f"/api/v1/feedback/{_RECORD_ID}/detect-gap")
+
+        assert resp.status_code == 200
+        assert resp.json()["eval_gap"] is False
 
 
 class TestListFeedbackInbox:
@@ -421,6 +494,27 @@ class TestReviewFeedback:
 
         assert resp.status_code == 200
         assert resp.json()["feedback_status"] == "dismissed"
+        call_args, _call_kwargs = mock_update.call_args
+        assert call_args[1] == "dismissed"
+
+    def test_mark_reviewed_uses_resolved_status(self, client: TestClient) -> None:
+        """mark_reviewed resolves the record; only the dismiss action sets 'dismissed' (PRD 8.20)."""
+        mock_record = _make_mock_record(feedback_status="resolved")
+
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+        ):
+            mock_get.return_value = _make_mock_record()
+            mock_update.return_value = mock_record
+
+            resp = client.post(
+                f"/api/v1/feedback/inbox/{_RECORD_ID}/review",
+                json={"action": "mark_reviewed"},
+            )
+
+        assert resp.status_code == 200
         call_args, _call_kwargs = mock_update.call_args
         assert call_args[1] == "resolved"
 
