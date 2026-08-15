@@ -721,6 +721,28 @@ class PipelineExecutor:
                 running_run = await get_run(session, run_id)
                 if running_run is None:
                     raise RunNotFoundError(run_id)
+                # PRD §8.12 ``run_started``: a run "starts" exactly once — the
+                # pending→running claim transition in the execute() path. The
+                # resume() path sets ``running`` directly (no _check_capacity
+                # call) so the event fires once per run, not once per resume.
+                # Failure-isolated: a broken audit append must never block run
+                # admission (the savepoint rollback undoes only the audit write).
+                try:
+                    await append_audit_event(
+                        session,
+                        org_id=org_id,
+                        event_type="run_started",
+                        resource_type="run",
+                        resource_id=run_id,
+                        payload_json={"pipeline_id": str(pipeline_id)},
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.warning(
+                        "pipeline.run_started_audit_failed",
+                        extra={"run_id": str(run_id), "org_id": str(org_id)},
+                    )
                 return running_run
 
             decline_code, decline_detail = self._capacity_decline(

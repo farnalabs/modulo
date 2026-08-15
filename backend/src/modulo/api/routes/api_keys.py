@@ -1,5 +1,6 @@
 """API key management — create, list, revoke. Returns MCP config snippet."""
 
+import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -16,6 +17,7 @@ from modulo.auth.api_key import create_api_key, list_api_keys, revoke_api_key, u
 from modulo.auth.dependencies import get_current_tenant_user, resolve_role_from_membership
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, org_role_level
+from modulo.core.audit_logger import append_audit_event
 from modulo.core.feature_flags import resolve_plan_context
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
@@ -222,6 +224,33 @@ async def create_api_key_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error",
         ) from None
+
+    # PRD §8.12 ``api_key_created``: key minting was never audited. Written in a
+    # fresh transaction (the create above already committed) and failure-isolated
+    # so a broken audit append never blocks a successful key creation.
+    try:
+        async with session.begin():
+            await append_audit_event(
+                session,
+                org_id=principal.organisation_id,
+                event_type="api_key_created",
+                actor_user_id=principal.account_id,
+                resource_type="api_key",
+                resource_id=key.id,
+                payload_json={
+                    "name": name,
+                    "role": req.role,
+                    "team_id": str(team_id) if team_id else None,
+                },
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.warning(
+            "api_keys.create_audit_failed",
+            extra={"org_id": str(principal.organisation_id), "key_id": str(key.id)},
+        )
+
     return ApiKeyCreatedResponse(
         id=key.id,
         name=key.name,
@@ -402,6 +431,29 @@ async def revoke_api_key_endpoint(
         ) from None
     if not revoked:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
+
+    # PRD §8.12 ``api_key_revoked``: key revocation was never audited. Written in
+    # a fresh transaction (the revoke above already committed) and failure-isolated
+    # so a broken audit append never fails a completed revocation.
+    try:
+        async with session.begin():
+            await append_audit_event(
+                session,
+                org_id=principal.organisation_id,
+                event_type="api_key_revoked",
+                actor_user_id=principal.account_id,
+                resource_type="api_key",
+                resource_id=key_id,
+                payload_json={"revoked_by": str(principal.account_id)},
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.warning(
+            "api_keys.revoke_audit_failed",
+            extra={"org_id": str(principal.organisation_id), "key_id": str(key_id)},
+        )
+
     return ApiKeyRevokeResponse(id=key_id, revoked=True)
 
 
