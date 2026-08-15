@@ -456,6 +456,10 @@ jobs:
   # (test_break_glass_gate.py) against testcontainers Postgres with the
   # PRODUCTION bootstrap_role.py, in BOTH directions (clean config passes, a
   # rogue grant FAILS the assertion) plus the transient-vs-fatal discriminator.
+  # Also runs the FAR-190/192 streak-engine SQL suite
+  # (test_trigger_streak_engine_sql.py) — the only per-PR run of the
+  # trigger_events vocabulary constraint + deactivation SQL against real
+  # Postgres (FAR-192 FIX 3).
   break-glass-deploy-gate:
     name: Break-glass deploy gate
     runs-on: ubicloud-standard-2
@@ -472,7 +476,7 @@ jobs:
       - name: Break-glass boot allow-list + connectivity smoke
         env:
           TESTCONTAINERS_RYUK_DISABLED: "true"
-        run: uv run --no-sync pytest tests/integration/test_break_glass_gate.py -q --tb=short --timeout=300 -p no:warnings
+        run: uv run --no-sync pytest tests/integration/test_break_glass_gate.py tests/integration/test_trigger_streak_engine_sql.py -q --tb=short --timeout=300 -p no:warnings
 
   notify-pr-failure:
     name: Trigger Branch Fixer

@@ -170,7 +170,7 @@ async def _insert_run(
                 "status": status,
                 "run_number": int(run_id.int % 10**9) + 1,
                 "ihash": uuid.uuid4().hex,
-                "thread": f"thread-{run_id.hex[:16]}",
+                "thread": f"thread-{run_id.hex}",
                 "started": completed_at - timedelta(minutes=2),
                 "completed": completed_at,
                 "cls": json.dumps(
@@ -258,6 +258,27 @@ async def test_streak_walk_deactivates_once_with_correct_streak(
             await conn.execute(text("SELECT active FROM triggers WHERE id = :tid"), {"tid": str(trigger_id)})
         ).scalar_one()
     assert row is False
+
+    # FAR-192: the deactivation lifecycle writes a TriggerEvent row with
+    # validation_result='auto_deactivated' inside the deactivation transaction.
+    # Before migration 0104 widened ``ck_trigger_events_validation_result`` this
+    # insert was rejected by the CHECK constraint, which rolled back the whole
+    # deactivation — the engine silently never deactivated on production. This
+    # assertion exercises the widened vocabulary against real Postgres.
+    async with db_engine.connect() as conn:
+        event_rows = (
+            await conn.execute(
+                text(
+                    "SELECT validation_result, error_detail FROM trigger_events "
+                    "WHERE organisation_id = :oid AND trigger_id = :tid "
+                    "AND validation_result = 'auto_deactivated'"
+                ),
+                {"oid": str(org), "tid": str(trigger_id)},
+            )
+        ).all()
+    assert len(event_rows) == 1, "expected exactly one auto_deactivated TriggerEvent row"
+    assert event_rows[0][0] == "auto_deactivated"
+    assert "auto-deactivated" in (event_rows[0][1] or ""), f"unexpected error_detail: {event_rows[0][1]!r}"
 
     # A second tick is a no-op (AND active guard).
     second = await ts._deactivate_trigger_on_no_delivery_streak(
@@ -569,19 +590,30 @@ async def test_streak_sql_uses_the_reshaped_index(
             classification_value="no_delivery",
         )
     status_list = ",".join(f"'{s}'" for s in sorted(TERMINAL_STATUSES))
-    # Disable seqscan so the planner must use the index when it can.
+    # Mirror the engine's recency query: ``_STREAK_NEWEST_REASON_SQL`` walks
+    # newest-first (``ORDER BY completed_at DESC, id DESC``), which is exactly
+    # the keyset ``ix_runs_streak_engine`` (trigger_id, completed_at DESC) is
+    # shaped for. With ``enable_seqscan = off`` the planner must use an index;
+    # the ORDER BY makes ``ix_runs_streak_engine`` the only one that serves the
+    # sort without a Sort node, so the assertion is deterministic on a tiny
+    # table (a competing ``ix_runs_trigger_id_created_at`` would need an
+    # explicit sort and lose). RESET runs in ``finally`` so a failed EXPLAIN
+    # never leaves the connection with seqscan disabled.
     explain_sql = (
         "EXPLAIN SELECT id FROM runs WHERE trigger_id = :tid "
         "AND status IN (__STATUSES__) AND completed_at IS NOT NULL "
-        "AND completed_at >= :cutoff"
+        "AND completed_at >= :cutoff "
+        "ORDER BY completed_at DESC"
     ).replace("__STATUSES__", status_list)
     async with db_engine.connect() as conn:
         await conn.execute(text("SET enable_seqscan = off"))
-        plan = await conn.execute(
-            text(explain_sql),
-            {"tid": str(trigger_id), "cutoff": _now() - timedelta(days=2)},
-        )
-        rows = [r[0] for r in plan.fetchall()]
-        await conn.execute(text("RESET enable_seqscan"))
+        try:
+            plan = await conn.execute(
+                text(explain_sql),
+                {"tid": str(trigger_id), "cutoff": _now() - timedelta(days=2)},
+            )
+            rows = [r[0] for r in plan.fetchall()]
+        finally:
+            await conn.execute(text("RESET enable_seqscan"))
     joined = "\n".join(rows)
     assert "ix_runs_streak_engine" in joined, f"expected the streak index in the plan:\n{joined}"
