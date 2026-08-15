@@ -6415,10 +6415,14 @@ export interface paths {
         put?: never;
         /**
          * Apply Guardrail Config
-         * @description Apply the pending proposal — the approve/merge step (operator only).
+         * @description Apply the pending proposal — the approve/merge step (admin only).
          *
          *     Reconciles the live ``EvalDefinition`` rows to the proposed set and moves
          *     the pin to a clean applied state. 409 when there is no proposal to apply.
+         *     Guardrails are safety controls, so the reconcile is gated by the same
+         *     admin-only check the direct eval-definition API enforces (evals.py) — an
+         *     operator with ``eval.definition.create`` must not be able to mutate these
+         *     rows through the config seam when the direct API denies it.
          */
         post: operations["apply_guardrail_config_api_v1_guardrails_config_apply_post"];
         delete?: never;
@@ -6438,7 +6442,10 @@ export interface paths {
         put?: never;
         /**
          * Reject Guardrail Config
-         * @description Discard the pending proposal (operator only). 409 when none exists.
+         * @description Discard the pending proposal (admin only). 409 when none exists.
+         *
+         *     Rejecting discards a proposed safety-control change, so it is gated by the
+         *     same admin-only check as apply and the direct eval-definition API.
          */
         post: operations["reject_guardrail_config_api_v1_guardrails_config_reject_post"];
         delete?: never;
