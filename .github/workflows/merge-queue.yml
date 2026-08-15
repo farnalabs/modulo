@@ -582,6 +582,11 @@ jobs:
           # rows only, never mint). The parser reads the payload's work_item_refs
           # list directly (one of its recognised self-report keys).
           #
+          # stage_id: "merge" names the lifecycle-map stage this workflow completes.
+          # The merge stage is EXTERNAL (a GitHub Actions workflow, not a Modulo
+          # pipeline), so it has no pipeline_id for the advancement service to
+          # resolve; the endpoint uses stage_id to advance the journey into it.
+          #
           # FAIL-OPEN BY DESIGN: discovery + the optional POST are guarded so a
           # Modulo outage can NEVER fail the merge queue. The payload is always
           # recorded in the log; the POST only fires when MODULO_SELF_REPORT_URL is
@@ -595,8 +600,8 @@ jobs:
             REFS=$(echo "$REFS" | jq -c --arg ref "#${NUM}" '. + [{"kind": "github_pr", "ref": $ref, "status": "done"}]' 2>/dev/null || echo "$REFS")
           done
           PAYLOAD=$(jq -n --argjson refs "$REFS" \
-            '{event: "workflow_self_report", source: "github_actions", workflow: "merge-queue", work_item_refs: $refs}' 2>/dev/null) \
-            || PAYLOAD='{"event":"workflow_self_report","source":"github_actions","workflow":"merge-queue","work_item_refs":[]}'
+            '{event: "workflow_self_report", source: "github_actions", workflow: "merge-queue", stage_id: "merge", work_item_refs: $refs}' 2>/dev/null) \
+            || PAYLOAD='{"event":"workflow_self_report","source":"github_actions","workflow":"merge-queue","stage_id":"merge","work_item_refs":[]}'
 
           echo "=== Modulo self-report payload (merged PRs) ==="
           echo "$PAYLOAD"

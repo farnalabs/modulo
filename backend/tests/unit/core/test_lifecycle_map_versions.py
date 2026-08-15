@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import FastAPI, HTTPException, status
 from fastapi.testclient import TestClient
-from sqlalchemy import Table, create_engine, text
+from sqlalchemy import Table, create_engine, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool, StaticPool
@@ -36,8 +36,9 @@ from modulo.api.routes.lifecycle_maps import (
 from modulo.api.routes.lifecycle_maps import (
     router as lifecycle_maps_router,
 )
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.lifecycle_map.advancement import advance_journeys
 from modulo.core.lifecycle_map.service import (
     _check_pipeline_uniqueness,
     create_lifecycle_map,
@@ -55,7 +56,9 @@ from modulo.core.lifecycle_map.validation import (
     clean_legacy_content,
     normalize_content,
 )
+from modulo.db.lifecycle_refs import canonical_work_item_id
 from modulo.db.models.base import Base
+from modulo.db.models.journey import Journey
 from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
 from modulo.db.models.organisation import Organisation
@@ -2310,3 +2313,303 @@ class TestLegacyBackfillScript:
         finally:
             check_engine.dispose()
         assert json.loads(content_raw) == {"stages": "not-an-array"}, "uncleanable map must not be modified"
+
+
+# ---------------------------------------------------------------------------
+# External-stage advancement via self-report stage_id
+#
+# The Merge Queue / Deploy Agent workflows self-report to
+# POST .../journeys/self-report with {event, source, workflow, stage_id,
+# work_item_refs} — NO pipeline_id. The merge/deploy stages are EXTERNAL
+# (GitHub Actions workflows, pipeline_id=null), so the pipeline-resolution path
+# in advance_journeys can never resolve them and the journey's stage never
+# moved. These tests pin the explicit-stage path: advance_journeys accepts an
+# `explicit_stage` row (resolved by the caller against the map's current
+# lifecycle_map_stages projection) and writes map_id/stage_id/position even
+# when pipeline_id is None or resolves to no stage. They FAIL on main (the
+# journey stays at null stage after an external self-report).
+# ---------------------------------------------------------------------------
+
+
+async def _seed_external_stage_fixtures(
+    engine: AsyncEngine,
+    *,
+    map_id: uuid.UUID = _MAP_ID,
+    stage_id: str = "merge",
+    stage_name: str = "Merge",
+    position: int = 7,
+    pipeline_id: uuid.UUID | None = None,
+    map_version: int = 1,
+) -> None:
+    tables: list[Table] = cast(
+        list[Table],
+        [Organisation.__table__, LifecycleMap.__table__, LifecycleMapStage.__table__, Journey.__table__],
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
+    maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+    async with maker() as s, s.begin():
+        s.add(Organisation(id=_ORG_ID, name="org", slug="org"))
+        s.add(
+            LifecycleMap(
+                id=map_id,
+                organisation_id=_ORG_ID,
+                name="SDLC",
+                account_id=_ACCOUNT_ID,
+                visibility="org",
+                version=map_version,
+                content_json={"stages": [{"id": stage_id, "name": stage_name, "type": "external"}]},
+            )
+        )
+        s.add(
+            LifecycleMapStage(
+                organisation_id=_ORG_ID,
+                account_id=_ACCOUNT_ID,
+                map_id=map_id,
+                version=map_version,
+                stage_id=stage_id,
+                stage_name=stage_name,
+                position=position,
+                stage_type="external",
+                pipeline_id=pipeline_id,
+            )
+        )
+        s.add(
+            Journey(
+                organisation_id=_ORG_ID,
+                kind="github_pr",
+                ref="123",
+                canonical_work_item_id=canonical_work_item_id(_ORG_ID, "github_pr", "#123"),
+            )
+        )
+
+
+async def _fetch_seeded_journey(engine: AsyncEngine) -> Journey:
+    maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+    async with maker() as s, s.begin():
+        return (await s.execute(select(Journey))).scalar_one()
+
+
+class TestAdvanceJourneysExplicitStage:
+    async def test_explicit_stage_advances_when_pipeline_none(self) -> None:
+        """A workflow self-report with stage_id (and no pipeline_id) must write
+        the journey's map_id/stage_id/position — the external-stage path that
+        was dead on main (pipeline resolution was skipped for pipeline_id=None)."""
+        engine = create_async_engine(
+            "sqlite+aiosqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        try:
+            await _seed_external_stage_fixtures(engine, stage_id="merge", position=7)
+            maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+            async with maker() as s, s.begin():
+                stage = (
+                    await s.execute(
+                        select(LifecycleMapStage).where(
+                            LifecycleMapStage.map_id == _MAP_ID,
+                            LifecycleMapStage.stage_id == "merge",
+                        )
+                    )
+                ).scalar_one()
+                now = datetime.now(UTC)
+                advanced = await advance_journeys(
+                    s,
+                    _ORG_ID,
+                    run_id=None,
+                    pipeline_id=None,
+                    refs=[{"kind": "github_pr", "ref": "#123", "source": "reported"}],
+                    status="complete",
+                    completed_at=now,
+                    run_created_at=now,
+                    explicit_stage=stage,
+                )
+                assert advanced == 1
+                await s.flush()
+
+            journey = await _fetch_seeded_journey(engine)
+            assert journey.stage_id == "merge"
+            assert journey.position == 7
+            assert journey.map_id == _MAP_ID
+            assert journey.map_version == 1
+            assert journey.latest_status == "complete"
+            assert journey.latest_provenance == "reported"
+        finally:
+            await engine.dispose()
+
+    async def test_explicit_stage_used_when_pipeline_does_not_resolve(self) -> None:
+        """Both pipeline_id and explicit_stage provided: the pipeline points at
+        a non-map pipeline (resolution yields no stage), so the explicit stage
+        must win and the journey advances into it."""
+        engine = create_async_engine(
+            "sqlite+aiosqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        try:
+            await _seed_external_stage_fixtures(engine, stage_id="merge", position=7, pipeline_id=None)
+            maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+            async with maker() as s, s.begin():
+                stage = (
+                    await s.execute(
+                        select(LifecycleMapStage).where(
+                            LifecycleMapStage.map_id == _MAP_ID,
+                            LifecycleMapStage.stage_id == "merge",
+                        )
+                    )
+                ).scalar_one()
+                now = datetime.now(UTC)
+                advanced = await advance_journeys(
+                    s,
+                    _ORG_ID,
+                    run_id=None,
+                    pipeline_id=uuid.UUID("00000000-0000-0000-0000-00000000000e"),
+                    refs=[{"kind": "github_pr", "ref": "#123", "source": "reported"}],
+                    status="complete",
+                    completed_at=now,
+                    run_created_at=now,
+                    explicit_stage=stage,
+                )
+                assert advanced == 1
+                await s.flush()
+
+            journey = await _fetch_seeded_journey(engine)
+            assert journey.stage_id == "merge"
+            assert journey.position == 7
+            assert journey.latest_status == "complete"
+        finally:
+            await engine.dispose()
+
+    async def test_no_explicit_stage_and_no_pipeline_keeps_null_stage(self) -> None:
+        """Prove-the-fix control: without the explicit stage, an external
+        self-report (no pipeline_id) must NOT move the journey's stage — this is
+        the exact behaviour the change fixes."""
+        engine = create_async_engine(
+            "sqlite+aiosqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        try:
+            await _seed_external_stage_fixtures(engine, stage_id="merge", position=7)
+            maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+            async with maker() as s, s.begin():
+                now = datetime.now(UTC)
+                advanced = await advance_journeys(
+                    s,
+                    _ORG_ID,
+                    run_id=None,
+                    pipeline_id=None,
+                    refs=[{"kind": "github_pr", "ref": "#123", "source": "reported"}],
+                    status="complete",
+                    completed_at=now,
+                    run_created_at=now,
+                )
+                assert advanced == 1
+                await s.flush()
+
+            journey = await _fetch_seeded_journey(engine)
+            assert journey.stage_id is None
+            assert journey.map_id is None
+            assert journey.position is None
+            assert journey.latest_status == "complete"
+        finally:
+            await engine.dispose()
+
+
+class TestSelfReportRouteStageId:
+    async def test_self_report_with_stage_id_advances_to_external_stage(self) -> None:
+        """End-to-end through the REAL self-report route: a workflow POSTs
+        {work_item_refs, stage_id: "merge"} for a journey of this map, and the
+        journey advances to the external merge stage even though there is no
+        pipeline_id. FAILS on main (stage stays null)."""
+        engine = create_async_engine(
+            "sqlite+aiosqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        try:
+            await _seed_external_stage_fixtures(engine, stage_id="merge", position=7, pipeline_id=None)
+
+            app = FastAPI()
+            app.include_router(lifecycle_maps_router)
+            app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(
+                username="workflow",
+                organisation_id=_ORG_ID,
+                account_id=_ACCOUNT_ID,
+                org_role="runner",
+            )
+            maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+
+            async def override_session() -> AsyncGenerator[AsyncSession, None]:
+                async with maker() as s:
+                    yield s
+
+            app.dependency_overrides[get_db_session] = override_session
+            with TestClient(app, raise_server_exceptions=False) as c:
+                resp = c.post(
+                    f"/api/v1/lifecycle-maps/{_MAP_ID}/journeys/self-report",
+                    json={
+                        "work_item_refs": [{"kind": "github_pr", "ref": "#123"}],
+                        "stage_id": "merge",
+                    },
+                )
+            app.dependency_overrides.clear()
+
+            assert resp.status_code == 200, resp.text
+            assert resp.json() == {"accepted": 1, "rejected": 0, "unmatched": 0}
+
+            journey = await _fetch_seeded_journey(engine)
+            assert journey.stage_id == "merge"
+            assert journey.position == 7
+            assert journey.map_id == _MAP_ID
+            assert journey.latest_status == "complete"
+            assert journey.latest_provenance == "reported"
+        finally:
+            await engine.dispose()
+
+    async def test_self_report_unresolved_stage_id_degrades_to_pipeline_path(self) -> None:
+        """A stage_id that does not resolve to a stage of the map's current
+        version must NOT error — it falls back to the pipeline-based path, so
+        the journey still gets its evidence but no stage columns."""
+        engine = create_async_engine(
+            "sqlite+aiosqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        try:
+            await _seed_external_stage_fixtures(engine, stage_id="merge", position=7, pipeline_id=None)
+
+            app = FastAPI()
+            app.include_router(lifecycle_maps_router)
+            app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(
+                username="workflow",
+                organisation_id=_ORG_ID,
+                account_id=_ACCOUNT_ID,
+                org_role="runner",
+            )
+            maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+
+            async def override_session() -> AsyncGenerator[AsyncSession, None]:
+                async with maker() as s:
+                    yield s
+
+            app.dependency_overrides[get_db_session] = override_session
+            with TestClient(app, raise_server_exceptions=False) as c:
+                resp = c.post(
+                    f"/api/v1/lifecycle-maps/{_MAP_ID}/journeys/self-report",
+                    json={
+                        "work_item_refs": [{"kind": "github_pr", "ref": "#123"}],
+                        "stage_id": "no-such-stage",
+                    },
+                )
+            app.dependency_overrides.clear()
+
+            assert resp.status_code == 200, resp.text
+            assert resp.json() == {"accepted": 1, "rejected": 0, "unmatched": 0}
+
+            journey = await _fetch_seeded_journey(engine)
+            assert journey.stage_id is None
+            assert journey.latest_status == "complete"
+            assert journey.latest_provenance == "reported"
+        finally:
+            await engine.dispose()
