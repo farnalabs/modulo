@@ -308,7 +308,7 @@ def test_diff_update():
 def test_diff_empty_for_identical_sets():
     a = load_config_set(_REGEX_YAML)
     b = load_config_set(_REGEX_YAML)
-    assert diff_config_sets(a, b) == []
+    assert not diff_config_sets(a, b)
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +392,7 @@ def test_build_config_set_dedupes_replicated_rows():
 
 def test_validate_config_set_accepts_valid_set():
     config_set = load_config_set(_REGEX_YAML)
-    validate_config_set(config_set)  # must not raise
+    assert validate_config_set(config_set) is None  # must not raise
 
 
 def test_config_round_trip_to_eval_config():
@@ -405,4 +405,4 @@ def test_config_round_trip_to_eval_config():
     assert engine_config["pattern"] == "AKIA[0-9A-Z]{16}"
     assert engine_config["field"] == "body"
     assert engine_config["redaction"] == [{"path": "body", "mode": "transform"}]
-    assert engine_config["required_capabilities"] == []
+    assert not engine_config["required_capabilities"]
