@@ -194,6 +194,25 @@ async def _run_reconcile(
     return summary, reenqueue, ingest, redis_client, awaiting_guard, session
 
 
+def _pipeline_capacity_marker_update(session: _MockSession, run_id: uuid.UUID) -> tuple[Any, Any] | None:
+    """Return the recorded FAR-225 marking UPDATE for *run_id*, if any.
+
+    The reconcile marks a pipeline-capacity-skipped orphan with
+    ``error_code='pipeline_capacity'`` so the never_dispatched kill sweep
+    excludes it and the capacity_marked_stale branch can rescue it. The
+    statement carries its params via ``.bindparams()`` (not the execute
+    ``params`` dict), so the bound values are read from the clause.
+    """
+    for stmt, params in session.executed:
+        if (
+            "UPDATE runs SET error_code" in str(stmt)
+            and "IS DISTINCT FROM" in str(stmt)
+            and stmt._bindparams["rid"].value == run_id
+        ):
+            return stmt, params
+    return None
+
+
 class TestReconcilePredicateMatrix:
     @pytest.mark.asyncio
     async def test_pending_undispatched_capacity_free_redispatch(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -207,12 +226,46 @@ class TestReconcilePredicateMatrix:
 
     @pytest.mark.asyncio
     async def test_pending_undispatched_capacity_full_skipped(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        summary, reenqueue, _ingest, _, _, _ = await _run_reconcile(
+        summary, reenqueue, _ingest, _, _, session = await _run_reconcile(
             monkeypatch, [_run_row(RUN_PENDING_UNDISPATCHED, "pending", dispatched=False)], capacity_free=False
         )
         assert summary["repaired"] == 0
         reenqueue.assert_not_awaited()
-        assert summary["skipped"] == 1
+        # FAR-225: the pipeline-capacity skip MARKs the run (error_code
+        # 'pipeline_capacity') so it is rescued-not-killed — counted as
+        # capacity_deferred, never a plain skipped/never_dispatched kill.
+        assert summary["skipped"] == 0
+        assert summary["capacity_deferred"] == 1
+        assert _pipeline_capacity_marker_update(session, RUN_PENDING_UNDISPATCHED) is not None
+
+    @pytest.mark.asyncio
+    async def test_capacity_full_mark_is_idempotent_on_already_marked_run(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A pending+undispatched run ALREADY carrying the pipeline_capacity
+        marker is re-marked idempotently (the guard keeps the UPDATE a no-op
+        on the marker) — never terminal-failed by the reconcile."""
+        summary, reenqueue, _ingest, _, _, session = await _run_reconcile(
+            monkeypatch,
+            [
+                _run_row(
+                    RUN_PENDING_UNDISPATCHED,
+                    "pending",
+                    dispatched=False,
+                    error_code="pipeline_capacity",
+                )
+            ],
+            capacity_free=False,
+        )
+        assert summary["capacity_deferred"] == 1
+        assert summary["skipped"] == 0
+        reenqueue.assert_not_awaited()
+        marker = _pipeline_capacity_marker_update(session, RUN_PENDING_UNDISPATCHED)
+        assert marker is not None
+        stmt, _params = marker
+        # The idempotence guard travels with the statement.
+        assert "IS DISTINCT FROM" in str(stmt)
+        assert stmt._bindparams["code"].value == "pipeline_capacity"
 
     @pytest.mark.asyncio
     async def test_pending_dispatched_stale_redispatch(self, monkeypatch: pytest.MonkeyPatch) -> None:

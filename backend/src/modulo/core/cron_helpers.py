@@ -3326,7 +3326,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                     # dispatched_at). Re-dispatch only when the pipeline has free
                     # capacity (plan F3b/F3c).
                     if row.status == "pending" and row.dispatched_at is None:
-                        from modulo.db.crud.run import count_active_runs_for_pipeline
+                        from modulo.db.crud.run import ERROR_CODE_PIPELINE_CAPACITY, count_active_runs_for_pipeline
                         from modulo.db.models.pipeline import Pipeline
 
                         pipeline = await session.get(Pipeline, row.pipeline_id)
@@ -3336,7 +3336,22 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                                 session, row.pipeline_id, include_pending=False, exclude_run_id=row.id
                             )
                             if active >= max_concurrent:
-                                summary["skipped"] += 1
+                                # FAR-225: mark the skipped run so it is rescued,
+                                # not killed. Stamping error_code='pipeline_capacity'
+                                # (a) excludes the run from the never_dispatched
+                                # kill sweep and (b) admits it to the
+                                # capacity_marked_stale re-dispatch branch once a
+                                # pipeline slot frees (heartbeat-stale gated), so
+                                # a webhook-burst orphan is recovered instead of
+                                # terminal-failed at the 300s window. Idempotent —
+                                # an already-marked run is not re-marked each tick.
+                                await session.execute(
+                                    text(
+                                        "UPDATE runs SET error_code = :code "
+                                        "WHERE id = :rid AND error_code IS DISTINCT FROM :code"
+                                    ).bindparams(code=ERROR_CODE_PIPELINE_CAPACITY, rid=row.id)
+                                )
+                                summary["capacity_deferred"] += 1
                                 continue
 
                     # NO SAQ-internal eviction (B2): a version-pinned
