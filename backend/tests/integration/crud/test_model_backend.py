@@ -4,10 +4,15 @@ RLS is set to test_org; all ORM changes are rolled back after each test.
 """
 
 import uuid
+from collections.abc import AsyncGenerator
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from modulo.auth.jwt import create_access_token
 from modulo.db.crud.model_backend import (
     create_model_backend,
     delete_model_backend,
@@ -15,8 +20,12 @@ from modulo.db.crud.model_backend import (
     list_model_backends,
     update_model_backend,
 )
+from modulo.db.models.model_backend import ModelBackend
 
 pytestmark = pytest.mark.integration
+
+_VALID_32 = "a" * 32
+_VALID_FERNET_KEY = "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
 
 
 def _mb_kwargs(test_org: uuid.UUID, test_user: uuid.UUID, *, suffix: str = "") -> dict:
@@ -169,3 +178,172 @@ class TestListModelBackendsTierFiltering:
         assert all(i.tier != "preview" for i in result.items)
         tiers = {i.tier for i in result.items}
         assert tiers == {"in_dev", "native"}
+
+
+# ---------------------------------------------------------------------------
+# Real-endpoint round-trip: PATCH fallback_backend_ids through the HTTP API
+# against the real database. Uses its own org so the shared test_org is never
+# polluted with committed rows (the CRUD integration tests above assert exact
+# org-wide counts).
+# ---------------------------------------------------------------------------
+
+
+async def _seed_org_and_admin(db_engine: AsyncEngine) -> tuple[uuid.UUID, uuid.UUID]:
+    org_id = uuid.uuid4()
+    account_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"),
+            {"id": str(org_id), "name": f"MB-{org_id.hex[:8]}", "slug": f"mb-{org_id.hex[:8]}"},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO accounts (id, email, display_name, password_hash, "
+                "auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)",
+            ),
+            {"id": str(account_id), "email": f"mb-{account_id.hex[:8]}@test.local", "name": "MB User"},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
+                "VALUES (:mid, :aid, :oid, 'admin')",
+            ),
+            {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
+        )
+    return org_id, account_id
+
+
+async def _seed_backends(db_engine: AsyncEngine, org_id: uuid.UUID, user_id: uuid.UUID) -> tuple[uuid.UUID, uuid.UUID]:
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session:
+        primary = await create_model_backend(
+            session,
+            org_id=org_id,
+            name=f"primary-{uuid.uuid4().hex[:6]}",
+            display_name="Primary",
+            provider="openai",
+            model_id="gpt-4o",
+            credentials_ciphertext=b"encrypted",
+            account_id=user_id,
+        )
+        fallback = await create_model_backend(
+            session,
+            org_id=org_id,
+            name=f"fallback-{uuid.uuid4().hex[:6]}",
+            display_name="Fallback",
+            provider="anthropic",
+            model_id="claude",
+            credentials_ciphertext=b"encrypted",
+            account_id=user_id,
+        )
+        await session.commit()
+        return primary.id, fallback.id
+
+
+def _token(org_id: uuid.UUID, user_id: uuid.UUID) -> str:
+    return create_access_token(
+        subject=f"user-{user_id.hex[:8]}",
+        secret_key=_VALID_32,
+        organisation_id=str(org_id),
+        account_id=str(user_id),
+        org_role="admin",
+    )
+
+
+@pytest_asyncio.fixture
+async def model_backend_client(db_url: str, app_engine: AsyncEngine) -> AsyncGenerator[AsyncClient, None]:
+    """HTTP client wired to the real (testcontainer) database via the app_engine role."""
+    from modulo.api.dependencies import _get_engine, get_db_session
+    from modulo.api.main import app
+    from modulo.settings import Settings, get_settings
+
+    settings = Settings(
+        database_url=db_url,
+        secret_key=_VALID_32,
+        fernet_key=_VALID_FERNET_KEY,
+        modulo_csrf_enabled=False,
+        modulo_auth_rate_limit_enabled=False,
+        redis_url="",
+        modulo_admin_password="",
+    )
+
+    async def override_session() -> AsyncGenerator[AsyncSession, None]:
+        factory = async_sessionmaker(app_engine, expire_on_commit=False)
+        async with factory() as session:
+            yield session
+
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[_get_engine] = lambda: app_engine
+    app.dependency_overrides[get_db_session] = override_session
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test", timeout=30.0) as client:
+        yield client
+
+    app.dependency_overrides.clear()
+
+
+async def test_update_model_backend_with_fallback_round_trips_real_endpoint(
+    db_engine: AsyncEngine,
+    model_backend_client: AsyncClient,
+) -> None:
+    """PATCH fallback_backend_ids through the real endpoint against the real DB.
+
+    Regression: the update route previously passed raw ``uuid.UUID`` objects
+    through ``update_model_backend`` into the ``JSON`` column, whose default
+    serializer raises ``TypeError: Object of type UUID is not JSON
+    serializable`` — the flush 500'd (via the generic ``except Exception``).
+    The route now stringifies the ids (mirroring the create path); this test
+    proves the real payload shape round-trips through storage and back out the
+    endpoint.
+    """
+    org_id, user_id = await _seed_org_and_admin(db_engine)
+    primary_id, fallback_id = await _seed_backends(db_engine, org_id, user_id)
+
+    headers = {"Authorization": f"Bearer {_token(org_id, user_id)}"}
+    resp = await model_backend_client.patch(
+        f"/api/v1/model-backends/{primary_id}",
+        json={"fallback_backend_ids": [str(fallback_id)]},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["fallback_backend_ids"] == [str(fallback_id)]
+
+    # The JSON column must store stringified ids, not raw uuid.UUID objects.
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session:
+        row = await session.get(ModelBackend, primary_id)
+        assert row is not None
+        assert row.fallback_backend_ids == [str(fallback_id)]
+        assert all(isinstance(fid, str) for fid in row.fallback_backend_ids)
+
+    # The delete-protection 409 is enforced against the stored reference.
+    del_resp = await model_backend_client.delete(
+        f"/api/v1/model-backends/{fallback_id}",
+        headers=headers,
+    )
+    assert del_resp.status_code == 409
+    assert "primary-" in del_resp.json()["detail"]
+
+
+async def test_update_model_backend_self_reference_rejected_real_endpoint(
+    db_engine: AsyncEngine,
+    model_backend_client: AsyncClient,
+) -> None:
+    """A backend must not reference itself as a fallback (422) via the real endpoint.
+
+    A self-referencing chain would permanently block deletion (the
+    delete-protection scan reports the backend referencing itself), so it is
+    rejected before any DB write.
+    """
+    org_id, user_id = await _seed_org_and_admin(db_engine)
+    primary_id, _ = await _seed_backends(db_engine, org_id, user_id)
+
+    headers = {"Authorization": f"Bearer {_token(org_id, user_id)}"}
+    resp = await model_backend_client.patch(
+        f"/api/v1/model-backends/{primary_id}",
+        json={"fallback_backend_ids": [str(primary_id)]},
+        headers=headers,
+    )
+    assert resp.status_code == 422, resp.text
+    assert "cannot reference itself" in resp.text
