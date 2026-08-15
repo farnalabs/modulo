@@ -259,6 +259,27 @@ async def test_streak_walk_deactivates_once_with_correct_streak(
         ).scalar_one()
     assert row is False
 
+    # FAR-192: the deactivation lifecycle writes a TriggerEvent row with
+    # validation_result='auto_deactivated' inside the deactivation transaction.
+    # Before migration 0104 widened ``ck_trigger_events_validation_result`` this
+    # insert was rejected by the CHECK constraint, which rolled back the whole
+    # deactivation — the engine silently never deactivated on production. This
+    # assertion exercises the widened vocabulary against real Postgres.
+    async with db_engine.connect() as conn:
+        event_rows = (
+            await conn.execute(
+                text(
+                    "SELECT validation_result, error_detail FROM trigger_events "
+                    "WHERE organisation_id = :oid AND trigger_id = :tid "
+                    "AND validation_result = 'auto_deactivated'"
+                ),
+                {"oid": str(org), "tid": str(trigger_id)},
+            )
+        ).all()
+    assert len(event_rows) == 1, "expected exactly one auto_deactivated TriggerEvent row"
+    assert event_rows[0][0] == "auto_deactivated"
+    assert "auto-deactivated" in (event_rows[0][1] or ""), f"unexpected error_detail: {event_rows[0][1]!r}"
+
     # A second tick is a no-op (AND active guard).
     second = await ts._deactivate_trigger_on_no_delivery_streak(
         app_factory, org_id=org, trigger_id=trigger_id, threshold=5, window_cutoff=_now()
