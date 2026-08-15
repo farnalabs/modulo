@@ -62,8 +62,8 @@ def _reset_engine_globals() -> Generator[None, None, None]:
                 loop.run_until_complete(engine.dispose())
 
 
-@pytest_asyncio.fixture
-async def auth_settings(db_url: str) -> Settings:
+@pytest.fixture
+def auth_settings(db_url: str) -> Settings:
     return Settings(
         database_url=db_url,
         modulo_db="postgres",
@@ -254,8 +254,8 @@ async def restricted_role(db_engine: AsyncEngine) -> Generator[tuple[str, str], 
             await conn.execute(text("COMMIT"))
 
 
-@pytest_asyncio.fixture
-async def restricted_settings(
+@pytest.fixture
+def restricted_settings(
     db_url: str,
     restricted_role: tuple[str, str],
 ) -> Settings:

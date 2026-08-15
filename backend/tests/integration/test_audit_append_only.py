@@ -105,8 +105,8 @@ class TestAuditAppendOnlyDbTrigger:
 class TestAuditAppendOnlyOrmGuard:
     """Tests that the ORM-level event listeners block UPDATE/DELETE."""
 
-    @pytest_asyncio.fixture(autouse=True)
-    async def setup(self) -> None:
+    @pytest.fixture(autouse=True)
+    def setup(self) -> None:
         """Register the ORM guard before each test."""
         register_append_only_guard()
 

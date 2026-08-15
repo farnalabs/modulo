@@ -206,8 +206,8 @@ async def snapshot(db_engine: AsyncEngine, org: uuid.UUID, pipeline: uuid.UUID) 
     return await _seed_snapshot(db_engine, org, pipeline)
 
 
-@pytest_asyncio.fixture(scope="module")
-async def app_factory(app_engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+@pytest.fixture(scope="module")
+def app_factory(app_engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
     """Session factory over the non-superuser engine (RLS applies, mirrors prod)."""
     return async_sessionmaker(app_engine, expire_on_commit=False, autobegin=False)
 

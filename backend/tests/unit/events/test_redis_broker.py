@@ -22,7 +22,7 @@ def mock_redis() -> MagicMock:
 
 
 @pytest.fixture
-async def broker(mock_redis: MagicMock) -> RedisEventBroker:
+def broker(mock_redis: MagicMock) -> RedisEventBroker:
     """Return a RedisEventBroker with both connections pre-mocked."""
     b = RedisEventBroker("redis://mock:6379/0")
     b._pub = mock_redis
