@@ -66,4 +66,11 @@ Admin page for scanning and cleaning up unused/orphaned resources.
 - No e2e/Playwright coverage for the housekeeping UI (checkbox interactions, confirm dialog)
 - Cleanup is performed by individual `DELETE` calls per item rather than a bulk operation
 - The scan runs 16 sequential category queries per request — no parallelism or caching
-- `webhook_dedup` candidates use `expires_at` as their `created_at` display value (semantic mismatch)
+
+## QA History
+
+### 2026-08-15 — improve-architecture (product-map walk)
+
+- **Fixed (MINOR):** `webhook_dedup` candidates reported their `expires_at` timestamp as the `created_at` display value in `_scan_expired_webhook_dedups` (`core/housekeeping.py`) — a semantic mismatch that made expired dedup hashes appear in the housekeeping UI as if created at expiry time. The `WebhookDedupHash` entity carries a real `created_at` (via `TimestampMixin`/`OrgScoped`), so the candidate now reports the row's creation time, matching every other scanner (`_scan_stale_api_keys`, `_scan_unused_environment_profiles`, etc.).
+- Added unit coverage in `backend/tests/unit/core/test_housekeeping_scanners.py` (`TestExpiredWebhookDedups`): `test_flags_only_expired_hashes_in_org` now asserts the org-scoped filter plus candidate detail, and new `test_reports_creation_time_not_expiry` proves a hash whose creation time (30 days ago) differs from its expiry (1 hour ago) is reported with its creation time, not its expiry.
+- Verification: 51/51 housekeeping unit tests (scanners + core + api) + 6/6 housekeeping BDD scenarios pass, ruff check + format clean, mypy --strict clean on `core/housekeeping.py`. Status: partial (e2e/Playwright UI coverage, per-item cleanup DELETE, 16 sequential scan queries remain).
