@@ -51,20 +51,33 @@ pytestmark = pytest.mark.skipif(
 from modulo.api.main import app  # noqa: E402
 
 schema = schemathesis.openapi.from_asgi("/openapi.json", app)
-filtered = schema.include(
-    method="GET", path_regex=r"^/api/v1/(pipelines|schemas|library|connectors|model-backends)(\?.*)?$"
-)
+
+# Each endpoint group is fuzzed in its own job (see schemathesis-nightly.yml
+# matrix). Every schemathesis example spins the full app lifespan (migrations
+# + seeding) via from_asgi, so running every group in one job takes ~15 min
+# and the ephemeral ubicloud runner kills the job ~10 min in ("runner has
+# received a shutdown signal", exit 143 - an infrastructure kill, not a test
+# failure) before the fuzz can finish. Splitting per group keeps each job well
+# inside the runner's usable window while still catching 5xx regressions.
+SCHEMA_GROUPS = {
+    "pipelines": r"^/api/v1/pipelines(\?.*)?$",
+    "schemas": r"^/api/v1/schemas(\?.*)?$",
+    "libraries": r"^/api/v1/libraries(\?.*)?$",
+    "connectors": r"^/api/v1/connectors(\?.*)?$",
+    "model-backends": r"^/api/v1/model-backends(\?.*)?$",
+}
+
+_group = os.environ.get("SCHEMA_GROUP", "").strip()
+if _group:
+    _regex = SCHEMA_GROUPS[_group]
+else:
+    _regex = r"^/api/v1/(pipelines|schemas|libraries|connectors|model-backends)(\?.*)?$"
+
+filtered = schema.include(method="GET", path_regex=_regex)
 
 
 @filtered.parametrize()
 @settings(max_examples=1, suppress_health_check=[HealthCheck.too_slow])
-# 1 example per endpoint: each schemathesis example spins the full app lifespan
-# (migrations + seeding) via from_asgi. On the ephemeral ubicloud runner this
-# was killed ~10 min into the run ("runner has received a shutdown signal",
-# exit 143 - an infrastructure kill, not a test failure) before the fuzz could
-# finish. 3 examples per endpoint is 3x the lifespan spins for marginal extra
-# coverage on these simple auth-guarded GET endpoints; 1 example completes
-# within the runner's usable window while still catching 5xx regressions.
 def test_api_fuzz_get_endpoints(case):
     """All read-only GET endpoints must respond without 500 errors."""
     # The fuzzer runs unauthenticated, so auth-protected GET endpoints
