@@ -28,6 +28,12 @@ Automated quality checks (regex, JSON Schema, custom function, scored eval) run 
 **Where:** `modulo/core/eval_engine/`, `docs/product-map/evals/eval-engine.md`, `docs/product-map/evals/eval-gates.md`, `docs/architecture.md` eval engine section.
 **Benefit:** failures surface at the gate with evidence, not after merge.
 
+### 4a. Guardrails at the ingestion edge (input-side)
+Deterministic data-safety checks also run on the **input** side — before a run's `input_payload` is persisted. A guardrail is an eval definition with `eval_type="guardrail"`; detection is deterministic pure evals only (regex | json_schema), and actions are `observe | warn | block | redact`. A `block` is terminal (`eval_failed`) with no HITL gate; remediation is the dedicated guardrail-override endpoint (`POST /runs/{run_id}/guardrail-override`), which re-runs the guardrail pass on the supplied input (re-block safe). The generic `recover_node` path REFUSES guardrail-blocked runs (never `deliver_manual`, which requires a HITL gate). Redaction is masks-only, static field-path based with exact/anchor matching (substring matching forbidden), and persisted state is always post-redaction.
+**Why:** boundaries must be checked before data crosses them, not after damage is done; redaction that destroys is a loss, masking preserves.
+**Where:** `modulo/core/guardrails/`, `docs/product-map/evals/eval-gates.md`, ingestion seam in `modulo.db.crud.run.create_run`.
+**Benefit:** structured credentials never persist unmasked, and the run history shows which guardrail caught what at the edge.
+
 ## 5. Humans in the loop where it matters
 HITL gates are atomic (claim, decide, record); `human_only` gates cannot be approved by the agent under review; team-scoped claims. Autonomy is earned, not assumed.
 **Why:** governance is permissions plus gates plus audit; automation never gets a blank check.
