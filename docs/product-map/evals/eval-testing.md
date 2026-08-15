@@ -58,7 +58,7 @@ Discovered from 1 completed delivery task (task-nv2-eval-bdd-tests). Tests valid
 - [x] Eval run scores each test case individually
 - [x] Eval run computes aggregate score from per-case scores
 - [x] Eval run below pass_threshold fails with status "failed"
-- [ ] Eval results page shows per-case scores and aggregate score
+- [ ] Eval results page shows per-case scores and aggregate score (frontend UI — eval_dashboard.feature placeholder)
 
 ### Regex eval
 - [x] Regex pattern matches output field → passed=true, score=1.0
@@ -84,7 +84,7 @@ Discovered from 1 completed delivery task (task-nv2-eval-bdd-tests). Tests valid
 - [x] Warn behaviour logs warning and does not halt pipeline
 - [x] Suite-level pass_threshold blocks run on aggregate failure (eval_suite_blocked)
 - [x] Suite-level pass_threshold passes on aggregate success
-- [ ] Block failure recorded in AuditEvent with type eval_blocked — not wired to AuditEvent DB table (BDD step defs are stubs)
+- [x] Block failure recorded in AuditEvent with type eval_blocked — wired at executor level (executor.py:1394-1409, 1876-1891 append_audit_event event_type="eval.blocked"); eval_block.feature scenario + step defs exist
 - [x] Multiple evals on one node: first failure blocks remaining evals, EvalBlockedError raised
 
 ### Eval suite aggregation
@@ -119,14 +119,14 @@ Discovered from 1 completed delivery task (task-nv2-eval-bdd-tests). Tests valid
 - [x] JSON Schema validation fails for data not matching schema
 - [x] JSON Schema scorer dispatches correctly for json_schema eval_type
 - [x] JSON Schema eval with block behaviour raises EvalBlockedError on mismatch
-- [ ] JSON Schema eval config stores schema ref and validates against output field
+- [x] JSON Schema eval config stores schema + field and validates against the output field (field-scoped validation — covered by test_field_scoped_validation in test_eval_engine.py)
 
 ### Custom function eval
 - [x] Custom function scorer executes correctly for configured function path
 - [x] Custom function returns score 0-1 and passed bool
 - [x] Unknown eval type raises error
 - [x] Custom function with missing config returns passed=false, score=0.0
-- [ ] Custom function registered via modulo.evals entry-point group
+- [ ] Custom function registered via modulo.evals entry-point group — NOT implemented; engine uses an explicit `config["functions"]` registry dict instead (deliberate security choice — no arbitrary imports). PRD §8.17 mentions the entry-point group; the code deviates. PRD file not updated (docs/prd.md outside this worktree's allowlist).
 
 ### Eval coverage
 - [x] GET /api/v1/evals/coverage returns node-level eval coverage with has_evals flag per node, covered/uncovered counts, coverage_pct
@@ -199,13 +199,14 @@ Discovered from 1 completed delivery task (task-nv2-eval-bdd-tests). Tests valid
 - [ ] No circuit breaker on repeated eval engine failures
 
 ### QA History
+- 2026-08-15: Coverage completion (FAR-232). Marked [ ]→[x]: (1) "Block failure recorded in AuditEvent" — verified wired at executor level (executor.py:1394-1409, 1876-1891 write append_audit_event event_type="eval.blocked"; eval_block.feature scenario + step defs exist), the "BDD step defs are stubs" note was stale. (2) "JSON Schema eval config stores schema ref and validates against output field" — field-scoped validation already covered by test_field_scoped_validation. Clarified custom_function entry-point-group gap (not implemented — engine uses explicit registry dict; PRD deviation documented, PRD file not editable within this worktree's allowlist). Remaining unchecked items are genuine gaps (eval results UI, integration test for eval blocking, retry/backoff, circuit breaker).
 - 2026-07-06: Cross-cutting QA (index 229). Fixed CRITICAL — eval_dashboard route in admin.py was missing SQLAlchemyError→503 catch (connection/deadlock failures propagated as 500). Fixed CRITICAL — okr_progress route in admin.py was missing SQLAlchemyError→503 catch (same pattern). Added except SQLAlchemyError handlers + 4 new tests (dashboard + regressions + okr_progress SQLAlchemyError→503, okr_progress ProgrammingError→501). Added json_schema and custom_function eval type behaviour sections to product map. Added Resilience section. Status: partial.
 - 2026-07-07: Cross-cutting QA (index 324). Fixed CRITICAL — detect_regressions() only returned alerts for declining trends; improving/stable trends were silently dropped despite product map claiming they were returned. Unit tests (test_improving_not_alerted, test_stable_not_alerted) caught the gap — moved alerts.append() outside the if/elif/else block so all trends produce alerts. Status: covered.
 
 ## Known Gaps
-- **eval_scorer.feature is a placeholder**: 6 abstract scenarios — not executable without concrete step values.
+- **eval_scorer.feature is wired, not a placeholder**: 7 real Gherkin scenarios with step definitions in test_eval.py (regex pass/fail, block/warn, JSON Schema, custom function, unknown type, LLM judge). Stale "placeholder" claims removed.
 - **eval_dashboard.feature is a placeholder**: 4 UI scenarios with no concrete selectors, routes, or assertions.
 - **eval_run.feature "results UI" scenario is a placeholder**: navigation step references eval_dashboard which is stub-only.
-- **Missing eval_dashboard SQLAlchemyError test (resolved)**: eval_dashboard route had only ProgrammingError catch — SQLAlchemyError→503 added at index 229 with test coverage. eval_regressions already had full catch chain.
 - **Missing eval_type ValueError propagates as 500**: unknown eval type raises ValueError which is not caught at the route handler level, producing a raw 500 traceback instead of a structured 422.
 - **No integration test for eval blocking in pipelines**: eval gate enforcement tested at BDD level (eval_block.feature) but no end-to-end pipeline run → eval block → eval_failed lifecycle test.
+- **Custom function registration deviates from PRD**: PRD §8.17 says functions register via the `modulo.evals` entry-point group; the engine uses an explicit `config["functions"]` registry dict instead (deliberate security choice — no arbitrary imports). PRD file not updated (outside this worktree's allowlist).

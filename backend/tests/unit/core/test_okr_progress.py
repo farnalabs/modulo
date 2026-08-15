@@ -252,6 +252,13 @@ class TestTrackOkrProgressDirect:
         with pytest.raises(ValueError, match="not found"):
             await track_okr_progress(session, _ORG_ID, "nonexistent-suite")
 
+    async def test_raises_value_error_for_suite_with_zero_definitions(self) -> None:
+        session = _make_mock_session()
+        session.execute.return_value = _make_first_result(_make_row(def_count=0, pass_threshold=None))
+
+        with pytest.raises(ValueError, match="not found"):
+            await track_okr_progress(session, _ORG_ID, "empty-suite")
+
     async def test_raises_value_error_for_empty_suite_id(self) -> None:
         session = _make_mock_session()
 
@@ -512,9 +519,36 @@ class TestOkrProgressEndpoint:
         yield TestClient(app)
         app.dependency_overrides.clear()
 
+    @pytest.fixture
+    def non_admin_client(self) -> Generator[TestClient, None, None]:
+        mock_session = _make_mock_session()
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_settings] = _make_settings
+        app.dependency_overrides[get_db_session] = override_session
+        app.dependency_overrides[_get_engine] = lambda: MagicMock()
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="operator",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="operator",
+        )
+        yield TestClient(app)
+        app.dependency_overrides.clear()
+
     def test_unauthenticated_returns_401(self, unauth_client: TestClient) -> None:
         resp = unauth_client.get(self.URL)
         assert resp.status_code == 401
+
+    def test_non_admin_returns_403(self, non_admin_client: TestClient) -> None:
+        resp = non_admin_client.get(self.URL)
+        assert resp.status_code == 403
+
+    def test_unicode_suite_id_returns_200(self, client: TestClient) -> None:
+        resp = client.get("/api/v1/admin/evals/okr-progress/s%C3%BCite-%C3%A9val")
+        assert resp.status_code == 200
 
     def test_admin_returns_200(self, client: TestClient) -> None:
         resp = client.get(self.URL)
@@ -610,6 +644,26 @@ class TestOkrProgressEndpoint:
             org_role="admin",
         )
         resp = TestClient(app).get("/api/v1/admin/evals/okr-progress/missing-suite")
+        assert resp.status_code == 404
+
+    def test_suite_with_zero_definitions_returns_404(self) -> None:
+        mock_session = _make_mock_session()
+        mock_session.execute.side_effect = [
+            _make_result(scalar_value=None),
+            _make_first_result(_make_row(def_count=0, pass_threshold=None)),
+        ]
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="admin",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="admin",
+        )
+        resp = TestClient(app).get("/api/v1/admin/evals/okr-progress/empty-suite")
         assert resp.status_code == 404
 
     def test_breach_true_in_response(self) -> None:

@@ -6,9 +6,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.routes.variants import (
+    CreateVariantGroupRequest,
+    VariantDef,
     _variant_to_response,
     coverage_gaps,
     create_group,
@@ -975,3 +978,66 @@ class TestPromptDiffsException:
             with pytest.raises(HTTPException) as exc:
                 await prompt_diffs(uuid.uuid4(), mock_session, principal)
             assert exc.value.status_code == 500
+
+
+class TestCreateVariantGroupRequestValidation:
+    """API-layer validation for selection_strategy and variant weights.
+
+    These model-level checks exist so an invalid ``selection_strategy`` or a
+    negative variant weight surfaces as a 422 ValidationError at the API edge
+    instead of a DB CHECK-constraint IntegrityError (409).
+    """
+
+    def _valid_variant(self, **overrides: object) -> VariantDef:
+        kwargs: dict[str, object] = {
+            "snapshot_id": uuid.uuid4(),
+            "name": "control",
+            "weight": 1.0,
+            "run_context_overrides": {"model_backend_id": "backend-a"},
+            "eval_definition_ids": [],
+        }
+        kwargs.update(overrides)
+        return VariantDef(**kwargs)
+
+    def test_invalid_selection_strategy_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            CreateVariantGroupRequest(
+                pipeline_id=uuid.uuid4(),
+                name="test",
+                variants=[self._valid_variant()],
+                selection_strategy="bogus",
+            )
+
+    def test_selection_strategy_weighted_accepted(self) -> None:
+        req = CreateVariantGroupRequest(
+            pipeline_id=uuid.uuid4(),
+            name="test",
+            variants=[self._valid_variant()],
+            selection_strategy="weighted",
+        )
+        assert req.selection_strategy == "weighted"
+
+    def test_selection_strategy_single_accepted(self) -> None:
+        req = CreateVariantGroupRequest(
+            pipeline_id=uuid.uuid4(),
+            name="test",
+            variants=[self._valid_variant()],
+            selection_strategy="single",
+        )
+        assert req.selection_strategy == "single"
+
+    def test_negative_weight_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            CreateVariantGroupRequest(
+                pipeline_id=uuid.uuid4(),
+                name="test",
+                variants=[self._valid_variant(weight=-1.0)],
+            )
+
+    def test_zero_weight_accepted(self) -> None:
+        req = CreateVariantGroupRequest(
+            pipeline_id=uuid.uuid4(),
+            name="test",
+            variants=[self._valid_variant(weight=0.0)],
+        )
+        assert req.variants[0].weight == 0.0

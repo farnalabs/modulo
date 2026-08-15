@@ -127,13 +127,13 @@ block or warn on failure.
 ### Edge Cases
 
 - [x] All evals pass on a node → no eval_failed status
-- [ ] No evals configured on a node → no eval step (architectural)
+- [x] No evals configured on a node → no eval step (architectural — executor only evaluates nodes with eval definitions)
 - [x] pass_threshold = 0 → always pass (including all-fail suite)
 - [x] pass_threshold = 1 → only perfect scores pass
-- [ ] Eval on final node → post-node eval, no follow-on (architectural)
-- [ ] Custom function registered after pipeline compiled → used or cached?
+- [x] Eval on final node → post-node eval, no follow-on (architectural — eval runs after every node incl. final, then run completes)
+- [x] Custom function registered after pipeline compiled → used (registry read from config at eval time — covered by test_function_registered_after_definition_still_used)
 - [ ] Variant group runs with different evals → per-variant eval comparison
-- [x] Empty suite → always pass (aggregate_score=1.0, total_evals=0)
+- [x] Empty suite → always pass (aggregate_score=0.0, total_evals=0 — score value is 0.0, suite still passes)
 
 ### Suite Aggregation
 
@@ -215,6 +215,18 @@ block or warn on failure.
    run → eval → eval_failed lifecycle test.
 
 ## QA History
+
+### 2026-08-15 — Coverage completion (FAR-232)
+
+**What was fixed:**
+- Marked [ ]→[x]: "No evals configured on a node → no eval step (architectural)" — the executor builds `eval_defs_by_node` and only evaluates nodes that have definitions; a node without evals has no eval step by construction.
+- Marked [ ]→[x]: "Eval on final node → post-node eval, no follow-on (architectural)" — eval runs after every node (including the final one) then the run terminalizes; no follow-on exists.
+- Marked [ ]→[x]: "Custom function registered after pipeline compiled → used or cached?" — the `config["functions"]` registry is read at eval time (not cached at definition time), so a late-registered function is picked up. Added `test_function_registered_after_definition_still_used` in test_eval_engine.py (first eval fails with "not found", registering the function makes the next eval pass).
+- Corrected the empty-suite `aggregate_score` claim to `0.0` (matches `evaluate_suite` — the suite still passes; 1.0 was a stale value already corrected in eval-engine.md).
+- Confirmed the "Block failure recorded in AuditEvent" claim is accurate — executor.py writes `append_audit_event(event_type="eval.blocked")` on both the execute and resume finalization paths (executor.py:1394-1409, 1876-1891).
+
+**Test results:** All eval engine unit tests pass (test_eval_engine.py, test_eval_suite.py, test_eval_regressions.py). BDD eval features run via step-def files (test_eval.py / test_eval_block_steps.py) — pre-existing failures in those files are unrelated to this work (no diff vs origin/main) and are reported separately.
+**Status:** partial (unchecked items are genuine gaps: custom-function sandbox, conditional-HITL syntax/nonexistent-field handling, JSON Schema $ref/depth, delete-blocking question, per-variant comparison).
 
 ### 2026-07-04 — Cross-cutting QA (index 118)
 - **Fixed**: Added ProgrammingError→501 catch to `compare_evals` endpoint (was missing, could crash on un-migrated DB)

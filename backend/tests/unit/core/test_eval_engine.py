@@ -271,6 +271,36 @@ class TestCustomFunctionEval:
         result = engine.evaluate({"text": "hello"}, eval_def)
         assert result.score == pytest.approx(0.9)
 
+    def test_function_registered_after_definition_still_used(self) -> None:
+        """The function registry is read from config at eval time (PRD 8.17).
+
+        A custom function registered after the eval definition is constructed
+        (e.g. after a pipeline is compiled) is still picked up because the
+        engine looks up ``config["functions"]`` on each evaluate() call rather
+        than caching the callable at definition time.
+        """
+        engine = EvalEngine()
+
+        def late_fn(output: dict, config: dict) -> dict:
+            return {"passed": True, "score": 0.77, "detail": "registered late"}
+
+        registry: dict[str, object] = {}
+        eval_def = _make_eval_def(
+            "custom_function",
+            {"function": "late", "functions": registry},
+        )
+
+        # First evaluation: function not yet registered → fail with clear message.
+        first = engine.evaluate({"text": "hello"}, eval_def)
+        assert first.passed is False
+        assert "not found" in first.detail
+
+        # Register the function after the definition exists — next call uses it.
+        registry["late"] = late_fn
+        second = engine.evaluate({"text": "hello"}, eval_def)
+        assert second.passed is True
+        assert second.score == pytest.approx(0.77)
+
 
 # =============================================================================
 # LLM judge eval
