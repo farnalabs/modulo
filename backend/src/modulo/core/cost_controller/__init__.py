@@ -485,7 +485,11 @@ async def reset_pipeline_circuit_breaker(
             Trigger.pipeline_id == pipeline_id,
             Trigger.deleted_at.is_(None),
         )
-        .values(active=True)
+        # FAR-190: re-anchor every re-activated trigger's no-delivery streak
+        # epoch in the SAME atomic statement as the active=True flip (the shared
+        # anchor semantics — no un-epoch'd active=True transition). Inlined here
+        # (rather than a second UPDATE) so the whole re-enable is one statement.
+        .values(active=True, streak_epoch=datetime.now(UTC))
     )
     await session.flush()
     return True

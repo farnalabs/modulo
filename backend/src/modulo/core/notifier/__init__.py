@@ -52,6 +52,7 @@ __all__ = [
     "EVENT_RUN_FAILED",
     "EVENT_RUN_STALLED",
     "EVENT_SYSTEM_ANNOUNCEMENT",
+    "EVENT_TRIGGER_DEACTIVATED",
     "MAX_ATTEMPTS",
     "MAX_DEAD_LETTERS",
     "RETRY_DELAYS",
@@ -104,6 +105,9 @@ EVENT_EVAL_REGRESSION = "eval_regression"
 EVENT_EVAL_BLOCKED = "eval_blocked"
 EVENT_FEEDBACK_PENDING = "feedback_pending"
 EVENT_SYSTEM_ANNOUNCEMENT = "system_announcement"
+# FAR-190 — an ongoing trigger auto-deactivated after N consecutive no-delivery
+# runs. Payload is sanitised (identifiers/titles + allow-listed reason fields).
+EVENT_TRIGGER_DEACTIVATED = "trigger_deactivated"
 
 
 @dataclass

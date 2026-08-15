@@ -31,8 +31,9 @@ import os
 import threading
 import time
 import uuid
+from collections.abc import Awaitable
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 from croniter import croniter
@@ -104,6 +105,167 @@ ONGOING_MAX_ENQUEUE_PER_TICK = 50
 # advance stops once active=False).
 ONGOING_MAX_CONSECUTIVE_FAILURES = 5
 _ONGOING_FAILURE_COUNTER_TTL = 6 * 3600  # 6h
+
+# FAR-190 — ongoing-trigger no-delivery streak engine.
+#
+# An ongoing trigger that produces N consecutive no-delivery terminal runs
+# (run_classification value 'no_delivery' — including empty-backlog completes
+# and infra/sandbox failures elevated to failed, PO decision) is auto-deactivated
+# so the operator investigates the quiet stretch. The streak walks newest ->
+# oldest terminal runs and stops at the first delivered OR excluded run (an
+# unclassified run — a missing/broken classification record — ALSO stops the
+# walk fail-closed, so deactivation can never ride on uncertain evidence). The
+# walk boundary is ``GREATEST(last_delivery_at, streak_epoch)``.
+#
+# Config (per-trigger ``config_json``): ``max_no_delivery_streak`` (threshold),
+# falling back to the legacy ``max_consecutive_failures`` key for one release;
+# ``no_delivery_min_window_hours`` (wall-clock window). Product default is N=5
+# WITH a 24h minimum wall-clock window so other customers' quiet stretches never
+# self-deactivate (the boundary must be at least the window old before the
+# streak can fire); the dogfood deployment overrides the window to 0 via
+# MODULO_ONGOING_STREAK_MIN_WINDOW_HOURS so a fast-moving repo's quiet stretch
+# still stops the pool.
+ONGOING_MAX_NO_DELIVERY_STREAK_DEFAULT = 5
+ONGOING_MIN_NO_DELIVERY_WINDOW_HOURS_DEFAULT = 24
+# Per-org per-hour deactivation cap (mass-cascade guard): a single org cannot
+# have more than this many auto-deactivations per rolling hour — a burst is
+# deferred to the next tick rather than cascading. The per-trigger atomic
+# UPDATE (count folded into the WHERE) remains the hard correctness bound; this
+# cap is the soft operational throttle.
+ONGOING_STREAK_DEACTIVATE_MAX_PER_ORG_PER_HOUR = 10
+# Mass-cascade alert: when an org has deactivated >= this many triggers in the
+# last 24h, a critical alert fires (infra outage guard) — once per window.
+ONGOING_STREAK_MASS_CASCADE_ALERT_THRESHOLD = 5
+ONGOING_STREAK_MASS_CASCADE_ALERT_WINDOW_HOURS = 24
+# Kill switch for the deactivate+notify side-effect. Classification ALWAYS
+# persists (the reconcile sweep is independent); this only gates the sweep's
+# deactivation + notification. Documented constant default, overridable at
+# runtime via MODULO_STREAK_DEACTIVATE_KILL_SWITCH.
+STREAK_DEACTIVATE_ENABLED_DEFAULT = True
+
+# Audit event types for the streak engine lifecycle records (append-only).
+STREAK_DEACTIVATION_EVENT_TYPE = "ongoing_trigger.auto_deactivated"
+STREAK_NOTIFY_FAILED_EVENT_TYPE = "ongoing_trigger.deactivation_notify_failed"
+STREAK_MASS_CASCADE_EVENT_TYPE = "ongoing_trigger.mass_cascade_alert"
+
+# Redis markers: per-org pending deactivation-notification retry set (a failed
+# dispatch is retried on the next scheduler tick; the member carries the full
+# sanitised payload) + the once-per-window mass-cascade alert marker.
+_STREAK_NOTIFY_PENDING_PREFIX = "saq:streak:notify_pending"
+_STREAK_MASS_CASCADE_ALERT_PREFIX = "saq:streak:mass_cascade_alerted"
+_STREAK_PENDING_MARKER_TTL = 7 * 24 * 3600  # 7d — long enough to retry across an outage
+
+# Notification payload reason allow-list — identifiers/titles + these reason
+# fields only, never tokens or raw output (FAR-190 payload-sanitisation rule).
+_STREAK_PAYLOAD_ALLOWED_REASONS = frozenset({"no_work", "needs_human", "source_error", "parse_error", "no_delivery"})
+
+# Static terminal-status IN-list for the streak engine's raw SQL. FAR-189 only
+# classifies terminal statuses; inlined as a constant (never user input) so the
+# engine's correlated subqueries never count a pending/in-flight run. Assembled
+# into the SQL constants via ``__STATUSES__`` placeholders + ``str.replace``
+# (bandit S608 flags f-string/format SQL; a static constant is not user input).
+_STREAK_STATUSES_SQL = "'complete','failed','cancelled','eval_failed','stalled','budget_exceeded'"
+
+# The streak boundary: GREATEST(last delivered run's completed_at, streak_epoch).
+# ``last_delivery_at`` is derived from the classification log (single source of
+# truth); ``COALESCE(triggers.streak_epoch, now())`` fails SAFE on a NULL epoch
+# (rolling-deploy skew) — the boundary becomes "now", no run counts, and the
+# trigger cannot deactivate until the row is re-anchored.
+_STREAK_BOUNDARY_SQL = (
+    "GREATEST("
+    "(SELECT max(r2.completed_at) FROM runs r2 "
+    " WHERE r2.organisation_id = triggers.organisation_id "
+    "   AND r2.trigger_id = triggers.id "
+    "   AND r2.completed_at IS NOT NULL "
+    "   AND r2.run_classification ->> 'value' = 'delivered'),"
+    "COALESCE(triggers.streak_epoch, now()))"
+)
+
+# The consecutive no-delivery streak: countable terminal runs (value
+# 'no_delivery', at/after the boundary) with NO newer terminal run that is
+# delivered/excluded/unclassified OR that has no classification record at all
+# (fail-closed: uncertain evidence stops the walk). The ``r3.id > r.id``
+# tie-break makes equal-completed_at runs deterministic (equal-completed_at
+# ordering — the count is order-independent but the STOP predicate needs a total
+# order). Terminal-only predicates keep in-flight runs drained (never counted,
+# never breaking the walk — deactivation never cancels).
+_STREAK_COUNT_SQL = (
+    (
+        "(SELECT count(*) FROM ("  # nosec B608 - static constant fragments, never user input
+        "SELECT r.id FROM runs r "
+        "WHERE r.organisation_id = triggers.organisation_id "
+        "  AND r.trigger_id = triggers.id "
+        "  AND r.status IN (__STATUSES__) "
+        "  AND r.completed_at IS NOT NULL "
+        "  AND r.completed_at >= __BOUNDARY__ "
+        "  AND r.run_classification ->> 'value' = 'no_delivery' "
+        "  AND NOT EXISTS ("
+        "    SELECT 1 FROM runs r3 "
+        "    WHERE r3.organisation_id = triggers.organisation_id "
+        "      AND r3.trigger_id = triggers.id "
+        "      AND r3.status IN (__STATUSES__) "
+        "      AND r3.completed_at IS NOT NULL "
+        "      AND (r3.completed_at > r.completed_at "
+        "           OR (r3.completed_at = r.completed_at AND r3.id > r.id)) "
+        "      AND (r3.run_classification IS NULL "
+        "           OR r3.run_classification ->> 'value' IN "
+        "('delivered', 'excluded', 'unclassified'))"
+        ") ) streak_count)"
+    )
+    .replace("__STATUSES__", _STREAK_STATUSES_SQL)
+    .replace("__BOUNDARY__", _STREAK_BOUNDARY_SQL)
+)
+
+# Guarded atomic deactivation (FAR-190 spec item 7): the streak is computed
+# INSIDE the UPDATE's WHERE from the live trigger row + classification log, so a
+# re-enabled trigger (active=false already, or epoch re-anchored) and a stale
+# tick can never be hit — concurrent ticks produce one rowcount=1 and the second
+# is a no-op. The boundary must also be at least ``window_cutoff`` old (the 24h
+# wall-clock window, 0 for dogfood — a cutoff of "now" is trivially satisfied).
+# ``RETURNING`` carries the streak value (same correlated subquery) for the
+# audit record, so no second walk is needed.
+_NO_DELIVERY_DEACTIVATE_SQL = (
+    (
+        "UPDATE triggers SET active = false "  # nosec B608 - static constant fragments, never user input
+        "WHERE id = :tid "
+        "  AND active "
+        "  AND __STREAK_COUNT__ >= :threshold "
+        "  AND __BOUNDARY__ <= :window_cutoff "
+        "RETURNING id, pipeline_id, organisation_id, config_json, __STREAK_COUNT__ AS streak"
+    )
+    .replace("__STREAK_COUNT__", _STREAK_COUNT_SQL)
+    .replace("__BOUNDARY__", _STREAK_BOUNDARY_SQL)
+)
+
+# Newest countable no-delivery run's classification reason — the audit + notify
+# reason for a deactivation. Mirrors the count predicate (boundary + stop) so it
+# returns a run actually inside the streak.
+_STREAK_NEWEST_REASON_SQL = (
+    (
+        "SELECT r.run_classification ->> 'reason' AS reason "  # nosec B608 - static constant fragments, never user input
+        "FROM runs r "
+        "WHERE r.organisation_id = :oid AND r.trigger_id = :tid "
+        "  AND r.status IN (__STATUSES__) "
+        "  AND r.completed_at IS NOT NULL "
+        "  AND r.completed_at >= __BOUNDARY__ "
+        "  AND r.run_classification ->> 'value' = 'no_delivery' "
+        "  AND NOT EXISTS ("
+        "    SELECT 1 FROM runs r3 "
+        "    WHERE r3.organisation_id = r.organisation_id "
+        "      AND r3.trigger_id = r.trigger_id "
+        "      AND r3.status IN (__STATUSES__) "
+        "      AND r3.completed_at IS NOT NULL "
+        "      AND (r3.completed_at > r.completed_at "
+        "           OR (r3.completed_at = r.completed_at AND r3.id > r.id)) "
+        "      AND (r3.run_classification IS NULL "
+        "           OR r3.run_classification ->> 'value' IN "
+        "('delivered', 'excluded', 'unclassified'))"
+        ") "
+        "ORDER BY r.completed_at DESC, r.id DESC LIMIT 1"
+    )
+    .replace("__STATUSES__", _STREAK_STATUSES_SQL)
+    .replace("__BOUNDARY__", _STREAK_BOUNDARY_SQL)
+)
 
 # dispatcher_reconcile (system cron) — every 60s.
 RECONCILE_STALE_HEARTBEAT_FACTOR = 2  # 2 * SAQ_JOB_HEARTBEAT = 600s
@@ -196,6 +358,11 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     "enqueue_failed_ttl_terminalized": 0,
     "enqueue_failed_redispatched": 0,
     "enqueue_failed_capped": 0,
+    "streak_scanned": 0,
+    "streak_deactivated": 0,
+    "streak_capped": 0,
+    "streak_alerts": 0,
+    "streak_notify_failed": 0,
 }
 
 
@@ -216,6 +383,11 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["enqueue_failed_ttl_terminalized"] = stats.get("enqueue_failed_ttl_terminalized", 0)
     _dispatcher_reconcile_stats["enqueue_failed_redispatched"] = stats.get("enqueue_failed_redispatched", 0)
     _dispatcher_reconcile_stats["enqueue_failed_capped"] = stats.get("enqueue_failed_capped", 0)
+    _dispatcher_reconcile_stats["streak_scanned"] = stats.get("streak_scanned", 0)
+    _dispatcher_reconcile_stats["streak_deactivated"] = stats.get("streak_deactivated", 0)
+    _dispatcher_reconcile_stats["streak_capped"] = stats.get("streak_capped", 0)
+    _dispatcher_reconcile_stats["streak_alerts"] = stats.get("streak_alerts", 0)
+    _dispatcher_reconcile_stats["streak_notify_failed"] = stats.get("streak_notify_failed", 0)
 
 
 # Shared Redis key for dispatcher_reconcile outcome stats (cross-process).
@@ -1215,6 +1387,699 @@ async def _clear_ongoing_failure(redis_client: AsyncRedis | None, trigger_id: uu
         raise
     except Exception:
         _log.warning("cron_helpers.clear_ongoing_failure failed for %s", trigger_id)
+
+
+# ---------------------------------------------------------------------------
+# FAR-190 — ongoing-trigger no-delivery streak engine.
+#
+# The engine walks an ongoing trigger's terminal run-classification records
+# (FAR-189) and auto-deactivates the trigger after N consecutive no-delivery
+# runs. It runs as a system sweep (``enforce_no_delivery_streaks``, wired into
+# ``dispatcher_reconcile`` every 60s) — NEVER inline in terminalization. The
+# streak is bounded by ``GREATEST(last_delivery_at, streak_epoch)`` and the
+# deactivation is a guarded atomic UPDATE (count folded into the WHERE), so a
+# re-enabled trigger or a stale tick can never be hit.
+#
+# Every active=True transition of an ongoing trigger MUST re-anchor
+# ``streak_epoch`` (migration backfill anchors at deploy; this anchors at
+# create + re-enable) — see ``anchor_trigger_streak_epoch``, routed through all
+# active-write sites (triggers.py update/toggle/restore, mcp_server, the
+# cost_controller circuit-breaker reset). There is no un-epoch'd activation
+# path: a row whose epoch is NULL (rolling-deploy skew) COALESCEs to now() and
+# therefore can never be deactivated until re-anchored.
+# ---------------------------------------------------------------------------
+
+
+async def anchor_trigger_streak_epoch(
+    session: AsyncSession,
+    *,
+    trigger_id: uuid.UUID,
+    now: datetime | None = None,
+) -> None:
+    """FAR-190 shared activation anchor — reset a trigger's no-delivery streak
+    boundary on any active=True transition (create / update / toggle / restore /
+    re-enable). UPDATE-based and idempotent; matches ONLY rows currently active
+    and not soft-deleted, so a half-applied transition can never be epoch-anchored
+    in the inactive state and a re-enabled trigger's streak restarts from its
+    re-enable moment. Call INSIDE the write transaction after ``active = True``
+    is set — the epoch must commit atomically with the flip so a concurrent
+    sweep tick can never observe active=True with a stale epoch.
+    """
+    from sqlalchemy import update
+
+    from modulo.db.models.trigger import Trigger
+
+    await session.execute(
+        update(Trigger)
+        .where(Trigger.id == trigger_id, Trigger.active.is_(True), Trigger.deleted_at.is_(None))
+        .values(streak_epoch=now or datetime.now(UTC))
+    )
+
+
+async def clear_trigger_streak_after_reenable(trigger_id: uuid.UUID) -> None:
+    """Post-commit re-enable side-effect (FAR-190): clear the FAR-158
+    config-failure Redis counter. MUST be called only after the trigger's
+    active=True transaction committed (over-clearing is safe, under-clearing is
+    not — a stale counter would otherwise re-deactivate a re-enabled trigger on
+    its next failure). Best-effort and NEVER raises: a missing/empty REDIS_URL
+    or any Redis failure leaves a stale counter that self-heals on the next
+    successful top-up.
+    """
+    try:
+        settings = get_settings()
+        if not settings.redis_url:
+            return
+        redis_client = AsyncRedis.from_url(settings.redis_url, socket_connect_timeout=5)
+        try:
+            await _clear_ongoing_failure(redis_client, trigger_id)
+        finally:
+            with _suppress_aclose():
+                await redis_client.aclose()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("cron_helpers.clear_streak_after_reenable failed trigger=%s", trigger_id)
+
+
+def _streak_deactivate_enabled() -> bool:
+    """Kill switch for the deactivate+notify side-effect (FAR-190 item 9).
+
+    Classification ALWAYS persists (the reconcile sweep is independent); this
+    only gates the sweep's deactivation + notification. Documented constant
+    default (``STREAK_DEACTIVATE_ENABLED_DEFAULT``) overridable at runtime via
+    the ``MODULO_STREAK_DEACTIVATE_KILL_SWITCH`` env var ('0'/'false'/'off'/'no'
+    disables).
+    """
+    raw = os.environ.get("MODULO_STREAK_DEACTIVATE_KILL_SWITCH")
+    if raw is None:
+        return STREAK_DEACTIVATE_ENABLED_DEFAULT
+    return raw.strip().lower() not in ("0", "false", "off", "no")
+
+
+def _streak_min_window_hours_default() -> int:
+    """Product default minimum wall-clock window before a no-delivery streak
+    fires (24h — a quiet stretch must not self-deactivate within the first day
+    after a delivery). The dogfood deployment overrides this to 0 via
+    ``MODULO_ONGOING_STREAK_MIN_WINDOW_HOURS`` so a fast-moving repo's quiet
+    stretch still stops the pool. Per-trigger ``no_delivery_min_window_hours``
+    config overrides both.
+    """
+    raw = os.environ.get("MODULO_ONGOING_STREAK_MIN_WINDOW_HOURS")
+    if raw is None:
+        return ONGOING_MIN_NO_DELIVERY_WINDOW_HOURS_DEFAULT
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return ONGOING_MIN_NO_DELIVERY_WINDOW_HOURS_DEFAULT
+
+
+def _streak_config(config: dict[str, Any] | None) -> tuple[int, int]:
+    """Resolve (threshold, min_window_hours) from a trigger's ``config_json``.
+
+    Threshold: ``max_no_delivery_streak``, falling back to the legacy
+    ``max_consecutive_failures`` key (read for one release) — else the dogfood
+    default (5). Window: per-trigger ``no_delivery_min_window_hours``, else the
+    env default (24h product; 0 for dogfood). Invalid values fall back to the
+    defaults — a mis-typed config can never disable the guard or fire instantly.
+    """
+    cfg = config or {}
+    threshold = cfg.get("max_no_delivery_streak")
+    if threshold is None:
+        threshold = cfg.get("max_consecutive_failures")  # legacy key fallback
+    try:
+        parsed = int(threshold) if threshold is not None else None
+    except (TypeError, ValueError):
+        parsed = None
+    threshold = (
+        # A missing, non-numeric, zero, or negative threshold is invalid — fall
+        # back to the default (never fire instantly on a mis-typed config).
+        ONGOING_MAX_NO_DELIVERY_STREAK_DEFAULT if parsed is None or parsed < 1 else parsed
+    )
+    window = cfg.get("no_delivery_min_window_hours")
+    if window is None:
+        window = _streak_min_window_hours_default()
+    else:
+        try:
+            window = max(0, int(window))
+        except (TypeError, ValueError):
+            window = _streak_min_window_hours_default()
+    return threshold, window
+
+
+async def _count_recent_streak_deactivations(
+    factory: Any,
+    org_id: uuid.UUID,
+    *,
+    hours: int,
+) -> int:
+    """Count an org's streak auto-deactivations in the last *hours* (audit chain
+    is the primary lifecycle record, so the count reads audit_events). Best-
+    effort: a count failure reads 0 (the per-trigger atomic UPDATE remains the
+    hard correctness bound; the cap is a soft operational throttle).
+    """
+    from sqlalchemy import func
+
+    from modulo.db.models.audit_event import AuditEvent
+
+    cutoff = datetime.now(UTC) - timedelta(hours=hours)
+    try:
+        async with factory() as session, session.begin():
+            await _set_rls_org(session, org_id)
+            result = await session.execute(
+                select(func.count()).where(
+                    AuditEvent.organisation_id == org_id,
+                    AuditEvent.event_type == STREAK_DEACTIVATION_EVENT_TYPE,
+                    AuditEvent.created_at >= cutoff,
+                )
+            )
+            return int(result.scalar_one() or 0)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("streak.deactivation_count_failed org=%s", org_id)
+        return 0
+
+
+async def _select_active_ongoing_triggers(
+    factory: Any,
+    org_id: uuid.UUID,
+    max_triggers: int,
+) -> list[Any]:
+    """Bounded select of the org's active ongoing triggers for the sweep."""
+    from modulo.db.models.trigger import Trigger
+
+    async with factory() as session, session.begin():
+        await _set_rls_org(session, org_id)
+        result = await session.execute(
+            select(Trigger)
+            .where(
+                Trigger.trigger_type == "ongoing",
+                Trigger.active.is_(True),
+                Trigger.deleted_at.is_(None),
+            )
+            .order_by(Trigger.id)
+            .limit(max_triggers)
+        )
+        return list(result.scalars().all())
+
+
+async def _newest_streak_no_delivery_reason(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    trigger_id: uuid.UUID,
+) -> str | None:
+    """The newest countable no-delivery run's classification reason — the audit
+    + notification reason for a deactivation. Mirrors the count predicate
+    (boundary + stop) so it returns a run actually inside the streak.
+    """
+    result = await session.execute(
+        text(_STREAK_NEWEST_REASON_SQL),
+        {"oid": str(org_id), "tid": str(trigger_id)},
+    )
+    row = result.first()
+    if row is None:
+        return None
+    return row[0] if row[0] is not None else None
+
+
+async def _record_streak_deactivation(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    data: dict[str, Any],
+    threshold: int,
+    reason: str | None,
+) -> None:
+    """Lifecycle records for one deactivation — run in the SAME transaction as
+    the guarded UPDATE: the append-only AuditEvent (actor=system) is the primary
+    record; the TriggerEvent row keeps the fire-outcome log consistent.
+    """
+    from types import SimpleNamespace
+
+    from modulo.core.audit_logger import append_audit_event
+
+    trigger_id = data["id"]
+    streak = int(data.get("streak") or 0)
+    await append_audit_event(
+        session,
+        org_id=org_id,
+        event_type=STREAK_DEACTIVATION_EVENT_TYPE,
+        actor_user_id=None,  # system
+        resource_type="trigger",
+        resource_id=trigger_id,
+        payload_json={
+            "trigger_id": str(trigger_id),
+            "pipeline_id": str(data.get("pipeline_id") or ""),
+            "streak": streak,
+            "threshold": int(threshold),
+            "reason": reason or "no_delivery",
+            "trigger_type": "ongoing",
+            "deactivated_by": "no_delivery_streak",
+        },
+    )
+    await _log_ongoing_event(
+        session,
+        trigger=SimpleNamespace(id=trigger_id),
+        org_id=org_id,
+        result="auto_deactivated",
+        error_detail=(f"auto-deactivated after {streak} consecutive no-delivery runs (threshold {int(threshold)})"),
+    )
+
+
+async def _deactivate_trigger_on_no_delivery_streak(
+    factory: Any,
+    *,
+    org_id: uuid.UUID,
+    trigger_id: uuid.UUID,
+    threshold: int,
+    window_cutoff: datetime,
+) -> dict[str, Any] | None:
+    """Guarded atomic deactivation for ONE ongoing trigger (FAR-190).
+
+    The streak is computed INSIDE the UPDATE's WHERE from the live trigger row
+    (``active`` + ``streak_epoch``) and the classification log, so a re-enabled
+    trigger or a stale tick can never be hit (no TOCTOU; concurrent ticks
+    produce one rowcount=1 and the second is a no-op). Runs in its OWN
+    transaction (per-trigger isolation): the deactivation UPDATE, the AuditEvent
+    lifecycle record, and the fire-outcome TriggerEvent commit together, and a
+    failure for this trigger can never stop the other triggers in the sweep.
+    Returns ``{id, pipeline_id, organisation_id, config_json, streak, reason}``
+    when deactivated, else ``None`` (below threshold / inside the wall-clock
+    window / already inactive).
+    """
+    async with factory() as session, session.begin():
+        await _set_rls_org(session, org_id)
+        result = await session.execute(
+            text(_NO_DELIVERY_DEACTIVATE_SQL),
+            {"tid": str(trigger_id), "threshold": threshold, "window_cutoff": window_cutoff},
+        )
+        row = result.first()
+        if row is None:
+            return None
+        data: dict[str, Any] = {
+            "id": trigger_id,
+            "pipeline_id": row[1],
+            "organisation_id": row[2],
+            "config_json": row[3] or {},
+            "streak": int(row[4] or 0),
+        }
+        reason = await _newest_streak_no_delivery_reason(session, org_id, trigger_id)
+        data["reason"] = reason or "no_delivery"
+        await _record_streak_deactivation(session, org_id=org_id, data=data, threshold=threshold, reason=reason)
+        _log.warning(
+            "streak.deactivated org=%s trigger=%s streak=%s threshold=%s",
+            org_id,
+            trigger_id,
+            data["streak"],
+            threshold,
+        )
+        return data
+
+
+def _streak_notify_pending_key(org_id: uuid.UUID) -> str:
+    return f"{_STREAK_NOTIFY_PENDING_PREFIX}:{org_id}"
+
+
+def _streak_pending_member(data: dict[str, Any], *, threshold: int, pipeline_name: str) -> str:
+    return json.dumps(
+        {
+            "trigger_id": str(data["id"]),
+            "pipeline_id": str(data.get("pipeline_id") or ""),
+            "streak": int(data.get("streak") or 0),
+            "threshold": int(threshold),
+            "reason": data.get("reason") or "no_delivery",
+            "pipeline_name": pipeline_name or "",
+        },
+        separators=(",", ":"),
+    )
+
+
+async def _write_streak_notify_pending(
+    redis_client: AsyncRedis | None,
+    org_id: uuid.UUID,
+    *,
+    data: dict[str, Any],
+    threshold: int,
+    pipeline_name: str,
+) -> None:
+    """Persist a failed deactivation notification as a per-org Redis SET member so
+    the next scheduler tick retries the dispatch. Best-effort — never raises.
+    """
+    if redis_client is None:
+        return
+    key = _streak_notify_pending_key(org_id)
+    try:
+        # redis.asyncio stubs type the set ops as ``Union[Awaitable, value]``
+        # (dual sync/async); we always hold the async client, so cast.
+        await cast(
+            Awaitable[int],
+            redis_client.sadd(key, _streak_pending_member(data, threshold=threshold, pipeline_name=pipeline_name)),
+        )
+        await cast(Awaitable[int], redis_client.expire(key, _STREAK_PENDING_MARKER_TTL))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("streak.notify_pending_write_failed org=%s", org_id)
+
+
+async def _record_streak_notify_failed(
+    org_id: uuid.UUID,
+    *,
+    data: dict[str, Any],
+    threshold: int,
+    reason: str,
+) -> None:
+    """Critical audit entry when the deactivation notifier fails (FAR-190 item
+    10). Best-effort — a failed audit write must never raise out of the sweep.
+    """
+    try:
+        from modulo.core.audit_logger import append_audit_event
+
+        async with _open_factory()() as session, session.begin():
+            await _set_rls_org(session, org_id)
+            await append_audit_event(
+                session,
+                org_id=org_id,
+                event_type=STREAK_NOTIFY_FAILED_EVENT_TYPE,
+                actor_user_id=None,  # system
+                resource_type="trigger",
+                resource_id=data["id"],
+                payload_json={
+                    "trigger_id": str(data["id"]),
+                    "pipeline_id": str(data.get("pipeline_id") or ""),
+                    "streak": int(data.get("streak") or 0),
+                    "threshold": int(threshold),
+                    "reason": reason,
+                    "trigger_type": "ongoing",
+                },
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("streak.notify_failed_audit_write_failed org=%s", org_id)
+
+
+async def _notify_streak_deactivation(
+    org_id: uuid.UUID,
+    *,
+    data: dict[str, Any],
+    threshold: int,
+    reason: str,
+    pipeline_name: str,
+    redis_client: AsyncRedis | None,
+) -> bool:
+    """Best-effort post-commit deactivation notification (FAR-190 item 10).
+
+    Reuses the existing notifier surface (constants in ``notifier/__init__``,
+    event config in ``event_mapper._EVENT_CONFIG``, AVAILABLE_EVENTS in
+    admin_notifications). Payload is sanitised: identifiers + titles +
+    allow-listed reason fields only — never tokens or raw output. On failure: a
+    critical log + a critical audit entry + a per-org Redis pending marker so
+    the next scheduler tick retries. Never raises.
+    """
+    safe_reason = reason if reason in _STREAK_PAYLOAD_ALLOWED_REASONS else "no_delivery"
+    payload = {
+        "trigger_id": str(data["id"]),
+        "pipeline_name": pipeline_name or "",
+        "trigger_type": "ongoing",
+        "streak": int(data.get("streak") or 0),
+        "threshold": int(threshold),
+        "reason": safe_reason,
+        # In-flight runs are drained (never cancelled); a delivery landing after
+        # deactivation is surfaced here as a contract field and never silently
+        # re-activates the trigger (stays inactive until the operator re-enables).
+        "delivered_after_deactivation": False,
+        "mass_cascade_alert": False,
+    }
+    try:
+        from modulo.core.notifier import EVENT_TRIGGER_DEACTIVATED, Notifier
+
+        notifier = Notifier(_get_engine(), get_settings().fernet_key)
+        await notifier.dispatch_event(org_id, EVENT_TRIGGER_DEACTIVATED, payload)
+        return True
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.critical(
+            "streak.deactivation_notify_failed org=%s trigger=%s",
+            org_id,
+            data["id"],
+            exc_info=True,
+        )
+        await _record_streak_notify_failed(org_id, data=data, threshold=threshold, reason=safe_reason)
+        await _write_streak_notify_pending(
+            redis_client, org_id, data=data, threshold=threshold, pipeline_name=pipeline_name
+        )
+        return False
+
+
+async def _retry_pending_streak_notifications(org_id: uuid.UUID, redis_client: AsyncRedis | None) -> int:
+    """Retry deactivation notifications whose first dispatch failed (persisted
+    notified_at + retry on scheduler tick). Reads the per-org pending SET,
+    re-dispatches each, removes on success. Best-effort — never raises.
+    """
+    if redis_client is None:
+        return 0
+    key = _streak_notify_pending_key(org_id)
+    try:
+        # redis.asyncio stubs type the set ops as ``Union[Awaitable, value]``
+        # (dual sync/async); we always hold the async client, so cast.
+        members = await cast(Awaitable[set[str]], redis_client.smembers(key))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("streak.notify_pending_read_failed org=%s", org_id)
+        return 0
+    retried = 0
+    for raw in members or []:
+        try:
+            data = json.loads(raw)
+            deactivation: dict[str, Any] = {
+                "id": uuid.UUID(data["trigger_id"]),
+                "pipeline_id": uuid.UUID(data["pipeline_id"]) if data.get("pipeline_id") else None,
+                "streak": int(data.get("streak") or 0),
+                "reason": data.get("reason") or "no_delivery",
+            }
+            ok = await _notify_streak_deactivation(
+                org_id,
+                data=deactivation,
+                threshold=int(data.get("threshold") or 0),
+                reason=deactivation["reason"],
+                pipeline_name=data.get("pipeline_name") or "",
+                # None: a retry failure must not re-queue into the pending set.
+                redis_client=None,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning("streak.notify_pending_retry_failed org=%s", org_id)
+            continue
+        if ok:
+            retried += 1
+            try:
+                await cast(Awaitable[int], redis_client.srem(key, raw))
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.warning("streak.notify_pending_remove_failed org=%s", org_id)
+    return retried
+
+
+async def _record_streak_mass_cascade(org_id: uuid.UUID, count: int) -> None:
+    """Critical audit entry for a mass-cascade alert (FAR-190 item 9). Best-effort."""
+    try:
+        from modulo.core.audit_logger import append_audit_event
+
+        async with _open_factory()() as session, session.begin():
+            await _set_rls_org(session, org_id)
+            await append_audit_event(
+                session,
+                org_id=org_id,
+                event_type=STREAK_MASS_CASCADE_EVENT_TYPE,
+                actor_user_id=None,  # system
+                resource_type="organisation",
+                resource_id=org_id,
+                payload_json={
+                    "deactivated_count": int(count),
+                    "window_hours": ONGOING_STREAK_MASS_CASCADE_ALERT_WINDOW_HOURS,
+                    "threshold": ONGOING_STREAK_MASS_CASCADE_ALERT_THRESHOLD,
+                    "trigger_type": "ongoing",
+                },
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("streak.mass_cascade_audit_write_failed org=%s", org_id)
+
+
+async def _maybe_alert_mass_cascade(factory: Any, org_id: uuid.UUID, redis_client: AsyncRedis | None) -> bool:
+    """Mass-cascade guard (FAR-190 item 9): when an org has deactivated >= 5
+    triggers within 24h (an infra-outage signature), raise a critical alert —
+    once per window (Redis SETNX marker). The alert is a critical log + a
+    critical audit event + an ops error ingestion; the per-trigger atomic UPDATE
+    remains the hard bound. Best-effort — never raises.
+    """
+    try:
+        count = await _count_recent_streak_deactivations(
+            factory, org_id, hours=ONGOING_STREAK_MASS_CASCADE_ALERT_WINDOW_HOURS
+        )
+        if count < ONGOING_STREAK_MASS_CASCADE_ALERT_THRESHOLD:
+            return False
+        if redis_client is not None:
+            key = f"{_STREAK_MASS_CASCADE_ALERT_PREFIX}:{org_id}"
+            claimed = await redis_client.set(
+                key,
+                "1",
+                nx=True,
+                ex=ONGOING_STREAK_MASS_CASCADE_ALERT_WINDOW_HOURS * 3600,
+            )
+            if not claimed:
+                return False  # already alerted this window
+        _log.critical(
+            "streak.mass_cascade org=%s deactivated_24h=%d threshold=%d — suspected infra outage",
+            org_id,
+            count,
+            ONGOING_STREAK_MASS_CASCADE_ALERT_THRESHOLD,
+        )
+        await _record_streak_mass_cascade(org_id, count)
+        await _ingest_saq_error(
+            cast(AsyncSession, None),  # session param is vestigial (the helper opens its own)
+            org_id,
+            function="enforce_no_delivery_streaks",
+            message=(
+                f"streak engine mass cascade: {count} ongoing triggers auto-deactivated in the last "
+                f"{ONGOING_STREAK_MASS_CASCADE_ALERT_WINDOW_HOURS}h"
+            ),
+            context={"org_id": str(org_id), "deactivated_24h": count},
+        )
+        return True
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("streak.mass_cascade_check_failed org=%s", org_id)
+        return False
+
+
+async def _pipeline_name(factory: Any, org_id: uuid.UUID, pipeline_id: uuid.UUID | None) -> str:
+    """Best-effort pipeline name for the notification payload (titles only)."""
+    if pipeline_id is None:
+        return ""
+    try:
+        from modulo.db.models.pipeline import Pipeline
+
+        async with factory() as session, session.begin():
+            await _set_rls_org(session, org_id)
+            result = await session.execute(select(Pipeline.name).where(Pipeline.id == pipeline_id))
+            name = result.scalar_one_or_none()
+            return str(name) if name is not None else ""
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("streak.pipeline_name_read_failed pipeline=%s", pipeline_id)
+        return ""
+
+
+async def enforce_no_delivery_streaks(
+    *,
+    org_ids: list[uuid.UUID] | None = None,
+    redis_client: AsyncRedis | None = None,
+    max_triggers_per_tick: int = 100,
+) -> dict[str, Any]:
+    """FAR-190 sweep — auto-deactivate ongoing triggers on no-delivery streaks.
+
+    Runs as a system sweep (from ``dispatcher_reconcile``, every 60s — NEVER
+    inline in terminalization). Per org: selects the active ongoing triggers
+    and, for each, folds the streak count into a guarded atomic deactivation
+    UPDATE. Per-org per-hour cap + the 24h mass-cascade alert guard against an
+    infra outage cascading. The kill switch (``_streak_deactivate_enabled``)
+    gates ONLY the deactivate+notify side-effect; classification persists
+    regardless (the reconcile sweep is independent).
+
+    The sweep NEVER raises — every per-trigger step is isolated, so a walk
+    failure for one trigger is swallowed (WARNING) and can never break the
+    enclosing tick's ongoing top-up, and can never stop the other triggers in
+    the sweep. Returns a summary dict.
+    """
+    summary: dict[str, Any] = {
+        "scanned": 0,
+        "deactivated": 0,
+        "capped": 0,
+        "alerts": 0,
+        "notify_failed": 0,
+        "notify_retried": 0,
+        "errors": 0,
+    }
+    try:
+        if not _streak_deactivate_enabled():
+            summary["kill_switch"] = "off"
+            return summary
+        factory = _open_factory()
+        if org_ids is None:
+            from modulo.db.models.organisation import Organisation
+
+            async with factory() as session, session.begin():
+                result = await session.execute(select(Organisation.id))
+                org_ids = list(result.scalars())
+        if not org_ids:
+            return summary
+        for org_id in org_ids:
+            try:
+                recent_deactivations = await _count_recent_streak_deactivations(factory, org_id, hours=1)
+                deactivated_this_tick = 0
+                triggers = await _select_active_ongoing_triggers(factory, org_id, max_triggers_per_tick)
+                for trigger in triggers:
+                    summary["scanned"] += 1
+                    if recent_deactivations + deactivated_this_tick >= ONGOING_STREAK_DEACTIVATE_MAX_PER_ORG_PER_HOUR:
+                        summary["capped"] += 1
+                        _log.warning("streak.capped org=%s trigger=%s", org_id, trigger.id)
+                        continue
+                    threshold, window_hours = _streak_config(trigger.config_json)
+                    window_cutoff = datetime.now(UTC) - timedelta(hours=window_hours)
+                    try:
+                        deactivated = await _deactivate_trigger_on_no_delivery_streak(
+                            factory,
+                            org_id=org_id,
+                            trigger_id=trigger.id,
+                            threshold=threshold,
+                            window_cutoff=window_cutoff,
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        summary["errors"] += 1
+                        _log.warning("streak.walk_failed org=%s trigger=%s", org_id, trigger.id, exc_info=True)
+                        continue
+                    if deactivated is None:
+                        continue
+                    deactivated_this_tick += 1
+                    summary["deactivated"] += 1
+                    pipeline_name = await _pipeline_name(factory, org_id, deactivated["pipeline_id"])
+                    reason = deactivated.get("reason") or "no_delivery"
+                    notified = await _notify_streak_deactivation(
+                        org_id,
+                        data=deactivated,
+                        threshold=threshold,
+                        reason=reason,
+                        pipeline_name=pipeline_name,
+                        redis_client=redis_client,
+                    )
+                    if not notified:
+                        summary["notify_failed"] += 1
+                    if await _maybe_alert_mass_cascade(factory, org_id, redis_client):
+                        summary["alerts"] += 1
+                summary["notify_retried"] += await _retry_pending_streak_notifications(org_id, redis_client)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                summary["errors"] += 1
+                _log.warning("enforce_no_delivery_streaks org_sweep_failed org=%s", org_id, exc_info=True)
+        return summary
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("enforce_no_delivery_streaks sweep_failed", exc_info=True)
+        summary["errors"] += 1
+        return summary
 
 
 async def _ongoing_topup(
@@ -3078,6 +3943,11 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         "enqueue_failed_redispatched": 0,
         "enqueue_failed_capped": 0,
         "capacity_deferred": 0,
+        "streak_scanned": 0,
+        "streak_deactivated": 0,
+        "streak_capped": 0,
+        "streak_alerts": 0,
+        "streak_notify_failed": 0,
     }
     # Runs terminalised by this tick's terminalizers — (run_id, org_id) — whose
     # compensating daily fact must be recorded once the per-org transactions
@@ -3422,6 +4292,32 @@ async def dispatcher_reconcile() -> dict[str, Any]:
             raise
         except Exception:
             _log.warning("dispatcher_reconcile.classification_sweep_failed", exc_info=True)
+        # FAR-190 (P6'''): ongoing-trigger no-delivery streak sweep. Runs AFTER
+        # the classification reconcile so the newest terminal runs have their
+        # classification records before the streak walk reads them. Best-effort
+        # and never raises — an isolated sweep failure must never fail the
+        # reconcile tick, break the fire_due_triggers top-up (separate cron),
+        # or stop any other trigger's evaluation.
+        try:
+            streak = await enforce_no_delivery_streaks(redis_client=redis_client)
+            summary["streak_scanned"] = streak.get("scanned", 0)
+            summary["streak_deactivated"] = streak.get("deactivated", 0)
+            summary["streak_capped"] = streak.get("capped", 0)
+            summary["streak_alerts"] = streak.get("alerts", 0)
+            summary["streak_notify_failed"] = streak.get("notify_failed", 0)
+            if streak.get("deactivated") or streak.get("alerts"):
+                _log.info(
+                    "dispatcher_reconcile.streak_sweep",
+                    extra={
+                        "deactivated": streak.get("deactivated", 0),
+                        "alerts": streak.get("alerts", 0),
+                        "capped": streak.get("capped", 0),
+                    },
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning("dispatcher_reconcile.streak_sweep_failed", exc_info=True)
         # Record the outcome for /healthz/ready BEFORE the client is closed:
         # the shared Redis key is what the WEB process reads (the in-process
         # dict lives only in this worker process).
