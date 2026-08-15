@@ -784,65 +784,58 @@ SIMPLEST_WORKFLOW: dict[str, Any] = {
 DAILY_REVIEWER: dict[str, Any] = {
     "name": "Daily Reviewer",
     "description": (
-        "Scheduled collection-level review of main as a whole. Gathers every "
-        "commit merged into the base branch within the review window, runs "
-        "collection-level lenses (logical conflicts, DRY across PRs, "
-        "convention drift) that CI cannot see at PR scope, groups the "
-        "findings into bounded work batches, raises one Linear ticket per "
-        "batch, and implements each batch as a pull request. Phase 1 loops "
-        "the batches sequentially (Ticket-to-PR pattern); Phase 2 upgrades to "
-        "parallel coders once fan-out lands."
+        "Scheduled collection-level review pipeline. Reviews main as a whole — "
+        "every commit merged in the last 24 hours viewed as a collection, not "
+        "PR-by-PR — so issues that only appear across merged PRs (logical "
+        "conflicts, duplicated utilities, drifting error-handling patterns) are "
+        "caught. A reviewer emits findings, a grouper batches them into one "
+        "ticket per batch, and coders implement each batch and open PRs. Phase 1 "
+        "runs the coder loop sequentially (ticket-to-pr pattern); Phase 2 fans "
+        "out to parallel coders via parallel_branches once FAR-171 lands."
     ),
     "version": "1.0.0",
     "author": "Modulo",
-    "tags": ["reviewer", "daily", "collection", "review", "pr", "sdlc", "canonical"],
+    "tags": ["daily-reviewer", "review", "ci-cd", "collection-level", "canonical"],
     "pipeline_steps": [
         {
-            "id": "commits-collection",
+            "id": "collect-changes",
             "agent": None,
             "connector_binding": {"type": "source_control", "required": True},
-            "description": "Gather commits merged into the base branch within the review window "
-            "with per-commit diffstats",
+            "description": "Fetch commits merged to origin/main in the last 24h with per-commit diffstat",
         },
         {
-            "id": "collection-review",
-            "agent": "collection-reviewer",
-            "depends_on": ["commits-collection"],
-            "description": "Run collection-level lenses over the day's merged commits and output findings[]",
+            "id": "review-main",
+            "agent": "main-reviewer",
+            "depends_on": ["collect-changes"],
+            "description": "Run collection-level lenses over the day's merged commits and emit findings",
         },
         {
-            "id": "batch-grouping",
-            "agent": "ticket-writer",
-            "depends_on": ["collection-review"],
-            "connector_binding": {"type": "issue_tracking", "required": True},
-            "description": "Group findings into bounded work batches and raise one Linear ticket per batch",
+            "id": "group-findings",
+            "agent": "finding-grouper",
+            "depends_on": ["review-main"],
+            "description": "Group findings into work batches and draft one ticket per batch",
         },
         {
-            "id": "batch-implementation",
-            "agent": None,
-            "depends_on": ["batch-grouping"],
+            "id": "implement-batches",
+            "agent": "spec-implementer",
+            "depends_on": ["group-findings"],
             "connector_binding": {"type": "source_control", "required": True},
-            "description": "Implement each batch sequentially (Phase 1; parallel coders once fan-out lands)",
-        },
-        {
-            "id": "pr-creation",
-            "agent": None,
-            "depends_on": ["batch-implementation"],
-            "connector_binding": {"type": "source_control", "required": True},
-            "description": "Create one pull request per implemented batch against the base branch",
+            "description": "Implement each batch (clone, implement, self-review, push branch) and open PRs",
         },
     ],
     "default_config": {
         "schedule": "cron(0 5 * * *)",
-        "review_window_hours": 24,
         "base_branch": "main",
+        "review_window_hours": 24,
+        "repository": "",
+        "branch_prefix": "far/",
+        "team": "FAR",
+        "ticket_labels": ["groomed"],
         "max_findings_per_batch": 3,
-        "max_file_footprint_per_batch": 1,
-        "batch_size_hint": "S",
-        "phase": "sequential",
-        "branch_prefix": "daily-reviewer/",
-        "ticket_labels": ["daily-reviewer", "groomed"],
-        "auto_test": True,
-        "pr_template": "default",
+        "parallel_coders": False,
+        "tracking_system": "linear",
+        "auto_create_pr": True,
+        "test_command": "pytest",
+        "notification_channels": ["slack"],
     },
 }
