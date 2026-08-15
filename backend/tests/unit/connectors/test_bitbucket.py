@@ -174,6 +174,46 @@ async def test_query_repos_corrupt_total(connector):
     assert result.total == 0
 
 
+@respx.mock
+async def test_query_repos_corrupt_body_no_crash(connector):
+    """A corrupt/hostile response returning a non-dict body must not crash the
+    connector — it falls back to an empty page with no total."""
+    respx.get(f"{_API}/repositories/myteam").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await connector.query(ConnectorQuery(resource="repos", filters={"workspace": "myteam"}))
+    assert not result.records
+    assert result.total is None
+
+
+@respx.mock
+async def test_query_repos_non_list_values_no_crash(connector):
+    """A corrupt body placing a non-list in ``values`` must fall back to an
+    empty page instead of returning a bare string as the records list."""
+    respx.get(f"{_API}/repositories/myteam").mock(
+        return_value=httpx.Response(200, json={"values": "not-a-list", "size": 2})
+    )
+    result = await connector.query(ConnectorQuery(resource="repos", filters={"workspace": "myteam"}))
+    assert not result.records
+    assert result.total == 2
+
+
+@respx.mock
+async def test_health_check_corrupt_body_no_crash(connector):
+    """A corrupt/hostile user response with a non-dict body must not crash
+    health_check — it reports success with an empty username."""
+    respx.get(f"{_API}/user").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await connector.health_check()
+    assert result.ok is True
+    assert not result.detail
+
+
+@respx.mock
+async def test_query_issues_corrupt_body_no_crash(connector):
+    respx.get(f"{_API}/repositories/myteam/myrepo/issues").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await connector.query(ConnectorQuery(resource="issues", filters={"workspace": "myteam", "repo": "myrepo"}))
+    assert not result.records
+    assert result.total is None
+
+
 def test_paging_total() -> None:
     assert _paging_total({"size": 25}) == 25
     assert _paging_total({"size": "25"}) == 25
@@ -182,6 +222,7 @@ def test_paging_total() -> None:
     assert _paging_total({"size": True}) == 0
     assert _paging_total({"size": "garbage"}) == 0
     assert _paging_total({}) is None
+    assert _paging_total(["garbage"]) is None
 
 
 def test_app_password_auth():

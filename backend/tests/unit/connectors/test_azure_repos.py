@@ -243,6 +243,53 @@ async def test_query_repos_corrupt_total(connector):
     assert result.total == 0
 
 
+@respx.mock
+async def test_query_repos_corrupt_body_no_crash(connector):
+    """A corrupt/hostile response returning a non-dict body must not crash the
+    connector — it falls back to an empty page with no total."""
+    respx.get(f"{_BASE}/myproject/_apis/git/repositories", params={"api-version": "7.0"}).mock(
+        return_value=httpx.Response(200, json=["garbage"])
+    )
+    result = await connector.query(ConnectorQuery(resource="repos", filters={"project": "myproject"}))
+    assert not result.records
+    assert result.total is None
+
+
+@respx.mock
+async def test_query_repos_non_list_value_no_crash(connector):
+    """A corrupt body placing a non-list in ``value`` must fall back to an
+    empty page instead of returning a bare string as the records list."""
+    respx.get(f"{_BASE}/myproject/_apis/git/repositories", params={"api-version": "7.0"}).mock(
+        return_value=httpx.Response(200, json={"value": "not-a-list", "count": 2})
+    )
+    result = await connector.query(ConnectorQuery(resource="repos", filters={"project": "myproject"}))
+    assert not result.records
+    assert result.total == 2
+
+
+@respx.mock
+async def test_health_check_corrupt_body_no_crash(connector):
+    """A corrupt/hostile profile response with a non-dict body must not crash
+    health_check — it reports success with an empty display name."""
+    respx.get(_PROFILE_URL, params={"api-version": "7.0"}).mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await connector.health_check()
+    assert result.ok is True
+    assert not result.detail
+
+
+@respx.mock
+async def test_query_commits_corrupt_body_no_crash(connector):
+    respx.get(
+        f"{_BASE}/myproject/_apis/git/repositories/myrepo/commits",
+        params={"searchCriteria.itemVersion.version": "main", "api-version": "7.0"},
+    ).mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await connector.query(
+        ConnectorQuery(resource="commits", filters={"project": "myproject", "repo": "myrepo"})
+    )
+    assert not result.records
+    assert result.total is None
+
+
 def test_paging_total() -> None:
     assert _paging_total({"count": 25}) == 25
     assert _paging_total({"count": "25"}) == 25
@@ -251,6 +298,7 @@ def test_paging_total() -> None:
     assert _paging_total({"count": True}) == 0
     assert _paging_total({"count": "garbage"}) == 0
     assert _paging_total({}) is None
+    assert _paging_total(["garbage"]) is None
 
 
 def test_auth_header_format():
