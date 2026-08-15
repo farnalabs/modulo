@@ -29,6 +29,7 @@ from modulo.core.pipeline_engine.classify import (
     REASON_BUDGET_EXCEEDED,
     REASON_CANCELLED,
     REASON_DELIVERED,
+    REASON_DELIVERED_EMAIL,
     REASON_NEEDS_HUMAN,
     REASON_NO_WORK,
     REASON_PARSE_ERROR,
@@ -243,6 +244,69 @@ class TestPrUrlSources:
             outputs_json=None,
             telemetry_json=None,
             raw_output_markers=_markers(_PR),
+        )
+        assert result.value == RunClassificationValue.no_delivery
+
+
+def _email_markers(*attempt_keys: str) -> dict[str, dict[str, Any]]:
+    """raw_output_markers where each marker carries delivery_done (FAR-228)."""
+    return {
+        key: {
+            "_modulo_marker": True,
+            "status": "failed",
+            "pr_url": "",
+            "parse_error": "email sent then sandbox crashed",
+            "attempt_key": key,
+            "delivery_done": True,
+        }
+        for key in attempt_keys
+    }
+
+
+class TestDeliveryDoneClassification:
+    """FAR-228: a complete run whose raw-output marker carries delivery_done is
+    classified delivered (REASON_DELIVERED_EMAIL) — the delivery was made even
+    though the node later failed/retried. pr_url STILL wins when both exist."""
+
+    def test_complete_with_delivery_done_marker_is_delivered(self) -> None:
+        result = classify_run(
+            "complete",
+            None,
+            outputs_json={},
+            telemetry_json={},
+            raw_output_markers=_email_markers("run:run-1:node:n1:1"),
+        )
+        assert result.value == RunClassificationValue.delivered
+        assert result.reason == REASON_DELIVERED_EMAIL
+
+    def test_complete_without_marker_still_no_work(self) -> None:
+        result = classify_run("complete", None, outputs_json={}, telemetry_json={})
+        assert result.value == RunClassificationValue.no_delivery
+        assert result.reason == REASON_NO_WORK
+
+    def test_real_pr_url_still_wins_over_email_marker(self) -> None:
+        """A valid pr_url takes precedence — a run that made a PR AND sent the
+        email records REASON_DELIVERED (pr_delivered), not email_delivered."""
+        result = classify_run(
+            "complete",
+            None,
+            outputs_json={"n1": _node_return_with_pr(_PR)},
+            telemetry_json={"n1": {}},
+            raw_output_markers=_email_markers("run:run-1:node:n1:1"),
+        )
+        assert result.value == RunClassificationValue.delivered
+        assert result.reason == REASON_DELIVERED
+        assert result.delivered_pr_urls == (_PR,)
+
+    def test_failed_with_delivery_done_marker_is_still_no_delivery(self) -> None:
+        """The email verdict only applies to the complete bucket — a failed run
+        remains countable no_delivery (mirrors the pr_url rule)."""
+        result = classify_run(
+            "failed",
+            "node.cancelled",
+            outputs_json={},
+            telemetry_json={},
+            raw_output_markers=_email_markers("run:run-1:node:n1:1"),
         )
         assert result.value == RunClassificationValue.no_delivery
 

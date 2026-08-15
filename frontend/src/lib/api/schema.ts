@@ -11535,6 +11535,8 @@ export interface components {
             agent_command?: string | null;
             /** Agent Prompt */
             agent_prompt?: string | null;
+            /** Delivery Sentinel */
+            delivery_sentinel?: string | null;
             /** Env Vars */
             env_vars?: {
                 [key: string]: string;
@@ -12647,6 +12649,15 @@ export interface components {
             started_at?: string | null;
             /** Completed At */
             completed_at?: string | null;
+            /** Run Classification */
+            run_classification?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Gate Fired
+             * @default false
+             */
+            gate_fired: boolean;
         };
         /** RunSummary */
         RunSummary: {

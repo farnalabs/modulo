@@ -78,7 +78,12 @@ from modulo.core.pipeline_engine.evidence import (
 )
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_or_compile
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
-from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError, SupersededNodeError
+from modulo.core.pipeline_engine.node_runner import (
+    SandboxNodeFailedError,
+    SupersededNodeError,
+    _idempotency_gate_skipped_envelope,
+    _marker_delivery_done_for_node,
+)
 from modulo.core.pipeline_engine.output_filter import OutputRejectedError
 from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
 from modulo.core.trigger_engine.agent_signal import fire_agent_signal
@@ -452,6 +457,48 @@ def _node_output_agent_failure(node_output: Any) -> str | None:
     if not isinstance(reason, str) or not reason:
         return "agent self-reported failure"
     return reason
+
+
+def _should_skip_retry(node_id: str | None, markers: Any, run_id: Any) -> bool:
+    """FAR-228 guard B decision: should a transient node failure be suppressed
+    as a retry because the run's delivery was already made?
+
+    ``node_id`` is ``exc.node_id`` (only ``SandboxNodeFailedError`` carries it)
+    or None — a None node_id (or a plain ``NodeCancelledError``) disables the
+    gate. ``markers`` is the run's ALREADY-LOADED ``raw_output_markers`` (never
+    a fresh SELECT). Fires only when any marker whose attempt_key embeds
+    ``:node:<node_id>:`` and ``:run:<run_id>:`` (delimiters, never substring)
+    carries ``delivery_done is True``. Non-dict ``markers`` (including
+    MagicMock test doubles) are ignored — the gate stays silent.
+    """
+    if node_id is None:
+        return False
+    return _marker_delivery_done_for_node(markers, run_id, node_id)
+
+
+def _node_output_has_idempotency_gate(node_output: Any) -> bool:
+    """True when a captured node output carries the FAR-228 idempotency-gate
+    skip marker (``output_json.idempotency_gate``) — such a node must NOT
+    re-fire agent_signal triggers.
+
+    Keyed ONLY on the marker — never on ``status == "skipped"`` (template-error
+    skips fire today and must keep firing). Handles both the outer
+    ``{"output": {...}}`` envelope and the artifact-wrapped envelope returned by
+    the sandbox node body (guard A / guard B shape).
+    """
+    if not isinstance(node_output, dict):
+        return False
+    candidates: list[Any] = [node_output.get("output")]
+    artifacts = node_output.get("artifacts")
+    if isinstance(artifacts, list):
+        candidates.extend(a.get("output") for a in artifacts if isinstance(a, dict))
+    for inner in candidates:
+        if not isinstance(inner, dict):
+            continue
+        output_json = inner.get("output_json")
+        if isinstance(output_json, dict) and output_json.get("idempotency_gate"):
+            return True
+    return False
 
 
 async def _apply_work_intact(
@@ -1590,6 +1637,16 @@ class PipelineExecutor:
         # Load connector hub for this run's org — provides connector access to connector nodes.
         connector_hub = await self._init_connector_hub(org_id)
 
+        # FAR-228: the idempotency gate is inert on multi-node graphs — it only
+        # fires for a SINGLE sandbox_agent node (guard A in the node body and
+        # guard B below both require this).
+        single_sandbox_node: bool = (
+            sum(1 for n in graph_json.get("nodes", []) if str(n.get("node_type", "")).strip() == "sandbox_agent") == 1
+        )
+        # FAR-228: set when guard B suppressed a transient retry — gates the
+        # eval-suite/fire_agent_signal block and publishes run_completed.
+        gate_suppressed = False
+
         try:
             # Compile (or retrieve from cache) the StateGraph.
             compiled = get_or_compile(
@@ -1705,7 +1762,45 @@ class PipelineExecutor:
             )
             stalled = bool(self._stall_requested is not None and self._stall_requested.is_set())
 
-            if node_attempt_count < retries and not superseded and not stalled:
+            # FAR-228 guard B (retry-suppression — THE INCIDENT FIX): before any
+            # state mutation, check whether the run ALREADY delivered (a prior
+            # attempt's marker carries delivery_done=True) for THIS node. If so,
+            # a transient retry is suppressed: the run completes COMPLETE with
+            # error_code harness.idempotency_gate instead of burning the retry
+            # budget and re-sending the side effect. ORDERING INVARIANT: computed
+            # AFTER superseded/stalled (above) and BEFORE any mutation —
+            # final_status/error_code are first mutated only in the
+            # retries-exhausted branch below. `markers` is the ALREADY-LOADED
+            # current_run.raw_output_markers — no fresh SELECT.
+            gate_ok = False
+            try:
+                gate_ok = (
+                    _should_skip_retry(getattr(exc, "node_id", None), current_run.raw_output_markers, str(run_id))
+                    and not superseded
+                    and not stalled
+                    and not bool(getattr(current_run, "cancellation_requested", False))
+                    and getattr(get_settings(), "modulo_idempotency_gate_enabled", True)
+                    and single_sandbox_node
+                )
+            except Exception:
+                _log.warning("pipeline.idempotency_gate.check_failed", extra={"run_id": str(run_id)})
+                gate_ok = False
+            if gate_ok:
+                _gated_node_id = exc.node_id if isinstance(exc, SandboxNodeFailedError) else None
+                _log.warning(
+                    "pipeline.idempotency_gate.suppressed_retry",
+                    extra={"run_id": str(run_id), "node_id": _gated_node_id},
+                )
+                gate_suppressed = True
+                final_status = "complete"
+                error_code = "harness.idempotency_gate"
+                error_detail = "delivery already sent; transient retry suppressed by idempotency gate"
+                completed_node_outputs[_gated_node_id] = _idempotency_gate_skipped_envelope(_gated_node_id)
+                # SKIP the pending-reset, the re-raise and the run_failed publish
+                # below — fall through to the existing finalization with
+                # final_status="complete". run_completed is published after the
+                # eval-skip point (below), while the broker is still open.
+            elif node_attempt_count < retries and not superseded and not stalled:
                 # Fenced pending-reset: a conditional UPDATE guarded by OUR
                 # captured claim token + status='running' so a superseded
                 # original cannot demote the successor's running row, a stalled
@@ -1735,7 +1830,7 @@ class PipelineExecutor:
                     await _teardown_hub(connector_hub)
                 get_registry().close(run_id)
                 raise
-            if superseded or stalled:
+            elif superseded or stalled:
                 # Superseded or watchdog-stalled: the run is owned by a
                 # successor or was already terminal-failed by the zombie
                 # watchdog — never reset it to pending and never terminal-fail
@@ -1751,36 +1846,39 @@ class PipelineExecutor:
                     await _teardown_hub(connector_hub)
                 get_registry().close(run_id)
                 raise
-            # Retries exhausted — terminal failure with a MEANINGFUL code
-            # (not the raw langgraph class name). Publish the run_failed event
-            # so WS subscribers get a live failure notification, consistent
-            # with every other terminal-failure path in this file.
-            #
-            # Write cap: 5000, NOT 500 — the transient node-cancelled detail is
-            # the only place the FAR-197 no-output.json diagnostic (stdout/stderr
-            # tails, the E2B log tail where the kill reason lives) reaches the
-            # user. It is bounded by the builder to fit the 5000-char
-            # sanitizer/column cap (runs.error_detail is String(5000)), and every
-            # detail read surface (run-detail REST + MCP) presents at limit=5000;
-            # list surfaces truncate to 200 by design. A 500-char write cap cut
-            # the stderr + log tails entirely for large-output failures.
-            final_status = "failed"
-            error_code = "node_cancelled"
-            if isinstance(exc, NodeCancelledError):
-                error_detail = _sanitize_detail(
-                    "Sandbox node cancelled (transient) after retries exhausted: " + str(exc), limit=5000
-                )
             else:
-                # SandboxNodeFailedError: the FAR-197 no-output diagnostic is a
-                # fully bounded message designed to survive this surface in
-                # full — keep the limit at the sanitizer/column cap (5000), not
-                # the 500 used for the short NodeCancelledError string, or the
-                # kill-reason log tail would be the first thing truncated
-                # (FAR-197 review).
-                error_detail = _sanitize_detail(
-                    "Sandbox node failed (transient) after retries exhausted: " + str(exc), limit=5000
-                )
-            broker.publish("run_failed", {"error": "node_cancelled", "detail": error_detail})
+                # Retries exhausted — terminal failure with a MEANINGFUL code
+                # (not the raw langgraph class name). Publish the run_failed
+                # event so WS subscribers get a live failure notification,
+                # consistent with every other terminal-failure path in this
+                # file.
+                #
+                # Write cap: 5000, NOT 500 — the transient node-cancelled
+                # detail is the only place the FAR-197 no-output.json
+                # diagnostic (stdout/stderr tails, the E2B log tail where the
+                # kill reason lives) reaches the user. It is bounded by the
+                # builder to fit the 5000-char sanitizer/column cap
+                # (runs.error_detail is String(5000)), and every detail read
+                # surface (run-detail REST + MCP) presents at limit=5000; list
+                # surfaces truncate to 200 by design. A 500-char write cap cut
+                # the stderr + log tails entirely for large-output failures.
+                final_status = "failed"
+                error_code = "node_cancelled"
+                if isinstance(exc, NodeCancelledError):
+                    error_detail = _sanitize_detail(
+                        "Sandbox node cancelled (transient) after retries exhausted: " + str(exc), limit=5000
+                    )
+                else:
+                    # SandboxNodeFailedError: the FAR-197 no-output diagnostic
+                    # is a fully bounded message designed to survive this
+                    # surface in full — keep the limit at the sanitizer/column
+                    # cap (5000), not the 500 used for the short
+                    # NodeCancelledError string, or the kill-reason log tail
+                    # would be the first thing truncated (FAR-197 review).
+                    error_detail = _sanitize_detail(
+                        "Sandbox node failed (transient) after retries exhausted: " + str(exc), limit=5000
+                    )
+                broker.publish("run_failed", {"error": "node_cancelled", "detail": error_detail})
         except Exception as exc:
             import traceback
 
@@ -1890,8 +1988,11 @@ class PipelineExecutor:
                     except Exception:
                         _log.exception("audit.eval_blocked_failed", extra={"run_id": str(run_id)})
 
-            # If the run completed, check for eval suite thresholds.
-            if final_status == "complete":
+            # If the run completed, check for eval suite thresholds. FAR-228: a
+            # gated run (error_code harness.idempotency_gate) is excluded — the
+            # delivery was already made by a PRIOR attempt; running evals /
+            # firing agent_signal against the skip envelope would be wrong.
+            if final_status == "complete" and error_code != "harness.idempotency_gate":
                 async with self._session_factory() as session, session.begin():
                     await set_rls_org(session, org_id)
                     try:
@@ -1932,6 +2033,13 @@ class PipelineExecutor:
                     async with self._session_factory() as session, session.begin():
                         await set_rls_org(session, org_id)
                         for node_id, node_output in completed_node_outputs.items():
+                            # FAR-228: a node whose output_json carries the
+                            # idempotency_gate marker is a SKIPPED delivery (guard
+                            # A/B) — it must not re-fire child pipelines. Keyed ONLY
+                            # on the marker, never on status == "skipped"
+                            # (template-error skips fire today).
+                            if _node_output_has_idempotency_gate(node_output):
+                                continue
                             try:
                                 signal_results = await fire_agent_signal(
                                     session,
@@ -1958,6 +2066,13 @@ class PipelineExecutor:
                                         "node_id": node_id,
                                     },
                                 )
+            if gate_suppressed:
+                # FAR-228: a gated run completed WITHOUT re-executing the node
+                # (guard B suppressed the transient retry). Publish run_completed
+                # after the eval-skip point and BEFORE the post-stream cleanup
+                # closes the broker below — the broker is provably open here
+                # (run_failed publishes at the retries-exhausted branch today).
+                broker.publish("run_completed", {})
         except asyncio.CancelledError:
             raise
         except Exception:

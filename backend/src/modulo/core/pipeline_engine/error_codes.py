@@ -136,6 +136,12 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity="warning",
         guidance="A node wrote output after the run terminalized.",
     ),
+    "harness.idempotency_gate": ErrorCodeSpec(
+        error_class="harness",
+        retryable=False,
+        alert_severity="warning",
+        guidance="Delivery already sent; transient retry suppressed by the idempotency gate.",
+    ),
     # --- sandbox codes ---------------------------------------------------
     "sandbox.no_output_json": ErrorCodeSpec(
         error_class="sandbox",
@@ -287,6 +293,8 @@ LEGACY_ALIASES: dict[str, str] = {
     "worker_lost": "harness.dispatch_failed",
     "task_failure": "harness.worker_failed",
     "gate_creation_failed": "harness.gate_creation_failed",
+    # FAR-228 raw code used by the executor's retry-suppression write.
+    "idempotency_gate": "harness.idempotency_gate",
     # Eval.
     "eval_blocked": "eval.blocked",
     "eval_suite_blocked": "eval.blocked",

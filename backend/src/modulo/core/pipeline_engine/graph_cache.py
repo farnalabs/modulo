@@ -368,6 +368,11 @@ def build_graph_from_json(
     if not nodes:
         raise ValueError("graph_json has no nodes")
 
+    # FAR-228: the idempotency gate is inert on multi-node graphs. Computed ONCE
+    # here and threaded into the sandbox node builder so guard A (early skip)
+    # can require it without re-deriving from the node's own def.
+    single_sandbox_node: bool = sum(1 for n in nodes if str(n.get("node_type", "")).strip() == "sandbox_agent") == 1
+
     for node_def in nodes:
         node_id: str = str(node_def["id"])
         role: str | None = node_def.get("role")
@@ -390,6 +395,7 @@ def build_graph_from_json(
                     node_def,
                     timeout=timeout,
                     session_factory=session_factory,
+                    single_sandbox_node=single_sandbox_node,
                 ),
             )
         elif node_type == "agent" and node_def.get("agent_id"):

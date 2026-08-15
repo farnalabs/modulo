@@ -88,7 +88,16 @@ class SandboxNodeFailedError(Exception):
     code with no parseable ``output.json``. The executor maps this to the
     retryable path (fenced reset to ``pending`` + SAQ retry) instead of a
     silent wrong-success completion.
+
+    ``node_id`` is carried so the executor's FAR-228 idempotency gate (guard B)
+    can resolve which node failed without re-deriving it from the message.
+    Omitting ``node_id`` (e.g. ``SandboxNodeFailedError("msg")`` in tests)
+    disables guard B — the transient retry proceeds exactly as before.
     """
+
+    def __init__(self, message: str = "", *, node_id: str | None = None) -> None:
+        super().__init__(message)
+        self.node_id = node_id
 
 
 class SupersededNodeError(Exception):
@@ -138,6 +147,12 @@ _DECORATOR_GRACE = 5.0  # scheduling + finally-block margin for decorator safety
 # DB fails open with a log BEFORE the safety-net timer can convert the
 # retryable SandboxNodeFailedError into a terminal node_timeout.
 _RAW_OUTPUT_MARKER_PERSIST_TIMEOUT = 5.0
+# FAR-228: bounded fenced SELECT for the idempotency gate's guard-A marker read
+# (3s — fail-open to provision normally on a hung DB, never block dispatch).
+_IDEMPOTENCY_GATE_READ_TIMEOUT = 3.0
+# FAR-228: best-effort marker persist bounded inside a caught CancelledError
+# (5s — the node is being cancelled, the write must not delay the re-raise).
+_IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT = 5.0
 _SANDBOX_IO_TIMEOUT = 30.0  # max seconds for a single sandbox file read/write
 _SANDBOX_IDLE_TIMEOUT = 300.0  # max seconds of agent silence before treating the command as stalled (FAR-97)
 _STREAM_FLUSH_INTERVAL = 1.0  # min seconds between live stdout/stderr chunk publishes per node (FAR-98)
@@ -544,6 +559,59 @@ def _normalize_marker_text(raw: Any) -> str:
     return str(raw)
 
 
+# FAR-228: the delivery sentinel must match as a FULL line, never a substring
+# (a mid-line occurrence in unrelated log prose must not fabricate a delivery).
+# ``^<sentinel>\r?$`` with MULTILINE + re.escape — the sentinel is a literal the
+# pipeline author chose, not a pattern. Compiled once at module load.
+def _compile_delivery_sentinel_pattern(sentinel: str) -> _re.Pattern[str] | None:
+    """Compile the full-line sentinel matcher for *sentinel* (or None)."""
+    if not sentinel or not isinstance(sentinel, str):
+        return None
+    try:
+        return _re.compile(rf"^{_re.escape(sentinel)}\r?$", _re.MULTILINE)
+    except (_re.error, TypeError):
+        _log.warning("sandbox_agent.delivery_sentinel_pattern_failed")
+        return None
+
+
+def _source_contains_delivery_sentinel(text: Any, sentinel: str) -> bool:
+    """True when *text* contains *sentinel* as a FULL LINE (FAR-228).
+
+    Full-line match only — ``re.search(r'^<sentinel>\r?$', text, re.M)``. A
+    mid-line occurrence (e.g. the sentinel embedded inside a JSON summary or a
+    log line) never counts, so the gate cannot be tripped by incidental prose.
+    Never raises on non-str input (coerced via ``_normalize_marker_text``).
+    """
+    pattern = _compile_delivery_sentinel_pattern(sentinel)
+    if pattern is None:
+        return False
+    return pattern.search(_normalize_marker_text(text)) is not None
+
+
+def _marker_delivery_done_for_node(markers: Any, run_id: Any, node_id: str) -> bool:
+    """True when any raw-output marker for ``(run_id, node_id)`` carries
+    ``delivery_done is True`` (FAR-228 — shared by guard A in the node body and
+    guard B in the executor).
+
+    The attempt_key is ``run:{run_id}:node:{node_id}:{claim_count}``. Matching
+    uses the delimited fragments ``run:{run_id}:`` (the key PREFIX) and
+    ``:node:{node_id}:`` (mid-key, trailing ``:``) so ``run-1`` never matches
+    ``run-11`` and ``node-a`` never matches ``node-a11`` (delimiter trap).
+    Non-dict markers / non-dict ``markers`` are ignored.
+    """
+    if not isinstance(markers, dict):
+        return False
+    run_tag = f"run:{run_id}:"
+    node_tag = f":node:{node_id}:"
+    for marker in markers.values():
+        if not isinstance(marker, dict) or marker.get("delivery_done") is not True:
+            continue
+        key = marker.get("attempt_key")
+        if isinstance(key, str) and run_tag in key and node_tag in key:
+            return True
+    return False
+
+
 async def _retain_raw_output_marker(
     session_factory: Callable[..., Any] | None,
     *,
@@ -557,6 +625,7 @@ async def _retain_raw_output_marker(
     exit_code: int,
     stdout_length: int,
     stderr_length: int,
+    delivery_sentinel: str | None = None,
 ) -> None:
     """Single builder + persist for a raw-output retention marker (FAR-188).
 
@@ -572,6 +641,14 @@ async def _retain_raw_output_marker(
     ``pr_url`` is extracted from the FULL UNREDACTED source, then the stored
     ``raw_output`` copy is scrubbed of credentials (``_redact_raw_output``)
     and ONLY THEN truncated to ``_MAX_ARTIFACT_LOG`` for storage.
+
+    FAR-228: when *delivery_sentinel* is non-empty AND the pre-truncation
+    ``source`` contains the sentinel as a FULL LINE, ``delivery_done: True`` is
+    stamped onto the marker — the run's side-effecting delivery (e.g. an email)
+    already happened even though the node is failing/retrying. The persist is
+    monotone at the same-key write (see ``_persist_raw_output_marker``): a
+    retry marker without the sentinel never unsets an existing
+    ``delivery_done``.
     """
     text = _normalize_marker_text(source)
     marker: dict[str, Any] = {
@@ -587,6 +664,8 @@ async def _retain_raw_output_marker(
         "attempt_key": attempt_key,
         "node_id": node_id,
     }
+    if _source_contains_delivery_sentinel(text, delivery_sentinel):
+        marker["delivery_done"] = True
     await _persist_raw_output_marker(
         session_factory,
         run_id=run_id,
@@ -678,9 +757,20 @@ async def _persist_raw_output_marker(
                 key = attempt_key or f"run:{run_id}:node:{node_id}:fallback"
                 existing = markers.get(key)
                 persisted_marker: dict[str, Any] = marker
-                if isinstance(existing, dict) and existing.get("pr_url"):
-                    persisted_marker = dict(marker)
-                    persisted_marker["pr_url"] = existing["pr_url"]
+                if isinstance(existing, dict):
+                    # Monotone preservation: a prior attempt's evidence is never
+                    # wiped by a retry. pr_url is preserved as-is; FAR-228
+                    # ``delivery_done`` is OR'd so a retry marker WITHOUT the
+                    # sentinel can never unset a prior ``delivery_done=True`` —
+                    # an explicit False is never written.
+                    preserved: dict[str, Any] = {}
+                    if existing.get("pr_url"):
+                        preserved["pr_url"] = existing["pr_url"]
+                    if existing.get("delivery_done") or marker.get("delivery_done"):
+                        preserved["delivery_done"] = True
+                    if preserved:
+                        persisted_marker = dict(marker)
+                        persisted_marker.update(preserved)
                 markers[key] = persisted_marker
                 run.raw_output_markers = markers
                 await session.flush()
@@ -710,6 +800,90 @@ async def _persist_raw_output_marker(
             "sandbox_agent.raw_output_marker_persist_timeout_or_error",
             extra={"run_id": run_id, "node_id": node_id, "attempt_key": attempt_key},
         )
+
+
+def _idempotency_gate_skipped_envelope(node_id: str) -> dict[str, Any]:
+    """FAR-228: the single artifact envelope produced by BOTH guards.
+
+    The ``output_json`` sub-key is REQUIRED so ``_split_sandbox_agent`` returns
+    a proper dict into ``outputs_json[node_id]`` (not None); the skip marker
+    makes ``_node_output_has_valid_artifact`` count it, so ``work_intact``
+    computes True for the single-node gated run; and ``idempotency_gate`` is
+    what suppresses agent_signal re-firing (NEVER ``status == "skipped"`` —
+    template-error skips fire today).
+    """
+    return {
+        "artifacts": [
+            {
+                "node_id": node_id,
+                "status": "skipped",
+                "output": {
+                    "output_json": {
+                        "status": "skipped",
+                        "delivery_done": True,
+                        "idempotency_gate": "email_sent",
+                    }
+                },
+            }
+        ]
+    }
+
+
+async def _read_run_raw_output_markers_for_gate(
+    session_factory: Callable[..., Any] | None,
+    *,
+    run_id: str,
+    org_id_raw: Any,
+    claim_lease: str | None,
+    node_id: str,
+) -> dict[str, Any] | None:
+    """FAR-228 guard A: SINGLE fenced read of ``runs.raw_output_markers``.
+
+    Bounded by ``_IDEMPOTENCY_GATE_READ_TIMEOUT`` (3s); fail-open to ``None``
+    (provision normally) on any failure — the gate must never block dispatch.
+    Fenced on the claim token + ``status='running'`` exactly like the dispatch
+    marker (``_acquire_dispatch_marker``) so a superseded executor never reads
+    a successor's markers as its own. This is a SEPARATE read from the atomic
+    dispatch marker (A4) — do NOT fuse them.
+    """
+    if session_factory is None or not claim_lease:
+        return None
+    try:
+        org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
+    except (TypeError, ValueError):
+        org_uuid = None
+    if org_uuid is None:
+        return None
+    from sqlalchemy import text as _sql_text
+
+    from modulo.db.rls import set_rls_org
+
+    async def _read() -> dict[str, Any] | None:
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, org_uuid)
+            row = (
+                await session.execute(
+                    _sql_text(
+                        "SELECT raw_output_markers FROM runs WHERE id=:rid AND organisation_id=:oid "
+                        "AND claim_token=:tok AND status='running'"
+                    ),
+                    {"rid": run_id, "oid": str(org_uuid), "tok": claim_lease},
+                )
+            ).fetchone()
+            if row is None:
+                return None
+            return row[0]
+
+    try:
+        return await asyncio.wait_for(_read(), timeout=_IDEMPOTENCY_GATE_READ_TIMEOUT)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "sandbox_agent.idempotency_gate_read_failed",
+            extra={"node_id": node_id, "run_id": run_id},
+        )
+        return None
 
 
 def _evaluate_eval_condition(score: float, threshold: float, operator: str) -> bool:
@@ -1309,6 +1483,7 @@ def make_sandbox_agent_fn(
     *,
     timeout: float | None = None,
     session_factory: Callable[..., Any] | None = None,
+    single_sandbox_node: bool = False,
 ) -> Any:
     """Return a decorated async node function that dispatches work to an external
     agent runtime in an E2B sandbox.
@@ -1360,6 +1535,11 @@ def make_sandbox_agent_fn(
     sandbox_timeout: int = node_def.get("timeout_seconds", 1200)
     stall_timeout_override: Any = node_def.get("stall_timeout_seconds")
     context_files: dict[str, str] = node_def.get("context_files") or {}
+    # FAR-228: the opt-in delivery sentinel (full-line marker in sandbox output
+    # that proves the side effect — e.g. an email — was sent) and the
+    # single-node guard (the gate is inert on multi-node graphs).
+    delivery_sentinel: str | None = node_def.get("delivery_sentinel")
+    delivery_sentinel = delivery_sentinel if isinstance(delivery_sentinel, str) and delivery_sentinel else None
 
     from e2b import AsyncSandbox  # type: ignore[import-untyped]
     from opentelemetry import trace as _otel_trace
@@ -1495,6 +1675,41 @@ def make_sandbox_agent_fn(
         agent_stdout: str = ""
         agent_stderr: str = ""
         output_json: Any = None
+
+        # FAR-228 guard A (early skipped-return / fallback): when the run has
+        # ALREADY delivered (a prior attempt's marker carries delivery_done=True)
+        # and this is the opt-in single-node case, return the SKIPPED ENVELOPE
+        # without provisioning a sandbox. Non-opt-in nodes pay ZERO here (no
+        # settings read, no DB read). Fail-open in every direction: a settings
+        # read error, a DB read error, or a non-matching marker all proceed to
+        # provision normally. The run then completes COMPLETE via the normal
+        # path (_stream_graph publishes run_completed); the phantom
+        # node_attempt_count increment is accepted by design.
+        if delivery_sentinel and single_sandbox_node:
+            _gate_enabled = True
+            try:
+                from modulo.settings import get_settings
+
+                _gate_enabled = getattr(get_settings(), "modulo_idempotency_gate_enabled", True)
+            except Exception:
+                _log.warning(
+                    "sandbox_agent.idempotency_gate_killswitch_check_failed",
+                    extra={"node_id": node_id, "run_id": run_id},
+                )
+            if _gate_enabled:
+                _markers = await _read_run_raw_output_markers_for_gate(
+                    session_factory,
+                    run_id=run_id,
+                    org_id_raw=org_id,
+                    claim_lease=claim_lease,
+                    node_id=node_id,
+                )
+                if _marker_delivery_done_for_node(_markers, run_id, node_id):
+                    _log.info(
+                        "sandbox_agent.idempotency_gate.skipped",
+                        extra={"node_id": node_id, "run_id": run_id},
+                    )
+                    return _idempotency_gate_skipped_envelope(node_id)
 
         async def _acquire_dispatch_marker() -> str | None:
             """DB-atomic dispatch marker (dist/runtime-core A4): one transaction
@@ -1764,6 +1979,11 @@ def make_sandbox_agent_fn(
                 _drained_chunks: list[str] = []
                 _drain_offset = 0
                 _drained_len = 0
+                # FAR-228: the drain closure is captured so the CancelledError
+                # retention path below can do a guarded final drain even though
+                # the normal post-command drain at ~1915 is unreachable on
+                # cancellation. None until the drain closure is defined.
+                _drain_fn: Any = None
 
                 async def _drain_sandbox_log() -> None:
                     nonlocal _drain_offset, _drained_len
@@ -1845,6 +2065,8 @@ def make_sandbox_agent_fn(
                     # where THIS tick's emitted bytes actually ended, not where
                     # the probe saw the file.
                     _drain_offset = max(_drain_offset, full_len)
+
+                _drain_fn = _drain_sandbox_log
 
                 # Redirect the agent's stdout/stderr into a sandbox log file so
                 # the process writes to a regular file — never a pipe that can
@@ -1989,9 +2211,11 @@ def make_sandbox_agent_fn(
                     exit_code=exit_code,
                     stdout_length=_stdout_len,
                     stderr_length=_stderr_len,
+                    delivery_sentinel=delivery_sentinel,
                 )
                 raise SandboxNodeFailedError(
-                    command_error or f"Sandbox agent command failed (no output within {sandbox_timeout}s)"
+                    command_error or f"Sandbox agent command failed (no output within {sandbox_timeout}s)",
+                    node_id=node_id,
                 )
 
             raw_output: str = ""
@@ -2057,6 +2281,7 @@ def make_sandbox_agent_fn(
                         exit_code=exit_code,
                         stdout_length=_stdout_len,
                         stderr_length=_stderr_len,
+                        delivery_sentinel=delivery_sentinel,
                     )
                     # FAR-197: surface WHY the agent failed. The captured
                     # stdout/stderr tails plus the E2B log tail (the only place
@@ -2072,7 +2297,8 @@ def make_sandbox_agent_fn(
                             sandbox_id=_sandbox_id,
                             read_raw=raw_output,
                             log_tail=_no_output_log_tail,
-                        )
+                        ),
+                        node_id=node_id,
                     )
                 # Parseable non-dict output: retain the marker, do NOT raise —
                 # fall through to the shared shaping path below.
@@ -2088,6 +2314,7 @@ def make_sandbox_agent_fn(
                     exit_code=exit_code,
                     stdout_length=_stdout_len,
                     stderr_length=_stderr_len,
+                    delivery_sentinel=delivery_sentinel,
                 )
 
             _span = _otel_trace.get_current_span()
@@ -2187,6 +2414,15 @@ def make_sandbox_agent_fn(
                     "sandbox_log_tail": _sandbox_log_tail,
                 }
 
+            # FAR-228 success-path stamp: when opt-in AND the sentinel is a
+            # FULL-LINE match in the FULL pre-truncation stdout (``agent_stdout_raw``,
+            # NOT the head-truncated ``agent_stdout``), the success output carries
+            # delivery evidence — this closes the completed-node-then-process-death
+            # gap, so a normal successful run also records delivery_done.
+            _delivery_done_field: dict[str, Any] = {}
+            if delivery_sentinel and _source_contains_delivery_sentinel(agent_stdout_raw, delivery_sentinel):
+                _delivery_done_field = {"delivery_done": True}
+
             return {
                 "artifacts": [
                     {
@@ -2208,6 +2444,7 @@ def make_sandbox_agent_fn(
                             "stderr_length": _stderr_len,
                             "agent_status": agent_status,
                             "agent_outcome": agent_outcome,
+                            **_delivery_done_field,
                             **_stall_reason_field,
                             **_sandbox_failure_fields,
                             "attempt_key": attempt_key,
@@ -2226,6 +2463,7 @@ def make_sandbox_agent_fn(
                     "stderr_length": _stderr_len,
                     "agent_status": agent_status,
                     "agent_outcome": agent_outcome,
+                    **_delivery_done_field,
                     **_stall_reason_field,
                     **_sandbox_failure_fields,
                     "attempt_key": attempt_key,
@@ -2233,6 +2471,71 @@ def make_sandbox_agent_fn(
             }
 
         except asyncio.CancelledError:
+            # FAR-228 (THE INCIDENT FIX): before re-raising, retain delivery
+            # evidence. Run 9559's attempt 1 was cancelled AFTER the email was
+            # sent but no marker was retained, so attempt 2 re-sent it. The
+            # cancellation may land between the last 5s drain tick and the
+            # process exit, so do ONE guarded final drain, then best-effort
+            # persist a delivery_done marker when the sentinel is a full-line
+            # match in the drained tail.
+            if _drain_fn is not None and sandbox is not None:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(_drain_fn()), timeout=_IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT
+                    )
+                except asyncio.CancelledError:
+                    asyncio.uncancel()
+                except Exception:
+                    _log.exception(
+                        "sandbox_agent.cancel_retention_drain_failed",
+                        extra={"node_id": node_id, "run_id": run_id},
+                    )
+                _drained_tail = "".join(_drained_chunks)
+                if delivery_sentinel and _source_contains_delivery_sentinel(_drained_tail, delivery_sentinel):
+                    _cancel_marker: dict[str, Any] = {
+                        "_modulo_marker": True,
+                        "status": "failed",
+                        "summary": (
+                            "Sandbox agent cancelled after delivery sentinel observed — "
+                            "delivery_done retained (idempotency gate)"
+                        ),
+                        "raw_output": _redact_raw_output(_drained_tail)[:_MAX_ARTIFACT_LOG],
+                        "parse_error": "",
+                        "pr_url": _extract_pr_url(_drained_tail),
+                        "exit_code": -1,
+                        "stdout_length": len(_drained_tail),
+                        "stderr_length": 0,
+                        "attempt_key": attempt_key,
+                        "node_id": node_id,
+                        "delivery_done": True,
+                    }
+                    try:
+                        # Shield + uncancel: awaiting a DB write inside a caught
+                        # CancelledError must not be re-cancelled or mis-attributed
+                        # to the persist's own timeout bookkeeping. Bounded and
+                        # fail-open — the re-raise below must not be delayed.
+                        _persist_task = asyncio.create_task(
+                            _persist_raw_output_marker(
+                                session_factory,
+                                run_id=run_id,
+                                org_id_raw=org_id,
+                                node_id=node_id,
+                                attempt_key=attempt_key,
+                                marker=_cancel_marker,
+                            )
+                        )
+                        await asyncio.wait_for(
+                            asyncio.shield(_persist_task),
+                            timeout=_IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT,
+                        )
+                        asyncio.uncancel()
+                    except asyncio.CancelledError:
+                        asyncio.uncancel()
+                    except Exception:
+                        _log.exception(
+                            "sandbox_agent.cancel_retention_persist_failed",
+                            extra={"node_id": node_id, "run_id": run_id},
+                        )
             raise
         except (SupersededNodeError, SandboxNodeFailedError):
             # A6: the retryable/superseded node-failure classes propagate to the

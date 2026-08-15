@@ -31,7 +31,8 @@ Decision table (spec, keyed on status — never prose):
 | cancelled       | ``excluded`` (operator/HITL-cancelled — never countable, even with an unparseable reason) |
 | budget_exceeded | ``excluded`` (and breaks the FAR-190 walk)      |
 | failed / eval_failed / stalled | ``no_delivery`` (COUNTABLE — infra/sandbox crash elevated to failed counts, PO) |
-| complete        | ``delivered`` iff >= 1 valid ``pr_url``; else COUNTABLE ``no_delivery`` (empty-backlog, PO) |
+| complete        | ``delivered`` iff >= 1 valid ``pr_url`` OR any marker carries ``delivery_done`` (FAR-228 |
+|                 | email sentinel); else COUNTABLE ``no_delivery`` (empty-backlog, PO) |
 | (other terminal)| ``excluded`` FAIL-SAFE — a NEW terminal status added to ``TERMINAL_STATUSES``
 |                 | hits this branch loudly instead of silently inheriting ``complete`` semantics |
 | (non-terminal)  | ``excluded`` guard (the hook only fires for terminal statuses) |
@@ -84,6 +85,7 @@ REASON_NO_DELIVERY = "no_delivery"
 REASON_CANCELLED = "operator_or_hitl_cancelled"
 REASON_BUDGET_EXCEEDED = "budget_exceeded"
 REASON_DELIVERED = "pr_delivered"
+REASON_DELIVERED_EMAIL = "email_delivered"
 REASON_UNCLASSIFIED = "classifier_error"
 
 #: Bounded scan depth when unwrapping a node return looking for ``pr_url``
@@ -291,6 +293,22 @@ def _any_marker_parse_error(raw_output_markers: Any) -> bool:
     return False
 
 
+def _any_marker_delivery_done(raw_output_markers: Any) -> bool:
+    """True when any FAR-228 marker carries ``delivery_done is True`` — the
+    run's side-effecting delivery (e.g. an email) was made even though the node
+    later failed/retried. Reads the marker column directly — never outputs_json
+    subscripts (structurally wrong). Deliberately UNGATED by the kill-switch:
+    classification records the delivered fact regardless of gate state."""
+    if not isinstance(raw_output_markers, dict):
+        return False
+    for marker in raw_output_markers.values():
+        if not isinstance(marker, dict):
+            continue
+        if marker.get("delivery_done") is True:
+            return True
+    return False
+
+
 def _derive_no_delivery_reason(
     error_code: str | None,
     raw_output_markers: Any,
@@ -338,6 +356,10 @@ def classify_run(
     ``complete`` classifies as ``excluded`` — a new terminal status added to
     ``TERMINAL_STATUSES`` fails loudly here instead of silently inheriting
     ``complete`` semantics.
+
+    For ``complete``: the run is ``delivered`` iff it has a valid ``pr_url`` OR
+    any raw-output marker carries ``delivery_done`` (FAR-228 — a side-effecting
+    delivery, e.g. an email, recorded even though the node later failed/retried).
     """
     from modulo.db.models.run import TERMINAL_STATUSES
 
@@ -381,7 +403,8 @@ def classify_run(
         )
 
     # complete -> delivered iff >= 1 valid pr_url (from node returns, node
-    # telemetry values, or raw_output_markers); else COUNTABLE no_delivery
+    # telemetry values, or raw_output_markers) OR any raw-output marker carries
+    # delivery_done (FAR-228 email sentinel); else COUNTABLE no_delivery
     # (empty-backlog, PO). Explicit branch — the deliverable must never be
     # reached via set-arithmetic fall-through.
     if status in _DELIVERABLE_STATUSES:
@@ -391,6 +414,16 @@ def classify_run(
                 RunClassificationValue.delivered,
                 REASON_DELIVERED,
                 delivered_pr_urls=tuple(pr_urls),
+                computed_at=computed_at,
+                work_intact=work_intact,
+                declared_success_nodes=declared_success_nodes,
+            )
+        # FAR-228: a delivered fact recorded on the marker is a real delivery
+        # even when the node then failed/retried (pr_url still wins above).
+        if _any_marker_delivery_done(raw_output_markers):
+            return ClassificationResult(
+                RunClassificationValue.delivered,
+                REASON_DELIVERED_EMAIL,
                 computed_at=computed_at,
                 work_intact=work_intact,
                 declared_success_nodes=declared_success_nodes,
