@@ -23,7 +23,6 @@ Caught before the graph is persisted via the MCP interface. Returns structured e
 
 | Code | Severity | Rule |
 |---|---|---|
-| Empty graph | Error | Graph must have at least one node |
 | Duplicate node IDs | Error | Node IDs must be unique across the graph |
 | Duplicate edge IDs | Error | Edge IDs must be unique across the graph |
 | `agent_command` (MCP) | Error | Sandbox agent nodes require a non-empty `agent_command` |
@@ -31,7 +30,7 @@ Caught before the graph is persisted via the MCP interface. Returns structured e
 
 ### Layer 3: GraphValidator (`core/graph_validator/`)
 
-Runs on-save (via the REST API's `PATCH /graph` endpoint) and pre-run (when a pipeline is triggered). Errors block execution; warnings are advisory.
+Runs on-save (via the REST API's `PATCH /{pipeline_id}/graph` endpoint) and pre-run (when a pipeline is triggered). Errors block execution; warnings are advisory.
 
 | Code | Severity | Rule |
 |---|---|---|
@@ -44,7 +43,7 @@ Runs on-save (via the REST API's `PATCH /graph` endpoint) and pre-run (when a pi
 | `GRAPH_DUPLICATE_NODE_ID` | Error | Duplicate node ID found in graph |
 | `GRAPH_NODE_ID_FORMAT` | Warning | Node ID does not look like a standard UUID format |
 | `GRAPH_NO_EDGES` | Warning | Graph has nodes but no edges defined |
-| `SANDBOX_MISSING_COMMAND` | Warning | Sandbox agent node has empty `agent_command` |
+| `SANDBOX_MISSING_COMMAND` | Error | Sandbox agent node has empty `agent_command` |
 | `SANDBOX_MISSING_TEMPLATE` | Warning | Sandbox agent node has no `template_id` |
 | `SANDBOX_TIMEOUT_BOUNDS` | Warning | Sandbox agent `timeout_seconds` outside recommended 60-3600s range |
 | `SANDBOX_TIMEOUT_INVALID` | Warning | Sandbox agent `timeout_seconds` is not a valid integer |
