@@ -401,10 +401,19 @@ def to_eval_config(item: GuardrailConfigItem) -> dict[str, Any]:
 
 def _resolve_db_action(config: dict[str, Any]) -> GuardrailAction:
     raw = config.get("action")
-    try:
-        return GuardrailAction(raw)  # type: ignore[arg-type]
-    except ValueError:
+    if raw is None:
+        # A row with no action key is the engine's default — preserve it rather
+        # than treating "absent" as an unknown value.
         return GuardrailAction.OBSERVE
+    try:
+        return GuardrailAction(raw)
+    except ValueError:
+        # Fail closed like the detection-type path: an unknown/mutated action
+        # must never be silently rebuilt as OBSERVE, which would mask a drifted
+        # action in the rebuild hash and hide the drift from the operator.
+        raise GuardrailConfigError(
+            f"Guardrail has unknown action {raw!r}; valid actions are {[a.value for a in GuardrailAction]}"
+        ) from None
 
 
 def config_item_from_engine_definition(engine_def: EvalDefinition) -> GuardrailConfigItem:
@@ -438,14 +447,24 @@ def config_item_from_engine_definition(engine_def: EvalDefinition) -> GuardrailC
     for raw in config.get("redaction") or []:
         if isinstance(raw, dict):
             redaction.append(RedactionRule(path=str(raw.get("path", "")), mode=raw.get("mode", "transform")))
-    return GuardrailConfigItem(
-        id=engine_def.name,
-        name=engine_def.name,
-        action=_resolve_db_action(config),
-        detection=detection,
-        redaction=redaction,
-        required_capabilities=[str(c) for c in config.get("required_capabilities") or []],
-    )
+    try:
+        return GuardrailConfigItem(
+            id=engine_def.name,
+            name=engine_def.name,
+            action=_resolve_db_action(config),
+            detection=detection,
+            redaction=redaction,
+            required_capabilities=[str(c) for c in config.get("required_capabilities") or []],
+        )
+    except pydantic.ValidationError as exc:
+        # The shipped T1 engine allows org-level guardrail names the config id
+        # pattern rejects (spaces, >100 chars), so a legacy row can already
+        # exist. The read surface must fail closed with a clear message — never
+        # a bare pydantic.ValidationError surfacing as a generic 422, and never
+        # a silent skip that would corrupt the rebuild hash.
+        raise GuardrailConfigError(
+            f"Guardrail {engine_def.name!r} cannot be represented as config-as-code: {exc}"
+        ) from exc
 
 
 def build_config_set_from_definitions(definitions: list[EvalDefinition]) -> GuardrailConfigSet:
@@ -463,7 +482,13 @@ def build_config_set_from_definitions(definitions: list[EvalDefinition]) -> Guar
             continue
         by_id.setdefault(definition.name, definition)
     items = [config_item_from_engine_definition(by_id[key]) for key in sorted(by_id)]
-    return GuardrailConfigSet(guardrails=items)
+    try:
+        return GuardrailConfigSet(guardrails=items)
+    except pydantic.ValidationError as exc:
+        # Same fail-closed guarantee as the per-item conversion: a set that the
+        # DTOs cannot represent must raise a GuardrailConfigError, never leak a
+        # bare pydantic.ValidationError to the read surface.
+        raise GuardrailConfigError(f"Guardrail definitions cannot be represented as config-as-code: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------

@@ -327,6 +327,27 @@ async def test_apply_with_no_proposal_returns_409(
     assert resp.status_code == 409
 
 
+async def test_get_config_echoes_proposal_while_pending(
+    integration_client: AsyncClient,
+    org_b: uuid.UUID,
+    admin_b: uuid.UUID,
+):
+    # While a proposal is pending (proposed, not yet applied), GET /config must
+    # export the PROPOSED YAML the operator is reviewing — not the stale
+    # (empty) applied snapshot.
+    await _propose(integration_client, org_b, admin_b, _CONFIG_YAML)
+
+    get_body = (
+        await integration_client.get(
+            "/api/v1/guardrails/config",
+            headers=_auth_headers(org_b, admin_b),
+        )
+    ).json()
+    assert get_body["status"] == "proposed"
+    assert "no-aws-keys" in get_body["config_yaml"]
+    assert "valid-payload" in get_body["config_yaml"]
+
+
 async def test_reject_clears_proposal(
     integration_client: AsyncClient,
     db_engine: AsyncEngine,
@@ -568,8 +589,9 @@ async def test_apply_does_not_clobber_node_bound_row_on_name_collision(
     pipeline_a: uuid.UUID,
 ):
     # A node-bound guardrail (graph-save flow) whose name collides with a
-    # config-as-code id must not be silently overwritten by apply's upsert —
-    # the upsert path is ownership-guarded exactly like the deletion path.
+    # config-as-code id cannot be materialized as an org-level row. Apply must
+    # fail closed with a 409 (in-band remediation: rename the config id) — it
+    # must NOT report clean and then drift on the very next poll.
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
@@ -596,7 +618,13 @@ async def test_apply_does_not_clobber_node_bound_row_on_name_collision(
         )
 
     await _propose(integration_client, org_a, admin_a, _CONFIG_YAML)
-    await _apply(integration_client, org_a, admin_a)
+
+    apply_resp = await integration_client.post(
+        "/api/v1/guardrails/config/apply",
+        headers=_auth_headers(org_a, admin_a),
+    )
+    assert apply_resp.status_code == 409, apply_resp.text
+    assert "no-aws-keys" in apply_resp.json()["detail"]
 
     async with db_engine.connect() as conn:
         rows = await conn.execute(
@@ -613,6 +641,100 @@ async def test_apply_does_not_clobber_node_bound_row_on_name_collision(
     assert colliding[0][0] is not None
     assert colliding[0][1]["action"] == "observe"
     assert colliding[0][1]["pattern"] == "graph-save-pattern"
+
+    # Apply was a clean no-op: no org-level (node_id IS NULL) row was created
+    # for the colliding id, and no phantom drift is reported — the pin is still
+    # "proposed", consistent with apply never having run.
+    async with db_engine.connect() as conn:
+        org_rows = await conn.execute(
+            text(
+                "SELECT count(*) FROM eval_definitions "
+                "WHERE organisation_id = :oid AND eval_type = 'guardrail' AND node_id IS NULL",
+            ),
+            {"oid": str(org_a)},
+        )
+        assert int(org_rows.scalar_one()) == 0
+    drift = (
+        await integration_client.get(
+            "/api/v1/guardrails/config/drift",
+            headers=_auth_headers(org_a, admin_a),
+        )
+    ).json()
+    assert drift["status"] == "proposed"
+
+    # The operator resolves the collision by renaming the config id; apply then
+    # succeeds clean and drift stays clean (node-bound rows are outside the
+    # drift boundary).
+    renamed_yaml = _CONFIG_YAML.replace("no-aws-keys", "no-aws-keys-renamed")
+    await _propose(integration_client, org_a, admin_a, renamed_yaml)
+    apply_body = await _apply(integration_client, org_a, admin_a)
+    assert apply_body["applied"] is True
+    assert apply_body["status"] == "clean"
+
+    async with db_engine.connect() as conn:
+        names = await conn.execute(
+            text(
+                "SELECT name, node_id FROM eval_definitions "
+                "WHERE organisation_id = :oid AND eval_type = 'guardrail' ORDER BY name",
+            ),
+            {"oid": str(org_a)},
+        )
+        by_name = {str(r[0]): r[1] for r in names.all()}
+    # The node-bound row is preserved and the renamed org-level rows are
+    # materialized (node_id NULL).
+    assert set(by_name) == {"no-aws-keys", "no-aws-keys-renamed", "valid-payload"}
+    assert by_name["no-aws-keys"] is not None
+    assert by_name["no-aws-keys-renamed"] is None
+
+    post_resolve_drift = (
+        await integration_client.get(
+            "/api/v1/guardrails/config/drift",
+            headers=_auth_headers(org_a, admin_a),
+        )
+    ).json()
+    assert post_resolve_drift["status"] == "clean"
+
+
+async def test_get_config_and_drift_fail_closed_on_legacy_guardrail_name(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    org_a: uuid.UUID,
+    admin_a: uuid.UUID,
+    pipeline_a: uuid.UUID,
+):
+    # A legacy org-level guardrail authored via the direct evals API (shipped
+    # with T1 before config-as-code) may carry a name the config id pattern
+    # rejects — "Block AWS keys" contains spaces. The read surface must fail
+    # closed with a clear message naming the offending guardrail, not a generic
+    # validation 422 and never a 500.
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO eval_definitions (id, organisation_id, pipeline_id, node_id, name, "
+                "eval_type, config_json, failure_behaviour, account_id) "
+                "VALUES (:id, :oid, :pid, NULL, 'Block AWS keys', 'guardrail', :cfg, 'warn', :aid)",
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "oid": str(org_a),
+                "pid": str(pipeline_a),
+                "cfg": json.dumps(
+                    {
+                        "interception_point": "input",
+                        "action": "observe",
+                        "type": "regex",
+                        "pattern": "AKIA[0-9A-Z]{16}",
+                        "field": "body",
+                    }
+                ),
+                "aid": str(admin_a),
+            },
+        )
+
+    for path in ("/api/v1/guardrails/config", "/api/v1/guardrails/config/drift"):
+        resp = await integration_client.get(path, headers=_auth_headers(org_a, admin_a))
+        assert resp.status_code == 422, resp.text
+        assert "Block AWS keys" in resp.json()["detail"]
 
 
 async def test_drift_clean_without_mutation(

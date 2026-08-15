@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from modulo.core.eval_engine import EvalDefinition, EvalType
-from modulo.core.guardrails import GuardrailConfigError
+from modulo.core.guardrails import GuardrailAction, GuardrailConfigError
 from modulo.core.guardrails.config import (
     GuardrailConfigSet,
     GuardrailDetection,
@@ -490,3 +490,74 @@ def test_config_item_rebuild_does_not_downgrade_unknown_type():
     )
     with pytest.raises(GuardrailConfigError, match="regex or json_schema"):
         config_item_from_engine_definition(unknown_def)
+
+
+# ---------------------------------------------------------------------------
+# Legacy T1 rows — fail closed, never a bare pydantic.ValidationError
+# ---------------------------------------------------------------------------
+
+
+def test_config_item_rebuild_fails_closed_on_legacy_name_with_spaces():
+    """The shipped T1 engine allows org-level guardrail names the config id
+    pattern rejects (here spaces in ``Block AWS keys``). The conversion must
+    raise GuardrailConfigError with the offending name — not a bare
+    pydantic.ValidationError that the read surface would map to a generic 422,
+    and not a silent skip that would corrupt the rebuild hash."""
+    legacy_def = _envelope_definition(
+        "Block AWS keys",
+        {"interception_point": "input", "action": "observe", "type": "regex", "pattern": "AKIA", "field": "body"},
+    )
+    with pytest.raises(GuardrailConfigError, match="Block AWS keys"):
+        config_item_from_engine_definition(legacy_def)
+
+
+def test_config_item_rebuild_fails_closed_on_overlong_legacy_name():
+    legacy_def = _envelope_definition(
+        "a" * 150,
+        {"interception_point": "input", "action": "observe", "type": "regex", "pattern": "AKIA", "field": "body"},
+    )
+    with pytest.raises(GuardrailConfigError, match="cannot be represented"):
+        config_item_from_engine_definition(legacy_def)
+
+
+def test_build_config_set_fails_closed_on_legacy_name():
+    """One non-conforming legacy row must fail the whole set build, never be
+    silently dropped from the rebuilt config (which would change the hash and
+    hide the drift)."""
+    definitions = _definitions([load_config_set(_REGEX_YAML)])
+    definitions.append(
+        _envelope_definition(
+            "Block AWS keys",
+            {"interception_point": "input", "action": "observe", "type": "regex", "pattern": "AKIA", "field": "body"},
+        )
+    )
+    with pytest.raises(GuardrailConfigError, match="Block AWS keys"):
+        build_config_set_from_definitions(definitions)
+
+
+# ---------------------------------------------------------------------------
+# Action resolution — fail closed on unknown, engine default on absent
+# ---------------------------------------------------------------------------
+
+
+def test_config_item_rebuild_fails_closed_on_unknown_action():
+    """An unknown/mutated action must fail closed (never silently downgrade to
+    OBSERVE), mirroring the detection-type fail-closed path — a downgrade would
+    mask a drifted action in the rebuild hash."""
+    unknown_def = _envelope_definition(
+        "gr-unknown-action",
+        {"interception_point": "input", "action": "silent_block", "type": "regex", "pattern": "x", "field": "body"},
+    )
+    with pytest.raises(GuardrailConfigError, match="silent_block"):
+        config_item_from_engine_definition(unknown_def)
+
+
+def test_config_item_rebuild_preserves_absent_action_as_observe():
+    """A row with no action key is the engine's default (observe) — preserving
+    it is not a downgrade, so it must not fail closed."""
+    no_action_def = _envelope_definition(
+        "gr-no-action",
+        {"interception_point": "input", "type": "regex", "pattern": "x", "field": "body"},
+    )
+    rebuilt = config_item_from_engine_definition(no_action_def)
+    assert rebuilt.action == GuardrailAction.OBSERVE

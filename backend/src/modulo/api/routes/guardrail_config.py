@@ -185,7 +185,7 @@ async def _reconcile_guardrail_rows(
     org_id: uuid.UUID,
     config_set: GuardrailConfigSet,
     account_id: uuid.UUID,
-) -> None:
+) -> list[str]:
     """Reconcile the org's live guardrail rows to match *config_set*.
 
     The org-level config is bound to EVERY (non-deleted) pipeline so the
@@ -193,6 +193,12 @@ async def _reconcile_guardrail_rows(
     ``pipeline_id`` — enforces it at the ingestion edge of every run. Rows are
     keyed by the stable config ``id`` (stored as the eval ``name``), making
     re-imports idempotent: present ids are upserted, absent ids are deleted.
+
+    Returns the list of proposed ids that collided with a node-bound row and
+    therefore could NOT be materialized. Collisions are detected BEFORE any
+    mutation — a single colliding pipeline fails the whole apply (the caller
+    turns this into a 409), so a collision is a clean no-op, never a partial
+    reconcile that would leave the applied pin instantly reporting drift.
     """
     proposed_by_id = {item.id: item for item in config_set.guardrails}
     pipelines = (
@@ -207,6 +213,8 @@ async def _reconcile_guardrail_rows(
         .scalars()
         .all()
     )
+    pipelines_rows: list[tuple[Pipeline, dict[str, EvalDefinitionRow]]] = []
+    colliding: list[str] = []
     for pipeline in pipelines:
         rows = (
             (
@@ -222,6 +230,14 @@ async def _reconcile_guardrail_rows(
             .all()
         )
         rows_by_name = {row.name: row for row in rows}
+        pipelines_rows.append((pipeline, rows_by_name))
+        for gid in proposed_by_id:
+            row = rows_by_name.get(gid)
+            if row is not None and row.node_id is not None and gid not in colliding:
+                colliding.append(gid)
+    if colliding:
+        return colliding
+    for pipeline, rows_by_name in pipelines_rows:
         for gid, item in proposed_by_id.items():
             row = rows_by_name.get(gid)
             config_json = to_eval_config(item)
@@ -252,6 +268,7 @@ async def _reconcile_guardrail_rows(
             if name not in proposed_by_id and row.node_id is None:
                 await session.delete(row)
     await session.flush()
+    return []
 
 
 def _current_status(pin: GuardrailPin | None, drifted: bool) -> str:
@@ -286,7 +303,16 @@ async def get_guardrail_config(
         await set_rls_org(session, principal.organisation_id)
         pin = await _load_pin(session, principal.organisation_id)
         definitions = await _load_guardrail_definitions(session, principal.organisation_id)
-        drifted = check_guardrail_drift(definitions, pin)
+        try:
+            drifted = check_guardrail_drift(definitions, pin)
+        except GuardrailConfigError as exc:
+            # A legacy org-level guardrail name the config id pattern rejects
+            # (spaces, >100 chars) must fail closed with a clear message — not
+            # a generic validation 422 and never a 500.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(exc),
+            ) from None
         if pin is None:
             return GuardrailConfigResponse(
                 config_yaml=dump_config_set(GuardrailConfigSet()),
@@ -297,11 +323,18 @@ async def get_guardrail_config(
                 # drift so this endpoint agrees with GET /drift.
                 status="drift" if drifted else "clean",
             )
+        current_status = _current_status(pin, drifted)
+        # While a proposal is pending, export the PROPOSED config — that is
+        # what the operator is reviewing — not the stale applied snapshot.
+        if current_status == "proposed":
+            config_yaml = pin.serialized_proposal or pin.serialized_snapshot or dump_config_set(GuardrailConfigSet())
+        else:
+            config_yaml = pin.serialized_snapshot or dump_config_set(GuardrailConfigSet())
         return GuardrailConfigResponse(
-            config_yaml=pin.serialized_snapshot or dump_config_set(GuardrailConfigSet()),
+            config_yaml=config_yaml,
             hash=pin.applied_hash,
             applied_at=pin.applied_at,
-            status=_current_status(pin, drifted),
+            status=current_status,
         )
 
 
@@ -400,29 +433,54 @@ async def apply_guardrail_config(
                 detail=f"Stored proposal is invalid: {exc}",
             ) from None
 
-        await _reconcile_guardrail_rows(session, principal.organisation_id, proposed, principal.account_id)
+        colliding = await _reconcile_guardrail_rows(session, principal.organisation_id, proposed, principal.account_id)
+        if colliding:
+            # Fail closed with an in-band remediation signal: a proposed id
+            # collides with a node-bound guardrail row, so the org-level row
+            # cannot be materialized and the applied pin would report drift on
+            # the very next poll. The reconcile is a clean no-op (collisions are
+            # detected before any mutation) and the pin stays "proposed" so the
+            # operator can re-propose a renamed id. The conflict audit commits
+            # with this transaction; the 409 is raised after it so the trail is
+            # not lost to the rollback.
+            await _audit(
+                session,
+                principal.organisation_id,
+                principal.account_id,
+                "guardrail_config.apply_conflict",
+                {"colliding_ids": sorted(colliding)},
+            )
+            conflict_detail = (
+                "Cannot apply guardrail config: id(s) collide with node-bound guardrails: "
+                + ", ".join(sorted(colliding))
+                + ". Rename the colliding config id(s) and re-propose."
+            )
+        else:
+            conflict_detail = None
+            applied_hash = pin.proposed_hash or hash_config_set(proposed)
+            now = utc_now_iso()
+            pin.applied_hash = applied_hash
+            pin.applied_at = now
+            pin.serialized_snapshot = pin.serialized_proposal
+            pin.proposed_hash = None
+            pin.proposed_at = None
+            pin.serialized_proposal = None
+            pin.status = "clean"
+            await _store_pin(session, principal.organisation_id, pin)
 
-        applied_hash = pin.proposed_hash or hash_config_set(proposed)
-        now = utc_now_iso()
-        pin.applied_hash = applied_hash
-        pin.applied_at = now
-        pin.serialized_snapshot = pin.serialized_proposal
-        pin.proposed_hash = None
-        pin.proposed_at = None
-        pin.serialized_proposal = None
-        pin.status = "clean"
-        await _store_pin(session, principal.organisation_id, pin)
+            await _audit(
+                session,
+                principal.organisation_id,
+                principal.account_id,
+                "guardrail_config.applied",
+                {
+                    "hash": applied_hash,
+                    "guardrail_count": len(proposed.guardrails),
+                },
+            )
 
-        await _audit(
-            session,
-            principal.organisation_id,
-            principal.account_id,
-            "guardrail_config.applied",
-            {
-                "hash": applied_hash,
-                "guardrail_count": len(proposed.guardrails),
-            },
-        )
+    if conflict_detail is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=conflict_detail)
 
     return GuardrailApplyResponse(applied=True, hash=applied_hash, applied_at=now, status="clean")
 
@@ -480,13 +538,22 @@ async def get_guardrail_drift(
         await set_rls_org(session, principal.organisation_id)
         pin = await _load_pin(session, principal.organisation_id)
         definitions = await _load_guardrail_definitions(session, principal.organisation_id)
-        drifted = check_guardrail_drift(definitions, pin)
-        current_hash = hash_config_set(build_config_set_from_definitions(definitions))
+        try:
+            drifted = check_guardrail_drift(definitions, pin)
+            current_hash = hash_config_set(build_config_set_from_definitions(definitions))
+        except GuardrailConfigError as exc:
+            # Same fail-closed guarantee as GET /config: a legacy org-level
+            # name the config id pattern rejects must surface a clear 422, not
+            # a generic validation error and never a 500.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(exc),
+            ) from None
         applied_hash = pin.applied_hash if pin else None
         # The response reflects the pin's OWNED state: a pending "proposed" pin
         # stays "proposed" even while the live rows drift, so /drift and
         # /config agree.
-        status = _current_status(pin, drifted)
+        current_status = _current_status(pin, drifted)
 
         # Persist status transitions on the pin and audit the drift entry so
         # the audit trail records WHEN drift began, not every poll. Only the
@@ -507,4 +574,4 @@ async def get_guardrail_drift(
                 pin.status = "clean"
                 await _store_pin(session, principal.organisation_id, pin)
 
-    return GuardrailDriftResponse(status=status, current_hash=current_hash, applied_hash=applied_hash)
+    return GuardrailDriftResponse(status=current_status, current_hash=current_hash, applied_hash=applied_hash)
