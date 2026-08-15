@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 
+from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -16,6 +17,20 @@ from modulo.connectors.base import (
 )
 
 GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
+
+
+def _list_records(body: object) -> list[dict[str, Any]]:
+    """Safely extract the Graph ``value`` page from a list response body.
+
+    A corrupt or hostile response may return a non-dict body (list, string,
+    number, ...) or a non-list ``value``. Both must fall back to an empty page
+    instead of crashing the connector with ``AttributeError``/``TypeError`` on
+    the bare ``.get()``/slice chain.
+    """
+    if not isinstance(body, dict):
+        return []
+    value = body.get("value", [])
+    return value if isinstance(value, list) else []
 
 
 class MicrosoftTeamsConnector(ConnectorBase):
@@ -95,16 +110,16 @@ class MicrosoftTeamsConnector(ConnectorBase):
         resp = await c.get("/teams", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = cast("list[dict[str, Any]]", body.get("value", []))
-        next_link = body.get("@odata.nextLink", "")
-        skiptoken = ""
-        if next_link:
-            parsed = urlparse(next_link)
-            params_qs = parse_qs(parsed.query)
+        records = _list_records(body)
+        next_cursor: str | None = None
+        next_link = body.get("@odata.nextLink", "") if isinstance(body, dict) else ""
+        if isinstance(next_link, str) and next_link:
+            params_qs = parse_qs(urlparse(next_link).query)
             skiptoken = params_qs.get("$skiptoken", [""])[0]
+            next_cursor = _safe_cursor(skiptoken)
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            next_cursor=skiptoken or None,
+            next_cursor=next_cursor,
             total=len(records),
         )
 
@@ -127,7 +142,7 @@ class MicrosoftTeamsConnector(ConnectorBase):
         resp = await c.get(f"/teams/{team_id}/channels", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = cast("list[dict[str, Any]]", body.get("value", []))
+        records = _list_records(body)
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
@@ -156,7 +171,7 @@ class MicrosoftTeamsConnector(ConnectorBase):
         resp = await c.get(f"/teams/{team_id}/channels/{channel_id}/messages", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = cast("list[dict[str, Any]]", body.get("value", []))
+        records = _list_records(body)
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
@@ -171,7 +186,7 @@ class MicrosoftTeamsConnector(ConnectorBase):
         resp = await c.get(f"/teams/{team_id}/members")
         resp.raise_for_status()
         body = resp.json()
-        records = cast("list[dict[str, Any]]", body.get("value", []))
+        records = _list_records(body)
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
@@ -186,7 +201,7 @@ class MicrosoftTeamsConnector(ConnectorBase):
         resp = await c.get("/users", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = cast("list[dict[str, Any]]", body.get("value", []))
+        records = _list_records(body)
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
@@ -201,7 +216,7 @@ class MicrosoftTeamsConnector(ConnectorBase):
         resp = await c.get("/groups", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = cast("list[dict[str, Any]]", body.get("value", []))
+        records = _list_records(body)
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
