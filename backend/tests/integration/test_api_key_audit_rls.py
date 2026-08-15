@@ -79,7 +79,8 @@ async def _fetch_audit_event(
     async with db_engine.connect() as conn:
         result = await conn.execute(
             text(
-                "SELECT id, organisation_id, event_type, account_id, resource_id, payload_json "
+                "SELECT id::text, organisation_id::text, event_type, "
+                "account_id::text, resource_id::text, payload_json "
                 "FROM audit_events WHERE organisation_id = :oid AND event_type = :et "
                 "ORDER BY created_at DESC, id DESC LIMIT 1",
             ),
