@@ -308,7 +308,8 @@ class TestRegisterGlobalHooksOnce:
             for thread in threads:
                 thread.start()
             for thread in threads:
-                thread.join()
+                thread.join(timeout=5)
+                assert not thread.is_alive(), "worker thread failed to finish within 5s"
 
         assert guard.call_count == 1
         assert tenant.call_count == 1
@@ -391,7 +392,8 @@ class TestGetSharedEngine:
             for thread in threads:
                 thread.start()
             for thread in threads:
-                thread.join()
+                thread.join(timeout=5)
+                assert not thread.is_alive(), "worker thread failed to finish within 5s"
 
         assert mock_build.call_count == 1
         assert results[0] is fake
