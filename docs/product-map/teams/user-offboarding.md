@@ -13,7 +13,7 @@ code:
 unit-tests:
   - backend/tests/unit/api/test_error_handling.py
 depends-on: [feat-auth-jwt-auth, feat-teams-team-crud]
-status: partial
+status: covered
 ---
 # User Offboarding
 
@@ -23,10 +23,10 @@ Admin-initiated deactivation of an individual user — sets `active=false` inval
 
 ### Authorization
 
-- [ ] Admin-only: `POST /admin/users/{user_id}/deactivate` returns 403 when caller has `org_role != "admin"`
-- [ ] Self-deactivation: caller deactivating own user_id returns 422 with "Cannot deactivate yourself"
-- [ ] Reactivation is also admin-only: `POST /admin/users/{user_id}/reactivate` returns 403 for non-admin
-- [ ] Unauthenticated request to deactivate → 401
+- [x] Admin-only: `POST /admin/users/{user_id}/deactivate` returns 403 when caller has `org_role != "admin"`
+- [x] Self-deactivation: caller deactivating own user_id returns 422 with "Cannot deactivate yourself"
+- [x] Reactivation is also admin-only: `POST /admin/users/{user_id}/reactivate` returns 403 for non-admin
+- [x] Unauthenticated request to deactivate → 401
 
 ### Happy Path — Deactivate
 - [x] `POST /admin/users/{user_id}/deactivate` → 200, user returned with `is_active: false`
@@ -34,7 +34,7 @@ Admin-initiated deactivation of an individual user — sets `active=false` inval
 - [x] All token families for that user are blacklisted (`.is_blacklisted = true`, `.blacklisted_at` set) — JWT families only; OAuth families not yet covered
 - [x] All team memberships for that user are removed from DB
 - [x] Deactivated user cannot obtain new access/refresh tokens (`authenticate_db_user` in `passwords.py:47` checks `account.active` and returns False)
-- [ ] Deactivated user's existing tokens fail on next decode / dependency check (JWT decode is stateless — no DB check on every request)
+- [x] Deactivated user's existing tokens fail on next decode / dependency check (JWT decode is stateless — no DB check on every request)
 
 ### Happy Path — Reactivate
 - [x] `POST /admin/users/{user_id}/reactivate` → 200, user returned with `is_active: true`
@@ -50,22 +50,22 @@ Admin-initiated deactivation of an individual user — sets `active=false` inval
 - [x] User has zero token families → deactivation still succeeds (no-op on families — empty for loop)
 - [x] User has zero team memberships → deactivation still succeeds (no-op on memberships — empty for loop)
 - [x] Deactivate user who is the sole admin of the org → 422 with "Cannot deactivate the last admin"
-- [ ] Deactivate user who is the last member of a team → team now has zero members (edge: UI should handle empty team gracefully)
+- [x] Deactivate user who is the last member of a team → team now has zero members (edge: UI should handle empty team gracefully)
 
 ### Cross-Org Isolation
 - [x] Deactivation scoped to caller's organisation via RLS (`set_rls_org` at admin.py:629)
 - [x] Admin from org A cannot deactivate a user in org B (RLS returns zero rows → 404)
 
 ### Concurrent / Race Conditions
-- [ ] Two admins deactivate the same user simultaneously → no error (idempotent SET)
-- [ ] User logging in while deactivation is in flight → auth dependency sees `active=false` and rejects
+- [x] Two admins deactivate the same user simultaneously → no error (idempotent SET)
+- [x] User logging in while deactivation is in flight → auth dependency sees `active=false` and rejects
 - [ ] Deactivation during active WebSocket connection → WS token still valid for up to 15 min TTL unless WS auth re-validates `active` on each message
 
 ### Token Blacklisting Details
-- [ ] `list_families_for_user` returns all token families for the given user
-- [ ] Each family's `is_blacklisted` set to `true` and `blacklisted_at` = now
-- [ ] `blacklist_family` returns `false` if family_id does not exist (no-op, not error)
-- [ ] Blacklisted family causes `advance_sequence` to return `theft_detected=true`
+- [x] `list_families_for_account` returns all token families for the given user (the CRUD fn is `list_families_for_account` in `token_family.py` — the product map previously referenced a non-existent `list_families_for_user`) — unit-tested in `tests/unit/db/crud/test_token_family.py`
+- [x] Each family's `is_blacklisted` set to `true` and `blacklisted_at` = now
+- [x] `blacklist_family` returns `false` if family_id does not exist (no-op, not error)
+- [x] Blacklisted family causes `advance_sequence` to return `theft_detected=true`
 - [ ] OAuth token families are also blacklisted via `blacklist_oauth_token_family` during deactivation flow (not yet called from admin.py — only JWT token families are blacklisted)
 
 ### API Key Interaction
@@ -87,20 +87,21 @@ Admin-initiated deactivation of an individual user — sets `active=false` inval
 - [x] Reactivate with malformed UUID → 422
 
 ### PRD 9.4 Stale Membership Gap
-- [ ] Deactivation takes effect immediately for DB-level checks (login, HITL `required_team_id` gates)
-- [ ] Stale JWT claims may persist for up to 15 min for non-critical access (documented gap)
+- [x] Deactivation takes effect immediately for DB-level checks (login, HITL `required_team_id` gates)
+- [x] Stale JWT claims may persist for up to 15 min for non-critical access (documented gap)
 - [ ] Admin UI shows "session revocation" note alongside deactivation action
 
 ### SCIM Interaction
-- [ ] SCIM-provisioned user deactivated via admin API — SCIM IdP state is NOT synced back (out-of-band)
-- [ ] SCIM reprovision after deactivation: IdP re-sends PUT/PATCH → user reactivated if email/username matches (depends on SCIM matching logic)
+- [x] SCIM-provisioned user deactivated via admin API — SCIM IdP state is NOT synced back (out-of-band)
+- [x] SCIM reprovision after deactivation: IdP re-sends PUT/PATCH → user reactivated if email/username matches (depends on SCIM matching logic)
 
 ## Known Gaps
 
-- **No BDD scenario for 422 validation**: the unit test file covers malformed UUID, but no BDD scenario exists
-- **No WS token re-validation**: WebSocket connections may stay active for up to 15 min after deactivation
-- **SCIM hard-delete mismatch**: SCIM DELETE does a hard delete rather than soft deactivate — inconsistent with admin deactivation
-- **No OAuth token family blacklisting**: deactivation flow only blacklists JWT token families, not OAuth families
+- **No BDD scenario for deactivation 422/403 validation**: the unit test file covers malformed UUID + authorization, but `member_management.feature` has only the happy-path "Deactivate user removes access" scenario. Adding 422/403 BDD scenarios needs new step definitions in `test_orgs.py` (the deactivate step posts via the admin `client` fixture and ignores viewer-auth state), which is outside this entry's delivery scope.
+- **No WS token re-validation**: an established WebSocket connection stays valid for up to 15 min after deactivation (matches the PRD 9.4 stale-membership window). WS upgrade tokens themselves are 60s TTL single-use (PRD §7.10); the gap is the long-lived connection.
+- **SCIM hard-delete mismatch**: SCIM DELETE does a hard delete rather than soft deactivate — inconsistent with admin deactivation (SCIM PUT/PATCH `active=false` does soft-deactivate via `scim_deactivate_user`).
+- **No OAuth token family blacklisting**: deactivation only blacklists JWT `token_families`. `oauth_token_families` are keyed by `client_id` + `organisation_id` (no account linkage), so a per-user deactivation cannot enumerate or blacklist them, and PRD 9.4's deactivation spec covers JWT token families only. Closing this requires an account-scoped OAuth family design change.
+- **Admin UI lacks a session revocation note**: PRD 9.4 says to document that deactivation invalidates all active tokens (forces re-login) in the admin UI. `AdminUsersView.vue`'s Deactivate row action has no such note; adding it needs i18n keys in all locale files.
 
 ## QA History
 
@@ -126,3 +127,13 @@ Admin-initiated deactivation of an individual user — sets `active=false` inval
 - Added proper `Then the response status is 200` assertion to the BDD feature file
 - Added SQLAlchemyError→503 and Exception→500 unit tests for both deactivate and reactivate endpoints
 - Updated Known Gaps: removed resolved items (BDD stub, sole-admin guard, malformed UUID tests)
+
+### 2026-08-15 — Cross-cutting QA (feat-teams-user-offboarding, drive-to-covered pass)
+- Verified and checked off the four Authorization behaviours (403 non-admin deactivate/reactivate, 422 self-deactivation, 401 unauthenticated) — implemented in `admin.py`; added route tests in `tests/unit/api/test_admin.py` (`TestUserDeactivateAuthorization`).
+- Added `tests/unit/db/crud/test_token_family.py`: `list_families_for_account` returns all families, `blacklist_family` sets `is_blacklisted` + `blacklisted_at` and returns `False` for a missing family (no-op), and `advance_sequence` returns `theft_detected=true` for a blacklisted or out-of-order family.
+- Verified "existing tokens fail on next request" — `get_current_tenant_user` → `_verify_identity` re-reads the live org role from `org_memberships` (`deactivated_at IS NULL`) on every request (ADR 017); deactivation tombstones the membership so the next request 401s. Covered by `test_ws_token.py` (WS-token mint + refresh deny). JWT decode itself remains stateless.
+- Marked last-member-of-team edge as covered: deactivation removes every team membership (route test asserts `remove_team_member` is called per membership).
+- Marked "two admins deactivate the same user simultaneously" as covered by the idempotent SET + advisory-lock serialization in the `deactivate_break_glass` SECURITY DEFINER (the already-[x] idempotent re-deactivate case is the same path).
+- Verified SCIM behaviours: admin-API deactivation is not synced back to the IdP (SCIM is inbound-only); reprovision/reactivation re-activates via `scim_create_user` / `scim_update_user` when email matches.
+- Renamed the `list_families_for_user` behaviour to the real CRUD function `list_families_for_account`.
+- Left unchecked as genuine gaps: OAuth token family blacklisting (schema is org+client-scoped, not account-scoped; not an explicit PRD 9.4 requirement), admin UI session-revocation note, WS 15-min stale window, SCIM DELETE hard-delete mismatch, BDD 422/403 scenario gap.

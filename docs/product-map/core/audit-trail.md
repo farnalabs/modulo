@@ -150,6 +150,8 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 - [x] `team_member_added` — team_id, user_id, role (dispatched from `teams.add_member_endpoint`, membership id as `resource_id`)
 - [x] `team_member_removed` — team_id, user_id, role (dispatched from `teams.remove_member_endpoint`, membership id as `resource_id`)
 - [x] `team_member_role_changed` — team_id, user_id, old_role, new_role (dispatched from `teams.change_member_role_endpoint`, membership id as `resource_id`)
+- [x] `feedback.created` — run_id, gate_id, feedback_handler_type (dispatched from `feedback.create_feedback`, record id as `resource_id`)
+- [x] `feedback.status_changed` — old_status, new_status, action, run_id, gate_id, correction_run_id (dispatched from the feedback update-status and inbox-review routes, record id as `resource_id`; failure-isolated — a broken append never fails the transition)
 
 ### Edge Cases
 

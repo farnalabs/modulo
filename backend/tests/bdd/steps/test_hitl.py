@@ -456,6 +456,7 @@ def patch_feedback_status(request, new_status: str, client, ctx):
         return_value=MagicMock(),
     ) as mock_mgr_cls:
         mock_mgr = mock_mgr_cls.return_value
+        mock_mgr.get_feedback_record = AsyncMock(return_value=mock_record)
         mock_mgr.update_status = AsyncMock(return_value=mock_record)
 
         resp = client.patch(

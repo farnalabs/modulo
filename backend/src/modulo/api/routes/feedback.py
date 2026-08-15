@@ -12,6 +12,7 @@ URLs:
     GET    /api/v1/feedback/proposals                    — eval proposals queue
 """
 
+import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -27,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_logger import append_audit_event
 from modulo.core.eval_engine import EvalDefinition as EvalDefinitionDTO
 from modulo.core.feedback_manager import (
     ConcurrentModificationError,
@@ -39,7 +41,7 @@ from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +114,47 @@ def _serialise_record(
     }
 
 
+async def _append_feedback_audit_event(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    *,
+    event_type: str,
+    resource_id: uuid.UUID,
+    payload: dict[str, Any],
+) -> None:
+    """Append a feedback audit event in a fresh transaction, failure-isolated.
+
+    The primary operation has already committed. RLS context (SET LOCAL) reverts
+    on COMMIT, so it must be re-established in this fresh transaction or the
+    STRICT-RLS audit INSERT is rejected. A broken append is logged and never
+    fails the completed operation (api_keys/teams gold pattern).
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await append_audit_event(
+                session,
+                org_id=principal.organisation_id,
+                event_type=event_type,
+                actor_user_id=principal.account_id,
+                resource_type="feedback_record",
+                resource_id=resource_id,
+                payload_json=payload,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.warning(
+            "feedback.audit_append_failed",
+            extra={
+                "org_id": str(principal.organisation_id),
+                "record_id": str(resource_id),
+                "event_type": event_type,
+            },
+        )
+
+
 @router.post("/runs/{run_id}/feedback", status_code=status.HTTP_201_CREATED)
 @handle_db_errors("feedback.create_feedback")
 async def create_feedback(
@@ -167,6 +210,18 @@ async def create_feedback(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred. Please try again later.",
         ) from exc
+
+    await _append_feedback_audit_event(
+        session,
+        principal,
+        event_type="feedback.created",
+        resource_id=record.id,
+        payload={
+            "run_id": str(record.run_id) if record.run_id else None,
+            "gate_id": record.gate_id,
+            "feedback_handler_type": record.feedback_handler_type,
+        },
+    )
 
     return {
         "id": str(record.id),
@@ -449,6 +504,10 @@ async def update_feedback_status(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             mgr = FeedbackManager(session, principal.organisation_id)
+            record = await mgr.get_feedback_record(record_id)
+            if record is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
+            old_status = record.feedback_status
             record = await mgr.update_status(record_id, req.status)
     except IntegrityError as exc:
         logger.exception("feedback.update_feedback_status")
@@ -479,6 +538,20 @@ async def update_feedback_status(
 
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
+
+    await _append_feedback_audit_event(
+        session,
+        principal,
+        event_type="feedback.status_changed",
+        resource_id=record_id,
+        payload={
+            "old_status": old_status,
+            "new_status": record.feedback_status,
+            "action": "update_status",
+            "run_id": str(record.run_id) if record.run_id else None,
+            "gate_id": record.gate_id,
+        },
+    )
 
     return {
         "id": str(record.id),
@@ -622,6 +695,7 @@ async def review_feedback(
         )
 
     correction_run_id: str | None = None
+    transitioned_to: str | None = None
 
     try:
         async with session.begin():
@@ -632,10 +706,14 @@ async def review_feedback(
             if record is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
 
+            old_status = record.feedback_status
+
             if req.action == "mark_reviewed":
                 record = await mgr.update_status(record_id, "resolved")
+                transitioned_to = "resolved"
             elif req.action == "dismiss":
                 record = await mgr.update_status(record_id, "dismissed")
+                transitioned_to = "dismissed"
 
             elif req.action == "create_correction_run":
                 if not record.run_id:
@@ -663,6 +741,7 @@ async def review_feedback(
                     ) from exc
 
                 correction_run_id = str(new_run_id)
+                transitioned_to = "correcting"
 
             if req.annotation is not None:
                 await session.execute(
@@ -710,6 +789,22 @@ async def review_feedback(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred. Please try again later.",
         ) from None
+
+    if transitioned_to is not None:
+        await _append_feedback_audit_event(
+            session,
+            principal,
+            event_type="feedback.status_changed",
+            resource_id=record_id,
+            payload={
+                "old_status": old_status,
+                "new_status": transitioned_to,
+                "action": req.action,
+                "run_id": str(record.run_id) if record.run_id else None,
+                "gate_id": record.gate_id,
+                "correction_run_id": correction_run_id,
+            },
+        )
 
     return {
         "id": str(record.id),
