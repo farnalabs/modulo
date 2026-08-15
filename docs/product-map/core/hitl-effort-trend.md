@@ -12,6 +12,7 @@ code:
 depends-on: [feat-evals-eval-engine, feat-evals-feedback-records]
 unit-tests:
   - backend/tests/unit/api/test_dashboard.py
+  - backend/tests/bdd/features/dashboard/test_hitl_trends_steps.py
 status: partial
 ---
 
@@ -103,6 +104,10 @@ HITL decision volume, rejection rates, review-time metrics, and trend visualisat
 
 ## QA History
 
+### 2026-08-15 — improve-architecture (product-map walk, feat-core-hitl-effort-trend)
+
+**RESOLVED the "BDD step definitions file does not exist" known gap.** The step file `backend/tests/bdd/features/dashboard/test_hitl_trends_steps.py` existed but was broken: it overrode `get_current_user` with an `AuthenticatedPrincipal` while `dashboard_trends` requires `get_current_tenant_user` (`TenantPrincipal` via `require_permission`), and it entered `TestClient(app)` as a context manager — triggering the app lifespan, which raises `RuntimeError: REDIS_URL is required`. Every one of the 7 scenarios in `hitl_trends.feature` failed at setup (not at assertion). Rewrote the step file against the shared BDD harness pattern (`test_housekeeping_steps.py`): (1) override `get_current_tenant_user` with an admin `TenantPrincipal`; (2) use `configure_mock_session(allow_empty_execute=True)` so all four trends queries return empty rows and the endpoint emits the zero-filled series the scenarios assert on; (3) build `TestClient(app)` without entering the lifespan context manager; (4) store the response on `request.node._resp`/`request.node.response` so the shared `the response status is` step works. Kept the `parsers.parse` matcher for the `with {count:d} entries` step. Verification: 7/7 `test_hitl_trends_steps.py` scenarios + 39/39 `test_dashboard.py` unit tests pass; `check-bdd-coverage.py` no longer lists `dashboard/hitl_trends.feature` as uncovered. Updated product map (unit-tests frontmatter, Known Gap → RESOLVED, QA History).
+
 ### 2026-07-06 — Cross-cutting QA (improve-architecture index 232)
 - **MAJOR:** Corrected 3 stale product map claims: `daily_run_counts` does catch ProgrammingError → 501 (lines 700-704), `dashboard_trends` also catches SQLAlchemyError → 500 and Exception → 500 (lines 652-662), `dashboard_summary` also catches SQLAlchemyError → 500 and Exception → 500 (lines 438-448)
 - **MAJOR:** Created `test_dashboard_programming_error.py` with 9 tests covering ProgrammingError → 501, SQLAlchemyError → 503, and Exception → 500 for all 3 dashboard endpoints
@@ -117,7 +122,7 @@ HITL decision volume, rejection rates, review-time metrics, and trend visualisat
 - **MAJOR:** Corrected stale product map claim — BDD steps file `test_hitl_trends_steps.py` does not exist on disk (was claimed as having empty stubs)
 
 ## Known Gaps
-- BDD step definitions file (`test_hitl_trends_steps.py`) does not exist — no step definitions are wired for the 7 scenarios in `hitl_trends.feature`. Feature file is spec-only.
+- ~~**BDD step definitions file does not exist**~~ — **RESOLVED (2026-08-15)**: `backend/tests/bdd/features/dashboard/test_hitl_trends_steps.py` was broken (overrode `get_current_user` with `AuthenticatedPrincipal` while the trends route now requires `get_current_tenant_user` → `TenantPrincipal`, and entered `TestClient` as a context manager, triggering the app lifespan which demands a `REDIS_URL`), so all 7 scenarios in `hitl_trends.feature` failed at setup. Rewritten against the shared harness: admin `TenantPrincipal` override, `configure_mock_session` (empty rows → zero-filled series), no lifespan context-manager entry, response stored on the request node for the shared status step. All 7 scenarios now run and pass.
 - No frontend HITL trend visualisation — API endpoint is fully implemented but has no consuming UI
 - Grafana dashboard requires manual import (not provisioned as code)
 - No per-team HITL effort breakdown (only org-level in trends endpoint)
