@@ -24,6 +24,7 @@ _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _BACKEND_ID = uuid.uuid4()
+_FALLBACK_ID = uuid.uuid4()
 _NOW = datetime(2025, 1, 1, tzinfo=UTC)
 
 
@@ -62,7 +63,7 @@ def _patch_secrets_backend() -> Generator[None, None, None]:
         yield
 
 
-def _make_mock_session() -> AsyncMock:
+def _make_mock_session(existing_fallback_ids: list[uuid.UUID] | None = None) -> AsyncMock:
     session = AsyncMock()
     configure_mock_session(session)
     begin_cm = AsyncMock()
@@ -72,14 +73,33 @@ def _make_mock_session() -> AsyncMock:
     # Default: no duplicate found for name check
     mock_result = MagicMock()
     mock_result.scalar_one_or_none.return_value = None
-    session.execute = AsyncMock(return_value=mock_result)
+    # Fallback-validation query (SELECT model_backends.id ... IN (...)) returns
+    # the seeded existing ids; every other query returns the default result.
+    fallback_result = MagicMock()
+    fallback_result.scalars.return_value = iter(existing_fallback_ids or [])
+
+    def _execute(stmt: object, *args: object, **kwargs: object) -> MagicMock:
+        text = str(stmt)
+        if "SELECT model_backends.id" in text and " IN " in text:
+            return fallback_result
+        return mock_result
+
+    session.execute = AsyncMock(side_effect=_execute)
     return session
 
 
 @pytest.fixture
 def client() -> Generator[TestClient, None, None]:
-    mock_session = _make_mock_session()
+    yield from _client_for_session(_make_mock_session())
 
+
+@pytest.fixture
+def client_with_fallback_ids() -> Generator[TestClient, None, None]:
+    """Client whose fallback-validation query reports ``existing_fallback_ids`` as present."""
+    yield from _client_for_session(_make_mock_session(existing_fallback_ids=[_FALLBACK_ID]))
+
+
+def _client_for_session(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
 
@@ -229,9 +249,8 @@ def test_create_model_backend_does_not_expose_credentials(client: TestClient) ->
     assert body["has_credentials"] is True
 
 
-def test_create_model_backend_with_fallback_ids(client: TestClient) -> None:
-    """Verify fallback_backend_ids are passed to create_model_backend."""
-    fallback_id = uuid.uuid4()
+def test_create_model_backend_with_fallback_ids(client_with_fallback_ids: TestClient) -> None:
+    """Verify existing fallback_backend_ids are passed to create_model_backend."""
     captured: list[list[str] | None] = []
 
     async def fake_create(session: object, **kwargs: object) -> MagicMock:
@@ -245,12 +264,127 @@ def test_create_model_backend_with_fallback_ids(client: TestClient) -> None:
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
     ):
-        body = {**_CREATE_BODY, "fallback_backend_ids": [str(fallback_id)]}
-        resp = client.post("/api/v1/model-backends", json=body)
+        body = {**_CREATE_BODY, "fallback_backend_ids": [str(_FALLBACK_ID)]}
+        resp = client_with_fallback_ids.post("/api/v1/model-backends", json=body)
 
     assert resp.status_code == 201
-    assert captured == [[str(fallback_id)]]
-    assert resp.json()["fallback_backend_ids"] == [str(fallback_id)]
+    assert captured == [[str(_FALLBACK_ID)]]
+    assert resp.json()["fallback_backend_ids"] == [str(_FALLBACK_ID)]
+
+
+def test_create_model_backend_unknown_fallback_returns_422(client: TestClient) -> None:
+    """A fallback ID that references no existing org backend is rejected before any DB write."""
+    with (
+        patch("modulo.api.routes.model_backends.create_model_backend") as mock_create,
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        body = {**_CREATE_BODY, "fallback_backend_ids": [str(uuid.uuid4())]}
+        resp = client.post("/api/v1/model-backends", json=body)
+
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert "Unknown model backend id(s) referenced as fallbacks" in detail
+    mock_create.assert_not_awaited()
+
+
+def test_create_model_backend_mixed_fallback_ids_reports_missing(client_with_fallback_ids: TestClient) -> None:
+    """Only the missing fallback IDs are reported when some references exist."""
+    missing = uuid.uuid4()
+    with (
+        patch("modulo.api.routes.model_backends.create_model_backend") as mock_create,
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        body = {**_CREATE_BODY, "fallback_backend_ids": [str(_FALLBACK_ID), str(missing)]}
+        resp = client_with_fallback_ids.post("/api/v1/model-backends", json=body)
+
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert str(missing) in detail
+    assert str(_FALLBACK_ID) not in detail
+    mock_create.assert_not_awaited()
+
+
+def test_update_model_backend_with_fallback_ids(client_with_fallback_ids: TestClient) -> None:
+    """Update accepts a fallback list that references existing org backends."""
+    backend = _make_backend()
+    backend.fallback_backend_ids = [str(_FALLBACK_ID)]
+    with (
+        patch("modulo.api.routes.model_backends.update_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client_with_fallback_ids.patch(
+            f"/api/v1/model-backends/{_BACKEND_ID}",
+            json={"fallback_backend_ids": [str(_FALLBACK_ID)]},
+        )
+    assert resp.status_code == 200
+    assert resp.json()["fallback_backend_ids"] == [str(_FALLBACK_ID)]
+
+
+def test_update_model_backend_unknown_fallback_returns_422(client: TestClient) -> None:
+    """Update with a fallback ID referencing no org backend is rejected."""
+    with (
+        patch("modulo.api.routes.model_backends.update_model_backend") as mock_update,
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/model-backends/{_BACKEND_ID}",
+            json={"fallback_backend_ids": [str(uuid.uuid4())]},
+        )
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert "Unknown model backend id(s) referenced as fallbacks" in detail
+    mock_update.assert_not_awaited()
+
+
+def test_update_model_backend_null_fallback_clears(client: TestClient) -> None:
+    """Explicit null clears the fallback list and skips reference validation."""
+    backend = _make_backend()
+    backend.fallback_backend_ids = None
+    with (
+        patch("modulo.api.routes.model_backends.update_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.patch(f"/api/v1/model-backends/{_BACKEND_ID}", json={"fallback_backend_ids": None})
+    assert resp.status_code == 200
+    assert resp.json()["fallback_backend_ids"] is None
+
+
+def test_delete_model_backend_referenced_as_fallback_returns_409(client: TestClient) -> None:
+    """Deleting a backend another backend references as a fallback is blocked."""
+    referencing = _make_backend()
+    referencing.name = "Primary Backend"
+    with (
+        patch(
+            "modulo.api.routes.model_backends.list_backends_referencing_fallback",
+            new=AsyncMock(return_value=[referencing]),
+        ) as mock_referencing,
+        patch("modulo.api.routes.model_backends.delete_model_backend") as mock_delete,
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.delete(f"/api/v1/model-backends/{_BACKEND_ID}")
+
+    assert resp.status_code == 409
+    assert "Primary Backend" in resp.json()["detail"]
+    mock_referencing.assert_awaited_once()
+    mock_delete.assert_not_awaited()
+
+
+def test_delete_model_backend_not_referenced_succeeds(client: TestClient) -> None:
+    """A backend referenced by nothing deletes normally (204)."""
+    with (
+        patch("modulo.api.routes.model_backends.list_backends_referencing_fallback", new=AsyncMock(return_value=[])),
+        patch("modulo.api.routes.model_backends.delete_model_backend", return_value=True),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.delete(f"/api/v1/model-backends/{_BACKEND_ID}")
+    assert resp.status_code == 204
 
 
 def test_create_model_backend_encrypts_api_key(client: TestClient) -> None:
