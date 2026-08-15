@@ -415,7 +415,7 @@ class TestAdminReassignAllTeamResources:
         assert resp.status_code == 200
         data = resp.json()
         assert data["reassigned"] == 0
-        assert data["resource_types"] == []
+        assert not data["resource_types"]
 
     def test_reassign_all_missing_team_returns_404(
         self, admin_client_and_session: tuple[TestClient, AsyncMock]

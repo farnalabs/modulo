@@ -1575,7 +1575,7 @@ async def admin_reassign_all_team_resources(
                     .where(model_cls.__table__.c.owner_team_id == team_id)
                     .values(owner_team_id=None, visibility="org")
                 )
-                count = int(result.rowcount or 0)
+                count = int(result.rowcount or 0)  # type: ignore[attr-defined]
                 if count:
                     reassigned += count
                     touched.append(label)
