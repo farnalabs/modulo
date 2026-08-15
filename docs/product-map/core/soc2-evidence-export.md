@@ -17,7 +17,7 @@ status: partial
 
 # SOC 2 Evidence Export
 
-Paginated JSON export of audit events for SOC 2 compliance evidence. Builds on the core audit trail (immutable SHA-256-linked event chain) to produce downloadable bundles that an external auditor can verify independently. Recording stays free; export is enterprise-gated.
+Paginated JSON export of audit events for SOC 2 compliance evidence. Builds on the core audit trail (immutable SHA-256-linked event chain) to produce downloadable bundles that an external auditor can verify independently. Recording stays free; export is team-gated.
 
 ## Behaviours
 
@@ -30,7 +30,7 @@ Paginated JSON export of audit events for SOC 2 compliance evidence. Builds on t
 - [x] Each event includes: id, event_type, actor_user_id, resource_type, resource_id, payload_json, request_id, previous_hash, created_at
 - [x] RLS-scoped: only caller's org events returned
 - [x] Authentication required (AuthenticatedPrincipal dependency)
-- [x] Enterprise-gated (requires `audit_viewer` feature flag in license)
+- [x] Team-gated (requires `audit_viewer` feature flag in license)
 
 ### Export Filters
 
@@ -118,7 +118,7 @@ Paginated JSON export of audit events for SOC 2 compliance evidence. Builds on t
 
 - [x] RLS isolates events per organisation
 - [x] Authentication required for all endpoints
-- [x] Enterprise feature gate prevents unauthorized access
+- [x] Team feature gate prevents unauthorized access
 - [x] Export never includes credentials or ciphertexts
 
 ## Known Gaps

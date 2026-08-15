@@ -336,7 +336,7 @@ class TestReconcilePredicateMatrix:
         assert reenqueue.await_args.args[3] == "execute_run"
 
     @pytest.mark.asyncio
-    async def test_nodeless_age_gate_requires_staleness(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_nodeless_age_gate_requires_staleness(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Age-gate unit check: a nodeless-but-recently-started run is NOT
         matched (the predicate age gate protects a legitimate long first node)."""
         row = _run_row(RUN_RUNNING, "running", stale=False, nodeless=True)
@@ -556,7 +556,6 @@ class TestEnqueueFailedRecovery:
         )
         assert summary["repaired"] == 2
         assert summary["enqueue_failed_capped"] == 1
-        reenqueue.assert_awaited()
         assert reenqueue.await_count == 2
         ingest.assert_not_awaited()
 

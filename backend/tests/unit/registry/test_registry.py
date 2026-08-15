@@ -217,7 +217,7 @@ class _PreserveRegistry:
 
 
 class TestPublish(_PreserveRegistry):
-    async def test_publish_new_primitive(self):
+    def test_publish_new_primitive(self):
         private, _public = generate_signing_key()
         key_hex = private.private_bytes_raw().hex()
         original_count = len(_BUILTIN_REGISTRY)
@@ -236,7 +236,7 @@ class TestPublish(_PreserveRegistry):
         assert entry.name == "test-primitive"
         assert len(_BUILTIN_REGISTRY) == original_count + 1
 
-    async def test_published_primitive_has_valid_signature(self):
+    def test_published_primitive_has_valid_signature(self):
         private, public = generate_signing_key()
         key_hex = private.private_bytes_raw().hex()
 
@@ -252,7 +252,7 @@ class TestPublish(_PreserveRegistry):
 
         assert verify_primitive_signature(entry, public_key=public)
 
-    async def test_publish_rejects_empty_author(self):
+    def test_publish_rejects_empty_author(self):
         private, _public = generate_signing_key()
         key_hex = private.private_bytes_raw().hex()
         with pytest.raises(ValueError, match="author must be a non-empty string"):
@@ -266,7 +266,7 @@ class TestPublish(_PreserveRegistry):
                 signing_key_hex=key_hex,
             )
 
-    async def test_publish_rejects_empty_name(self):
+    def test_publish_rejects_empty_name(self):
         private, _public = generate_signing_key()
         key_hex = private.private_bytes_raw().hex()
         with pytest.raises(ValueError, match="name must be a non-empty string"):
@@ -280,7 +280,7 @@ class TestPublish(_PreserveRegistry):
                 signing_key_hex=key_hex,
             )
 
-    async def test_publish_rejects_empty_primitive_type(self):
+    def test_publish_rejects_empty_primitive_type(self):
         private, _public = generate_signing_key()
         key_hex = private.private_bytes_raw().hex()
         with pytest.raises(ValueError, match="primitive_type must be a non-empty string"):
@@ -294,7 +294,7 @@ class TestPublish(_PreserveRegistry):
                 signing_key_hex=key_hex,
             )
 
-    async def test_publish_rejects_empty_description(self):
+    def test_publish_rejects_empty_description(self):
         private, _public = generate_signing_key()
         key_hex = private.private_bytes_raw().hex()
         with pytest.raises(ValueError, match="description must be a non-empty string"):
@@ -308,7 +308,7 @@ class TestPublish(_PreserveRegistry):
                 signing_key_hex=key_hex,
             )
 
-    async def test_publish_rejects_non_list_tags(self):
+    def test_publish_rejects_non_list_tags(self):
         private, _public = generate_signing_key()
         key_hex = private.private_bytes_raw().hex()
         with pytest.raises(ValueError, match="tags must be a list of strings"):
@@ -322,7 +322,7 @@ class TestPublish(_PreserveRegistry):
                 signing_key_hex=key_hex,
             )
 
-    async def test_publish_rejects_non_string_tag(self):
+    def test_publish_rejects_non_string_tag(self):
         private, _public = generate_signing_key()
         key_hex = private.private_bytes_raw().hex()
         with pytest.raises(ValueError, match="tags must be a list of strings"):
@@ -336,7 +336,7 @@ class TestPublish(_PreserveRegistry):
                 signing_key_hex=key_hex,
             )
 
-    async def test_publish_rejects_non_dict_content_json(self):
+    def test_publish_rejects_non_dict_content_json(self):
         private, _public = generate_signing_key()
         key_hex = private.private_bytes_raw().hex()
         with pytest.raises(ValueError, match="content_json must be a dict"):
@@ -350,7 +350,7 @@ class TestPublish(_PreserveRegistry):
                 signing_key_hex=key_hex,
             )
 
-    async def test_publish_rejects_non_serializable_content_json(self):
+    def test_publish_rejects_non_serializable_content_json(self):
         private, _public = generate_signing_key()
         key_hex = private.private_bytes_raw().hex()
         with pytest.raises(ValueError, match="not JSON-serializable"):
@@ -364,7 +364,7 @@ class TestPublish(_PreserveRegistry):
                 signing_key_hex=key_hex,
             )
 
-    async def test_publish_rejects_invalid_signing_key_hex(self):
+    def test_publish_rejects_invalid_signing_key_hex(self):
         with pytest.raises(ValueError, match="invalid signing key hex"):
             publish_primitive(
                 author="a",
@@ -376,7 +376,7 @@ class TestPublish(_PreserveRegistry):
                 signing_key_hex="not-hex",
             )
 
-    async def test_publish_overwrites_existing_slug(self):
+    def test_publish_overwrites_existing_slug(self):
         private, _public = generate_signing_key()
         key_hex = private.private_bytes_raw().hex()
         original_count = len(_BUILTIN_REGISTRY)
@@ -404,7 +404,7 @@ class TestPublish(_PreserveRegistry):
         assert republished.description == "v2"
         assert republished.content_json == {"a": 2}
 
-    async def test_publish_unknown_fingerprint_without_key_returns_false(self):
+    def test_publish_unknown_fingerprint_without_key_returns_false(self):
         private, _public = generate_signing_key()
         key_hex = private.private_bytes_raw().hex()
         entry = publish_primitive(

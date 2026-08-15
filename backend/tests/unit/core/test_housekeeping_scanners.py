@@ -194,6 +194,30 @@ class TestExpiredWebhookDedups:
         assert len(candidates) == 1
         assert candidates[0].detail == "Expired webhook deduplication hash"
 
+    async def test_reports_creation_time_not_expiry(self, session: AsyncSession) -> None:
+        now = datetime.now(UTC)
+        created_at = now - timedelta(days=30)
+        expires_at = now - timedelta(hours=1)
+        session.add(
+            WebhookDedupHash(
+                id=uuid.uuid4(),
+                organisation_id=_ORG_A,
+                trigger_id=uuid.uuid4(),
+                payload_hash="a" * 64,
+                created_at=created_at,
+                expires_at=expires_at,
+            )
+        )
+        await session.commit()
+
+        candidates = await _scan_expired_webhook_dedups(session, _ORG_A)
+
+        assert len(candidates) == 1
+        assert candidates[0].created_at is not None
+        reported = datetime.fromisoformat(candidates[0].created_at)
+        assert reported == created_at.replace(tzinfo=None)
+        assert reported != expires_at.replace(tzinfo=None)
+
     async def test_returns_empty_when_nothing_expired(self, session: AsyncSession) -> None:
         now = datetime.now(UTC)
         session.add(

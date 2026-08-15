@@ -107,7 +107,7 @@ def test_missing_agent_commands_only_raises_value_error():
         make_sandbox_agent_fn(node_def)
 
 
-async def test_with_agent_command_returns_callable():
+def test_with_agent_command_returns_callable():
     """A node_def with agent_command resolves without raising and returns a callable."""
     node_def = {
         "id": "n1",
@@ -118,7 +118,7 @@ async def test_with_agent_command_returns_callable():
     assert callable(fn)
 
 
-async def test_with_agent_commands_returns_callable():
+def test_with_agent_commands_returns_callable():
     """agent_commands list is joined and resolved without raising."""
     node_def = {
         "id": "n1",
@@ -989,6 +989,282 @@ async def test_timed_out_command_output_includes_sandbox_id_and_log_tail():
     sandbox.kill.assert_awaited()
 
 
+# ---------------------------------------------------------------------------
+# FAR-197: no-output.json failure surfaces the agent stdout/stderr tail
+# ---------------------------------------------------------------------------
+
+
+async def _completed_sandbox(exit_code: int, *, stdout: str = "", stderr: str = "", output_json: str = ""):
+    """Build a sandbox mock whose command COMPLETED (cmd_result not None) but
+    whose output.json read returns *output_json* (default empty = missing)."""
+    cmd_result = MagicMock()
+    cmd_result.exit_code = exit_code
+    cmd_result.stdout = stdout
+    cmd_result.stderr = stderr
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(return_value=cmd_result)
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    # get_info reports size 0 so the drain probe never transfers log content —
+    # agent_stdout_raw then falls back to cmd_result.stdout deterministically.
+    sandbox.files.read = AsyncMock(side_effect=_read_router(output_json))
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=0))
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+    return sandbox
+
+
+async def test_no_output_json_message_includes_stdout_stderr_tail_and_sandbox_id():
+    """When the command completed but output.json is missing, the raised
+    SandboxNodeFailedError explains WHY (stdout/stderr tail + sandbox id) instead
+    of the opaque 'no parseable output.json' string (FAR-197)."""
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = await _completed_sandbox(
+        1,
+        stdout="opencode: command not found\n",
+        stderr="bash: opencode: command not found",
+    )
+    sandbox.sandbox_id = "sbx-far197"
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch(
+            "modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail",
+            new=AsyncMock(return_value="sample log line"),
+        ),
+        pytest.raises(SandboxNodeFailedError) as excinfo,
+    ):
+        await fn(_run_state())
+
+    message = str(excinfo.value)
+    assert "no parseable output.json" in message
+    assert "exit code 1" in message
+    assert "opencode: command not found" in message
+    assert "bash: opencode: command not found" in message
+    assert "sbx-far197" in message
+    assert "sample log line" in message
+
+
+async def test_invalid_output_json_includes_what_was_read_bounded():
+    """Invalid output.json is treated the same as missing — the message includes
+    what was read (bounded) so the failure is diagnosable (FAR-197)."""
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = await _completed_sandbox(0, stdout="booting agent", output_json="<<< not json >>>")
+    sandbox.sandbox_id = "sbx-invalid"
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch(
+            "modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail",
+            new=AsyncMock(return_value=""),
+        ),
+        pytest.raises(SandboxNodeFailedError) as excinfo,
+    ):
+        await fn(_run_state())
+
+    message = str(excinfo.value)
+    assert "exit code 0" in message
+    assert "<<< not json >>>" in message  # what was read is surfaced, bounded
+
+
+async def test_exit_code_zero_with_no_output_json_still_raises():
+    """Exit code 0 with no parseable output.json is still a retryable
+    SandboxNodeFailedError — a node with zero usable work must never complete
+    silently (A6 / FAR-197)."""
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = await _completed_sandbox(0, stdout="agent ran")
+    sandbox.sandbox_id = "sbx-zero"
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch(
+            "modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail",
+            new=AsyncMock(return_value=""),
+        ),
+        pytest.raises(SandboxNodeFailedError) as excinfo,
+    ):
+        await fn(_run_state())
+
+    message = str(excinfo.value)
+    assert "no parseable output.json" in message
+    assert "exit code 0" in message
+
+
+async def test_no_output_json_message_is_bounded_for_huge_stdout():
+    """Huge agent stdout/stderr still produces a bounded message — the raised
+    error never carries an unbounded string (FAR-197)."""
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+    huge = "z" * 200_000
+    sandbox = await _completed_sandbox(1, stdout=huge, stderr=huge)
+    sandbox.sandbox_id = "sbx-huge"
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch(
+            "modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail",
+            new=AsyncMock(return_value="x" * 50_000),
+        ),
+        pytest.raises(SandboxNodeFailedError) as excinfo,
+    ):
+        await fn(_run_state())
+
+    message = str(excinfo.value)
+    # log tail (1024) + stderr (1536) + stdout (1024) caps + headers/markers.
+    # The WHOLE message must stay under 5000 so it survives BOTH the
+    # sanitizer's hard cap and the executor's terminal-fail write surface
+    # (`_sanitize_detail("...: " + msg, limit=5000)`) + the String(5000)
+    # runs.error_detail column — the diagnostic is never truncated away.
+    assert len(message) < 5_000
+    assert "...[truncated" in message
+    # The kill-reason log tail leads the sections, so at ANY truncation the
+    # highest-value diagnostic (the only place the kill reason lives) survives.
+    assert message.index("--- sandbox log tail ---") < message.index("--- stderr tail ---")
+    assert message.index("--- stderr tail ---") < message.index("--- stdout tail ---")
+
+
+async def test_no_output_json_message_bounded_with_huge_raw_readback():
+    """Worst case: huge stdout/stderr AND a huge invalid output.json readback
+    still yields one bounded message < 5000 chars with no duplicated sections
+    (FAR-197 merge-conflict regression guard).
+
+    The read snippet documents itself LAST (per the section ordering), and each
+    section header must appear exactly once — a duplicated stdout block (from a
+    botched conflict resolution) inflated the message past the 5000-char
+    sanitizer/column cap and silently truncated the diagnostic tail.
+    """
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+    huge = "z" * 200_000
+    # Huge stdout/stderr AND a huge invalid output.json readback — the exact
+    # invalid-JSON worst case that must stay bounded.
+    sandbox = await _completed_sandbox(
+        1,
+        stdout=huge,
+        stderr=huge,
+        output_json="<<< not json >>>" + "y" * 200_000,
+    )
+    sandbox.sandbox_id = "sbx-huge-raw"
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch(
+            "modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail",
+            new=AsyncMock(return_value="x" * 50_000),
+        ),
+        pytest.raises(SandboxNodeFailedError) as excinfo,
+    ):
+        await fn(_run_state())
+
+    message = str(excinfo.value)
+    assert len(message) < 5_000
+    # Every section header appears exactly once — no duplicated blocks.
+    assert message.count("--- stdout tail ---") == 1
+    assert message.count("--- stderr tail ---") == 1
+    assert message.count("--- sandbox log tail ---") == 1
+    assert message.count("--- output.json read") == 1
+    # Documented ordering: log tail (kill reason) -> stderr -> stdout -> raw readback last.
+    assert message.index("--- sandbox log tail ---") < message.index("--- stderr tail ---")
+    assert message.index("--- stderr tail ---") < message.index("--- stdout tail ---")
+    assert message.index("--- stdout tail ---") < message.index("--- output.json read")
+
+
+async def test_no_output_log_tail_fetched_before_kill():
+    """On the no-output.json path the E2B log tail is fetched BEFORE the
+    finally-block sandbox kill — the logs endpoint only serves live sandboxes
+    (FAR-197)."""
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = await _completed_sandbox(1)
+    sandbox.sandbox_id = "sbx-order"
+
+    events: list[str] = []
+
+    async def _fake_tail(*_args, **_kwargs):
+        events.append("fetch")
+        return "sample log line"
+
+    def _record_kill(*_args, **_kwargs):
+        events.append("kill")
+
+    sandbox.kill.side_effect = _record_kill
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail", new=_fake_tail),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    assert events[0] == "fetch"
+    assert events.index("fetch") < events.index("kill")
+    sandbox.kill.assert_awaited()
+
+
+async def test_no_output_json_log_includes_lengths_and_sandbox_id(caplog):
+    """The sandbox_agent.no_output_json INFO record carries stdout/stderr
+    lengths + sandbox id for log-level diagnostics (FAR-197)."""
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = await _completed_sandbox(1, stdout="abc", stderr="de")
+    sandbox.sandbox_id = "sbx-log"
+
+    with (
+        caplog.at_level(logging.INFO, logger="modulo.core.pipeline_engine.node_runner"),
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch(
+            "modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail",
+            new=AsyncMock(return_value=""),
+        ),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    records = [r for r in caplog.records if r.getMessage() == "sandbox_agent.no_output_json"]
+    assert records, "no_output_json INFO record not emitted"
+    record = records[-1]
+    assert record.exit_code == 1
+    assert record.stdout_length == 3
+    assert record.stderr_length == 2
+    assert record.sandbox_id == "sbx-log"
+
+
+def test_no_output_json_message_survives_executor_terminal_fail_surface():
+    """The FAR-197 diagnostic is NOT truncated at the user-facing write surface.
+
+    After retries are exhausted the executor writes the raised message to
+    runs.error_detail via ``_sanitize_detail("Sandbox node failed (transient)
+    after retries exhausted: " + str(exc), limit=5000)`` (executor.py) — the
+    exact field the RunDetail view renders. Round-trip the WORST-CASE message
+    (huge stdout/stderr + log tail) through that write and assert the whole
+    diagnostic — including the kill-reason log tail, which is the first thing
+    a 500-char cap would have cut — survives in full (FAR-197 review).
+    """
+    from modulo.core.pipeline_engine.executor import _sanitize_detail
+    from modulo.core.pipeline_engine.node_runner import _build_no_output_message
+
+    message = _build_no_output_message(
+        exit_code=1,
+        stdout_raw="z" * 200_000,
+        stderr_raw="s" * 200_000,
+        sandbox_id="sbx-roundtrip",
+        read_raw="",
+        log_tail="l" * 50_000 + " KILL_REASON_ONLY_HERE",
+    )
+    stored = _sanitize_detail("Sandbox node failed (transient) after retries exhausted: " + message, limit=5000)
+
+    assert stored == "Sandbox node failed (transient) after retries exhausted: " + message
+    assert "KILL_REASON_ONLY_HERE" in stored
+    assert "--- sandbox log tail ---" in stored
+    assert "--- stderr tail ---" in stored
+    assert "--- stdout tail ---" in stored
+
+
 async def test_fetch_sandbox_log_tail_returns_empty_without_api_key(monkeypatch):
     """No E2B key configured -> helper returns '' without attempting a fetch."""
     monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
@@ -1013,3 +1289,156 @@ async def test_fetch_sandbox_log_tail_returns_empty_for_invalid_id(monkeypatch):
     with patch("urllib.request.urlopen") as _urlopen:
         assert not await _fetch_sandbox_log_tail(None)
     _urlopen.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# agent_command Jinja rendering (LLM model as a per-run / per-parameter value)
+# ---------------------------------------------------------------------------
+
+
+def _model_node_def(command: str, **overrides) -> dict:
+    node_def = _base_node_def(agent_command=command)
+    node_def.update(overrides)
+    return node_def
+
+
+async def test_agent_command_renders_input_model():
+    """`{{ input.model }}` in agent_command resolves from the run's input payload."""
+    node_def = _model_node_def("opencode run --model {{ input.model }} --auto --format json < /home/user/prompt.md")
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(
+            {
+                "run_context": {"input": {"model": "opencode-go/mimo-v2.5"}},
+                "_run_id": "run-1",
+                "_pipeline_id": "pipe-1",
+                "_org_id": _ORG_ID,
+            }
+        )
+
+    assert result["output"]["status"] == "completed"
+    wrapped = sandbox.commands.run.call_args.args[0]
+    assert "--model opencode-go/mimo-v2.5" in wrapped
+    assert "{{" not in wrapped
+
+
+async def test_agent_command_renders_parameter_model():
+    """`{{ parameter.model }}` in agent_command resolves from the resolved parameter schema."""
+    node_def = _model_node_def(
+        "opencode run --model {{ parameter.model }} --auto --format json < /home/user/prompt.md",
+        _resolved_parameters={"model": "opencode-go/mimo-v2.5"},
+    )
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    wrapped = sandbox.commands.run.call_args.args[0]
+    assert "--model opencode-go/mimo-v2.5" in wrapped
+    assert "{{" not in wrapped
+
+
+async def test_agent_command_default_filter():
+    """A missing input.model falls back to the `default()` filter value."""
+    node_def = _model_node_def(
+        'opencode run --model {{ input.model | default("opencode-go/deepseek-v4-flash") }} '
+        "--auto --format json < /home/user/prompt.md"
+    )
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    wrapped = sandbox.commands.run.call_args.args[0]
+    assert "--model opencode-go/deepseek-v4-flash" in wrapped
+    assert "{{" not in wrapped
+
+
+async def test_agent_command_without_template_unchanged():
+    """A plain agent_command (no {{ }} templates) executes byte-for-byte unchanged."""
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    wrapped = sandbox.commands.run.call_args.args[0]
+    assert f"( {_AGENT_COMMAND} )" in wrapped
+    assert _AGENT_COMMAND in wrapped
+
+
+async def test_agent_command_undefined_error_skips():
+    """A command template referencing a missing nested input field raises
+    UndefinedError -> the node returns status 'skipped' and NO sandbox command
+    is executed (mirrors the prompt's UndefinedError handling)."""
+    node_def = _model_node_def(
+        "opencode run --model {{ input.missing.deep.path }} --auto --format json < /home/user/prompt.md"
+    )
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["status"] == "skipped"
+    assert "agent_command" in result["summary"]
+    sandbox.commands.run.assert_not_called()
+
+
+async def test_agent_command_invalid_template_falls_back_verbatim():
+    """A legacy command with Jinja-like syntax that is NOT a valid template
+    (e.g. an empty ``{{ }}`` or an unclosed ``{{``) must NOT crash the run with
+    TemplateSyntaxError — it executes verbatim, as it did before #1291."""
+    node_def = _model_node_def(
+        "opencode run --model deepseek-v4-flash {{ }} --auto --format json < /home/user/prompt.md"
+    )
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    wrapped = sandbox.commands.run.call_args.args[0]
+    assert "{{ }}" in wrapped
+    assert sandbox.commands.run.call_count == 1
+
+
+async def test_agent_command_unclosed_template_falls_back_verbatim():
+    """An unclosed ``{{`` in a legacy command is a TemplateSyntaxError — falls
+    back to verbatim execution instead of crashing the run."""
+    node_def = _model_node_def("opencode run --model {{ --auto --format json < /home/user/prompt.md")
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    wrapped = sandbox.commands.run.call_args.args[0]
+    assert "{{" in wrapped
+    assert sandbox.commands.run.call_count == 1
+
+
+async def test_agent_command_empty_after_render_fails():
+    """A command that renders to empty (e.g. `{{ input.model }}` with no default
+    and no value) fails with a clear ValueError and NO sandbox command executes."""
+    node_def = _model_node_def("{{ input.model }}")
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(ValueError, match="rendered agent_command is empty"),
+    ):
+        await fn(_run_state())
+
+    sandbox.commands.run.assert_not_called()

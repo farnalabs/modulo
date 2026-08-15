@@ -36,13 +36,18 @@ from modulo.core.pipeline_engine.error_codes import present_error, sanitize_erro
 from modulo.core.pipeline_engine.event_broker import get_registry
 from modulo.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
+    GuardrailOverrideError,
+    GuardrailOverrideRejectedError,
+    GuardrailOverrideRequiredError,
     NodeAlreadyCompletedError,
     NodeNotFoundInGraphError,
     RecoveryNotAllowedError,
+    guardrail_override,
     recover_node,
 )
 from modulo.core.trigger_engine import TriggerEngine
 from modulo.db.crud.node_observation import observe_node
+from modulo.db.crud.observability import get_otel_config
 from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 from modulo.db.crud.run import (
@@ -60,6 +65,7 @@ from modulo.db.models.agent import Agent
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.rls import set_rls_org
+from modulo.otel_bridge import trace_id_for_thread
 from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
@@ -130,6 +136,28 @@ async def _do_get_child_run_rollup(
         rollup = await get_child_run_rollup(session, [run_id])
         cost, count = rollup.get(run_id, (_COST_ROLLUP_ZERO, 0))
         return _quantize_cost_rollup(cost), count
+
+
+async def _do_get_otel_endpoint(
+    factory: async_sessionmaker[AsyncSession],
+    org_id: uuid.UUID,
+) -> str:
+    """Return the org's configured OTLP endpoint, or ``""`` when unset.
+
+    Best-effort enrichment (FAR-198 trace_url deep-link): a DB failure must
+    never turn a run-detail request into an error — the run response is valid
+    without a trace_url.
+    """
+    try:
+        async with factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            config = await get_otel_config(session, org_id)
+        return config.get("otlp_endpoint") or ""
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("runs.otel_endpoint_unavailable", extra={"org_id": str(org_id)}, exc_info=True)
+        return ""
 
 
 async def _do_list_runs(
@@ -240,8 +268,6 @@ async def list_runs_endpoint(
         ) from None
 
 
-_NAMESPACE_TRACE = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
-
 # Union serialization bounds (PR B, plan §6.1): the per-node node_token_usage
 # summary is truncated to the NEWEST N nodes on RunResponse, beyond which a
 # node_count aggregate is emitted; the full union stays on the run row.
@@ -317,6 +343,10 @@ class RunResponse(BaseModel):
     total_cost_usd: Decimal | None = None
     token_consumption: dict[str, Any] | None = None
     trace_id: str | None = None
+    # Deep-link to the org's configured OTLP backend (Jaeger-style) for this
+    # run's trace. Only populated on the detail endpoint when the org has an
+    # otlp_endpoint configured — always None on list/trigger responses.
+    trace_url: str | None = None
     node_token_usage: dict[str, Any] | None = None
     # Cost breakdown — component snapshots (amounts as strings). NULL for
     # pre-migration runs; amounts ride the breakdown serializer which owns the
@@ -333,15 +363,23 @@ class RunResponse(BaseModel):
     completed_at: datetime | None = None
 
 
-def _build_run_response(run: Any, child_cost: Decimal | None = None, child_count: int = 0) -> RunResponse:
+def _build_run_response(
+    run: Any,
+    child_cost: Decimal | None = None,
+    child_count: int = 0,
+    otlp_endpoint: str | None = None,
+) -> RunResponse:
     """Build a RunResponse from a Run ORM entity, populating derived fields."""
     token_consumption: dict[str, Any] | None = None
     if run.total_tokens is not None:
         token_consumption = {"total_tokens": run.total_tokens}
 
     trace_id: str | None = None
+    trace_url: str | None = None
     if run.langgraph_thread_id:
-        trace_id = str(uuid.uuid5(_NAMESPACE_TRACE, run.langgraph_thread_id))
+        trace_id = trace_id_for_thread(run.langgraph_thread_id)
+        if otlp_endpoint:
+            trace_url = f"{otlp_endpoint.rstrip('/')}/jaeger/ui/trace/{trace_id}"
 
     pipeline_name: str | None = None
     if run.pipeline is not None:
@@ -364,6 +402,7 @@ def _build_run_response(run: Any, child_cost: Decimal | None = None, child_count
         total_cost_usd=run.total_cost_usd,
         token_consumption=token_consumption,
         trace_id=trace_id,
+        trace_url=trace_url,
         node_token_usage=_serialize_node_token_usage(run.node_token_usage),
         cost_breakdown=run.cost_breakdown,
         child_runs_cost_usd=child_runs_cost_usd,
@@ -619,6 +658,7 @@ async def get_run_status(
     try:
         run = await _run_with_retry(lambda: _do_get_run(factory, principal, run_id))
         child_cost, child_count = await _run_with_retry(lambda: _do_get_child_run_rollup(factory, principal, run_id))
+        otlp_endpoint = await _do_get_otel_endpoint(factory, principal.organisation_id)
     except IntegrityError:
         _log.exception("runs.get_run_status")
         raise HTTPException(
@@ -653,7 +693,7 @@ async def get_run_status(
             detail="An unexpected error occurred.",
         ) from None
 
-    return _build_run_response(run, child_cost, child_count)
+    return _build_run_response(run, child_cost, child_count, otlp_endpoint=otlp_endpoint)
 
 
 @router.post("/{run_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
@@ -1409,6 +1449,8 @@ async def recover_run_node(
                 )
             except RecoveryNotAllowedError as exc:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)[:200]) from exc
+            except GuardrailOverrideRequiredError as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)[:200]) from exc
             except NodeNotFoundInGraphError as exc:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
             except NodeAlreadyCompletedError as exc:
@@ -1485,6 +1527,128 @@ async def recover_run_node(
         action=action,
         status=run.status,
     )
+
+
+# ---------------------------------------------------------------------------
+# Guardrail override (FAR-208 item 6) — the ONLY remediation for a
+# guardrail-blocked terminal run (recover_node refuses eval_blocked runs)
+# ---------------------------------------------------------------------------
+
+
+class GuardrailOverrideRequest(BaseModel):
+    input_data: dict[str, Any]
+
+
+class GuardrailOverrideResponse(BaseModel):
+    run_id: uuid.UUID
+    status: str
+    action: str = "override"
+
+
+@router.post(
+    "/{run_id}/guardrail-override",
+    response_model=GuardrailOverrideResponse,
+    status_code=status.HTTP_200_OK,
+)
+@handle_db_errors("runs.guardrail_override")
+async def guardrail_override_run(
+    run_id: uuid.UUID,
+    req: GuardrailOverrideRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> GuardrailOverrideResponse:
+    """Remediate a guardrail-blocked run with operator-supplied input.
+
+    A guardrail block is TERMINAL ``eval_failed`` (error_code ``eval_blocked``)
+    with NO HITL gate, and the generic recover endpoint refuses such runs. The
+    override is the ONLY remediation: it re-runs the guardrail pass on the
+    supplied ``input_data`` (re-block safe default — a still-violating input is
+    refused with 422 and the run stays terminal), persists the post-redaction
+    payload, flips the run to ``pending`` with ``is_replay=True``, and
+    re-dispatches it from run start (execute_run — the blocked run never
+    executed, so there is no checkpoint to resume).
+
+    Requires operator or admin role.
+    """
+    if principal.org_role not in ("admin", "operator"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only operators and admins can override guardrail blocks",
+        )
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            try:
+                run = await guardrail_override(
+                    session,
+                    org_id=principal.organisation_id,
+                    run_id=run_id,
+                    input_data=req.input_data,
+                    actor_id=principal.account_id,
+                )
+            except GuardrailOverrideRejectedError as exc:
+                # Still-violating supplied input — re-block safe default. The
+                # run stays terminal eval_failed; 422 = the supplied input is
+                # unprocessable for this run.
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)[:200]) from exc
+            except GuardrailOverrideError as exc:
+                # Not a guardrail-blocked terminal run — nothing to override.
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)[:200]) from exc
+            except ConcurrentRecoveryError as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except IntegrityError:
+        _log.exception("runs.guardrail_override")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        ) from None
+    except ProgrammingError:
+        _log.exception("runs.guardrail_override")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
+        ) from None
+
+    except SQLAlchemyError:
+        _log.warning("route.db_error", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("pipeline_execution.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
+
+    # Re-dispatch the pending run from run start (execute_run). The blocked run
+    # never executed, so there is no checkpoint to resume from — dispatch_run
+    # enqueues the default execute_run job with no resume data.
+    try:
+        outcome, _job_id = await dispatch_run(
+            str(run_id),
+            str(principal.organisation_id),
+            queue="runs",
+        )
+    except Exception as exc:
+        _log.exception("run.guardrail_override_dispatch_failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to dispatch pipeline after guardrail override",
+        ) from exc
+
+    if outcome in ("deferred", "enqueue_failed"):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to enqueue pipeline after guardrail override",
+        )
+
+    return GuardrailOverrideResponse(run_id=run_id, status=run.status)
 
 
 # ---------------------------------------------------------------------------

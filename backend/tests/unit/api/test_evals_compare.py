@@ -532,3 +532,26 @@ class TestEvalFromRun:
             data = resp.json()
             assert data["eval_type"] == eval_type
             assert "field" in data["config_json"]
+
+    def test_from_run_rejects_guardrail(self, admin_client: TestClient) -> None:
+        # ``guardrail`` is deliberately absent from the from-run vocabulary: a
+        # guardrail deny-rule (regex pattern / json_schema) cannot be
+        # pre-populated from run output, and a stub config would be
+        # silently-inert (fail-open) for a data-safety control. Rejected by
+        # the request regex at the API edge.
+        mock_session = _make_mock_session()
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        resp = admin_client.post(
+            self.URL,
+            json={
+                "run_id": str(_RUN_A),
+                "node_id": str(_NODE_1),
+                "eval_type": "guardrail",
+                "name": "Guardrail Eval",
+            },
+        )
+        assert resp.status_code == 422

@@ -174,7 +174,7 @@ class TestOAuthClientCRUD:
         assert client.scopes == "trigger:run"
         assert client.organisation_id == _ORG_ID
         assert len(raw_secret) == 40
-        assert session.add.called
+        assert session.add.call_args.args[0] is client
 
     async def test_get_by_client_id_returns_client(self) -> None:
         fake_client = _make_oauth_client(client_id="myid")
@@ -281,7 +281,6 @@ class TestAuthorizationCode:
         )
         assert isinstance(code, str)
         assert len(code) > 0
-        assert session.add.called
         created = session.add.call_args.args[0]
         assert created.account_id == _ACCOUNT_ID
         assert created.code_challenge == _CODE_CHALLENGE
@@ -816,7 +815,6 @@ class TestConsentState:
             code_challenge=_CODE_CHALLENGE,
             org_id=_ORG_ID,
         )
-        assert session.add.called
         row = session.add.call_args.args[0]
         assert row.state == "state-abc"
         assert row.client_id == "cid"

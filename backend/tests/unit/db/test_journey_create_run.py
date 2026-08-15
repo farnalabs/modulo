@@ -35,6 +35,7 @@ from modulo.db.crud.run import _floor_work_item_id, create_run
 from modulo.db.crud.variant_group import run_variant_weighted
 from modulo.db.lifecycle_refs import canonical_work_item_id
 from modulo.db.models.base import Base
+from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.journey import Journey
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
@@ -58,6 +59,7 @@ _TABLES: list[Table] = cast(
         Run.__table__,
         Journey.__table__,
         VariantGroup.__table__,
+        EvalDefinition.__table__,
     ],
 )
 
@@ -342,7 +344,8 @@ class TestDeterministicId:
         run_b = await _create(session, work_item_refs=_REF_ENTRIES)
         journey_a = await _journey_for(session, "github_issue", "a/b#5")
         journey_b = await _journey_for(session, "github_issue", "a/b#5")
-        assert journey_a is not None and journey_b is not None
+        assert journey_a is not None
+        assert journey_b is not None
         assert journey_a.id == journey_b.id
         assert journey_a.canonical_work_item_id == journey_b.canonical_work_item_id
         assert run_a.work_item_refs == run_b.work_item_refs

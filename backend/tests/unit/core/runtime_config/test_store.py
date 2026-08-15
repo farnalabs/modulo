@@ -59,7 +59,8 @@ class TestRuntimeConfigStore:
             for t in threads:
                 t.start()
             for t in threads:
-                t.join()
+                t.join(timeout=5)
+                assert not t.is_alive(), "worker thread failed to finish within 5s"
 
             assert not errors
             assert len(instances) == 8

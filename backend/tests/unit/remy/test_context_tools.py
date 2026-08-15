@@ -373,7 +373,7 @@ class TestGetAvailableFeatures:
     async def test_returns_feature_table_and_count(self) -> None:
         flags = [
             self._flag("remy_chat", "core", True),
-            self._flag("custom_skills", "enterprise", False),
+            self._flag("custom_skills", "team", False),
         ]
         plan_ctx = self._plan_ctx(flags, "community")
 
@@ -391,7 +391,7 @@ class TestGetAvailableFeatures:
         assert "remy_chat" in result["results"]
         assert "custom_skills" in result["results"]
         assert "| remy_chat | core | yes |" in result["results"]
-        assert "| custom_skills | enterprise | no |" in result["results"]
+        assert "| custom_skills | team | no |" in result["results"]
 
     async def test_returns_auth_error_when_unauthenticated(self) -> None:
         with patch("modulo.api.mcp_server.validate_current_auth", return_value=False):

@@ -164,6 +164,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         check=False,
+        timeout=30,
         env={**_clean_git_env(), "GIT_CEILING_DIRECTORIES": str(repo.parent)},
     )
 
@@ -188,7 +189,7 @@ def _local_runner(repo: Path):
             stderr=asyncio.subprocess.PIPE,
             env={**_clean_git_env(), "GIT_CEILING_DIRECTORIES": str(repo.parent)},
         )
-        stdout, stderr = await proc.communicate()
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
         return CommandResult(
             exit_code=proc.returncode if proc.returncode is not None else 1,
             stdout=stdout.decode(errors="replace"),

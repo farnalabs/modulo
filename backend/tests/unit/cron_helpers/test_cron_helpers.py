@@ -141,15 +141,20 @@ def _cron_row(
     )
 
 
-def _polling_row(trigger_id: uuid.UUID, *, has_connector: bool = True) -> SimpleNamespace:
+def _polling_row(
+    trigger_id: uuid.UUID, *, has_connector: bool = True, config_overrides: dict[str, Any] | None = None
+) -> SimpleNamespace:
+    config_json = (
+        {"connector_instance_id": str(uuid.uuid4()), "poll_query": "SELECT 1", "poll_interval_seconds": 60}
+        if has_connector
+        else {}
+    )
+    if config_overrides:
+        config_json.update(config_overrides)
     return SimpleNamespace(
         id=trigger_id,
         pipeline_id=uuid.uuid4(),
-        config_json=(
-            {"connector_instance_id": str(uuid.uuid4()), "poll_query": "SELECT 1", "poll_interval_seconds": 60}
-            if has_connector
-            else {}
-        ),
+        config_json=config_json,
     )
 
 
@@ -401,6 +406,47 @@ class TestFireDueTriggers:
         assert summary["cron_enqueued"] == 1
         adv_cron.assert_awaited_once()
         assert adv_cron.await_args.args[3] == "America/New_York"
+
+    @pytest.mark.asyncio
+    async def test_malformed_poll_interval_seconds_defaults_to_60(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A malformed ``poll_interval_seconds`` must not kill the global tick.
+
+        Regression test for the ``int()`` guard: a non-numeric value used to
+        raise ``ValueError`` straight out of ``fire_due_triggers`` (a global
+        tick killer). Now it is caught, logged, and the default 60s interval
+        is used so the polling trigger still fires.
+        """
+        _patch_env(monkeypatch)
+        session = _MockSession(
+            [
+                _org_result([ORG]),
+                _pause_result(ORG),
+                _rows_result([_cron_row(TRIGGER_A)]),
+                _rows_result([_polling_row(TRIGGER_POLL, config_overrides={"poll_interval_seconds": "not-an-int"})]),
+                _rows_result([_report_row(REPORT)]),
+            ]
+        )
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis") as redis_cls,
+            patch.object(ch, "RedisQueue", MagicMock()),
+            patch.object(ch, "_advance_cron_next_fire", new_callable=AsyncMock, return_value=True),
+            patch.object(ch, "_advance_polling_next_fire", new_callable=AsyncMock, return_value=True) as adv_poll,
+            patch.object(ch, "_advance_report_next_send", new_callable=AsyncMock, return_value=True),
+            patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock, return_value="job-id"),
+        ):
+            redis_cls.from_url.return_value = redis_client
+            summary = await ch.fire_due_triggers()
+
+        # The tick survives and the polling trigger fires with the 60s default.
+        assert summary["polling_due"] == 1
+        assert summary["polling_enqueued"] == 1
+        adv_poll.assert_awaited_once()
+        assert adv_poll.await_args.args[2] == 60
 
     @pytest.mark.asyncio
     async def test_paused_org_skips_cron_and_polling_enqueue_with_advance(
@@ -2571,7 +2617,7 @@ class TestCatchupReviewFindings:
         assert marker_key.endswith(str(int(due.timestamp())))
 
     @pytest.mark.asyncio
-    async def test_marker_ttl_covers_worst_case_inflight(self) -> None:
+    def test_marker_ttl_covers_worst_case_inflight(self) -> None:
         """Finding 3: the marker TTL covers the worst-case fire-job in-flight
         window (timeout x (retries+1)) so a pending job cannot outlive its
         marker and get re-fired."""

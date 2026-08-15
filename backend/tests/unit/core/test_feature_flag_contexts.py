@@ -648,12 +648,12 @@ class TestGetPlanForOrg:
 
     async def test_org_without_plan_uses_config_default(self) -> None:
         org = SimpleNamespace(plan_id=None)
-        config = SimpleNamespace(value="enterprise")
+        config = SimpleNamespace(value="team")
         with (
             _fake_crud_module("modulo.db.crud.organisation", get_organisation=AsyncMock(return_value=org)),
             _fake_crud_module("modulo.db.crud.system_config", get_config=AsyncMock(return_value=config)),
         ):
-            assert await get_plan_for_org(MagicMock(), _ORG_ID) == "enterprise"
+            assert await get_plan_for_org(MagicMock(), _ORG_ID) == "team"
 
     async def test_no_org_uses_config_default(self) -> None:
         config = SimpleNamespace(value="pro")

@@ -607,7 +607,7 @@ def test_try_parse_uuids_separates_valid_and_invalid():
 # ---------------------------------------------------------------------------
 
 
-async def test_conditional_edge_uses_source_node_id_fallback():
+def test_conditional_edge_uses_source_node_id_fallback():
     """Conditional edges without 'source' fall back to 'source_node_id'."""
     result = ValidationResult()
     GraphValidator._check_jmespath_conditional(
@@ -624,7 +624,7 @@ async def test_conditional_edge_uses_source_node_id_fallback():
     assert issue.node_id == "a"
 
 
-async def test_hitl_eval_condition_uses_source_node_id_fallback():
+def test_hitl_eval_condition_uses_source_node_id_fallback():
     """HITL eval-condition errors fall back to 'source_node_id'."""
     result = ValidationResult()
     GraphValidator._check_hitl_eval_condition(

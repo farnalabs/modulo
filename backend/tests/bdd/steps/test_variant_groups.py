@@ -342,7 +342,8 @@ def check_variant_distribution(variant: str, expected: int, ctx: dict[str, Any])
 @then("each batch run merges its variant's run_context_overrides into the input payload")
 def check_batch_run_overrides_merged(ctx: dict[str, Any]) -> None:
     results = ctx.get("run_results")
-    assert results is not None and len(results) >= 1, "Expected batch run results"
+    assert results is not None, "Expected batch run results"
+    assert len(results) >= 1
     for entry in results:
         variant = entry["variant"]
         overrides = variant.get("run_context_overrides", {})

@@ -111,7 +111,7 @@ async def test_initialise_youtrack_missing_base_url_is_skipped():
         hub.get(ci.id)
 
 
-async def test_get_unknown_raises():
+def test_get_unknown_raises():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     hub = ConnectorHub(secrets_backend=backend)
     unknown_id = uuid.uuid4()
@@ -517,7 +517,7 @@ async def test_initialise_double_guard_inside_lock_warns(tmp_path, caplog):
 
     assert any("already initialised" in rec.message for rec in caplog.records)
     # Nothing was built because the inner guard fired before the loop.
-    assert hub.connector_ids == frozenset()
+    assert not hub.connector_ids
 
 
 async def test_initialise_cancelled_error_propagates():
@@ -578,7 +578,7 @@ async def test_acl_returns_acl_for_connector(tmp_path):
     assert acl.allowed_operations == frozenset({"read", "write"})
 
 
-async def test_acl_unknown_connector_raises():
+def test_acl_unknown_connector_raises():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     hub = ConnectorHub(secrets_backend=backend)
     with pytest.raises(ConnectorNotFoundError):

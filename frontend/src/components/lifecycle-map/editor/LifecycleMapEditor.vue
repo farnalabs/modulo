@@ -273,8 +273,16 @@ async function loadData() {
       get<any>(`/api/v1/lifecycle-maps/${props.mapId}`).catch(() => null),
       get<{ items: PipelineSummary[] }>('/api/v1/pipelines?limit=200').catch(() => ({ items: [] })),
     ])
-    mapName.value = mapData.name
+    mapName.value = mapData?.name ?? ''
     pipelines.value = pipelinesData.items || []
+
+    if (!mapData) {
+      // The map fetch failed (e.g. 404 / network error) — surface the error
+      // instead of silently rendering an empty canvas (STATE-2: API failures
+      // render an inline error).
+      pageError.value = `Failed to load lifecycle map (${props.mapId}): map not found.`
+      return
+    }
 
     const versionList = await get<LifecycleMapVersion[]>(`/api/v1/lifecycle-maps/${props.mapId}/versions`)
     versions.value = versionList || []

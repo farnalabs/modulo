@@ -148,7 +148,7 @@ data residency, air-gapped).
 All providers share the same `RuntimeProvider` ABC. Switching between them
 is a config change, not a code change.
 
-### Enterprise features already available
+### Team features already available
 
 These are not future plans — they are built and tested today:
 
@@ -198,7 +198,7 @@ you want to offer Modulo as a service to external teams.
                         │  Existing Infra       │
                         │  (Docker Compose/VPC) │
                         │  Any RuntimeProvider  │
-                        │  Full enterprise      │
+                        │  Full team           │
                         └──────────────────────┘
 ```
 

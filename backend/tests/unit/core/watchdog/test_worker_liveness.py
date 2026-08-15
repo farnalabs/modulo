@@ -304,7 +304,7 @@ class TestWorkerLivenessWatchdog:
         post.assert_awaited_once()
         assert state is None  # workers never looked dead
 
-    async def test_configured_queues_are_prefix_aware(self) -> None:
+    def test_configured_queues_are_prefix_aware(self) -> None:
         settings = _make_settings(SAQ_RUNS_QUEUE="staging-runs")
         assert wl._configured_queues(settings) == ["staging-runs", "staging-system"]
 
@@ -583,7 +583,7 @@ class TestMultiChannelAlertFanout:
         client.post.assert_awaited_once()
         assert client.post.await_args.args[0] == "https://hooks.slack.com/webhook"
 
-    async def test_parse_alert_email_to(self) -> None:
+    def test_parse_alert_email_to(self) -> None:
         assert wl._parse_alert_email_to("a@b.com, c@d.com , ,e@f.com") == [
             "a@b.com",
             "c@d.com",
@@ -645,7 +645,7 @@ class TestEdgeTriggeredAlertRecovery:
         assert "recovered" in send.call_args.args[4]
         assert "no live SAQ worker" in send.call_args.args[3]
 
-    async def test_recovery_text_includes_duration_and_prior_conditions(self) -> None:
+    def test_recovery_text_includes_duration_and_prior_conditions(self) -> None:
         state = {"conditions": ["no live SAQ worker"], "started_at": time.time() - 120}
         text = wl._recovery_text(state)
         assert "worker-liveness recovered" in text
@@ -844,7 +844,7 @@ class TestEmailErrorPaths:
         send.assert_not_called()
         assert "watchdog.email_no_recipients" in caplog.text
 
-    async def test_recovery_text_without_started_at_omits_duration(self) -> None:
+    def test_recovery_text_without_started_at_omits_duration(self) -> None:
         text = wl._recovery_text({"conditions": ["no live SAQ worker"]})
         assert "for" not in text
 

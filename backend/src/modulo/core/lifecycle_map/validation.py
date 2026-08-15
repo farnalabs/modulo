@@ -223,6 +223,154 @@ def _validate_graph_structure(stages: list[dict[str, Any]], edges: list[dict[str
         raise LifecycleMapContentError("lifecycle-map content: stage transitions form a cycle: " + " -> ".join(cycle))
 
 
+def _edge_endpoint(edge: dict[str, Any], kind: str) -> str | None:
+    """Resolve an edge's source/target, honouring the editor alias keys."""
+    keys = _SOURCE_KEYS if kind == "source" else _TARGET_KEYS
+    for key in keys:
+        value = edge.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _can_reach(adjacency: dict[str, set[str]], start: str, goal: str) -> bool:
+    """True when *goal* is reachable from *start* in *adjacency* (BFS).
+
+    A self-loop is reachable trivially, so ``_can_reach(g, n, n)`` returns True.
+    """
+    if start == goal:
+        return True
+    stack = [start]
+    seen: set[str] = set()
+    while stack:
+        node = stack.pop()
+        if node in seen:
+            continue
+        seen.add(node)
+        for nxt in adjacency.get(node, ()):
+            if nxt == goal:
+                return True
+            stack.append(nxt)
+    return False
+
+
+def clean_legacy_content(content: dict[str, Any] | None) -> tuple[dict[str, Any], list[str]]:
+    """Repair legacy ``content_json`` so it passes :func:`normalize_content` again.
+
+    FAR-175 tightened graph validation to reject dangling edges and duplicate
+    stage/edge ids with a 422. Maps whose ``content_json`` was written before
+    that validation now fail EVERY content edit -- including graduation --
+    because ``save_map_version`` / ``graduate_stage`` re-validate the stored
+    graph before writing. This pure helper repairs such legacy content so the
+    one-off backfill script (``backend/scripts/
+    backfill_lifecycle_map_legacy_content.py``) can unblock those maps:
+
+    * drops duplicate stage ids (keeps the first occurrence) and
+      non-dict / id-less stages
+    * drops duplicate edge ids (keeps the first occurrence) and
+      non-dict / id-less edges
+    * drops edges whose source/target names an undefined stage (dangling)
+    * greedily drops edges that close a transition cycle (edges are processed
+      in order, keeping the graph acyclic; a self-loop is dropped)
+    * drops the ``transitions`` alias so the result is canonical
+
+    Non-repairable shapes (``stages``/``edges`` present but not arrays) are
+    returned unchanged with a change note so the caller can flag them for
+    manual repair. Every other key (``notes``, metadata) is preserved.
+
+    Returns ``(cleaned_content, changes)`` where each entry in *changes* is a
+    human-readable description of one dropped/fixed element. Callers MUST
+    verify the result with :func:`normalize_content` before persisting.
+    """
+    changes: list[str] = []
+    if content is None:
+        return {}, []
+    if not isinstance(content, dict):
+        return {}, ["content_json is not an object; left for manual repair"]
+    result: dict[str, Any] = dict(content)
+
+    if "stages" in result and not isinstance(result["stages"], list):
+        changes.append(
+            f"content_json.stages must be an array (got {type(result['stages']).__name__}); left for manual repair"
+        )
+        return result, changes
+
+    if "stages" in result:
+        cleaned_stages: list[dict[str, Any]] = []
+        stage_ids: set[str] = set()
+        for index, stage in enumerate(result["stages"]):
+            if not isinstance(stage, dict):
+                changes.append(f"dropped stage #{index} (not an object)")
+                continue
+            stage_id = stage.get("id")
+            if not isinstance(stage_id, str) or not stage_id.strip():
+                changes.append(f"dropped stage #{index} (missing or non-string id)")
+                continue
+            if stage_id in stage_ids:
+                changes.append(f"dropped duplicate stage id {stage_id!r} (#{index})")
+                continue
+            stage_ids.add(stage_id)
+            cleaned_stages.append(stage)
+        result["stages"] = cleaned_stages
+    else:
+        stage_ids = set()
+
+    if "edges" not in result and "transitions" not in result:
+        return result, changes
+
+    edges_raw = result.get("edges")
+    if edges_raw is None:
+        edges_raw = result.get("transitions")
+    if not isinstance(edges_raw, list):
+        changes.append(
+            f"content_json.edges/transitions must be an array (got {type(edges_raw).__name__}); left for manual repair"
+        )
+        return result, changes
+
+    seen_edge_ids: set[str] = set()
+    valid_edges: list[dict[str, Any]] = []
+    for index, edge in enumerate(edges_raw):
+        if not isinstance(edge, dict):
+            changes.append(f"dropped edge #{index} (not an object)")
+            continue
+        edge_id = edge.get("id")
+        if not isinstance(edge_id, str) or not edge_id.strip():
+            changes.append(f"dropped edge #{index} (missing or non-string id)")
+            continue
+        if edge_id in seen_edge_ids:
+            changes.append(f"dropped duplicate edge id {edge_id!r} (#{index})")
+            continue
+        seen_edge_ids.add(edge_id)
+        source = _edge_endpoint(edge, "source")
+        target = _edge_endpoint(edge, "target")
+        if source is None or target is None:
+            changes.append(f"dropped edge {edge_id!r} (missing source/target)")
+            continue
+        if source not in stage_ids:
+            changes.append(f"dropped dangling edge {edge_id!r} (source {source!r} not defined)")
+            continue
+        if target not in stage_ids:
+            changes.append(f"dropped dangling edge {edge_id!r} (target {target!r} not defined)")
+            continue
+        valid_edges.append(edge)
+
+    # Greedy cycle-breaking: accept edges in order while the graph stays acyclic.
+    adjacency: dict[str, set[str]] = {}
+    acyclic_edges: list[dict[str, Any]] = []
+    for edge in valid_edges:
+        source = _edge_endpoint(edge, "source") or ""
+        target = _edge_endpoint(edge, "target") or ""
+        if _can_reach(adjacency, target, source):
+            changes.append(f"dropped cycle-closing edge {edge.get('id')!r} ({source} -> {target})")
+            continue
+        acyclic_edges.append(edge)
+        adjacency.setdefault(source, set()).add(target)
+
+    result["edges"] = acyclic_edges
+    result.pop("transitions", None)
+    return result, changes
+
+
 def normalize_content(content: dict[str, Any] | None) -> dict[str, Any]:
     """Validate and canonicalise a lifecycle-map ``content_json`` payload.
 

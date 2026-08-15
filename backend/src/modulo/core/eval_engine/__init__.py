@@ -59,6 +59,7 @@ class EvalType(StrEnum):
     REGEX = "regex"
     JSON_SCHEMA = "json_schema"
     CUSTOM_FUNCTION = "custom_function"
+    GUARDRAIL = "guardrail"
 
 
 FailureBehaviour = Literal["warn", "block"]
@@ -118,6 +119,20 @@ class UnknownEvalTypeError(ValueError):
     def __init__(self, eval_type: str) -> None:
         super().__init__(f"Unknown eval type: {eval_type!r}")
         self.eval_type = eval_type
+
+
+class GuardrailMisroutedError(RuntimeError):
+    """Raised when a guardrail definition is routed through ``EvalEngine.evaluate``.
+
+    Guardrail detection is a sibling function in ``modulo.core.guardrails``
+    that reuses the pure eval helpers; the ``EvalEngine.evaluate`` contract is
+    untouched. Any attempt to evaluate a guardrail through the generic engine
+    is a routing bug and must fail loudly rather than silently mis-evaluate.
+    """
+
+    def __init__(self, eval_name: str) -> None:
+        super().__init__(f"Guardrail {eval_name!r} must not be routed through EvalEngine.evaluate")
+        self.eval_name = eval_name
 
 
 class SuiteEvalResult(BaseModel):
@@ -217,6 +232,13 @@ class EvalEngine:
                 result = self._evaluate_custom(output, eval_def, run_id)
             case EvalType.LLM_JUDGE:
                 result = self._evaluate_llm(output, eval_def, run_id, llm_judge_callable)
+            case EvalType.GUARDRAIL:
+                # Guardrail detection is a sibling function (modulo.core.guardrails)
+                # that reuses the pure regex/json_schema helpers; it must never be
+                # routed through the generic engine — its config shape differs and
+                # block semantics are guardrail-owned (terminal eval_failed). Fail
+                # loudly on misrouting rather than silently mis-evaluate.
+                raise GuardrailMisroutedError(eval_def.name)
             case _:
                 raise UnknownEvalTypeError(str(eval_def.eval_type))
 
@@ -234,6 +256,26 @@ class EvalEngine:
         "x": re.VERBOSE,
         "u": re.UNICODE,
     }
+
+    @staticmethod
+    def _resolve_output_field(output: dict[str, Any], field: str) -> tuple[bool, Any]:
+        """Resolve a (possibly dotted) ``field`` path against *output*.
+
+        Returns ``(found, value)``. Segment matching is an EXACT key lookup —
+        never a substring match. A single-segment field behaves exactly like a
+        top-level ``output.get(field)`` lookup. Guardrail detection reuses this
+        so an author can write ``field: "config.credentials.api_key"`` for a
+        credential guardrail and have it actually fire (FAR-208 review MAJOR-2)
+        instead of silently never resolving to a value.
+        """
+        if not field:
+            return False, None
+        current: Any = output
+        for segment in field.split("."):
+            if not segment or not isinstance(current, dict) or segment not in current:
+                return False, None
+            current = current[segment]
+        return True, current
 
     def _evaluate_regex(
         self,
@@ -274,8 +316,8 @@ class EvalEngine:
                 eval_id=eval_def.id,
                 detail="Regex eval missing 'field' in config",
             )
-        raw_value = output.get(field)
-        value = "" if raw_value is None else str(raw_value)
+        found, raw_value = self._resolve_output_field(output, field)
+        value = "" if not found or raw_value is None else str(raw_value)
         flags = 0
         flags_str = eval_def.config.get("flags", "")
         if flags_str:
@@ -321,7 +363,8 @@ class EvalEngine:
             )
         field = eval_def.config.get("field", "")
         if field:
-            if field not in output:
+            found, data = self._resolve_output_field(output, field)
+            if not found:
                 _log.warning("JSON Schema eval %s field %r not found in output", eval_def.id, field)
                 return _fail_result(
                     run_id=run_id,
@@ -329,7 +372,6 @@ class EvalEngine:
                     eval_id=eval_def.id,
                     detail=f"Field {field!r} not found in output for JSON Schema validation",
                 )
-            data = output[field]
         else:
             data = output
         try:
@@ -599,6 +641,7 @@ __all__ = [
     "EvalSuiteBlockedError",
     "EvalType",
     "FailureBehaviour",
+    "GuardrailMisroutedError",
     "LLMJudgeCallable",
     "SuiteEvalResult",
     "UnknownEvalTypeError",

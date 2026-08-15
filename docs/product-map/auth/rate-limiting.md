@@ -4,6 +4,7 @@ prd: 7.18
 delivery-tasks: [task-nv12-rate-limiting]
 bdd:
   - backend/tests/bdd/features/model_backends/rate_limiting.feature
+  - backend/tests/bdd/features/rate_limiting/auth_brute_force.feature
 code:
   - backend/src/modulo/api/middleware/rate_limiter.py
   - backend/src/modulo/core/rate_limiter.py
@@ -13,6 +14,7 @@ unit-tests:
   - backend/tests/unit/rate_limiter/test_token_bucket.py
   - backend/tests/unit/mcp/test_mcp_trigger_rate_limit.py
   - backend/tests/bdd/steps/test_rate_limiting.py
+  - backend/tests/bdd/steps/test_auth_rate_limiting.py
   - backend/tests/unit/api/test_rate_limiter_middleware.py
   - backend/tests/unit/api/test_rate_limiter_keys.py
   - backend/tests/unit/api/test_rate_limit_hitl_review.py
@@ -128,6 +130,8 @@ Redis-backed sliding window and in-memory token bucket rate limiting for POST/PU
 - ~~HITL review rate limit (20/min per PRD §7.18) is not enforced as a separate rule — `/api/v1/runs` catch-all covers HITL paths at 60/min instead of the specified 20/min~~ — RESOLVED 2026-08-12: `RateLimitMiddleware.HITL_RULE` (`/hitl/`, 20/min) matches HITL review paths (`/api/v1/runs/{run_id}/hitl/{gate_id}/...`) by path-segment marker in `_rule_for`/`_should_rate_limit` and is preferred over the `/api/v1/runs` rule; exceeded review requests return 429 with `Retry-After`
 
 ## QA History
+### 2026-08-14 — wire auth_brute_force.feature into product map (improve-architecture)
+- Linked the already-wired `backend/tests/bdd/features/rate_limiting/auth_brute_force.feature` (5 executable scenarios: login 429, window reset, per-IP isolation, success reset, exponential backoff) to the `feat-auth-rate-limiting` entry's `bdd:` field. The feature file was wired via `backend/tests/bdd/steps/test_auth_rate_limiting.py` but was never listed in frontmatter. Added that step file to `unit-tests:` too.
 ### 2026-08-12 — HITL review rate limit 20/min (improve-architecture)
 - RESOLVED the "HITL review rate limit (20/min per PRD §7.18) is not enforced as a separate rule" known gap. Added `RateLimitMiddleware.HITL_RULE` (`"/hitl/"`, 20/min, 60s) — HITL review actions live under `/api/v1/runs/{run_id}/hitl/{gate_id}/` where the run/gate ids are variable so a static prefix cannot match them; `_rule_for`/`_should_rate_limit` now resolve the path-segment marker first so these paths are capped at 20/min (per user via the existing `_client_key`) instead of the `/api/v1/runs` 60/min catch-all, and return 429 with `Retry-After` when exceeded. `set_rules`/admin runtime reconfiguration is unaffected (RULES list unchanged; HITL stays PRD-fixed).
 - Updated `tests/unit/api/test_rate_limit_hitl_review.py`: docstring + `test_hitl_approve_matches_runs_rule` → `test_hitl_rule_is_20_per_min`, new `test_hitl_rule_is_more_restrictive_than_runs`, `test_hitl_check_uses_20_per_min_budget` (asserts `check(..., max_requests=20)`), `test_hitl_prd_20_per_min_is_enforced`, `test_rule_for_prefers_hitl_rule_over_runs`, `test_rule_for_keeps_runs_rule_for_non_hitl`; removed the "document the gap" placeholder test.

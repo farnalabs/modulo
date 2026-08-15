@@ -275,17 +275,35 @@ class TestResolveLogLevel:
         assert _resolve_log_level("modulo.api.routes.runs") == "WARNING"
 
 
-class TestLogAsyncEmitError:
-    async def test_logs_exception_when_present(self, caplog: pytest.LogCaptureFixture) -> None:
+def _completed_future(exc: BaseException | None = None) -> asyncio.Future[None]:
+    """Build a finished ``asyncio.Future``.
+
+    Constructing an ``asyncio.Future`` needs a running event loop on Python
+    3.12+ (``get_event_loop`` no longer fabricates one), so build it inside
+    ``asyncio.run`` and hand back the finished future. The callback under test
+    only calls ``future.exception()``, which is loop-independent.
+    """
+
+    async def _build() -> asyncio.Future[None]:
         future: asyncio.Future[None] = asyncio.Future()
-        future.set_exception(ValueError("boom"))
+        if exc is not None:
+            future.set_exception(exc)
+        else:
+            future.set_result(None)
+        return future
+
+    return asyncio.run(_build())
+
+
+class TestLogAsyncEmitError:
+    def test_logs_exception_when_present(self, caplog: pytest.LogCaptureFixture) -> None:
+        future: asyncio.Future[None] = _completed_future(exc=ValueError("boom"))
         with caplog.at_level(logging.ERROR, logger="modulo.core.logging_config"):
             _log_async_emit_error(future)
         assert any("async_emit_failed" in r.getMessage() for r in caplog.records)
 
-    async def test_no_exception_no_log(self, caplog: pytest.LogCaptureFixture) -> None:
-        future: asyncio.Future[None] = asyncio.Future()
-        future.set_result(None)
+    def test_no_exception_no_log(self, caplog: pytest.LogCaptureFixture) -> None:
+        future: asyncio.Future[None] = _completed_future()
         with caplog.at_level(logging.ERROR, logger="modulo.core.logging_config"):
             _log_async_emit_error(future)
         assert not caplog.records

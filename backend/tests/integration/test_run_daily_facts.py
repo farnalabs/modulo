@@ -122,6 +122,7 @@ async def _insert_run(
     total_cost_usd=None,
     total_tokens: int | None = None,
     run_id: uuid.UUID | None = None,
+    claim_token: str | None = None,
 ) -> uuid.UUID:
     from sqlalchemy import insert as sa_insert
 
@@ -137,6 +138,8 @@ async def _insert_run(
         "langgraph_thread_id": f"thread-{run_id.hex[:16]}",
         "run_number": int(run_id.int % 10**9) + 1,
     }
+    if claim_token is not None:
+        values["claim_token"] = claim_token
     values.update(
         {
             col: value
@@ -155,11 +158,18 @@ async def _insert_run(
 
 
 async def _insert_cost_component(session: AsyncSession, org_id: uuid.UUID) -> None:
+    # Idempotent: several tests seed the same 'llm_tokens' component for the
+    # shared module-scoped org; ON CONFLICT DO NOTHING prevents the second
+    # insert from tripping uq_cost_components_org_name_active (deploy-gate
+    # isolation fix, FAR-200). The unique index is partial
+    # (WHERE deleted_at IS NULL), so the ON CONFLICT inference clause must
+    # repeat the predicate to match it.
     await session.execute(
         text(
             "INSERT INTO cost_components (id, organisation_id, name, display_name, kind, rate_usd, "
             "formula, enabled, sort_order) "
-            "VALUES (:id, :oid, 'llm_tokens', 'LLM Tokens', 'calculated', NULL, :formula, true, 0)",
+            "VALUES (:id, :oid, 'llm_tokens', 'LLM Tokens', 'calculated', NULL, :formula, true, 0) "
+            "ON CONFLICT (organisation_id, name) WHERE deleted_at IS NULL DO NOTHING",
         ),
         {
             "id": str(uuid.uuid4()),
@@ -297,6 +307,138 @@ class TestLiveWriter:
         async with db_session.begin():
             await db_session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
             assert await _count_facts(db_session, run_id) == 1
+
+    async def test_fenced_finalize_writes_terminal_fact(
+        self,
+        db_session: AsyncSession,
+        org: uuid.UUID,
+        pipeline: uuid.UUID,
+        snapshot: uuid.UUID,
+    ) -> None:
+        """FAR-200 regression: a claim-token (fenced) finalize must snapshot the
+        run's TERMINAL state into the fact — not the pre-write ``'running'`` row.
+
+        ``update_run_status``'s fenced path writes via raw SQL, bypassing the
+        ORM identity map, so ``record_run_facts`` used to be handed the stale
+        pre-write run (status ``'running'``, NULL cost) — the exact
+        ``complete_count=0`` / NULL-cost bug seen on recent days in production.
+        """
+        from modulo.core.cost_controller.finalize import finalize_cost
+
+        run_id = await _insert_run(
+            db_session,
+            org_id=org,
+            pipeline_id=pipeline,
+            snapshot_id=snapshot,
+            status="running",
+            started_at=datetime(2026, 8, 4, 10, 0, tzinfo=UTC),
+            claim_token="tok-fenced",
+        )
+        await _insert_cost_component(db_session, org)
+        await db_session.commit()
+
+        async with db_session.begin():
+            await db_session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
+            await finalize_cost(
+                db_session,
+                run_id=run_id,
+                org_id=org,
+                status="complete",
+                segment_node_token_usage={"n1": {"input_tokens": 1000, "output_tokens": 0, "total_tokens": 1000}},
+                segment_completed_node_outputs=None,
+                node_type_map={"n1": "agent"},
+                is_terminal=True,
+                claim_token="tok-fenced",
+            )
+
+        async with db_session.begin():
+            await db_session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
+            row = (
+                await db_session.execute(
+                    text(
+                        "SELECT status, total_cost_usd, total_tokens, run_date FROM run_daily_facts WHERE run_id = :rid"
+                    ),
+                    {"rid": str(run_id)},
+                )
+            ).first()
+        assert row is not None, "a fenced terminal finalize must write a fact"
+        assert row[0] == "complete", "a fenced finalize must record the TERMINAL status, not the pre-write 'running'"
+        assert row[1] is not None, "the fact must carry the run's cost"
+        assert float(row[1]) > 0, "the fact must carry a positive cost"
+        assert row[2] == 1000
+        assert row[3] == date(2026, 8, 4)
+
+    async def test_refresh_failure_never_rolls_back_terminal_write(
+        self,
+        db_session: AsyncSession,
+        org: uuid.UUID,
+        pipeline: uuid.UUID,
+        snapshot: uuid.UUID,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """ADR-020 envelope (FAR-200 review): a facts-refresh failure must not
+        propagate out of ``finalize_cost`` nor roll back the terminal status
+        write + ledger.
+
+        The refresh previously ran at the CALL SITE — ``session.refresh(run)``
+        evaluated BEFORE ``record_run_facts``'s fail-open guard, so a refresh
+        failure (PendingRollbackError, connection drop) bubbled out of
+        ``finalize_cost`` and rolled back the run's terminal status + ledger.
+        The refresh now lives INSIDE ``record_run_facts``'s guard and degrades
+        to recording from the in-memory object on failure, so the terminal
+        outcome always commits.
+        """
+        from modulo.core.cost_controller.finalize import finalize_cost
+
+        run_id = await _insert_run(
+            db_session,
+            org_id=org,
+            pipeline_id=pipeline,
+            snapshot_id=snapshot,
+            status="running",
+            started_at=datetime(2026, 8, 13, 12, 0, tzinfo=UTC),
+            claim_token="tok-refresh-fail",
+        )
+        await _insert_cost_component(db_session, org)
+        await db_session.commit()
+
+        async def _boom(*args: object, **kwargs: object) -> object:
+            raise RuntimeError("simulated facts refresh failure")
+
+        monkeypatch.setattr(AsyncSession, "refresh", _boom)
+
+        async with db_session.begin():
+            await db_session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
+            await finalize_cost(
+                db_session,
+                run_id=run_id,
+                org_id=org,
+                status="complete",
+                segment_node_token_usage={"n1": {"input_tokens": 1000, "output_tokens": 0, "total_tokens": 1000}},
+                segment_completed_node_outputs=None,
+                node_type_map={"n1": "agent"},
+                is_terminal=True,
+                claim_token="tok-refresh-fail",
+            )
+
+        async with db_session.begin():
+            await db_session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
+            run_status = (
+                await db_session.execute(text("SELECT status FROM runs WHERE id = :rid"), {"rid": str(run_id)})
+            ).scalar_one()
+            ledger_total = (
+                await db_session.execute(
+                    text(
+                        "SELECT total_spend_usd FROM org_daily_run_counts "
+                        "WHERE organisation_id = :oid AND team_id IS NULL AND run_date = '2026-08-13'"
+                    ),
+                    {"oid": str(org)},
+                )
+            ).scalar_one_or_none()
+
+        assert run_status == "complete", "the terminal status write must commit despite a refresh failure"
+        assert ledger_total is not None, "the ledger must commit despite a refresh failure"
+        assert float(ledger_total) > 0, "the ledger must commit despite a refresh failure"
 
     async def test_fallback_path_writes_fact(
         self,

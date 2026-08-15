@@ -376,7 +376,7 @@ async def _scan_expired_webhook_dedups(session: AsyncSession, org_id: uuid.UUID)
             id=str(r.id),
             name=f"Webhook dedup {r.payload_hash[:16]}...",
             detail="Expired webhook deduplication hash",
-            created_at=r.expires_at.isoformat() if r.expires_at else None,
+            created_at=r.created_at.isoformat() if r.created_at else None,
         )
         for r in rows
     ]

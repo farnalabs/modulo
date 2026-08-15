@@ -159,5 +159,5 @@ class TestFilesystemConnector:
         assert by_name["sub"]["type"] == "dir"
         assert Path(by_name["f.txt"]["path"]).is_absolute()
 
-    async def test_connector_type_is_filesystem(self, fs_connector: FilesystemConnector) -> None:
+    def test_connector_type_is_filesystem(self, fs_connector: FilesystemConnector) -> None:
         assert fs_connector.connector_type == ConnectorType.FILESYSTEM

@@ -38,6 +38,11 @@ export interface AnalyticsResponse {
   dimension?: string | null;
   date_from?: string | null;
   date_to?: string | null;
+  /** FAR-200 freshness indicator: hours since the newest day with a terminal
+   * fact row, and whether that lags > ~36h. Surfaced as a stale-data notice.
+   */
+  facts_freshness_hours?: number | null;
+  facts_stale?: boolean;
   buckets: AnalyticsBucket[];
 }
 
@@ -498,6 +503,8 @@ export const useAnalyticsStore = defineStore("analytics", () => {
   const earliestAvailableDate = ref<string | null>(null);
 
   const buckets = computed(() => results.value?.buckets ?? []);
+  const factsStale = computed(() => Boolean(results.value?.facts_stale));
+  const factsFreshnessHours = computed(() => results.value?.facts_freshness_hours ?? null);
   const hasData = computed(() =>
     buckets.value.some(
       (b) =>
@@ -630,6 +637,8 @@ export const useAnalyticsStore = defineStore("analytics", () => {
     flagOff,
     earliestAvailableDate,
     buckets,
+    factsStale,
+    factsFreshnessHours,
     hasData,
     groupBy,
     setFilters,

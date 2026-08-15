@@ -4,11 +4,15 @@ Webhook processing pipeline:
   1. Load trigger config from DB (with FOR UPDATE lock)
   2. X-Modulo-Timestamp replay window check (±300s)
   3. HMAC-SHA256 validation over timestamp.body (if hmac_secret configured)
-  4. Deduplication (WebhookDedupHash - payload hash, 5-min TTL)
-  5. Flood protection (concurrent run count vs. trigger.max_concurrent_runs)
-  6. Payload mapping (dot-notation path → input_payload key)
-  7. Create Run + TriggerEvent in one transaction
-  8. Dedup hash committed with run (single atomic unit)
+  4. Event filtering — accepted_events presence check + optional event_filters
+     value check (dotted payload path → allowed values); a non-matching payload
+     is logged, records an ``event_type_not_accepted`` TriggerEvent, and raises
+     without creating a run
+  5. Deduplication (WebhookDedupHash - payload hash, 5-min TTL)
+  6. Flood protection (concurrent run count vs. trigger.max_concurrent_runs)
+  7. Payload mapping (dot-notation path → input_payload key)
+  8. Create Run + TriggerEvent in one transaction
+  9. Dedup hash committed with run (single atomic unit)
 
 All outcomes (pass and fail) are recorded as a TriggerEvent row, with two
 exceptions documented here for accuracy:
@@ -221,6 +225,27 @@ def _extract_field(payload: dict[str, Any], path: str) -> Any:
     return value
 
 
+def _matches_event_filters(raw_payload: dict[str, Any], event_filters: Any) -> bool:
+    """Return True when every configured dotted-path value filter matches.
+
+    ``event_filters`` maps a dotted payload path (e.g. ``"review.state"``) to a
+    list of allowed values. A missing key, a non-dict intermediate node, a
+    resolved value absent from the allowlist, or a malformed (non-dict or
+    non-list) filter config rejects the event (returns False) — value filters
+    fail closed. Comparison uses the existing ``_extract_field`` dot-notation
+    walk so filtering shares the payload-mapping path semantics.
+    """
+    if not isinstance(event_filters, dict):
+        return False
+    for path, allowed_values in event_filters.items():
+        if not isinstance(allowed_values, (list, tuple, set)):
+            return False
+        value = _extract_field(raw_payload, path)
+        if value not in allowed_values:
+            return False
+    return True
+
+
 def _apply_payload_mapping(raw_payload: dict[str, Any], mapping: dict[str, str]) -> dict[str, Any]:
     """Map raw webhook payload fields to input_payload using dot-notation paths.
 
@@ -360,6 +385,30 @@ class TriggerEngine:
                         f"Trigger {trigger_id}: none of the accepted event types {accepted_events} "
                         f"found in webhook payload (keys: {list(raw_payload.keys())})"
                     )
+
+            # Value-based event filtering - skip if any configured dotted path
+            # resolves to a value outside its allowlist. Evaluated AFTER the
+            # accepted_events presence check but BEFORE dedup/run creation so a
+            # non-matching payload never consumes a dedup slot or creates a run.
+            event_filters = cfg.get("event_filters")
+            if event_filters and not _matches_event_filters(raw_payload, event_filters):
+                _log.info(
+                    "Webhook event value filter not accepted for trigger %s (event_filters=%s, payload_keys=%s)",
+                    trigger_id,
+                    event_filters,
+                    list(raw_payload.keys()),
+                )
+                await self._log_event(
+                    session,
+                    trigger=trigger,
+                    org_id=org_id,
+                    payload_hash=payload_hash,
+                    result="event_type_not_accepted",
+                )
+                raise RuntimeError(
+                    f"Trigger {trigger_id}: event value filters {event_filters} "
+                    f"not satisfied by webhook payload (keys: {list(raw_payload.keys())})"
+                )
 
             # Deduplication
             is_new = await self._try_insert_dedup(session, trigger_id, org_id, payload_hash)
@@ -569,6 +618,28 @@ class TriggerEngine:
                         f"Trigger {trigger.id}: none of the accepted event types {accepted_events} "
                         f"found in replayed webhook payload (keys: {list(raw_payload.keys())})"
                     )
+
+            # Value-based event filtering - mirror the handle_webhook gate so a
+            # re-fired event is held to the same filter as the original delivery.
+            event_filters = cfg.get("event_filters")
+            if event_filters and not _matches_event_filters(raw_payload, event_filters):
+                _log.info(
+                    "Replay event value filter not accepted for trigger %s (event_filters=%s, payload_keys=%s)",
+                    trigger.id,
+                    event_filters,
+                    list(raw_payload.keys()),
+                )
+                await self._log_event(
+                    session,
+                    trigger=trigger,
+                    org_id=org_id,
+                    payload_hash=payload_hash,
+                    result="event_type_not_accepted",
+                )
+                raise RuntimeError(
+                    f"Trigger {trigger.id}: event value filters {event_filters} "
+                    f"not satisfied by replayed webhook payload (keys: {list(raw_payload.keys())})"
+                )
 
             # Flood protection
             active_count = await self._count_active_runs(session, trigger.id)

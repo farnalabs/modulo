@@ -70,14 +70,18 @@ class LifecycleMapTransfer(BaseModel):
 
     This is the primitive shape ``GET .../export`` returns and ``POST
     /import`` accepts: ``content_json`` holds the canonical stages/edges/notes
-    graph and is validated with the same rules as an editor save.
+    graph and is validated with the same rules as an editor save. ``format_version``
+    is ``2`` and the optional ``versions`` array carries the version history
+    (each version's stages/edges/notes + metadata); a v1 envelope without
+    ``versions`` still imports as a single-version map.
     """
 
     primitive_type: Literal["lifecycle_map"] = "lifecycle_map"
-    format_version: str = "1"
+    format_version: str = "2"
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
     content_json: dict[str, Any] = Field(default_factory=dict)
+    versions: list[dict[str, Any]] | None = None
 
 
 class LifecycleMapResponse(BaseModel):
@@ -263,7 +267,7 @@ class JourneySelfReportResponse(BaseModel):
     """Per-ref outcome summary for one self-report request.
 
     ``accepted`` refs matched an existing journey and were advanced;
-    ``unmatched`` refs were valid but had no journey row (dropped â€” never
+    ``unmatched`` refs were valid but had no journey row (dropped — never
     minted); ``rejected`` refs were malformed or dropped by the 100-entry cap.
     """
 
@@ -782,6 +786,14 @@ async def restore_lifecycle_map_endpoint(
             lifecycle_map = await restore_lifecycle_map(session, lifecycle_map_id)
             if lifecycle_map is not None:
                 await session.refresh(lifecycle_map)
+                await _record_audit(
+                    session,
+                    org_id=principal.organisation_id,
+                    event_type="lifecycle_map.restored",
+                    account_id=principal.account_id,
+                    resource_id=lifecycle_map.id,
+                    payload_json={"name": lifecycle_map.name},
+                )
     except ProgrammingError as exc:
         _log.exception("lifecycle_maps.restore_lifecycle_map_endpoint")
         raise HTTPException(
@@ -878,7 +890,7 @@ async def save_lifecycle_map_version_endpoint(
                 await _record_audit(
                     session,
                     org_id=principal.organisation_id,
-                    event_type="lifecycle_map.updated",
+                    event_type="lifecycle_map.version_saved",
                     account_id=principal.account_id,
                     resource_id=lifecycle_map.id,
                     payload_json={
@@ -932,7 +944,7 @@ async def update_lifecycle_map_version_endpoint(
     principal: TenantPrincipal = require_permission("lifecycle_map.update"),
 ) -> LifecycleMapVersionResponse:
     """Update a version. v1 semantics: the active map state is the only version,
-    so this behaves identically to save â€” ``version_id`` is validated as a UUID
+    so this behaves identically to save — ``version_id`` is validated as a UUID
     for contract compatibility but the save targets the map itself.
     """
     try:
@@ -951,7 +963,7 @@ async def update_lifecycle_map_version_endpoint(
                 await _record_audit(
                     session,
                     org_id=principal.organisation_id,
-                    event_type="lifecycle_map.updated",
+                    event_type="lifecycle_map.version_saved",
                     account_id=principal.account_id,
                     resource_id=lifecycle_map.id,
                     payload_json={
@@ -1284,7 +1296,7 @@ async def self_report_journeys_endpoint(
     lifecycle-map stage and want the journeys they touched to reflect it.
     Per the FAR-143 spec v6 rule, self-report is ADVISORY: a reported ref can
     only CONFIRM / MATCH an existing journey keyed by the same canonical
-    ``(org, kind, ref)`` â€” a ref with no journey row is dropped (counted as
+    ``(org, kind, ref)`` — a ref with no journey row is dropped (counted as
     unmatched) and is NEVER minted, and no runs are created or touched. Each
     confirmed journey is advanced via ``advance_journeys`` with ``status``
     ``"complete"`` (the workflow reached this endpoint, so its stage
@@ -1292,13 +1304,13 @@ async def self_report_journeys_endpoint(
     ``latest_terminal_run_id`` is preserved, not overwritten).
 
     The request body is already the self-report wire shape, so entries flow
-    straight through ``validate_and_normalise_reported_refs`` â€” the same
+    straight through ``validate_and_normalise_reported_refs`` — the same
     per-entry validation/canonicalisation the run-finalise path applies to
     merged run outputs (``parse_self_report_refs`` is only needed for nested
     run-output trees). A malformed entry is rejected and counted, never a
     whole-request 422 (fail-open per ref).
 
-    Auth: the documented CI/CD credential path (PRD Â§5.2) â€” a user JWT or an
+    Auth: the documented CI/CD credential path (PRD §5.2) — a user JWT or an
     org API key (``mk_...``). A GitHub Actions workflow calls this with
     ``Authorization: Bearer mk_<key>`` for a key whose owner holds the
     ``runner`` role. There is no ``run.create`` permission in the registry;

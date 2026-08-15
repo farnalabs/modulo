@@ -21,7 +21,7 @@ _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _TEAM_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
 
 
-class _EnterprisePlan:
+class _TeamPlan:
     def feature_enabled(self, name: str) -> bool:
         return True
 
@@ -83,7 +83,7 @@ def admin_client() -> TestClient:
         account_id=_USER_ID,
         org_role="admin",
     )
-    app.dependency_overrides[get_plan_context] = lambda: _EnterprisePlan()
+    app.dependency_overrides[get_plan_context] = lambda: _TeamPlan()
     client = TestClient(app)
     yield client
     app.dependency_overrides.clear()

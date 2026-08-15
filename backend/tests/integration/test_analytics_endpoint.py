@@ -36,7 +36,7 @@ class _AllFeatures:
         return []
 
     def tier(self) -> str:
-        return "enterprise"
+        return "team"
 
     def has_license_key(self) -> bool:
         return True
@@ -307,6 +307,19 @@ async def user_b(db_engine: AsyncEngine, org_b: uuid.UUID) -> uuid.UUID:
 
 
 @pytest_asyncio.fixture(scope="module")
+async def empty_org(db_engine: AsyncEngine) -> uuid.UUID:
+    """Dedicated org for the empty-series test — module-scoped but NEVER written
+    to by any other test, so it stays truly empty (org_a is polluted by the
+    two-org isolation test which inserts facts for it)."""
+    return await _seed_org(db_engine, "AnalyticsEndpoint-Empty")
+
+
+@pytest_asyncio.fixture(scope="module")
+async def empty_user(db_engine: AsyncEngine, empty_org: uuid.UUID) -> uuid.UUID:
+    return await _seed_user(db_engine, empty_org, "analytics-empty@test.local")
+
+
+@pytest_asyncio.fixture(scope="module")
 async def concurrency_org(db_engine: AsyncEngine) -> uuid.UUID:
     """Dedicated org for the concurrency test.
 
@@ -374,10 +387,10 @@ class TestEmptyOrg:
     async def test_empty_org_returns_empty_series(
         self,
         integration_client: AsyncClient,
-        org_a: uuid.UUID,
-        user_a: uuid.UUID,
+        empty_org: uuid.UUID,
+        empty_user: uuid.UUID,
     ) -> None:
-        token = _token(org_a, user_a, "admin")
+        token = _token(empty_org, empty_user, "admin")
         resp = await integration_client.get(
             "/api/v1/analytics/query?date_from=2026-07-01&date_to=2026-07-07",
             headers={"Authorization": f"Bearer {token}"},
@@ -386,6 +399,10 @@ class TestEmptyOrg:
         payload = resp.json()
         assert payload["buckets"], "an empty org must still return zero-filled buckets for the range"
         assert all(b["count"] == 0 for b in payload["buckets"])
+        # FAR-200 wire contract: the serialized response must carry the
+        # freshness indicator — an empty org reads as "no data yet", not stale.
+        assert payload["facts_stale"] is False, "an empty org reads as 'no data yet', not stale"
+        assert payload["facts_freshness_hours"] is None, "an empty org has no terminal fact day to measure from"
 
 
 class TestDimensionedQuery:
@@ -417,6 +434,12 @@ class TestDimensionedQuery:
         assert {"manual", "cron", "webhook"} <= keys, f"expected dimensioned keys, got {keys}"
         assert None not in keys, "dimensioned buckets must carry non-None keys"
         assert sum(b["count"] for b in payload["buckets"]) == 3
+        # FAR-200 wire contract: the serialized response must carry the
+        # freshness indicator — a fresh org (today's terminal facts) reports
+        # numeric hours within the 36h staleness window and is not stale.
+        assert payload["facts_freshness_hours"] is not None, "a fresh org must report numeric freshness hours"
+        assert payload["facts_freshness_hours"] <= 36, "today's terminal facts are within the 36h staleness window"
+        assert payload["facts_stale"] is False, "a fresh org with today's terminal facts is not stale"
 
     async def test_folder_dimension_returns_uuid_keys(
         self,

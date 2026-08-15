@@ -1660,11 +1660,50 @@ Stored per-run per-node. Displayed in run inspection UI (§7.9). Written to Audi
 
 A HITL gate's `condition` field (v1) references an eval: `{eval_id: "quality-check", threshold: 0.8, operator: "lt"}`. If the condition is true (score < 0.8), LangGraph `interrupt()` fires. If false, execution continues without pausing. The Eval Engine runs within the StateGraph node transition — before the conditional interrupt check. This ordering is non-negotiable; HITL gating cannot be conditional without it.
 
+#### Guardrails — the input-side seam (FAR-208)
+
+The eval system above is **output-side** (post-node). Guardrails are the **input-side** analogue: deterministic structured-credential boundary data-safety at the ingestion edge. A guardrail is an `EvalDefinition` with `eval_type="guardrail"` (additive to the eval_type vocabulary at the 5 authoritative sites). Shipped core:
+
+| Field | Description |
+|---|---|
+| `eval_type` | `guardrail` |
+| `config_json.interception_point` | `input` (ingestion edge; T1) |
+| `config_json.action` | `observe` \| `warn` \| `block` \| `redact` |
+| `config_json.redaction` | static field-path policies `{path, mode: transform\|drop\|block}` |
+| `config_json.required_capabilities` | optional conformance claim (empty = no claim) |
+| `detection` | deterministic pure evals ONLY: `regex` \| `json_schema` |
+
+Behaviour:
+
+- **Detection** is deterministic and pure. A guardrail is a *sibling* of the Eval Engine — routing a guardrail through `EvalEngine.evaluate` raises `GuardrailMisroutedError`.
+- **Interception** runs at run-creation (webhook trigger, manual, replay) inside `create_run` **before** `runs.input_payload` is persisted — persisted state is post-redaction. Two-phase pass: evaluate ALL bound guardrails against an immutable pre-act copy, then apply redaction masks in deterministic order. Zero-guardrail fast path.
+- **Redaction** is masks-only (fixed mask token, never payload-derived), static field paths with EXACT/ANCHOR matching (substring matching forbidden), and an allowlist of never-touch system fields.
+- **Block** is TERMINAL `eval_failed` (error_code `eval_blocked`); the run is never dispatched, never retried, and has no HITL gate. `failure_behaviour='retry'` is forbidden on guardrails (rejected at the API edge and the DB CHECK).
+- **Observe/warn** never block; observe-mode results stamp `eval_results.observed` so the guardrail_summary observed bucket counts once.
+- **Remediation** is the dedicated guardrail-override endpoint (`POST /runs/{run_id}/guardrail-override`). The generic recover endpoint REFUSES guardrail-blocked runs (`error_code` `eval_blocked`) — the generic path does not re-run the guardrail pass on the supplied input and would resume execution on the blocked payload. `deliver_manual` is unavailable for terminal runs (no HITL gate → 404). The override re-runs the guardrail pass on the operator-supplied input (re-block safe default; a still-violating input is refused and the run stays terminal), persists the post-redaction payload, flips the run to `pending`, sets `is_replay=True` so lifecycle-map journeys increment exactly once, and re-dispatches from run start (the blocked run never executed, so there is no checkpoint to resume).
+
+Planned (not shipped in T1): conformance enforcement wiring at dispatch time (three-state derivation is shipped as a pure helper; enforcement is planned), kill-switch rollout flag, snapshot pinning (`guardrail_pins_json`), guardrail_summary telemetry on run detail, canary guardrails, and the guardrail management UI.
+
 #### Alpha Note
 The Eval Engine component appears in the §6.1 architecture diagram. Eval System is a **v1 feature** — no eval definitions, no eval UI, and no conditional HITL in alpha. Alpha runs do not execute evals.
 
 #### V1 delivery dependency
 The Eval System (§8.17) must ship before the Feedback System (§8.20). The Feedback System's `ai_correction` handler, eval gap detection, and proposed eval curation all require a functioning eval suite. The `human` feedback handler mode operates without evals (it is a routing and inbox feature only) and can ship alongside or before the Eval System. V1 Core delivery order: Eval System → Feedback System (`ai_correction` and gap detection). Human feedback inbox can ship earlier as a standalone feature. Additionally, Run Context Propagation (alpha) is a prerequisite for the Feedback System's correction run mechanics — correction runs inherit `run_context` from the original checkpoint. Run Context must be fully implemented and validated in alpha before the Feedback System's correction run feature can ship in v1.
+
+#### Guardrails (planned)
+
+Guardrails are boundary enforcement for agent safety: the same eval primitives as §8.17 extended to the input side, with interception points, transform actions (redaction), and remediation wiring. They are **planned — not yet shipped** (T1 of the phase-guardrails epic). Nothing in this subsection exists in shipped code today.
+
+The boundary philosophy: the agent definition is the driver's manual; boundary controls are the enforcement. An orchestrator CAN enforce deterministic, auditable, tamper-resistant controls at the orchestration boundary — validating what enters and leaves a run. It must DELEGATE agent-internal behaviour and unmediated external runtimes, which no boundary control can observe. Guardrails are therefore not agent-internal safety; they are the contract between the orchestrator and the agent it runs.
+
+Planned capability (T1) — all **planned, not yet shipped**:
+- **Input-side interception** at run creation — evaluated before the run's first node executes.
+- **Actions**: `observe` | `warn` | `block` | `redact` (masks-only; redaction replaces matched field values with a placeholder, never logs the raw value).
+- **Deterministic detection** — the same `regex` / `json_schema` primitives as §8.17; no LLM judge on the input side.
+- **Conformance** for the `block` action — the run is rejected at the boundary, leaving an auditable, machine-readable rejection record.
+- **Audited override/recovery** — any bypass of a guardrail result is itself an auditable event.
+
+What guardrails do NOT cover (known failure classes, all planned follow-on work, none shipped): free-text PII embedded in otherwise-valid field values, content-based detection (semantic, not structural), the interior of an agent loop (e.g. a long-running agent's intermediate steps), and output-side effects (already specified in §8.17 output-side gates).
 
 ---
 
@@ -1832,14 +1871,14 @@ The entire View Modes feature is **Team-gated** (`view_modes` feature flag). Wit
 
 #### Default UX: Simple/Advanced Toggle
 
-On first enterprise setup, two views are seeded:
+On first team setup, two views are seeded:
 - **Simple** — core navigation (pipelines, stages, runs, library, settings), dashboard summary widgets, basic run/trigger views, HITL review queue, run list, basic agent/schema/connector management. Advanced features (evals, variants, schema inference, feedback inbox, cost breakdown, audit viewer, etc.) are hidden.
 - **Advanced** — everything visible.
 
 A toggle in the sidebar footer (adjacent to the theme toggle and tier badge) switches between them. The page re-renders in place via Vue's reactive system — no route change, no reload, no flash, no state mutation. The current selection is persisted in `localStorage`.
 
 **When the toggle is hidden**:
-- No enterprise license → no toggle, no view system at all, all features visible
+- No team license → no toggle, no view system at all, all features visible
 - User is assigned a view other than "Simple" or "Advanced" → the toggle is hidden. The assigned view is applied silently.
 - User has an enforced view → the toggle is hidden (choice removed)
 
@@ -1892,7 +1931,7 @@ Views are assigned to users, teams, or org roles via a `view_assignments` table:
 
 #### Admin Configuration: `/settings/view-modes`
 
-`/settings/view-modes` (admin only, enterprise-gated):
+`/settings/view-modes` (admin only, team-gated):
 
 | Section | Content |
 |---|---|
@@ -2076,7 +2115,7 @@ data: {"type":"run","id":"uuid","action":"updated","version":42,"org_id":"uuid"}
 
 #### Flag / Gating
 
-This feature is **free-tier** (no enterprise gate). Real-time sync is a UX baseline, not a premium feature.
+This feature is **free-tier** (no team gate). Real-time sync is a UX baseline, not a premium feature.
 
 ---
 
@@ -2290,7 +2329,7 @@ A second Remy ingress at the full-screen route `/remy` renders the **same** sess
 
 #### Flag / Gating
 
-Remy is a **Team-tier** feature (enterprise-gated via `remy` feature flag). The base access control (which users/teams see Remy) is org-level admin configuration, not a separate license gate. The feature flag controls whether Remy exists in the org at all; the access list controls who sees it.
+Remy is a **Team-tier** feature (team-gated via `remy` feature flag). The base access control (which users/teams see Remy) is org-level admin configuration, not a separate license gate. The feature flag controls whether Remy exists in the org at all; the access list controls who sees it.
 
 ---
 
@@ -3562,7 +3601,7 @@ These are not required for the initial release but should follow shortly after.
 - LangGraph PostgresSaver subclass with organisation_id isolation (pre-SaaS requirement)
 
 ### V3 (SaaS — conditional on V1/V2 traction)
-- modulo-cloud service layer (org lifecycle, SaaS plan enforcement, subdomain routing) — build only if community traction and enterprise license sales justify the operational overhead
+- modulo-cloud service layer (org lifecycle, SaaS plan enforcement, subdomain routing) — build only if community traction and team license sales justify the operational overhead
 - Multi-tenancy active (RLS fully enforced; LangGraph isolation complete)
 - Hosted community registry (Modulo-operated)
 - Multi-region data residency architecture
@@ -4120,7 +4159,7 @@ content_json:
       estimated_frequency: daily
 ```
 
-Versioning follows the same pattern as schemas: explicit save creates a new version. Old versions are browsable. The `lifecycle_map` primitive can be exported, imported, and shared via bundles. **Implementation note:** the version API surface is implemented — `GET /{id}/versions` (list), `GET /{id}/versions/{version}` (get; only the current version is served — a non-current version returns 404), `POST /{id}/versions` (save) and `PUT /{id}/versions/{version_id}` (update). A save validates and canonicalises the content, replaces the active `content_json`, and bumps the version counter; the active map state is served as a single version entry. `POST /{id}/restore` revives a soft-deleted map (freed pipelines re-register). Immutable per-version snapshots with browse-back are a later slice. **Export/import (FAR-174):** `GET /api/v1/lifecycle-maps/{id}/export` returns the active version as a portable envelope (`primitive_type: lifecycle_map`, `format_version: 1`, name/description, `content_json` of stages/edges/notes); `POST /api/v1/lifecycle-maps/import` accepts that envelope, validates content with the same rules as an editor save (malformed graph → 422), dedupes the name ("(imported)" suffix on collision), and creates a NEW map that is also registered as a `lifecycle_map` library primitive. Lifecycle maps are a first-class library primitive type: they can be listed in the library, and `POST /api/v1/libraries/{id}/create-lifecycle-map` copies a primitive into a new map in the org (copy-to-adapt).
+Versioning follows the same pattern as schemas: explicit save creates a new version. Old versions are browsable. The `lifecycle_map` primitive can be exported, imported, and shared via bundles. **Implementation note:** the version API surface is implemented — `GET /{id}/versions` (list), `GET /{id}/versions/{version}` (get; only the current version is served — a non-current version returns 404), `POST /{id}/versions` (save) and `PUT /{id}/versions/{version_id}` (update). A save validates and canonicalises the content, replaces the active `content_json`, and bumps the version counter; the active map state is served as a single version entry. `POST /{id}/restore` revives a soft-deleted map (freed pipelines re-register). Immutable per-version snapshots with browse-back are a later slice. **Export/import (FAR-174, extended FAR-204):** `GET /api/v1/lifecycle-maps/{id}/export` returns the map's version history as a portable envelope (`primitive_type: lifecycle_map`, `format_version: 2`, name/description, `content_json` of the active stages/edges/notes, and a `versions` array of each version's stages/edges/notes + version number + created_at); `POST /api/v1/lifecycle-maps/import` accepts that envelope, validates content with the same rules as an editor save (malformed graph → 422), dedupes the name ("(imported)" suffix on collision), and creates a NEW map that is also registered as a `lifecycle_map` library primitive. Import is backward compatible: a `format_version: 1` payload (no `versions`) imports as a single-version map; a v2 `versions` array is replayed through the version-save path so the chain is recreated deterministically (exported numbers preserved when contiguous 1..N, otherwise re-derived). Lifecycle maps are a first-class library primitive type: they can be listed in the library, `POST /api/v1/libraries/{id}/create-lifecycle-map` copies a primitive into a new map in the org (copy-to-adapt), and `POST /api/v1/libraries/community/contribute` accepts `primitive_type: lifecycle_map` so maps can be contributed to the community library like any other primitive (FAR-204).
 
 #### 8.31.10 The 80% Target
 
@@ -4387,9 +4426,9 @@ A dedicated `GET /api/v1/analytics/concurrency` endpoint (and the `query_analyti
 | Rating system scope | Deferred to v1. Alpha is single-user internal — no user community to rate. |
 | MODULO_DEMO_MODE | Auto-configures StubModelBackend + FilesystemConnector with pre-canned data. Demo walkable with zero external API keys. |
 | Component library | shadcn-vue + Radix Vue. Headless accessible primitives styled via Tailwind + CSS custom properties. Copy-paste model (`src/components/ui/`). Chosen because it uses the same `[data-theme]` CSS custom property token approach as the Modulo theme system — no theming conflict. Never build button/dialog/focus logic from scratch. |
-| Tier badge placement | Sidebar nav footer pill, every authenticated page. Reads `planStore`; links to `/settings/license`. Enterprise-gated features show lock icon + disabled control + tooltip instead of being hidden — passive upgrade funnel. |
-| MODULO_LICENSE_KEY | Base64-encoded signed JSON enterprise license payload. Verified against embedded Ed25519 public key on startup. If absent, invalid, or expired: FreeTierPlanContext applies (enterprise features disabled). No outbound network call required. V1. |
-| License model | BSL 1.1 — source-available (`Development/Product/LICENSE`). Free for all internal use (personal, commercial, production) except resale or paid hosting. Enterprise tier = gated features only (SSO, RBAC, audit viewer, admin spend limits) — no SLAs, no dedicated support. Each version auto-converts to Apache 2.0 three years after its release date. The semver release process updates the LICENSE file's version and Change Date. Flat annual fee for enterprise license key; no telemetry billing. |
+| Tier badge placement | Sidebar nav footer pill, every authenticated page. Reads `planStore`; links to `/settings/license`. Team-gated features show lock icon + disabled control + tooltip instead of being hidden — passive upgrade funnel. |
+| MODULO_LICENSE_KEY | Base64-encoded signed JSON team license payload. Verified against embedded Ed25519 public key on startup. If absent, invalid, or expired: FreeTierPlanContext applies (team features disabled). No outbound network call required. V1. |
+| License model | BSL 1.1 — source-available (`Development/Product/LICENSE`). Free for all internal use (personal, commercial, production) except resale or paid hosting. Team tier = gated features only (SSO, RBAC, audit viewer, admin spend limits) — no SLAs, no dedicated support. Each version auto-converts to Apache 2.0 three years after its release date. The semver release process updates the LICENSE file's version and Change Date. Flat annual fee for team license key; no telemetry billing. |
 | Alpha exit criteria | 5 explicit criteria (§9.3b). Alpha does not become v1 by default — explicit decision required. |
 | V1 split | V1 Core (public launch — must ship together) + V1 Extended (post-launch incremental). Prevents V1 from becoming a never-shipping monolith. |
 | Alpha documentation | dev-setup.md, architecture.md, CONTRIBUTING.md required before alpha is shared with a second developer. |

@@ -285,7 +285,7 @@ class TestVaultSecretsBackend:
         with pytest.raises(ValueError, match="invalid secret key"):
             await backend.delete_secret("/absolute/path")
 
-    async def test_missing_addr_raises_value_error(self, monkeypatch, mock_hvac: MagicMock) -> None:
+    def test_missing_addr_raises_value_error(self, monkeypatch, mock_hvac: MagicMock) -> None:
         monkeypatch.delenv("VAULT_ADDR", raising=False)
         monkeypatch.delenv("VAULT_TOKEN", raising=False)
         with pytest.raises(ValueError, match="VAULT_ADDR is not set"):
@@ -362,7 +362,7 @@ class TestVaultSecretsBackend:
         with pytest.raises(asyncio.CancelledError):
             await backend._ensure_client()
 
-    async def test_constructor_raises_without_hvac(self) -> None:
+    def test_constructor_raises_without_hvac(self) -> None:
         with (
             patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", False),
             pytest.raises(RuntimeError, match="hvac"),

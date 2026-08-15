@@ -430,7 +430,7 @@ async def test_query_filters_undecided_claimed_claims_for_org() -> None:
     assert "claimed_at IS NOT NULL" in where
 
 
-async def test_default_thresholds_documented() -> None:
+def test_default_thresholds_documented() -> None:
     """The shipped warning/escalation thresholds are the documented defaults."""
     assert DEFAULT_WARNING_HOURS == 4
     assert DEFAULT_ESCALATION_HOURS == 24

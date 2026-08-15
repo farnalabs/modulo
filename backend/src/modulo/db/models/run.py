@@ -172,10 +172,33 @@ class Run(OrgScoped):
     # E2B sandbox id surfaced for observability (migration 0074).
     sandbox_id: Mapped[str | None] = mapped_column(Text)
     outputs_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    # FAR-152 work_intact (migration 0091) — computed at terminalization by the
+    # executor from completed-node artifacts + the full DAG (``evidence.compute_work_intact``)
+    # and written via a fenced raw UPDATE (``executor._apply_work_intact``). Mapped on
+    # the ORM so the FAR-189 classifier can record it as metadata (the old
+    # ``getattr(run, "work_intact", None)`` never observed the column).
+    work_intact: Mapped[bool | None] = mapped_column(Boolean)
     # Per-node telemetry (status, wall_clock_time_ms, exit_code, ...) split out
     # of outputs_json by the Agent Return Contract (FAR-125). NULL for
     # pre-split runs. Written atomically with outputs_json (migration 0074).
     node_telemetry_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    # FAR-188 raw-output retention markers (migration 0099) — dedicated JSONB
+    # column keyed by attempt_key, holding raw sandbox output retained when a
+    # sandbox_agent node's output.json fails to parse or the command
+    # stalls/times out. DELIBERATELY separate from outputs_json /
+    # node_telemetry_json so the Agent Return Contract columns stay clean: the
+    # node-output endpoint can never serve raw stdout, recover_node's
+    # already-completed guard never sees a fake completed node, and finalize's
+    # split-output machinery never touches the marker. Generic JSON here for
+    # SQLite/MariaDB parity (the work_item_refs precedent, migration 0083).
+    raw_output_markers: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    # FAR-189 run-outcome classification (migration 0100) — JSONB column with
+    # shape {value, reason, delivered_pr_urls, computed_at, work_intact,
+    # declared_success_nodes}. UNIQUE(run_id) is the runs PK; the record is
+    # written atomically with terminalization by the shared fenced terminal
+    # write (crud/run) and refreshed (upsert) on re-terminalization. Generic
+    # JSON here for SQLite/MariaDB parity (the raw_output_markers precedent).
+    run_classification: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     # Journey / work-item tracking (FAR-142, migration 0083) — additive,
     # nullable, never backfilled. ``work_item_id`` is the chain anchor written
     # ONCE at create (floor id or adopted from the parent run) and NEVER

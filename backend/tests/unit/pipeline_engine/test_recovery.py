@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
+    GuardrailOverrideRequiredError,
     NodeAlreadyCompletedError,
     NodeNotFoundInGraphError,
     RecoveryNotAllowedError,
@@ -232,6 +233,62 @@ async def test_recover_node_terminal_status():
             )
 
     assert "complete" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_recover_node_refuses_guardrail_blocked_run():
+    """A guardrail-blocked run (eval_failed / eval_blocked) must NOT be
+    resurrected through the generic recovery path (MAJOR-1) — the generic path
+    does not re-run the guardrail pass on the supplied input and would resume
+    execution on the blocked payload. Only the guardrail-override endpoint may
+    remediate it."""
+    run = _make_run(status="eval_failed")
+    run.error_code = "eval_blocked"
+    session = _mock_session()
+
+    with (
+        patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run),
+        pytest.raises(GuardrailOverrideRequiredError) as exc_info,
+    ):
+        pipeline_result = MagicMock()
+        pipeline_result.scalar_one.return_value = MagicMock()
+        session.execute = AsyncMock(side_effect=[pipeline_result])
+
+        await recover_node(
+            session,
+            org_id=_ORG_ID,
+            run_id=_RUN_ID,
+            node_id=_NODE_ID,
+            input_data={"foo": "bar"},
+        )
+
+    assert "guardrail-override" in str(exc_info.value).lower()
+
+
+@pytest.mark.asyncio
+async def test_recover_node_eval_failed_non_blocked_still_rejected():
+    """An eval_failed run with a NON-guardrail error_code is not recoverable
+    via the generic path either (eval_failed is no longer a generic recoverable
+    status) — it gets the plain RecoveryNotAllowedError."""
+    run = _make_run(status="eval_failed")
+    run.error_code = "eval.blocked"  # output-side eval block, not guardrail-blocked
+    session = _mock_session()
+
+    with patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run):
+        pipeline_result = MagicMock()
+        pipeline_result.scalar_one.return_value = MagicMock()
+        session.execute = AsyncMock(side_effect=[pipeline_result])
+
+        with pytest.raises(RecoveryNotAllowedError) as exc_info:
+            await recover_node(
+                session,
+                org_id=_ORG_ID,
+                run_id=_RUN_ID,
+                node_id=_NODE_ID,
+                input_data={"foo": "bar"},
+            )
+
+    assert "eval_failed" in str(exc_info.value)
 
 
 @pytest.mark.asyncio

@@ -41,7 +41,6 @@ from modulo.db.models.trigger import Trigger
 logger = logging.getLogger(__name__)
 
 BUNDLE_FORMAT_VERSION = "1"
-BUNDLE_FORMAT_VERSION_V2 = "2"
 MANIFEST_FILENAME = "bundle.json"
 DEFAULT_SCHEMA_VERSION = "1.0"
 DEFAULT_NODE_TIMEOUT = 300
@@ -281,7 +280,6 @@ async def export_pipeline_bundle_v2(
 
         agent_ids: set[uuid.UUID] = set()
         schema_ids: set[uuid.UUID] = set()
-        model_backend_ids: set[uuid.UUID] = set()
 
         if pipeline.graph_nodes_json:
             for node in pipeline.graph_nodes_json:
@@ -325,8 +323,6 @@ async def export_pipeline_bundle_v2(
                     schema_ids.add(a.input_schema_id)
                 if a.output_schema_id:
                     schema_ids.add(a.output_schema_id)
-                if a.model_backend_id:
-                    model_backend_ids.add(a.model_backend_id)
 
         schemas_list: list[dict[str, Any]] = []
         if schema_ids:

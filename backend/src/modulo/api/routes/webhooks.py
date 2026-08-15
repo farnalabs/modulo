@@ -34,7 +34,7 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.permissions import PermissionDenied, assert_org_role
 from modulo.core.dispatch import dispatch_run
 from modulo.core.error_tracking import ErrorIngestionService
-from modulo.core.exceptions import TriggersPausedError
+from modulo.core.exceptions import SnapshotLockNotAvailableError, TriggersPausedError
 
 # Deprecated private aliases — kept importable so legacy patch targets and
 # callers referencing the underscore names keep working (M5 public-API fix).
@@ -162,6 +162,7 @@ async def receive_webhook(
     raw_body = await request.body()
     hmac_signature = request.headers.get("X-Modulo-Webhook-Secret")
     modulo_timestamp = request.headers.get("X-Modulo-Timestamp") or str(int(time.time()))
+    trigger: Trigger | None = None
 
     try:
         raw_payload: dict[str, Any] = await request.json()
@@ -288,6 +289,13 @@ async def receive_webhook(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=str(exc),
         ) from exc
+    except SnapshotLockNotAvailableError:
+        _log.info(
+            "webhooks.receive_webhook.snapshot_lock_busy trigger=%s pipeline=%s",
+            trigger_id,
+            trigger.pipeline_id if trigger is not None else None,
+        )
+        return {"run_id": None, "status": "queued", "detail": "Pipeline busy — queued for retry"}
     except ProgrammingError:
         _log.exception("webhooks.receive_webhook")
         raise HTTPException(
@@ -354,6 +362,7 @@ async def replay_webhook(
                 detail="Permission 'run.trigger' requires 'runner' role",
             ) from exc
 
+    trigger: Trigger | None = None
     try:
         async with session.begin():
             from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
@@ -480,6 +489,13 @@ async def replay_webhook(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Concurrent run limit of {exc.limit} reached",
         ) from exc
+    except SnapshotLockNotAvailableError:
+        _log.info(
+            "webhooks.replay_webhook.snapshot_lock_busy trigger=%s pipeline=%s",
+            trigger_id,
+            trigger.pipeline_id if trigger is not None else None,
+        )
+        return {"run_id": None, "status": "queued", "detail": "Pipeline busy — queued for retry"}
     except ProgrammingError:
         _log.exception("webhooks.replay_webhook")
         raise HTTPException(

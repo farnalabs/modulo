@@ -118,9 +118,139 @@ def response_is_export_envelope(request: Any) -> None:
     resp = request.node._resp
     data = resp.json()
     assert data.get("primitive_type") == "lifecycle_map", data
-    assert data.get("format_version") == "1", data
+    assert data.get("format_version") == "2", data
     assert "content_json" in data, data
     assert "name" in data, data
+
+
+@then("the export envelope carries the version history")
+def export_envelope_carries_version_history(request: Any) -> None:
+    """FAR-204: the v2 envelope carries a versions array with per-version graph."""
+    resp = request.node._resp
+    data = resp.json()
+    versions = data.get("versions")
+    assert isinstance(versions, list) and versions, data
+    first = versions[0]
+    assert isinstance(first, dict), data
+    assert "stages" in first, data
+    assert "edges" in first, data
+    assert first.get("version") is not None, data
+
+
+@when(parsers.parse('I import a lifecycle map named "{name}" from a v1 envelope'))
+def post_import_lifecycle_map_v1(name: str, ctx: dict[str, Any], request: Any, client: Any) -> None:
+    """FAR-204 backward compat: a format_version 1 envelope still imports."""
+    envelope = {
+        "primitive_type": "lifecycle_map",
+        "format_version": "1",
+        "name": name,
+        "content_json": {"stages": [{"id": "s1", "name": "Inbox", "type": "manual"}], "edges": []},
+    }
+    with patch("modulo.api.routes.lifecycle_maps.import_lifecycle_map_envelope", new=AsyncMock()) as mock_import:
+        mock_lm = _make_lifecycle_map(name=name)
+        mock_import.return_value = mock_lm
+        resp = client.post("/api/v1/lifecycle-maps/import", json=envelope)
+    _store_response(request, ctx, resp)
+    ctx["imported_map"] = mock_lm
+
+
+@when(parsers.parse('I import a lifecycle map named "{name}" with version history'))
+def post_import_lifecycle_map_with_versions(name: str, ctx: dict[str, Any], request: Any, client: Any) -> None:
+    """FAR-204: a v2 envelope carrying a versions array is accepted by the route."""
+    envelope = {
+        "primitive_type": "lifecycle_map",
+        "format_version": "2",
+        "name": name,
+        "content_json": {"stages": [{"id": "s1", "name": "Inbox", "type": "manual"}], "edges": []},
+        "versions": [
+            {"version": 1, "stages": [{"id": "s1", "name": "Inbox", "type": "manual"}], "edges": []},
+            {
+                "version": 2,
+                "stages": [
+                    {"id": "s1", "name": "Inbox", "type": "manual"},
+                    {"id": "s2", "name": "Review", "type": "manual"},
+                ],
+                "edges": [{"id": "e1", "source": "s1", "target": "s2"}],
+            },
+        ],
+    }
+    with patch("modulo.api.routes.lifecycle_maps.import_lifecycle_map_envelope", new=AsyncMock()) as mock_import:
+        mock_lm = _make_lifecycle_map(name=name)
+        mock_import.return_value = mock_lm
+        resp = client.post("/api/v1/lifecycle-maps/import", json=envelope)
+    _store_response(request, ctx, resp)
+    ctx["imported_map"] = mock_lm
+
+
+@when("I import a lifecycle map with a malformed version history")
+def post_import_lifecycle_map_malformed_versions(request: Any, client: Any) -> None:
+    """FAR-204: a malformed versions entry raises the bundle error → 422."""
+    envelope = {
+        "primitive_type": "lifecycle_map",
+        "format_version": "2",
+        "name": "Broken",
+        "content_json": {"stages": [{"id": "s1", "name": "Inbox", "type": "manual"}], "edges": []},
+        "versions": [{"version": "nope", "stages": [], "edges": []}],
+    }
+    from modulo.core.lifecycle_map.import_export import LifecycleMapBundleError
+
+    bundle_error = LifecycleMapBundleError("Lifecycle map 'versions' entry #0 'version' must be an integer, got 'nope'")
+    with patch(
+        "modulo.api.routes.lifecycle_maps.import_lifecycle_map_envelope",
+        new=AsyncMock(side_effect=bundle_error),
+    ):
+        resp = client.post("/api/v1/lifecycle-maps/import", json=envelope)
+    _store_response(request, ctx={}, resp=resp)
+
+
+@when(parsers.parse('I contribute a lifecycle map primitive named "{name}"'))
+def post_contribute_lifecycle_map(name: str, ctx: dict[str, Any], request: Any, client: Any) -> None:
+    """FAR-204: lifecycle_map is an accepted community-contribute primitive_type."""
+    payload = {
+        "primitive_type": "lifecycle_map",
+        "name": name,
+        "slug": "community-sdlc",
+        "description": "shared lifecycle map",
+        "tags": [],
+        "content_json": {"stages": [{"id": "s1", "name": "Inbox", "type": "manual"}], "edges": []},
+        "source_url": None,
+    }
+
+    def _primitive() -> MagicMock:
+        p = MagicMock()
+        p.id = uuid.uuid4()
+        p.organisation_id = ORG_ID
+        p.source = "local"
+        p.primitive_type = "lifecycle_map"
+        p.name = name
+        p.slug = "community-sdlc"
+        p.description = "shared lifecycle map"
+        p.author = USER_ID.hex
+        p.version = "1.0"
+        p.tags = []
+        p.content_json = payload["content_json"]
+        p.source_url = None
+        p.forked_from = None
+        p.checksum = None
+        p.ed25519_signature = None
+        p.verified = None
+        p.download_count = None
+        p.average_rating = None
+        p.review_count = None
+        p.owner_team_id = None
+        p.visibility = "org"
+        p.account_id = USER_ID
+        p.auto_update = True
+        p.tier = "native"
+        p.trust_tier = None
+        p.created_at = datetime.now(UTC)
+        p.updated_at = datetime.now(UTC)
+        return p
+
+    with patch("modulo.api.routes.library.contribute_primitive", new=AsyncMock(return_value=_primitive())):
+        resp = client.post("/api/v1/libraries/community/contribute", json=payload)
+    _store_response(request, ctx, resp)
+    ctx["contributed"] = name
 
 
 @when(parsers.parse('I import a lifecycle map named "{name}"'))
@@ -433,6 +563,97 @@ def get_lifecycle_map_versions(ctx: dict[str, Any], request: Any, client: Any) -
         mock_get.return_value = lm
         resp = client.get(f"/api/v1/lifecycle-maps/{lm.id}/versions")
     _store_response(request, ctx, resp)
+
+
+@when("I save a version of the lifecycle map")
+def save_version_capture_audit(ctx: dict[str, Any], request: Any, client: Any, mock_session: Any) -> None:
+    """POST /versions with an audit capture — pins the dedicated
+    ``lifecycle_map.version_saved`` event flowing through the real route's
+    ``_record_audit`` (FAR-203)."""
+    current = ctx.get("lifecycle_map", _make_lifecycle_map())
+    stages = [{"id": "stage-0", "name": "Stage 0", "type": "modulo"}]
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_session.begin_nested = MagicMock(return_value=begin_nested_cm)
+    with (
+        patch("modulo.api.routes.lifecycle_maps.save_map_version", new=AsyncMock()) as mock_save,
+        patch("modulo.api.routes.lifecycle_maps.append_audit_event", new=AsyncMock()) as mock_audit,
+    ):
+        updated = _make_lifecycle_map(name=current.name, version=current.version + 1, content_json={"stages": stages})
+        mock_save.return_value = updated
+        resp = client.post(
+            f"/api/v1/lifecycle-maps/{current.id}/versions",
+            json={"stages": stages, "edges": [], "notes": ""},
+        )
+    _store_response(request, ctx, resp)
+    ctx["audit_mock"] = mock_audit
+    ctx["lifecycle_map"] = updated
+
+
+@when("I restore the lifecycle map")
+def restore_lifecycle_map(ctx: dict[str, Any], request: Any, client: Any, mock_session: Any) -> None:
+    """POST /{id}/restore with an audit capture — pins the ``lifecycle_map.restored``
+    event flowing through the real route's ``_record_audit`` (FAR-203)."""
+    current = ctx.get("lifecycle_map", _make_lifecycle_map())
+    restored = _make_lifecycle_map(name=current.name, content_json=current.content_json)
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_session.begin_nested = MagicMock(return_value=begin_nested_cm)
+    with (
+        patch("modulo.api.routes.lifecycle_maps.restore_lifecycle_map", new=AsyncMock()) as mock_restore,
+        patch("modulo.api.routes.lifecycle_maps.append_audit_event", new=AsyncMock()) as mock_audit,
+    ):
+        mock_restore.return_value = restored
+        resp = client.post(f"/api/v1/lifecycle-maps/{current.id}/restore")
+    _store_response(request, ctx, resp)
+    ctx["audit_mock"] = mock_audit
+    ctx["lifecycle_map"] = restored
+
+
+@then(parsers.parse('a "{event_type}" audit event was recorded for the map'))
+def lifecycle_map_audit_event_recorded(event_type: str, ctx: dict[str, Any]) -> None:
+    mock_audit = ctx.get("audit_mock")
+    assert mock_audit is not None, "No audit mock captured — the step did not run"
+    assert mock_audit.await_args is not None, f"No audit event was recorded, expected {event_type!r}"
+    kwargs = mock_audit.await_args.kwargs
+    assert kwargs["event_type"] == event_type, f"Expected {event_type!r}, got {kwargs['event_type']!r}"
+    assert kwargs["resource_type"] == "lifecycle_map"
+
+
+@given("a lifecycle map with dangling legacy content exists")
+def lifecycle_map_with_dangling_legacy_content(ctx: dict[str, Any], request: Any) -> None:
+    """A pre-FAR-175 stored graph: an edge referencing an undefined stage."""
+    content_json = {
+        "stages": [{"id": "stage-0", "name": "Inbox", "type": "manual"}],
+        "edges": [{"id": "edge-0", "source": "stage-0", "target": "stage-ghost"}],
+    }
+    lm = _make_lifecycle_map(name="Legacy Map", content_json=content_json)
+    ctx["lifecycle_map"] = lm
+    request.node._lifecycle_map = lm
+
+
+@when("the legacy content backfill cleans the map")
+def legacy_backfill_cleans_map(ctx: dict[str, Any]) -> None:
+    from modulo.core.lifecycle_map.validation import clean_legacy_content
+
+    lm = ctx.get("lifecycle_map")
+    assert lm is not None, "No lifecycle map in context"
+    cleaned, changes = clean_legacy_content(lm.content_json)
+    ctx["cleaned_content"] = cleaned
+    ctx["backfill_changes"] = changes
+
+
+@then("the repaired map content is accepted by editor validation")
+def repaired_map_content_accepted(ctx: dict[str, Any]) -> None:
+    from modulo.core.lifecycle_map.validation import normalize_content
+
+    cleaned = ctx.get("cleaned_content")
+    assert cleaned is not None, "The backfill step did not run"
+    assert ctx.get("backfill_changes"), "The backfill made no changes to the legacy content"
+    normalize_content(cleaned)  # raises LifecycleMapContentError if still invalid
+    assert not ctx["cleaned_content"]["edges"], "the dangling edge must be dropped"
 
 
 @then(parsers.parse("the version list contains exactly {count:d} version at version {version:d}"))

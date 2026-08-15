@@ -13,6 +13,7 @@ from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, evict
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 from modulo.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
+    GuardrailOverrideRequiredError,
     NodeAlreadyCompletedError,
     NodeNotFoundInGraphError,
     RecoveryNotAllowedError,
@@ -23,6 +24,7 @@ __all__ = [
     "ConcurrentRecoveryError",
     "ContextSetterViolationError",
     "GraphValidationError",
+    "GuardrailOverrideRequiredError",
     "ModuloPostgresSaver",
     "NodeAlreadyCompletedError",
     "NodeNotFoundInGraphError",

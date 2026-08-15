@@ -240,8 +240,26 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
     and the outer transaction (the run finalization) survives. The upsert is
     ``INSERT ... ON CONFLICT (run_id) DO UPDATE`` — re-finalization corrects
     the fact in place.
+
+    The run is refreshed at the START, inside this same guard: the fenced
+    ``update_run_status`` (``claim_token`` set) writes via raw SQL and bypasses
+    the ORM identity map, so without a refresh the fact would snapshot the
+    pre-write ``'running'`` row with NULL cost (FAR-200). A refresh failure
+    (PendingRollbackError, connection drop) is logged and DEGRADES to recording
+    from the in-memory object — it can never propagate out of the guard and
+    roll back the run's terminal status write + ledger (ADR-020).
     """
     try:
+        try:
+            await session.refresh(run)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "analytics.facts.refresh_failed",
+                extra={"run_id": str(run.id), "org_id": str(run.organisation_id), "status": run.status},
+                exc_info=True,
+            )
         team_name, pipeline_name, folder_id = await _snapshot_dimensions(session, run)
         node_count, sandbox_agent_node_count, max_node_timeout_seconds = await _snapshot_graph_dimensions(session, run)
         values: dict[str, Any] = {

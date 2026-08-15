@@ -712,7 +712,7 @@ export interface paths {
         put?: never;
         /**
          * Issue License
-         * @description Manually issue (sign) an enterprise license key for a customer.
+         * @description Manually issue (sign) a team license key for a customer.
          *
          *     Uses the same signing service as the Stripe purchase fulfilment webhook.
          *     When ``email`` is provided, the license key is also emailed to the customer
@@ -3492,6 +3492,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{run_id}/guardrail-override": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Guardrail Override Run
+         * @description Remediate a guardrail-blocked run with operator-supplied input.
+         *
+         *     A guardrail block is TERMINAL ``eval_failed`` (error_code ``eval_blocked``)
+         *     with NO HITL gate, and the generic recover endpoint refuses such runs. The
+         *     override is the ONLY remediation: it re-runs the guardrail pass on the
+         *     supplied ``input_data`` (re-block safe default — a still-violating input is
+         *     refused with 422 and the run stays terminal), persists the post-redaction
+         *     payload, flips the run to ``pending`` with ``is_replay=True``, and
+         *     re-dispatches it from run start (execute_run — the blocked run never
+         *     executed, so there is no checkpoint to resume).
+         *
+         *     Requires operator or admin role.
+         */
+        post: operations["guardrail_override_run_api_v1_runs__run_id__guardrail_override_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{run_id}/nodes/{node_id}/prompt/reveal": {
         parameters: {
             query?: never;
@@ -4659,7 +4690,7 @@ export interface paths {
         /**
          * Update Lifecycle Map Version Endpoint
          * @description Update a version. v1 semantics: the active map state is the only version,
-         *     so this behaves identically to save â€” ``version_id`` is validated as a UUID
+         *     so this behaves identically to save — ``version_id`` is validated as a UUID
          *     for contract compatibility but the save targets the map itself.
          */
         put: operations["update_lifecycle_map_version_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__versions__version_id__put"];
@@ -4764,7 +4795,7 @@ export interface paths {
          *     lifecycle-map stage and want the journeys they touched to reflect it.
          *     Per the FAR-143 spec v6 rule, self-report is ADVISORY: a reported ref can
          *     only CONFIRM / MATCH an existing journey keyed by the same canonical
-         *     ``(org, kind, ref)`` â€” a ref with no journey row is dropped (counted as
+         *     ``(org, kind, ref)`` — a ref with no journey row is dropped (counted as
          *     unmatched) and is NEVER minted, and no runs are created or touched. Each
          *     confirmed journey is advanced via ``advance_journeys`` with ``status``
          *     ``"complete"`` (the workflow reached this endpoint, so its stage
@@ -4772,13 +4803,13 @@ export interface paths {
          *     ``latest_terminal_run_id`` is preserved, not overwritten).
          *
          *     The request body is already the self-report wire shape, so entries flow
-         *     straight through ``validate_and_normalise_reported_refs`` â€” the same
+         *     straight through ``validate_and_normalise_reported_refs`` — the same
          *     per-entry validation/canonicalisation the run-finalise path applies to
          *     merged run outputs (``parse_self_report_refs`` is only needed for nested
          *     run-output trees). A malformed entry is rejected and counted, never a
          *     whole-request 422 (fail-open per ref).
          *
-         *     Auth: the documented CI/CD credential path (PRD Â§5.2) â€” a user JWT or an
+         *     Auth: the documented CI/CD credential path (PRD §5.2) — a user JWT or an
          *     org API key (``mk_...``). A GitHub Actions workflow calls this with
          *     ``Authorization: Bearer mk_<key>`` for a key whose owner holds the
          *     ``runner`` role. There is no ``run.create`` permission in the registry;
@@ -7675,6 +7706,13 @@ export interface components {
             date_from?: string | null;
             /** Date To */
             date_to?: string | null;
+            /** Facts Freshness Hours */
+            facts_freshness_hours?: number | null;
+            /**
+             * Facts Stale
+             * @default false
+             */
+            facts_stale: boolean;
             /** Buckets */
             buckets: components["schemas"]["AnalyticsBucket"][];
         };
@@ -8622,6 +8660,10 @@ export interface components {
             name: string;
             /** Eval Type */
             eval_type: string;
+            /** Config Json */
+            config_json?: {
+                [key: string]: unknown;
+            };
             /**
              * Failure Behaviour
              * @default warn
@@ -9665,6 +9707,28 @@ export interface components {
             /** Mappings */
             mappings: components["schemas"]["GroupMappingItem"][];
         };
+        /** GuardrailOverrideRequest */
+        GuardrailOverrideRequest: {
+            /** Input Data */
+            input_data: {
+                [key: string]: unknown;
+            };
+        };
+        /** GuardrailOverrideResponse */
+        GuardrailOverrideResponse: {
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Status */
+            status: string;
+            /**
+             * Action
+             * @default override
+             */
+            action: string;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -9867,7 +9931,7 @@ export interface components {
          * @description Per-ref outcome summary for one self-report request.
          *
          *     ``accepted`` refs matched an existing journey and were advanced;
-         *     ``unmatched`` refs were valid but had no journey row (dropped â€” never
+         *     ``unmatched`` refs were valid but had no journey row (dropped — never
          *     minted); ``rejected`` refs were malformed or dropped by the 100-entry cap.
          */
         JourneySelfReportResponse: {
@@ -10339,7 +10403,10 @@ export interface components {
          *
          *     This is the primitive shape ``GET .../export`` returns and ``POST
          *     /import`` accepts: ``content_json`` holds the canonical stages/edges/notes
-         *     graph and is validated with the same rules as an editor save.
+         *     graph and is validated with the same rules as an editor save. ``format_version``
+         *     is ``2`` and the optional ``versions`` array carries the version history
+         *     (each version's stages/edges/notes + metadata); a v1 envelope without
+         *     ``versions`` still imports as a single-version map.
          */
         LifecycleMapTransfer: {
             /**
@@ -10350,7 +10417,7 @@ export interface components {
             primitive_type: "lifecycle_map";
             /**
              * Format Version
-             * @default 1
+             * @default 2
              */
             format_version: string;
             /** Name */
@@ -10361,6 +10428,10 @@ export interface components {
             content_json?: {
                 [key: string]: unknown;
             };
+            /** Versions */
+            versions?: {
+                [key: string]: unknown;
+            }[] | null;
         };
         /** LifecycleMapTransitionItem */
         LifecycleMapTransitionItem: {
@@ -12541,6 +12612,8 @@ export interface components {
             } | null;
             /** Trace Id */
             trace_id?: string | null;
+            /** Trace Url */
+            trace_url?: string | null;
             /** Node Token Usage */
             node_token_usage?: {
                 [key: string]: unknown;
@@ -23490,6 +23563,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NodeRecoverResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    guardrail_override_run_api_v1_runs__run_id__guardrail_override_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GuardrailOverrideRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GuardrailOverrideResponse"];
                 };
             };
             /** @description Validation Error */

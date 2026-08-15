@@ -434,7 +434,7 @@ class TestAlertEngineCooldown:
 
 
 class TestDispatchWebhook:
-    async def test_slack_format(self) -> None:
+    def test_slack_format(self) -> None:
         result = _format_slack_payload(
             payload={
                 "rule": "Critical Alert",
@@ -451,7 +451,7 @@ class TestDispatchWebhook:
         assert "Critical Alert" in result["text"]
         assert "g-123" in result["text"]
 
-    async def test_webhook_payload_structure(self) -> None:
+    def test_webhook_payload_structure(self) -> None:
         alert = TriggeredAlert(
             rule_id=uuid.uuid4(),
             rule_name="Test Webhook",
@@ -1292,7 +1292,7 @@ class TestDispatchAll:
 
 
 class TestCRUDRules:
-    async def test_create_rule_schema_valid(self) -> None:
+    def test_create_rule_schema_valid(self) -> None:
         body = ErrorNotificationRuleCreate(
             name="My Rule",
             condition_level="critical",
@@ -1311,14 +1311,14 @@ class TestCRUDRules:
             pytest.param("webhook_url", "ftp://bad.com", "webhook_url must start with", id="invalid_webhook_url"),
         ],
     )
-    async def test_create_rule_invalid_field(self, field: str, value: object, match: str) -> None:
+    def test_create_rule_invalid_field(self, field: str, value: object, match: str) -> None:
         kwargs: dict = {"name": "Bad", field: value}
         if field == "webhook_url":
             kwargs["action_type"] = "webhook"
         with pytest.raises(ValidationError, match=match):
             ErrorNotificationRuleCreate(**kwargs)
 
-    async def test_update_rule_partial(self) -> None:
+    def test_update_rule_partial(self) -> None:
         body = ErrorNotificationRuleUpdate(name="Renamed")
         assert body.name == "Renamed"
         assert body.enabled is None

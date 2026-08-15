@@ -21,6 +21,7 @@ bdd:
   - backend/tests/bdd/features/library/contribute.feature
   - backend/tests/bdd/features/library/ratings.feature
   - backend/tests/bdd/features/library/auto_update.feature
+  - backend/tests/bdd/features/library/community_registry.feature
   - backend/tests/bdd/features/personas/jordan-community-contributor.feature
   - backend/tests/bdd/features/personas/alice-devx-sme.feature
   - backend/tests/bdd/features/composites/composite_library.feature
@@ -141,7 +142,7 @@ Cryptographic signing, verification, and fork tracking for community library pri
 ## Known Gaps
 
 ### Registry & signing
-- BDD feature files exist on disk (`backend/tests/bdd/features/library/community_registry.feature`, `backend/tests/bdd/features/plugins/plugin_registry.feature`), step definitions exist and reference correct paths — BUT `plugin_registry.feature` has `@awaiting-implementation` tags on most scenarios (discovery, detail, startup). `signing.feature` covers webhook HMAC signing only — there is no dedicated Ed25519 registry signing BDD feature. (qa-iterate(docs/product-map/core/): second pass fixes)
+- BDD feature file `backend/tests/bdd/features/plugins/plugin_registry.feature` has `@awaiting-implementation` tags on most scenarios (discovery, detail, startup) — not runnable. `signing.feature` covers webhook HMAC signing only — there is no dedicated Ed25519 registry signing BDD feature. (community_registry.feature's 12 scenarios are wired and executable — linked in `bdd:`.)
 - No frontend trust tier display (green/amber badges) or community warning flow — confirmed missing; only `communityPrimitives` computed exists in `LibraryView.vue` without UI for it
 - No frontend ownership picker for copy-to-adapt
 - No unit tests for `forked_from` constraints at the service layer (only integration test in `test_initial_migration.py` covers DB-level trigger; BDD steps exist for forked_from assertions)

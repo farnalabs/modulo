@@ -1,6 +1,6 @@
-"""Enterprise license signing — generate Ed25519-signed license keys.
+"""Team license signing — generate Ed25519-signed license keys.
 
-Keys produced by :func:`encode_license_key` / :func:`generate_enterprise_license`
+Keys produced by :func:`encode_license_key` / :func:`generate_team_license`
 round-trip through ``modulo.core.license.parse_and_verify``: the payload is
 canonical JSON, signed with the configured Ed25519 private key, and encoded as
 ``<base64(payload)>.<base64(signature)>`` — exactly the format
@@ -27,13 +27,13 @@ from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
 
-# The license payload tier that activates Team/enterprise feature gates. See
+# The license payload tier that activates Team feature gates. See
 # ``modulo.core.feature_flags.TIER_RANK`` — "team" is the only paid tier.
 LICENSE_TIER = "team"
 
-# Feature flag names granted to enterprise licences. These are the real flag
+# Feature flag names granted to team licences. These are the real flag
 # names registered in ``feature_flags._KNOWN_FLAGS`` under the Team tier.
-ENTERPRISE_FEATURES: list[str] = ["team_rbac", "sso", "audit_viewer"]
+TEAM_FEATURES: list[str] = ["team_rbac", "sso", "audit_viewer"]
 
 
 class LicenseSigningError(ValueError):
@@ -84,14 +84,14 @@ def _resolve_private_key(private_key_hex: str | None) -> str:
     )
 
 
-def build_enterprise_payload(
+def build_team_payload(
     org_name: str,
     term_months: int = 12,
     *,
     org_id: str | None = None,
     features: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Build the signed license payload for an enterprise customer.
+    """Build the signed license payload for a team customer.
 
     ``org_id`` defaults to a stable UUID v5 derived from ``org_name`` so the
     same customer always maps to the same org identifier.
@@ -100,13 +100,13 @@ def build_enterprise_payload(
     expires_at = _add_months(datetime.now(UTC), term_months).isoformat()
     return {
         "tier": LICENSE_TIER,
-        "features": list(features if features is not None else ENTERPRISE_FEATURES),
+        "features": list(features if features is not None else TEAM_FEATURES),
         "expires_at": expires_at,
         "org_id": resolved_org_id,
     }
 
 
-def generate_enterprise_license(
+def generate_team_license(
     org_name: str,
     term_months: int = 12,
     *,
@@ -114,12 +114,12 @@ def generate_enterprise_license(
     org_id: str | None = None,
     features: list[str] | None = None,
 ) -> str:
-    """Generate an Ed25519-signed enterprise license key for *org_name*.
+    """Generate an Ed25519-signed team license key for *org_name*.
 
     The signing key is ``private_key_hex`` when provided, otherwise resolved
     from ``MODULO_LICENSE_PRIVATE_KEY``. Raises :class:`LicenseSigningError`
     when no key is available or the key is malformed.
     """
     key = _resolve_private_key(private_key_hex)
-    payload = build_enterprise_payload(org_name, term_months, org_id=org_id, features=features)
+    payload = build_team_payload(org_name, term_months, org_id=org_id, features=features)
     return encode_license_key(payload, key)

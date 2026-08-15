@@ -4,6 +4,7 @@ prd: 8.4
 delivery-tasks: []  # not yet linked — ~180 behaviours across 11 sub-features
 bdd:
   - backend/tests/bdd/features/pipelines/pipeline_config_validation.feature
+  - backend/tests/bdd/features/pipelines/create.feature
   - backend/tests/bdd/features/ui/pipeline_builder.feature
 code:
   - backend/src/modulo/api/routes/pipelines.py
@@ -34,6 +35,7 @@ unit-tests:
   - backend/tests/unit/test_pipeline_node_conversion.py
   - backend/tests/unit/graph_validator/test_graph_validator.py
   - backend/tests/unit/graph_validator/test_category_validator.py
+  - backend/tests/bdd/steps/test_alpha_pipelines.py
   - frontend/src/__tests__/PipelineListView.spec.ts
 depends-on:
   - feat-core-pipeline-execution
@@ -266,6 +268,7 @@ frontend-side integration:
 
 ## QA History
 
+- 2026-08-14 (improve-architecture): Linked the already-wired `backend/tests/bdd/features/pipelines/create.feature` (5 executable scenarios: minimal pipeline, LLM/manual nodes, run_context defaults, duplicate name rejection) to the `feat-pipelines-core` `bdd:` field and added its wiring step file `backend/tests/bdd/steps/test_alpha_pipelines.py` to `unit-tests:`. The feature file was executable on disk but never listed in frontmatter.
 - 2026-07-08: Cross-cutting QA (index 254): Fixed CRITICAL — RLS leak in save_as_composite_endpoint (3 DB queries outside session.begin() — Agent lookup, PipelineEdge fetch, create_composite_template — missing RLS context on Postgres; all moved inside transaction). Fixed CRITICAL — added SQLAlchemyError→503 catches to 8 pipeline CRUD + clone routes. Fixed CRITICAL — combined `except (IntegrityError, ProgrammingError, SQLAlchemyError)` in convert-to-agent/revert-to-manual split into separate handlers with correct status codes (409/501/503). Fixed MAJOR — replaced 10 `e instanceof Error ? e.message : String(e)` handlers with `formatApiError(e)` in 4 frontend views (PipelineEditorView, PipelineListView, PipelineTemplateGallery). Fixed 2 pre-existing test failures (license tier assertion, AsyncMock for publish_primitive). Merged to main at v0.3.227. Status: partial.
 - 2026-07-05: Prodmap pipelines QA: Fixed depends-on direction (core → cicd was inverted). Fixed false Known Gap about missing `test_graph_validator.py`. Fixed website docs path prefix. Updated delivery-tasks note.
 - 2026-07-09: Cross-cutting QA (index 338): Updated frontmatter — added graph_validator unit tests to unit-tests, populated depends-on with feat-core-pipeline-execution, feat-pipelines-cicd-pipeline, feat-core-agent-model. Corrected stale claims: graph_validator/__init__.py is 817 lines (not 876), test_graph_validator.py now covers topology/schema/connector/backend/conditional edges (52 tests), test_category_validator.py covers node categories (12 tests). Removed dead `PipelineTemplateGallery.vue` code reference. Added Known Gaps for frontend i18n coverage (PipelineEditorView, CompositeEditorView all have 30+ hardcoded strings). Added `@handle_db_errors` decorator clarification to Error Handling section. Status: partial.

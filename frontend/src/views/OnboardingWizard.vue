@@ -9,7 +9,7 @@
             class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-medium transition-colors"
             :class="stepCircleClass(i)"
           >
-            <svg v-if="i < currentStep" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m5 12 5 5 9-9"/></svg>
+            <Check v-if="i < currentStep" class="h-4 w-4" aria-hidden="true" />
             <span v-else>{{ i + 1 }}</span>
           </div>
           <div v-if="i < steps.length - 1" class="mx-2 h-px w-8 sm:w-16" :class="i < currentStep ? 'bg-primary' : 'bg-border'" />
@@ -26,12 +26,10 @@
       <!-- Step 0: Welcome -->
       <div v-if="currentStep === 0" class="space-y-4 text-center">
         <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
-          <svg class="h-8 w-8 text-primary" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          <Layers class="h-8 w-8 text-primary" aria-hidden="true" />
         </div>
         <p class="text-muted-foreground">
-          This wizard will guide you through <strong>6 quick steps</strong> to get your first pipeline running:
-          connect your tools, infer a data schema, browse the library for compatible agents and blueprints,
-          and wire everything together.
+          {{ $t('views.OnboardingWizard.wizard_guide_before') }} <strong>{{ $t('views.OnboardingWizard.wizard_guide_steps') }}</strong> {{ $t('views.OnboardingWizard.wizard_guide_after') }}
         </p>
         <ul class="mx-auto max-w-md space-y-2 text-left text-sm text-muted-foreground">
           <li v-for="(s, i) in steps.slice(1)" :key="i" class="flex items-start gap-2">
@@ -43,8 +41,10 @@
 
       <!-- Step 1: Connect Tools -->
       <div v-if="currentStep === 1" class="space-y-4">
-        <div v-if="loadingConnectors" class="flex items-center justify-center py-8">
-          <div class="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+        <div v-if="loadingConnectors" class="space-y-3 py-4" aria-hidden="true">
+          <div class="h-16 animate-pulse rounded-lg bg-muted" />
+          <div class="h-16 animate-pulse rounded-lg bg-muted" />
+          <div class="h-16 animate-pulse rounded-lg bg-muted" />
         </div>
         <div v-else-if="connectorsError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">{{ connectorsError }}</div>
         <div v-else-if="connectors.length === 0" class="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
@@ -56,7 +56,7 @@
             v-for="c in connectors"
             :key="c.id"
             data-testid="onboarding-wizard-connector-card"
-            class="flex cursor-pointer items-center gap-3 rounded-lg border p-4 transition-colors hover:bg-accent"
+            class="flex cursor-pointer items-center gap-3 rounded-lg border p-4 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             :class="wizardState.connectorId === c.id ? 'border-primary bg-primary/5' : 'border-input'"
             @click="wizardState.connectorId = c.id; wizardState.connectorName = c.name"
           >
@@ -164,7 +164,7 @@
             </div>
           </div>
           <div>
-            <label for="onboardingwizard-field-3" class="mb-2 block text-sm font-medium">{{ $t('views.OnboardingWizard.fields') }} <span class="text-muted-foreground">{{ $t('views.OnboardingWizard.fields_hint') }}</span></label>
+            <h3 class="mb-2 text-sm font-medium">{{ $t('views.OnboardingWizard.fields') }} <span class="text-muted-foreground">{{ $t('views.OnboardingWizard.fields_hint') }}</span></h3>
             <table class="w-full text-sm">
               <thead>
                 <tr class="border-b text-left text-muted-foreground">
@@ -179,7 +179,7 @@
                   <td class="py-2 font-mono text-xs">{{ field.name }}</td>
                   <td class="py-2 font-mono text-xs text-muted-foreground">{{ field.type }}</td>
                   <td class="py-2">
-                    <span class="inline-block rounded px-1.5 py-0.5 text-xs font-medium" :class="field.required ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'">{{ field.required ? 'yes' : 'no' }}</span>
+                    <span class="inline-block rounded px-1.5 py-0.5 text-xs font-medium" :class="field.required ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'">{{ field.required ? $t('views.SchemaInferenceView.yes') : $t('views.SchemaInferenceView.no') }}</span>
                   </td>
                   <td class="py-2 text-xs text-muted-foreground">{{ field.description ?? '—' }}</td>
                 </tr>
@@ -205,25 +205,26 @@
 
       <!-- Step 4: Browse Library -->
       <div v-if="currentStep === 4" class="space-y-4">
-        <div v-if="loadingLibrary" class="flex items-center justify-center py-8">
-          <div class="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+        <div v-if="loadingLibrary" class="grid grid-cols-1 gap-3 sm:grid-cols-2" aria-hidden="true">
+          <div v-for="n in 4" :key="n" class="h-24 animate-pulse rounded-lg bg-muted" />
         </div>
         <div v-else-if="libraryError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">{{ libraryError }}</div>
         <div v-else-if="libraryItems.length === 0" class="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-          No library items available. You can skip this step and proceed to create a pipeline manually.
+          {{ $t('views.OnboardingWizard.no_library_items') }}
         </div>
         <div v-else class="space-y-2">
           <div class="flex items-center gap-3">
-            <input id="onboardingwizard-field-3"
+            <input id="onboardingwizard-library-search"
               v-model="librarySearch"
               type="text"
-              placeholder="Filter items..."
+              :aria-label="$t('views.OnboardingWizard.search_library')"
+              :placeholder="$t('views.OnboardingWizard.filter_items')"
               data-testid="onboarding-wizard-library-search"
               class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
-            <Select aria-label="Filter by type" v-model="libraryTypeFilter">
-              <SelectTrigger data-testid="onboarding-wizard-library-type-filter" aria-label="Filter by type" class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                <SelectValue placeholder="All types" />
+            <Select :aria-label="$t('views.OnboardingWizard.filter_by_type')" v-model="libraryTypeFilter">
+              <SelectTrigger data-testid="onboarding-wizard-library-type-filter" :aria-label="$t('views.OnboardingWizard.filter_by_type')" class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <SelectValue :placeholder="$t('views.OnboardingWizard.all_types')" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="pipeline_template">{{ $t('views.OnboardingWizard.pipeline_templates') }}</SelectItem>
@@ -238,7 +239,7 @@
               v-for="item in filteredLibraryItems"
               :key="item.id"
               data-testid="onboarding-wizard-library-item"
-              class="cursor-pointer rounded-lg border p-4 transition-colors hover:bg-accent"
+              class="cursor-pointer rounded-lg border p-4 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               :class="wizardState.selectedLibraryItemId === item.id ? 'border-primary bg-primary/5' : 'border-input'"
               @click="wizardState.selectedLibraryItemId = wizardState.selectedLibraryItemId === item.id ? null : item.id"
             >
@@ -249,7 +250,7 @@
                   <p v-if="item.description" class="mt-0.5 text-xs text-muted-foreground line-clamp-2">{{ item.description }}</p>
                 </div>
                 <div v-if="wizardState.selectedLibraryItemId === item.id" class="mt-1">
-                  <svg class="h-5 w-5 text-primary" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 12 5 5 9-9"/></svg>
+                  <Check class="h-5 w-5 text-primary" aria-hidden="true" />
                 </div>
               </div>
               <div v-if="item.tags && item.tags.length > 0" class="mt-2 flex flex-wrap gap-1">
@@ -269,7 +270,7 @@
             type="text"
             data-testid="onboarding-wizard-pipeline-name"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            placeholder="My Onboarding Pipeline"
+            :placeholder="$t('views.OnboardingWizard.pipeline_name_placeholder')"
           />
         </div>
         <div>
@@ -279,7 +280,7 @@
             rows="3"
             data-testid="onboarding-wizard-pipeline-description"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            placeholder="What does this pipeline do?"
+            :placeholder="$t('views.OnboardingWizard.pipeline_description_placeholder')"
           />
         </div>
         <div v-if="wizardState.selectedLibraryItemId && selectedLibraryItem" class="rounded-lg bg-muted p-3">
@@ -294,46 +295,46 @@
             data-testid="onboarding-wizard-create-pipeline"
             @click="createPipeline"
           >
-            {{ creatingPipeline ? 'Creating...' : 'Create Pipeline' }}
+            {{ creatingPipeline ? $t('views.OnboardingWizard.creating') : $t('views.OnboardingWizard.create_pipeline') }}
           </Button>
         </div>
         <div v-if="pipelineCreateError" class="text-sm text-destructive">{{ pipelineCreateError }}</div>
         <div v-if="wizardState.createdPipelineId" class="rounded-lg bg-success/10 p-3 text-sm text-success">
-          Pipeline "{{ wizardState.pipelineName }}" created.
+          {{ $t('views.OnboardingWizard.pipeline_label') }} "{{ wizardState.pipelineName }}" {{ $t('views.OnboardingWizard.created_suffix') }}.
         </div>
       </div>
 
       <!-- Step 6: Done -->
       <div v-if="currentStep === 6" class="space-y-6 py-4 text-center">
         <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-success/10">
-          <svg class="h-8 w-8 text-success" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 12 5 5 9-9"/></svg>
+          <Check class="h-8 w-8 text-success" aria-hidden="true" />
         </div>
-        <h3 class="text-2xl font-bold">You're all set!</h3>
+        <h3 class="text-2xl font-bold">{{ $t('views.OnboardingWizard.all_set') }}</h3>
         <p class="text-muted-foreground">
-          Your pipeline <strong>{{ wizardState.pipelineName }}</strong> has been created
-          {{ wizardState.createdPipelineId ? 'and is ready to run' : '' }}.
-          Here's what was accomplished:
+          {{ $t('views.OnboardingWizard.your_pipeline_has_been_created') }} <strong>{{ wizardState.pipelineName }}</strong>
+          {{ wizardState.createdPipelineId ? $t('views.OnboardingWizard.and_ready_to_run') : '' }}.
+          {{ $t('views.OnboardingWizard.heres_what_was_accomplished') }}
         </p>
         <ul class="mx-auto max-w-sm space-y-2 text-left text-sm">
           <li v-if="wizardState.connectorName" class="flex items-center gap-2 text-muted-foreground">
-            <svg class="h-4 w-4 shrink-0 text-success" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 12 5 5 9-9"/></svg>
-            Connected <strong>{{ wizardState.connectorName }}</strong>
+            <Check class="h-4 w-4 shrink-0 text-success" aria-hidden="true" />
+            {{ $t('views.OnboardingWizard.connected') }} <strong>{{ wizardState.connectorName }}</strong>
           </li>
           <li v-if="wizardState.draftSchema" class="flex items-center gap-2 text-muted-foreground">
-            <svg class="h-4 w-4 shrink-0 text-success" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 12 5 5 9-9"/></svg>
-            Inferred schema <strong>{{ wizardState.draftSchema.name }}</strong>
+            <Check class="h-4 w-4 shrink-0 text-success" aria-hidden="true" />
+            {{ $t('views.OnboardingWizard.inferred_schema') }} <strong>{{ wizardState.draftSchema.name }}</strong>
           </li>
           <li v-if="wizardState.publishedSchemaId" class="flex items-center gap-2 text-muted-foreground">
-            <svg class="h-4 w-4 shrink-0 text-success" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 12 5 5 9-9"/></svg>
-            Published to schema registry
+            <Check class="h-4 w-4 shrink-0 text-success" aria-hidden="true" />
+            {{ $t('views.OnboardingWizard.published_to_schema_registry') }}
           </li>
           <li v-if="wizardState.selectedLibraryItemId" class="flex items-center gap-2 text-muted-foreground">
-            <svg class="h-4 w-4 shrink-0 text-success" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 12 5 5 9-9"/></svg>
-            Selected library item
+            <Check class="h-4 w-4 shrink-0 text-success" aria-hidden="true" />
+            {{ $t('views.OnboardingWizard.selected_library_item') }}
           </li>
           <li v-if="wizardState.createdPipelineId" class="flex items-center gap-2 text-muted-foreground">
-            <svg class="h-4 w-4 shrink-0 text-success" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 12 5 5 9-9"/></svg>
-            Pipeline <strong>{{ wizardState.pipelineName }}</strong> created
+            <Check class="h-4 w-4 shrink-0 text-success" aria-hidden="true" />
+            {{ $t('views.OnboardingWizard.pipeline_label') }} <strong>{{ wizardState.pipelineName }}</strong> {{ $t('views.OnboardingWizard.created_suffix') }}
           </li>
         </ul>
         <div class="flex items-center justify-center gap-3 pt-4">
@@ -344,21 +345,21 @@
             data-testid="onboarding-wizard-run-pipeline-now"
             @click="runPipeline"
           >
-            {{ runningPipeline ? 'Starting...' : 'Run Pipeline Now' }}
+            {{ runningPipeline ? $t('views.OnboardingWizard.starting') : $t('views.OnboardingWizard.run_pipeline_now') }}
           </Button>
           <router-link
             :to="{ name: 'dashboard' }"
             data-testid="onboarding-wizard-go-to-dashboard"
-            class="rounded-lg border border-input bg-background px-6 py-2.5 text-sm font-medium hover:bg-accent"
+            class="rounded-lg border border-input bg-background px-6 py-2.5 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            Go to Dashboard
+            {{ $t('views.OnboardingWizard.go_to_dashboard') }}
           </router-link>
         </div>
         <div v-if="emptyRunWarning" class="rounded-lg bg-warning/10 border border-warning/30 p-3 text-sm text-warning" data-testid="onboarding-wizard-run-empty-warning">
           {{ emptyRunWarning }}
         </div>
         <div v-if="runResult" class="rounded-lg bg-success/10 p-3 text-sm text-success">
-          Pipeline started! <router-link :to="{ name: 'dashboard' }" class="underline">{{ $t('views.OnboardingWizard.view_runs_on_dashboard') }}</router-link>.
+          {{ $t('views.OnboardingWizard.pipeline_started') }} <router-link :to="{ name: 'dashboard' }" class="underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{{ $t('views.OnboardingWizard.view_runs_on_dashboard') }}</router-link>.
         </div>
         <div v-if="pipelineRunError" class="text-sm text-destructive">{{ pipelineRunError }}</div>
       </div>
@@ -369,20 +370,20 @@
         <button
           v-if="currentStep > 0"
           data-testid="onboarding-wizard-previous"
-          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           @click="prevStep"
         >
-          Previous
+          {{ $t('views.OnboardingWizard.previous') }}
         </button>
       </div>
       <div class="flex items-center gap-3">
         <button
           v-if="currentStep > 0 && currentStep < 5"
           data-testid="onboarding-wizard-skip-to-end"
-          class="text-sm text-muted-foreground hover:text-foreground"
+          class="text-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           @click="skipToEnd"
         >
-          Skip to end
+          {{ $t('views.OnboardingWizard.skip_to_end') }}
         </button>
         <Button
           :disabled="!canProceed"
@@ -390,7 +391,7 @@
           data-testid="onboarding-wizard-next"
           @click="nextStep"
         >
-          {{ currentStep === 5 ? 'Finish' : 'Next' }}
+          {{ currentStep === 5 ? $t('views.OnboardingWizard.finish') : $t('views.OnboardingWizard.next') }}
         </Button>
       </div>
     </div>
@@ -399,6 +400,8 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { Check, Layers } from '@lucide/vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
@@ -414,15 +417,17 @@ interface DraftSchema {
   fields: Array<{name: string; type: string; required: boolean; description: string | null}>
 }
 
-const steps = [
-  { title: 'Welcome', subtitle: 'Get started with SDLC onboarding' },
-  { title: 'Connect Tools', subtitle: 'Select a connector instance (GitHub, Jira, filesystem)' },
-  { title: 'Run Inference', subtitle: 'Infer a schema from your connected data source' },
-  { title: 'Review Schemas', subtitle: 'Review, edit, and confirm the inferred schema' },
-  { title: 'Browse Library', subtitle: 'Find compatible agents and blueprints' },
-  { title: 'Wire Pipeline', subtitle: 'Name, describe, and create your pipeline' },
-  { title: 'Done', subtitle: 'Your pipeline is ready to run' },
-]
+const { t } = useI18n()
+
+const steps = computed(() => [
+  { title: t('views.OnboardingWizard.welcome'), subtitle: t('views.OnboardingWizard.get_started_with_sdlc_onboarding') },
+  { title: t('views.OnboardingWizard.connect_tools'), subtitle: t('views.OnboardingWizard.select_a_connector_instance_github_jira_filesystem') },
+  { title: t('views.OnboardingWizard.run_inference'), subtitle: t('views.OnboardingWizard.infer_a_schema_from_your_connected_data_source') },
+  { title: t('views.OnboardingWizard.review_schemas'), subtitle: t('views.OnboardingWizard.review_edit_and_confirm_the_inferred_schema') },
+  { title: t('views.OnboardingWizard.browse_library'), subtitle: t('views.OnboardingWizard.find_compatible_agents_and_blueprints') },
+  { title: t('views.OnboardingWizard.wire_pipeline'), subtitle: t('views.OnboardingWizard.name_describe_and_create_your_pipeline') },
+  { title: t('views.OnboardingWizard.done'), subtitle: t('views.OnboardingWizard.your_pipeline_is_ready_to_run') },
+])
 
 const currentStep = ref(0)
 
@@ -517,12 +522,12 @@ async function loadConnectors() {
   try {
     const { data, error: err } = await api.GET('/api/v1/connectors')
     if (err) {
-      connectorsError.value = `Failed to load connectors: ${formatApiError(err)}`
+      connectorsError.value = `${t('views.OnboardingWizard.failed_to_load_connectors')}${formatApiError(err)}`
     } else if (data) {
       connectors.value = data.items
     }
   } catch (e: unknown) {
-    connectorsError.value = `Failed to load connectors: ${formatApiError(e)}`
+    connectorsError.value = `${t('views.OnboardingWizard.failed_to_load_connectors')}${formatApiError(e)}`
   } finally {
     loadingConnectors.value = false
   }
@@ -560,7 +565,7 @@ async function inferSchema() {
       },
     })
     if (err) {
-      inferError.value = `Schema inference failed: ${formatApiError(err)}`
+      inferError.value = `${t('views.OnboardingWizard.schema_inference_failed')}${formatApiError(err)}`
     } else if (data) {
       wizardState.rawDefinitionJson = data.definition_json
       wizardState.draftSchema = {
@@ -572,7 +577,7 @@ async function inferSchema() {
       editableSchemaDescription.value = data.suggestion_description ?? ''
     }
   } catch (e: unknown) {
-    inferError.value = `Schema inference failed: ${formatApiError(e)}`
+    inferError.value = `${t('views.OnboardingWizard.schema_inference_failed')}${formatApiError(e)}`
   } finally {
     inferring.value = false
   }
@@ -590,11 +595,11 @@ async function saveSchema() {
       },
     })
     if (schemaErr) {
-      schemaSaveError.value = `Save failed: ${formatApiError(schemaErr)}`
+      schemaSaveError.value = `${t('views.OnboardingWizard.save_failed')}${formatApiError(schemaErr)}`
       return
     }
     if (!schemaData) {
-      schemaSaveError.value = 'Save failed: no response'
+      schemaSaveError.value = t('views.OnboardingWizard.save_failed_no_response')
       return
     }
 
@@ -608,13 +613,13 @@ async function saveSchema() {
       },
     })
     if (versionErr) {
-      schemaSaveError.value = `Save failed: ${formatApiError(versionErr)}`
+      schemaSaveError.value = `${t('views.OnboardingWizard.save_failed')}${formatApiError(versionErr)}`
       return
     }
 
     wizardState.publishedSchemaId = schemaData.id
   } catch (e: unknown) {
-    schemaSaveError.value = `Save failed: ${formatApiError(e)}`
+    schemaSaveError.value = `${t('views.OnboardingWizard.save_failed')}${formatApiError(e)}`
   } finally {
     savingSchema.value = false
   }
@@ -628,7 +633,7 @@ async function loadLibrary() {
     if (err) throw err
     libraryItems.value = data!.items
   } catch (e) {
-    libraryError.value = e instanceof Error ? e.message : 'Failed to load library'
+    libraryError.value = e instanceof Error ? e.message : t('views.OnboardingWizard.failed_to_load_library')
   } finally {
     loadingLibrary.value = false
   }
@@ -656,7 +661,7 @@ async function createPipeline() {
     wizardState.createdPipelineId = data!.id
     wizardState.createdPipelineName = data!.name
   } catch (e) {
-    pipelineCreateError.value = e instanceof Error ? e.message : 'Failed to create pipeline'
+    pipelineCreateError.value = e instanceof Error ? e.message : t('views.OnboardingWizard.failed_to_create_pipeline')
   } finally {
     creatingPipeline.value = false
   }
@@ -666,7 +671,7 @@ async function runPipeline() {
   if (!wizardState.createdPipelineId) return
   if (!confirmEmptyRun.value) {
     confirmEmptyRun.value = true
-    emptyRunWarning.value = 'No input provided \u2014 this pipeline will run with an empty input payload. Are you sure?'
+    emptyRunWarning.value = t('views.OnboardingWizard.no_input_empty_run_warning')
     return
   }
   emptyRunWarning.value = null
@@ -682,16 +687,16 @@ async function runPipeline() {
       },
     })
     if (err) throw err
-    runResult.value = 'Pipeline started successfully.'
+    runResult.value = t('views.OnboardingWizard.pipeline_started')
   } catch (e) {
-    pipelineRunError.value = e instanceof Error ? e.message : 'Failed to start pipeline'
+    pipelineRunError.value = e instanceof Error ? e.message : t('views.OnboardingWizard.failed_to_start_pipeline')
   } finally {
     runningPipeline.value = false
   }
 }
 
 function nextStep() {
-  if (currentStep.value < steps.length - 1) {
+  if (currentStep.value < steps.value.length - 1) {
     currentStep.value++
   }
 }
@@ -703,7 +708,7 @@ function prevStep() {
 }
 
 function skipToEnd() {
-  currentStep.value = steps.length - 1
+  currentStep.value = steps.value.length - 1
 }
 
 watch(() => wizardState.pipelineDescription, () => {

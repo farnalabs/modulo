@@ -171,6 +171,7 @@ class TestCreateEvalDefinition:
         assert data["failure_behaviour"] == "block"
         assert data["pass_threshold"] == pytest.approx(0.8)
         assert data["suite_id"] == "suite-1"
+        assert data["config_json"] == {"pattern": r"\d+"}
 
     def test_create_omit_optionals(self, admin_client: TestClient) -> None:
         mock_session = _make_mock_session()
@@ -232,6 +233,50 @@ class TestCreateEvalDefinition:
             },
         )
         assert resp.status_code == 422
+
+    def test_create_guardrail_forbidden_detection_envelope(self, admin_client: TestClient) -> None:
+        # PRD §8.17: guardrail detection must be regex|json_schema. A nested
+        # ``detection`` envelope that declares a forbidden type is rejected at
+        # the API edge (never reaches the engine to fail closed at run time).
+        resp = admin_client.post(
+            self.URL,
+            json={
+                "pipeline_id": str(_PIPELINE_ID),
+                "name": "Envelope Eval",
+                "eval_type": "guardrail",
+                "config_json": {"detection": {"type": "llm_judge"}},
+                "failure_behaviour": "block",
+            },
+        )
+        assert resp.status_code == 422
+
+    def test_create_guardrail_detection_envelope_accepted(self, admin_client: TestClient) -> None:
+        mock_session = _make_mock_session()
+        mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
+            _make_result(scalar_value=None),  # set_rls_org
+            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
+        ]
+        mock_session.add = MagicMock()
+        mock_session.flush = AsyncMock()
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        resp = admin_client.post(
+            self.URL,
+            json={
+                "pipeline_id": str(_PIPELINE_ID),
+                "name": "Envelope Regex Eval",
+                "eval_type": "guardrail",
+                "config_json": {"detection": {"type": "regex", "field": "body", "pattern": r"SECRET_[A-Z0-9]{8}"}},
+                "failure_behaviour": "block",
+            },
+        )
+        assert resp.status_code == 201
+        assert resp.json()["eval_type"] == "guardrail"
 
 
 # ── GET /api/v1/evals ──────────────────────────────────────────────────────

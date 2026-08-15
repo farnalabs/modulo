@@ -1070,17 +1070,17 @@ async def test_verify_write_scopes_reports_missing(connector):
     respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json={"scope": ["read_api"]}))
     assert await connector.verify_write_scopes("file") == frozenset({"write_repository"})
     assert await connector.verify_write_scopes("issue") == frozenset({"api"})
-    assert await connector.verify_write_scopes("unknown_resource") == frozenset()
+    assert not await connector.verify_write_scopes("unknown_resource")
 
 
 @respx.mock
 async def test_verify_write_scopes_empty_when_satisfied_or_unknown(connector):
     """verify_write_scopes returns empty when the token has the scope or it can't be probed."""
     respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json={"scope": ["api"]}))
-    assert await connector.verify_write_scopes("file") == frozenset()
-    assert await connector.verify_write_scopes("mr_merge") == frozenset()
+    assert not await connector.verify_write_scopes("file")
+    assert not await connector.verify_write_scopes("mr_merge")
     respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(404, text="Not Found"))
-    assert await connector.verify_write_scopes("file") == frozenset()
+    assert not await connector.verify_write_scopes("file")
 
 
 @respx.mock

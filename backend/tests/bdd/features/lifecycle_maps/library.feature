@@ -17,14 +17,39 @@ Feature: Lifecycle Map as Library Primitive
     Then the response status is 200
     And the response is a lifecycle map export envelope
 
+  Scenario: Export returns the version-history envelope (format v2)
+    Given a lifecycle map named "SDLC Workflow" exists with version 3
+    When I export the lifecycle map
+    Then the response status is 200
+    And the response is a lifecycle map export envelope
+    And the export envelope carries the version history
+
   Scenario: Importing an exported envelope creates a new map
     When I import a lifecycle map named "Imported SDLC"
     Then the response status is 201
     And the response contains a lifecycle map named "Imported SDLC"
 
+  Scenario: Importing a v1 envelope imports as a single-version map
+    When I import a lifecycle map named "Imported SDLC" from a v1 envelope
+    Then the response status is 201
+    And the response contains a lifecycle map named "Imported SDLC"
+
+  Scenario: Importing a v2 envelope recreates the version chain
+    When I import a lifecycle map named "Imported SDLC" with version history
+    Then the response status is 201
+    And the response contains a lifecycle map named "Imported SDLC"
+
+  Scenario: Importing a v2 envelope with malformed version history is rejected
+    When I import a lifecycle map with a malformed version history
+    Then the response status is 422
+
   Scenario: Importing a lifecycle map with invalid content is rejected
     When I import a lifecycle map with invalid content
     Then the response status is 422
+
+  Scenario: Lifecycle maps can be contributed to the community library
+    When I contribute a lifecycle map primitive named "Community SDLC"
+    Then the response status is 201
 
   Scenario: Importing a lifecycle map whose pipeline is already claimed returns 409
     When I import a lifecycle map that conflicts with an existing map's pipeline

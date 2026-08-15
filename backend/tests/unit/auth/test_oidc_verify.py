@@ -492,7 +492,7 @@ class TestEdgeCases:
             with pytest.raises(OidcVerifyError, match="Invalid JWT format"):
                 await verify_id_token(bad, _JWKS_URI, _CLIENT_ID, _ISSUER)
 
-    async def test_cache_clear_works(self) -> None:
+    def test_cache_clear_works(self) -> None:
         from modulo.auth.oidc_verify import _cache_set, _jwks_cache
 
         _cache_set("https://example.com/jwks", [{"kty": "RSA"}])

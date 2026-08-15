@@ -13,8 +13,8 @@ from modulo.core.stripe_fulfilment import (
     _licence_email_html,
     _licence_email_text,
     _processed_event_ids,
-    email_enterprise_license,
-    fulfil_enterprise_purchase,
+    email_team_license,
+    fulfil_team_purchase,
 )
 from modulo.settings import Settings
 
@@ -59,29 +59,29 @@ class TestEmailContent:
         assert "renews annually" in text
 
 
-class TestEmailEnterpriseLicense:
+class TestEmailTeamLicense:
     async def test_sends_license_email(self) -> None:
         settings = _make_settings()
         with patch("modulo.core.stripe_fulfilment.send_email", new=MagicMock(return_value=True)) as mock_send:
-            await email_enterprise_license(settings, "bob@acme.com", "abc.def", "2999-01-01T00:00:00+00:00")
+            await email_team_license(settings, "bob@acme.com", "abc.def", "2999-01-01T00:00:00+00:00")
         mock_send.assert_called_once()
         args = mock_send.call_args.args
         assert args[1] == ["bob@acme.com"]
-        assert args[2] == "Your Modulo Enterprise license"
+        assert args[2] == "Your Modulo Team License"
         assert "MODULO_LICENSE_KEY=abc.def" in args[3]
 
     async def test_email_failure_is_logged_not_raised(self, caplog: pytest.LogCaptureFixture) -> None:
         settings = _make_settings()
         with patch("modulo.core.stripe_fulfilment.send_email", side_effect=EmailSendingError("smtp down")):
-            await email_enterprise_license(settings, "bob@acme.com", "abc.def", "")
+            await email_team_license(settings, "bob@acme.com", "abc.def", "")
         assert "email_failed" in caplog.text
 
 
-class TestFulfilEnterprisePurchase:
+class TestFulfilTeamPurchase:
     async def test_generates_and_emails_license(self) -> None:
         settings = _make_settings()
         with patch("modulo.core.stripe_fulfilment.send_email", new=MagicMock(return_value=True)) as mock_send:
-            license_key = await fulfil_enterprise_purchase(
+            license_key = await fulfil_team_purchase(
                 settings,
                 event_id="evt_1",
                 customer_email="bob@acme.com",
@@ -98,13 +98,13 @@ class TestFulfilEnterprisePurchase:
     async def test_duplicate_event_is_skipped(self) -> None:
         settings = _make_settings()
         with patch("modulo.core.stripe_fulfilment.send_email", new=MagicMock(return_value=True)) as mock_send:
-            first = await fulfil_enterprise_purchase(
+            first = await fulfil_team_purchase(
                 settings,
                 event_id="evt_dup",
                 customer_email="bob@acme.com",
                 org_name="Acme",
             )
-            second = await fulfil_enterprise_purchase(
+            second = await fulfil_team_purchase(
                 settings,
                 event_id="evt_dup",
                 customer_email="bob@acme.com",
@@ -124,7 +124,7 @@ class TestFulfilEnterprisePurchase:
             "modulo.core.stripe_fulfilment.send_email",
             new=MagicMock(side_effect=EmailSendingError("smtp down")),
         ) as mock_fail:
-            first = await fulfil_enterprise_purchase(
+            first = await fulfil_team_purchase(
                 settings,
                 event_id="evt_retry",
                 customer_email="bob@acme.com",
@@ -139,7 +139,7 @@ class TestFulfilEnterprisePurchase:
             "modulo.core.stripe_fulfilment.send_email",
             new=MagicMock(return_value=True),
         ) as mock_ok:
-            second = await fulfil_enterprise_purchase(
+            second = await fulfil_team_purchase(
                 settings,
                 event_id="evt_retry",
                 customer_email="bob@acme.com",
@@ -154,12 +154,12 @@ class TestFulfilEnterprisePurchase:
         settings = _make_settings()
         with (
             patch(
-                "modulo.core.stripe_fulfilment.generate_enterprise_license",
+                "modulo.core.stripe_fulfilment.generate_team_license",
                 side_effect=LicenseSigningError("no key"),
             ),
             patch("modulo.core.stripe_fulfilment.send_email", new=MagicMock()) as mock_send,
         ):
-            result = await fulfil_enterprise_purchase(
+            result = await fulfil_team_purchase(
                 settings,
                 event_id="evt_3",
                 customer_email="bob@acme.com",
@@ -173,7 +173,7 @@ class TestFulfilEnterprisePurchase:
     async def test_fulfilment_without_email(self) -> None:
         settings = _make_settings()
         with patch("modulo.core.stripe_fulfilment.send_email", new=MagicMock()) as mock_send:
-            license_key = await fulfil_enterprise_purchase(
+            license_key = await fulfil_team_purchase(
                 settings,
                 event_id="evt_4",
                 customer_email="bob@acme.com",
