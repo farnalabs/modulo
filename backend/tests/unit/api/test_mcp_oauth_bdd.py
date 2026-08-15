@@ -6,7 +6,6 @@ protocol endpoints (in mcp_server.py / mcp_oauth.py) in addition to the client
 CRUD endpoints already tested in test_mcp_oauth.py.
 """
 
-import asyncio
 import json as json_module
 import uuid
 from collections.abc import AsyncGenerator, Generator
@@ -268,7 +267,7 @@ class TestAuthorizeEndpoint:
 
         return Request(scope, receive=receive)
 
-    def _authorize(self, params: dict[str, str]) -> Any:
+    async def _authorize(self, params: dict[str, str]) -> Any:
         with (
             patch("modulo.api.mcp_server._get_session_factory") as mock_sf,
             patch("modulo.api.mcp_server.get_settings", return_value=_make_settings()),
@@ -285,11 +284,11 @@ class TestAuthorizeEndpoint:
             from modulo.api.mcp_server import _oauth_authorize
 
             request = self._make_request(params)
-            response = asyncio.run(_oauth_authorize(request))
+            response = await _oauth_authorize(request)
             return response, mock_create_state
 
-    def test_authorize_redirects_to_spa_consent_route(self) -> None:
-        response, mock_create_state = self._authorize(
+    async def test_authorize_redirects_to_spa_consent_route(self) -> None:
+        response, mock_create_state = await self._authorize(
             {
                 "response_type": "code",
                 "client_id": "oauth_client_1",
@@ -317,7 +316,7 @@ class TestAuthorizeEndpoint:
         assert kwargs["code_challenge"] == _CODE_CHALLENGE
         assert kwargs["org_id"] == _ORG_ID
 
-    def test_authorize_rejects_plain_pkce_method(self) -> None:
+    async def test_authorize_rejects_plain_pkce_method(self) -> None:
         with (
             patch("modulo.api.mcp_server.get_settings", return_value=_make_settings()),
             patch("modulo.api.mcp_server._get_session_factory"),
@@ -335,12 +334,12 @@ class TestAuthorizeEndpoint:
                     "state": "xyz",
                 }
             )
-            response = asyncio.run(_oauth_authorize(request))
+            response = await _oauth_authorize(request)
 
         assert response.status_code == 400
         assert "S256" in json_module.loads(response.body)["detail"]
 
-    def test_authorize_rejects_missing_state(self) -> None:
+    async def test_authorize_rejects_missing_state(self) -> None:
         with (
             patch("modulo.api.mcp_server.get_settings", return_value=_make_settings()),
             patch("modulo.api.mcp_server._get_session_factory"),
@@ -357,12 +356,12 @@ class TestAuthorizeEndpoint:
                     "code_challenge_method": "S256",
                 }
             )
-            response = asyncio.run(_oauth_authorize(request))
+            response = await _oauth_authorize(request)
 
         assert response.status_code == 400
         assert "state" in json_module.loads(response.body)["detail"]
 
-    def test_authorize_rejects_missing_code_challenge(self) -> None:
+    async def test_authorize_rejects_missing_code_challenge(self) -> None:
         with (
             patch("modulo.api.mcp_server.get_settings", return_value=_make_settings()),
             patch("modulo.api.mcp_server._get_session_factory"),
@@ -379,7 +378,7 @@ class TestAuthorizeEndpoint:
                     "state": "xyz",
                 }
             )
-            response = asyncio.run(_oauth_authorize(request))
+            response = await _oauth_authorize(request)
 
         assert response.status_code == 400
         assert "code_challenge" in json_module.loads(response.body)["detail"]
@@ -391,7 +390,7 @@ class TestAuthorizeEndpoint:
 
 
 class TestRedirectUriValidation:
-    def test_mismatched_redirect_uri_returns_error(self) -> None:
+    async def test_mismatched_redirect_uri_returns_error(self) -> None:
         with (
             patch("modulo.api.mcp_server._get_session_factory") as mock_sf,
             patch("modulo.api.mcp_server.get_settings", return_value=_make_settings()),
@@ -429,7 +428,7 @@ class TestRedirectUriValidation:
                 return {"type": "http.disconnect"}
 
             request = Request(scope, receive=receive)
-            response = asyncio.run(_oauth_authorize(request))
+            response = await _oauth_authorize(request)
 
         assert response.status_code == 400
         assert "redirect_uri not allowed" in json_module.loads(response.body)["detail"]
