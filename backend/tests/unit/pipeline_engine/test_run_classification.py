@@ -780,6 +780,74 @@ class TestSweep:
         summary = await reconcile_missing_classifications(maker, org_ids=[_ORG], max_runs=10, budget_seconds=30.0)
         assert summary["scanned"] == 0
 
+    async def test_sweep_backfills_run_failed_by_saq_hooks_mark_run_failed(
+        self,
+    ) -> None:
+        """FAR-224: a run terminalised by ``saq_hooks._mark_run_failed`` — a
+        raw-SQL terminalizer that bypasses the inline classification hook — must
+        be classified by the reconcile sweep within one tick.
+
+        Drives the REAL ``_mark_run_failed`` path (claim-token-fenced
+        task_failure write) against the test engine, asserts the run is left
+        with ``run_classification = NULL``, then runs the periodic
+        ``run_classification_reconcile`` entrypoint and asserts the record is
+        backfilled. A directly-seeded ``status='failed'`` row (as in
+        ``test_reconcile_backfills_terminal_runs_without_record``) could not
+        catch a regression where ``_mark_run_failed`` stops writing the
+        terminal shape the sweep's predicate depends on.
+
+        Uses its OWN engine (not the shared ``engine`` fixture) so the raw
+        UPDATE's Postgres-style ``now()`` can be exposed on SQLite via
+        ``create_function`` without affecting any other test.
+        """
+        from datetime import datetime
+
+        from sqlalchemy import event
+
+        from modulo.core import cron_helpers
+        from modulo.core.error_tracking import saq_hooks
+
+        eng = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool, echo=False)
+
+        @event.listens_for(eng.sync_engine, "connect")
+        def _sqlite_now(dbapi_connection: Any, connection_record: Any) -> None:
+            dbapi_connection.create_function("now", 0, lambda: datetime.now().isoformat())
+
+        async with eng.begin() as conn:
+            await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_TABLES))
+        try:
+            run_id = uuid.uuid4()
+            maker = async_sessionmaker(eng, expire_on_commit=False, autobegin=False)
+            async with maker() as s, s.begin():
+                await _seed_run(s, run_id)  # status="running", claim_token="tok-a"
+
+            with patch.object(saq_hooks, "_open_factory", return_value=maker):
+                # Pass the id strings in SQLite's hyphenless-hex storage form:
+                # SQLAlchemy's Uuid() stores a CHAR(32) hex string here, so the
+                # production ``str(uuid)`` bind would match 0 rows on this test
+                # engine (on Postgres both forms coerce to the same native
+                # UUID — this is a SQLite test-infra accommodation only).
+                rowcount = await saq_hooks._mark_run_failed(
+                    run_id.hex,
+                    _ORG.hex,
+                    claim_token="tok-a",
+                    error_detail="task failure",
+                )
+            assert rowcount == 1
+
+            # The raw-SQL write bypasses the classification hook — the exact gap
+            # the 60s dispatcher_reconcile sweep exists to close.
+            assert await _read_classification(eng, run_id) is None
+
+            with patch.object(cron_helpers, "_open_factory", return_value=maker):
+                summary = await cron_helpers.run_classification_reconcile()
+            assert summary["classified"] == 1
+            record = await _read_classification(eng, run_id)
+            assert record is not None
+            assert record["value"] == "no_delivery"
+        finally:
+            await eng.dispose()
+
 
 class _MockBegin:
     async def __aenter__(self) -> Self:

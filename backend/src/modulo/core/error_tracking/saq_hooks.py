@@ -142,9 +142,23 @@ async def _mark_run_failed(
     5000 code points BEFORE the UPDATE — ``runs.error_detail`` is String(5000);
     an untruncated detail raises DataError, which the generic except in
     :func:`after_process` would swallow and the run would NEVER be marked
-    failed (the exact failure this fix exists to prevent). ``None`` is written
+    failed (the exact failure this fix exists to prevent).     ``None`` is written
     when the detail is falsy — never ``""`` (an empty-string detail flips the
     daily-watcher detail_available flag; NULL does not).
+
+    FAR-224 decision — SWEEP-ONLY, not inline: this raw-SQL write deliberately
+    does NOT call the classification hook inline (unlike the fenced
+    ``crud.run`` terminal write). The 60s ``dispatcher_reconcile`` →
+    ``run_classification_reconcile`` sweep backfills the record within one
+    tick: it matches every ``status='failed'`` row with
+    ``run_classification IS NULL`` (this UPDATE sets both ``status='failed'``
+    and ``completed_at=now()``), and the FAR-190 streak walk runs AFTER the
+    classification reconcile in the SAME tick, so a run failed here is counted
+    in the same sweep cycle. The streak engine reads classification only at
+    sweep time, the FAR-191 streak-status reader degrades gracefully on NULL,
+    and no terminalization-time synchronous consumer exists — so the bounded
+    60s lag is acceptable. Re-inline (following the crud/run.py contract) only
+    if a synchronous terminalization-time consumer appears.
 
     Returns the number of rows updated — 0 means the guards rejected the write
     (superseded / already terminal / cancellation requested).
