@@ -28,6 +28,7 @@ code:
   - backend/src/modulo/db/migrations/versions/0002_v2_teams_library.py
 unit-tests:
   - backend/tests/unit/auth/test_team_rbac.py
+  - backend/tests/unit/api/test_teams.py
 depends-on: [feat-teams-team-crud]
 status: partial
 ---
@@ -236,9 +237,14 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - Audit event failures on team create/update/delete do not propagate to the caller — the operation completes but the event is lost silently (logged as warning only)
 - `remove_member_endpoint` requires admin or team operator — but there's no guard against removing the last operator from a team (design choice, not a bug)
 - `add_member_endpoint` validates team operator self-escalation at REST layer but does not check membership existence limit (no cap on memberships per team)
-- No `PATCH /teams/{id}/members/{id}` audit event for role changes (PUT audit events on team create/update/delete only — role changes are not audited)
+- ~~No `PATCH /teams/{id}/members/{id}` audit event for role changes (PUT audit events on team create/update/delete only — role changes are not audited)~~ **[RESOLVED 2026-08-15]** — `change_member_role_endpoint` now appends `team_member_role_changed` (old_role/new_role); `add_member_endpoint` appends `team_member_added` and `remove_member_endpoint` appends `team_member_removed`. See QA History.
 
 ## QA History
+
+### 2026-08-15 — improve-architecture (team membership audit events)
+- **RESOLVED** "No `PATCH /teams/{id}/members/{id}` audit event for role changes" — all three membership routes in `api/routes/teams.py` now dispatch PRD §8.12 audit events in a fresh post-commit transaction (`team_member_added` / `team_member_removed` / `team_member_role_changed` with `team_id`/`user_id`/`role`(+`old_role`/`new_role`) payloads, membership id as `resource_id`). A 404 (unknown membership) emits nothing, and the appends are failure-isolated (`asyncio.CancelledError` re-raised, any other failure logged without failing the completed operation). Covered by 11 new unit tests in `test_teams.py`. Also resolved the "team create/update/delete audit" side of the gap: those events were already dispatched (`team_created`/`team_updated`/`team_deleted`); the audit-trail product map was stale.
+
+
 
 ### 2026-07-11 — Round 2 re-QA (index 359)
 

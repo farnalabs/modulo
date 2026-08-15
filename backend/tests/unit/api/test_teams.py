@@ -399,6 +399,75 @@ class TestAddMember:
             )
         assert resp.status_code == 404
 
+    def test_emits_team_member_added_audit(self, client: TestClient) -> None:
+        target_account = MagicMock()
+        target_account.id = _USER_ID
+        target_membership = MagicMock()
+        target_membership.role = "admin"
+        audit = AsyncMock(return_value=MagicMock())
+        with (
+            patch(
+                "modulo.api.routes.teams.add_team_member",
+                return_value=_make_membership(role="viewer"),
+            ),
+            patch("modulo.db.crud.account.get_account_by_id", new=AsyncMock(return_value=target_account)),
+            patch(
+                "modulo.db.crud.org_membership.get_membership_by_account_and_org",
+                new=AsyncMock(return_value=target_membership),
+            ),
+            patch("modulo.api.routes.teams.get_team", return_value=_make_team()),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+            patch("modulo.core.audit_logger.append_audit_event", new=audit),
+        ):
+            resp = client.post(
+                f"/api/v1/teams/{_TEAM_ID}/members",
+                json={"user_id": str(_USER_ID), "role": "viewer"},
+            )
+        assert resp.status_code == 201
+        audit.assert_awaited_once()
+        kwargs = audit.await_args.kwargs
+        assert kwargs["event_type"] == "team_member_added"
+        assert kwargs["org_id"] == _ORG_ID
+        assert kwargs["actor_user_id"] == _USER_ID
+        assert kwargs["resource_type"] == "team_membership"
+        assert kwargs["resource_id"] == _MEMBERSHIP_ID
+        assert kwargs["payload_json"] == {
+            "team_id": str(_TEAM_ID),
+            "user_id": str(_USER_ID),
+            "role": "viewer",
+        }
+
+    def test_audit_failure_does_not_block_add(self, client: TestClient) -> None:
+        target_account = MagicMock()
+        target_account.id = _USER_ID
+        target_membership = MagicMock()
+        target_membership.role = "admin"
+
+        async def _raise_audit(*_a: object, **_k: object) -> object:
+            raise RuntimeError("audit boom")
+
+        with (
+            patch(
+                "modulo.api.routes.teams.add_team_member",
+                return_value=_make_membership(),
+            ),
+            patch("modulo.db.crud.account.get_account_by_id", new=AsyncMock(return_value=target_account)),
+            patch(
+                "modulo.db.crud.org_membership.get_membership_by_account_and_org",
+                new=AsyncMock(return_value=target_membership),
+            ),
+            patch("modulo.api.routes.teams.get_team", return_value=_make_team()),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+            patch("modulo.core.audit_logger.append_audit_event", side_effect=_raise_audit),
+        ):
+            resp = client.post(
+                f"/api/v1/teams/{_TEAM_ID}/members",
+                json={"user_id": str(_USER_ID), "role": "viewer"},
+            )
+        assert resp.status_code == 201
+
 
 class TestListMembers:
     def test_returns_200(self, client: TestClient) -> None:
@@ -458,6 +527,169 @@ class TestRemoveMember:
         ):
             resp = client.delete(f"/api/v1/teams/{_TEAM_ID}/members/{uuid.uuid4()}")
         assert resp.status_code == 404
+
+    def test_emits_team_member_removed_audit(self, client: TestClient) -> None:
+        audit = AsyncMock(return_value=MagicMock())
+        with (
+            patch(
+                "modulo.api.routes.teams.get_membership",
+                return_value=_make_membership(role="operator"),
+            ),
+            patch("modulo.api.routes.teams.remove_team_member", return_value=True),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+            patch("modulo.core.audit_logger.append_audit_event", new=audit),
+        ):
+            resp = client.delete(f"/api/v1/teams/{_TEAM_ID}/members/{_MEMBERSHIP_ID}")
+        assert resp.status_code == 204
+        audit.assert_awaited_once()
+        kwargs = audit.await_args.kwargs
+        assert kwargs["event_type"] == "team_member_removed"
+        assert kwargs["org_id"] == _ORG_ID
+        assert kwargs["actor_user_id"] == _USER_ID
+        assert kwargs["resource_type"] == "team_membership"
+        assert kwargs["resource_id"] == _MEMBERSHIP_ID
+        assert kwargs["payload_json"] == {
+            "team_id": str(_TEAM_ID),
+            "user_id": str(_USER_ID),
+            "role": "operator",
+        }
+
+    def test_not_found_does_not_emit_audit(self, client: TestClient) -> None:
+        audit = AsyncMock(return_value=MagicMock())
+        with (
+            patch(
+                "modulo.api.routes.teams.get_membership",
+                return_value=None,
+            ),
+            patch("modulo.api.routes.teams.remove_team_member", return_value=False),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+            patch("modulo.core.audit_logger.append_audit_event", new=audit),
+        ):
+            resp = client.delete(f"/api/v1/teams/{_TEAM_ID}/members/{uuid.uuid4()}")
+        assert resp.status_code == 404
+        audit.assert_not_awaited()
+
+    def test_audit_failure_does_not_block_removal(self, client: TestClient) -> None:
+        async def _raise_audit(*_a: object, **_k: object) -> object:
+            raise RuntimeError("audit boom")
+
+        with (
+            patch(
+                "modulo.api.routes.teams.get_membership",
+                return_value=_make_membership(),
+            ),
+            patch("modulo.api.routes.teams.remove_team_member", return_value=True),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+            patch("modulo.core.audit_logger.append_audit_event", side_effect=_raise_audit),
+        ):
+            resp = client.delete(f"/api/v1/teams/{_TEAM_ID}/members/{_MEMBERSHIP_ID}")
+        assert resp.status_code == 204
+
+
+class TestChangeMemberRole:
+    def test_returns_200(self, client: TestClient) -> None:
+        existing = _make_membership(role="viewer")
+        updated = _make_membership(role="operator")
+        with (
+            patch("modulo.api.routes.teams.get_team", return_value=_make_team()),
+            patch("modulo.api.routes.teams.get_membership", return_value=existing),
+            patch("modulo.api.routes.teams.update_member_role", return_value=updated),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+        ):
+            resp = client.patch(
+                f"/api/v1/teams/{_TEAM_ID}/members/{_MEMBERSHIP_ID}",
+                json={"role": "operator"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["role"] == "operator"
+
+    def test_membership_not_found_returns_404(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.teams.get_team", return_value=_make_team()),
+            patch("modulo.api.routes.teams.get_membership", return_value=None),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+        ):
+            resp = client.patch(
+                f"/api/v1/teams/{_TEAM_ID}/members/{uuid.uuid4()}",
+                json={"role": "operator"},
+            )
+        assert resp.status_code == 404
+
+    def test_invalid_role_returns_422(self, client: TestClient) -> None:
+        resp = client.patch(
+            f"/api/v1/teams/{_TEAM_ID}/members/{_MEMBERSHIP_ID}",
+            json={"role": "superadmin"},
+        )
+        assert resp.status_code == 422
+
+    def test_emits_team_member_role_changed_audit(self, client: TestClient) -> None:
+        audit = AsyncMock(return_value=MagicMock())
+        with (
+            patch("modulo.api.routes.teams.get_team", return_value=_make_team()),
+            patch("modulo.api.routes.teams.get_membership", return_value=_make_membership(role="viewer")),
+            patch("modulo.api.routes.teams.update_member_role", return_value=_make_membership(role="operator")),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+            patch("modulo.core.audit_logger.append_audit_event", new=audit),
+        ):
+            resp = client.patch(
+                f"/api/v1/teams/{_TEAM_ID}/members/{_MEMBERSHIP_ID}",
+                json={"role": "operator"},
+            )
+        assert resp.status_code == 200
+        audit.assert_awaited_once()
+        kwargs = audit.await_args.kwargs
+        assert kwargs["event_type"] == "team_member_role_changed"
+        assert kwargs["org_id"] == _ORG_ID
+        assert kwargs["actor_user_id"] == _USER_ID
+        assert kwargs["resource_type"] == "team_membership"
+        assert kwargs["resource_id"] == _MEMBERSHIP_ID
+        assert kwargs["payload_json"] == {
+            "team_id": str(_TEAM_ID),
+            "user_id": str(_USER_ID),
+            "old_role": "viewer",
+            "new_role": "operator",
+        }
+
+    def test_not_found_does_not_emit_audit(self, client: TestClient) -> None:
+        audit = AsyncMock(return_value=MagicMock())
+        with (
+            patch("modulo.api.routes.teams.get_team", return_value=_make_team()),
+            patch("modulo.api.routes.teams.get_membership", return_value=None),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+            patch("modulo.core.audit_logger.append_audit_event", new=audit),
+        ):
+            resp = client.patch(
+                f"/api/v1/teams/{_TEAM_ID}/members/{uuid.uuid4()}",
+                json={"role": "operator"},
+            )
+        assert resp.status_code == 404
+        audit.assert_not_awaited()
+
+    def test_audit_failure_does_not_block_role_change(self, client: TestClient) -> None:
+        async def _raise_audit(*_a: object, **_k: object) -> object:
+            raise RuntimeError("audit boom")
+
+        with (
+            patch("modulo.api.routes.teams.get_team", return_value=_make_team()),
+            patch("modulo.api.routes.teams.get_membership", return_value=_make_membership(role="viewer")),
+            patch("modulo.api.routes.teams.update_member_role", return_value=_make_membership(role="operator")),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+            patch("modulo.core.audit_logger.append_audit_event", side_effect=_raise_audit),
+        ):
+            resp = client.patch(
+                f"/api/v1/teams/{_TEAM_ID}/members/{_MEMBERSHIP_ID}",
+                json={"role": "operator"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["role"] == "operator"
 
 
 class TestAdminCreateTeam:
