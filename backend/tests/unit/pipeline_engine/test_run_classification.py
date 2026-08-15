@@ -12,6 +12,7 @@ idempotency (UNIQUE(run_id)), and re-terminalization refresh (upsert).
 import builtins
 import uuid
 from collections.abc import AsyncGenerator
+from datetime import UTC
 from typing import Any, Self, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -811,7 +812,7 @@ class TestSweep:
 
         @event.listens_for(eng.sync_engine, "connect")
         def _sqlite_now(dbapi_connection: Any, connection_record: Any) -> None:
-            dbapi_connection.create_function("now", 0, lambda: datetime.now().isoformat())
+            dbapi_connection.create_function("now", 0, lambda: datetime.now(UTC).isoformat())
 
         async with eng.begin() as conn:
             await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_TABLES))
