@@ -88,6 +88,109 @@ jobs:
           name: coverage-report
           path: backend/coverage.xml
 
+  integration-changed:
+    # Runs the integration test files a PR (or push) actually changed. The
+    # full integration suite only runs in the deploy pipeline's pre-deploy
+    # gate, so a broken integration test merged to main sails through PR CI
+    # and blocks every deploy (2026-08-14: PR #1266 added an assert-after-
+    # delete to test_demo_first_run.py; 6 deploys failed before it was
+    # caught). Skips green when no backend/tests/integration/ files changed.
+    name: Integration tests (changed)
+    runs-on: ubicloud-standard-2
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Detect changed integration test files
+        id: changed
+        shell: bash
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            BASE="origin/$GITHUB_BASE_REF"
+          else
+            BASE="HEAD^"
+          fi
+          CHANGED="$(git diff --name-only "$BASE" HEAD -- backend/tests/integration/ || true)"
+          # Keep only files that actually exist in the PR tree - a deleted or
+          # renamed-away integration test would otherwise be fed to pytest below
+          # and error "file or directory not found" (exit 4). Mirrors the
+          # migration-prefix collision check's HEAD-existence guard.
+          : > /tmp/integration-changed.txt
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            if ! git cat-file -e "HEAD:${f}" 2>/dev/null; then
+              echo "  (skip) not present in PR tree: ${f}"
+              continue
+            fi
+            printf '%s\n' "${f#backend/}" >> /tmp/integration-changed.txt
+          done <<< "$CHANGED"
+          CHANGED="$(tr '\n' ' ' < /tmp/integration-changed.txt | sed 's/ *$//')"
+          echo "changed_files=${CHANGED}" >> "$GITHUB_OUTPUT"
+          if [ -n "$CHANGED" ]; then
+            echo "Changed integration test files: ${CHANGED}"
+          else
+            echo "No integration test files changed - skipping."
+          fi
+      - name: Start Postgres (integration dependency)
+        if: steps.changed.outputs.changed_files != ''
+        shell: bash
+        run: |
+          docker rm -f modulo-ci-pg 2>/dev/null || true
+          docker run -d --name modulo-ci-pg \
+            -e POSTGRES_USER=modulo_test \
+            -e POSTGRES_PASSWORD=modulo_test \
+            -e POSTGRES_DB=modulo_test \
+            -p 5433:5432 \
+            postgres:16-alpine
+          for i in $(seq 1 60); do
+            if docker exec modulo-ci-pg pg_isready -U modulo_test 2>/dev/null; then
+              echo "Postgres ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Postgres did not become ready within the retry budget"
+          docker logs modulo-ci-pg 2>/dev/null || true
+          exit 1
+      - name: Start Redis (integration dependency)
+        if: steps.changed.outputs.changed_files != ''
+        shell: bash
+        run: |
+          docker rm -f modulo-ci-redis 2>/dev/null || true
+          docker run -d --name modulo-ci-redis -p 6379:6379 redis:7-alpine
+          for i in $(seq 1 30); do
+            if docker exec modulo-ci-redis redis-cli ping 2>/dev/null | grep -q PONG; then
+              echo "Redis ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Redis did not become ready within the retry budget"
+          docker logs modulo-ci-redis 2>/dev/null || true
+          exit 1
+      - name: Run changed integration tests
+        if: steps.changed.outputs.changed_files != ''
+        shell: bash
+        run: |
+          # Expand the newline-delimited list via mapfile - never interpolate
+          # PR-controlled filenames into `run:` (shell metacharacters and
+          # spaces would be executed/split). The list was written to a temp
+          # file by the Detect step.
+          mapfile -t TEST_FILES < /tmp/integration-changed.txt
+          echo "Running: pytest ${TEST_FILES[*]}"
+          uv run --no-sync pytest "${TEST_FILES[@]}" -q --tb=short --timeout=300 -p no:warnings
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: "true"
+          DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
+
   frontend:
     name: Frontend and WCAG
     runs-on: ubicloud-standard-2
@@ -381,7 +484,7 @@ jobs:
     # step so it keeps its documented meaning ("do not auto-dispatch the
     # Branch Fixer").
     if: github.event_name == 'pull_request' && always()
-    needs: [backend-lint, backend-test, frontend, schema-freshness, product-map-validate, manifest-validate, tools-tests, gitleaks, break-glass-deploy-gate]
+    needs: [backend-lint, backend-test, integration-changed, frontend, schema-freshness, product-map-validate, manifest-validate, tools-tests, gitleaks, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
@@ -469,7 +572,7 @@ jobs:
     # reports success on pull_request events; the "only dispatch when all
     # needed checks are green" logic lives on the webhook step below.
     if: github.event_name == 'pull_request' && always()
-    needs: [backend-lint, backend-test, frontend, schema-freshness, product-map-validate, manifest-validate, tools-tests, gitleaks, break-glass-deploy-gate]
+    needs: [backend-lint, backend-test, integration-changed, frontend, schema-freshness, product-map-validate, manifest-validate, tools-tests, gitleaks, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       contents: read
