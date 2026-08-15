@@ -1,4 +1,4 @@
-"""14 canonical library workflow primitives.
+"""15 canonical library workflow primitives.
 
 Each dict defines a pre-built pipeline template that combines agents,
 schemas, and connector bindings into a reusable workflow.
@@ -775,5 +775,67 @@ SIMPLEST_WORKFLOW: dict[str, Any] = {
         "test_command": "",
         "auto_commit": False,
         "max_iterations": 3,
+    },
+}
+
+# ---------------------------------------------------------------------------
+# 15. daily-reviewer
+# ---------------------------------------------------------------------------
+DAILY_REVIEWER: dict[str, Any] = {
+    "name": "Daily Reviewer",
+    "description": (
+        "Scheduled collection-level review pipeline. Reviews main as a whole — "
+        "every commit merged in the last 24 hours viewed as a collection, not "
+        "PR-by-PR — so issues that only appear across merged PRs (logical "
+        "conflicts, duplicated utilities, drifting error-handling patterns) are "
+        "caught. A reviewer emits findings, a grouper batches them into one "
+        "ticket per batch, and coders implement each batch and open PRs. Phase 1 "
+        "runs the coder loop sequentially (ticket-to-pr pattern); Phase 2 fans "
+        "out to parallel coders via parallel_branches once FAR-171 lands."
+    ),
+    "version": "1.0.0",
+    "author": "Modulo",
+    "tags": ["daily-reviewer", "review", "ci-cd", "collection-level", "canonical"],
+    "pipeline_steps": [
+        {
+            "id": "collect-changes",
+            "agent": None,
+            "connector_binding": {"type": "source_control", "required": True},
+            "description": "Fetch commits merged to origin/main in the last 24h with per-commit diffstat",
+        },
+        {
+            "id": "review-main",
+            "agent": "main-reviewer",
+            "depends_on": ["collect-changes"],
+            "description": "Run collection-level lenses over the day's merged commits and emit findings",
+        },
+        {
+            "id": "group-findings",
+            "agent": "finding-grouper",
+            "depends_on": ["review-main"],
+            "description": "Group findings into work batches and draft one ticket per batch",
+        },
+        {
+            "id": "implement-batches",
+            "agent": "spec-implementer",
+            "depends_on": ["group-findings"],
+            "connector_binding": {"type": "source_control", "required": True},
+            "description": "Implement each batch (clone, implement, self-review, push branch) and open PRs",
+        },
+    ],
+    "default_config": {
+        "schedule": "cron(0 5 * * *)",
+        "base_branch": "main",
+        "review_window_hours": 24,
+        "repository": "",
+        "branch_prefix": "far/",
+        "team": "FAR",
+        "ticket_labels": ["groomed"],
+        "max_findings_per_batch": 3,
+        "parallel_coders": False,
+        "tracking_system": "linear",
+        "auto_create_pr": True,
+        "test_command": "pytest",
+        "notification_channels": ["slack"],
     },
 }

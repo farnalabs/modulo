@@ -18,6 +18,7 @@ import pytest
 from modulo.core.library import (
     ADR_WORKFLOW,
     CICD_WORKFLOW,
+    DAILY_REVIEWER,
     DOGFOODING_PIPELINE,
     FEATURE_PROPOSAL,
     FULL_SDLC,
@@ -54,6 +55,7 @@ WORKFLOW_CASES = [
     DOGFOODING_PIPELINE,
     RELEASE_CANDIDATE,
     SIMPLEST_WORKFLOW,
+    DAILY_REVIEWER,
 ]
 
 # Every template must be discoverable via the library package's exports too.
