@@ -149,6 +149,14 @@ regression that silently weakens the suite:
   N times, while a reader (and a mutation-testing run) believes N distinct
   inputs are covered. Drop the unused parameter (and the parametrize when
   that leaves no other varying argument)
+- split ``assert_called_once``/``assert_awaited_once`` + ``assert_called_with``/
+  ``assert_awaited_with`` pairs on the *same* mock — the two-line form is the
+  split twin of the single atomic ``assert_called_once_with(...)``/
+  ``assert_awaited_once_with(...)`` check. Written separately, the pair can
+  silently drift out of sync (one half edited, the other not), so a reader —
+  and a mutation-testing run — cannot rely on the "exactly once with these
+  args" guarantee the combined form enforces in one statement. Merge the pair
+  into the ``_once_with`` form
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -2966,3 +2974,135 @@ def test_unused_parametrize_arg_lens_flags_ignored_cases():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _unused_parametrize_arg_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+_SPLIT_ONCE_WITH_METHODS = frozenset({"assert_called_once_with", "assert_awaited_once_with"})
+"""The atomic ``_once_with`` assertion methods. Each verifies "called exactly
+once AND with these arguments" in a single statement."""
+
+_SPLIT_ONCE_METHODS = frozenset({"assert_called_once", "assert_awaited_once"})
+"""The ``_once`` halves of a split pair — verify only "called exactly once"."""
+
+_SPLIT_WITH_METHODS = frozenset({"assert_called_with", "assert_awaited_with"})
+"""The ``_with`` halves of a split pair — verify only "last call args match"."""
+
+
+def _split_once_with_call_assertions(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every split call-assertion pair —
+    ``<mock>.assert_called_once()``/``<mock>.assert_awaited_once()``
+    immediately followed by ``<mock>.assert_called_with(...)``/
+    ``<mock>.assert_awaited_with(...)`` on the same mock. The two statements
+    are the split twin of the single atomic ``<mock>.assert_called_once_with
+    (...)``/``<mock>.assert_awaited_once_with(...)`` check, and written apart
+    they can silently drift out of sync. Only immediately-adjacent statements
+    are considered, so unrelated assertions between the two halves are not
+    flagged."""
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for i, stmt in enumerate(node.body[:-1]):
+            nxt = node.body[i + 1]
+            first = _mock_assert_method(stmt)
+            second = _mock_assert_method(nxt)
+            if first is None or second is None:
+                continue
+            first_base, first_attr = first
+            second_base, second_attr = second
+            if first_attr not in _SPLIT_ONCE_METHODS or second_attr not in _SPLIT_WITH_METHODS:
+                continue
+            if ast.dump(first_base) != ast.dump(second_base):
+                continue
+            found.append(
+                (
+                    stmt.lineno,
+                    f"{first_attr}() + {second_attr}(...) on the same mock is a split "
+                    f"pair — combine into the single atomic {ast.unparse(first_base)}."
+                    f"{second_attr[:-5]}_once_with(...) so 'exactly once with these args' "
+                    "cannot silently drift out of sync",
+                )
+            )
+    return found
+
+
+def _mock_assert_method(stmt: ast.stmt) -> tuple[ast.AST, str] | None:
+    """If ``stmt`` is an expression statement calling a mock assertion method
+    (``assert_called*``/``assert_awaited*``), return ``(receiver, method)``."""
+    if not isinstance(stmt, ast.Expr) or not isinstance(stmt.value, ast.Call):
+        return None
+    f = stmt.value.func
+    if not isinstance(f, ast.Attribute):
+        return None
+    if f.attr not in (
+        _SPLIT_ONCE_METHODS | _SPLIT_WITH_METHODS | {"assert_called_once_with", "assert_awaited_once_with"}
+    ):
+        return None
+    if not isinstance(f.value, (ast.Name, ast.Attribute, ast.Subscript)):
+        return None
+    return f.value, f.attr
+
+
+def test_no_split_once_with_call_assertions():
+    """``<mock>.assert_called_once()`` immediately followed by
+    ``<mock>.assert_called_with(...)`` on the same mock is the two-line split
+    of the single atomic ``<mock>.assert_called_once_with(...)`` check. Written
+    apart, the pair can silently drift out of sync — one half edited, the other
+    forgotten — so the combined "exactly once with these args" guarantee that
+    ``assert_called_once_with`` enforces in one statement is only an accident
+    of the current two-line form. Merge the pair into the ``_once_with`` form.
+    Only immediately-adjacent statements are flagged, so the deliberate
+    "assert the count, then assert the args after more work" idiom is left
+    alone."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _split_once_with_call_assertions(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} split assert_called_once + assert_called_with pair(s).\n"
+        "A call-count assertion immediately followed by an args assertion on the same mock is the\n"
+        "split twin of the atomic assert_called_once_with/assert_awaited_once_with check. Merge them:\n"
+        "    mock.assert_called_once()          ->  mock.assert_called_once_with(expected)\n"
+        "    mock.assert_called_with(expected)\n" + "\n".join(violations)
+    )
+
+
+def test_split_once_with_lens_flags_redundant_pairs():
+    """Synthetic positive/negative control for the split-assertion lens: it
+    must flag an ``assert_called_once``/``assert_awaited_once`` immediately
+    followed by an ``assert_called_with``/``assert_awaited_with`` on the same
+    mock, and ignore standalone ``_once`` calls, ``_once_with`` calls (already
+    atomic), args assertions without the count twin, pairs on *different*
+    mocks, and pairs separated by an intermediate statement."""
+    positive_sources = [
+        "def test_foo():\n    mock.assert_called_once()\n    mock.assert_called_with(1, 2)\n",
+        "def test_foo():\n    mock_async.assert_awaited_once()\n    mock_async.assert_awaited_with(record)\n",
+        (
+            "def test_foo():\n    self.provider.execute.assert_called_once()\n"
+            "    self.provider.execute.assert_called_with('x')\n"
+        ),
+        "def test_foo():\n    mock.assert_awaited_once()\n    mock.assert_awaited_with()\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _split_once_with_call_assertions(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    mock.assert_called_once()\n",
+        "def test_foo():\n    mock.assert_called_once_with(1, 2)\n",
+        "def test_foo():\n    mock.assert_called_with(1, 2)\n",
+        "def test_foo():\n    mock_a.assert_called_once()\n    mock_b.assert_called_with(1, 2)\n",
+        (
+            "def test_foo():\n"
+            "    mock.assert_called_once()\n"
+            "    result = do_work()\n"
+            "    mock.assert_called_with(result)\n"
+        ),
+        "def test_foo():\n    mock.assert_called_once()\n    mock.assert_not_called()\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _split_once_with_call_assertions(tree), f"lens should NOT flag:\n{source}"
