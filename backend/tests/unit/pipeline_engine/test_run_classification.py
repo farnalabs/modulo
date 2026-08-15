@@ -340,7 +340,7 @@ class TestDeliveryDoneClassification:
         )
         assert result.value == RunClassificationValue.delivered
         assert result.reason == REASON_DELIVERED_EMAIL
-        assert result.delivered_pr_urls == ()
+        assert not result.delivered_pr_urls
 
     def test_complete_without_success_marker_still_no_work(self) -> None:
         """FAR-228: without a delivery_done marker (and without pr_url) a
