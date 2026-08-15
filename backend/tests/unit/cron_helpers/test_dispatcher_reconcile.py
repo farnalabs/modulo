@@ -388,7 +388,6 @@ class TestReconcilePredicateMatrix:
         reenqueue.assert_awaited_once()
         assert reenqueue.await_args.args[3] == "execute_run"
 
-    @pytest.mark.asyncio
     def test_nodeless_age_gate_requires_staleness(self) -> None:
         """Age-gate unit check: a nodeless-but-recently-started run is NOT
         matched (the predicate age gate protects a legitimate long first node)."""
