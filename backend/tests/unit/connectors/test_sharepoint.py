@@ -37,6 +37,17 @@ async def test_health_check_fail(connector):
 
 
 @respx.mock
+async def test_health_check_corrupt_body_no_crash(connector):
+    """A 200 with a non-dict body (list, string, ...) must not crash
+    health_check — it reports ok with an empty detail instead of raising
+    AttributeError on ``site_info.get(...)``."""
+    respx.get(f"{_API}/sites/root").mock(return_value=httpx.Response(200, json=["not-a-site"]))
+    result = await connector.health_check()
+    assert result.ok is True
+    assert result.detail == ""
+
+
+@respx.mock
 async def test_query_sites(connector):
     sites = {
         "value": [
@@ -57,10 +68,98 @@ async def test_query_sites_with_search(connector):
             {"id": "site1", "displayName": "Contoso"},
         ]
     }
-    respx.get(f"{_API}/sites?search=Contoso").mock(return_value=httpx.Response(200, json=sites))
+    respx.get(
+        f"{_API}/sites",
+        params={"search": "Contoso", "$top": 100},
+    ).mock(return_value=httpx.Response(200, json=sites))
     result = await connector.query(ConnectorQuery(resource="sites", filters={"search": "Contoso"}))
     assert len(result.records) == 1
     assert result.records[0]["displayName"] == "Contoso"
+
+
+@respx.mock
+async def test_query_sites_with_cursor(connector):
+    respx.get(
+        f"{_API}/sites",
+        params={"$skiptoken": "token123", "$top": 5},
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "value": [{"id": "site3", "displayName": "Site C"}],
+                "@odata.nextLink": "https://graph.microsoft.com/v1.0/sites?$skiptoken=nexttoken&$top=5",
+            },
+        )
+    )
+    result = await connector.query(ConnectorQuery(resource="sites", cursor="token123", limit=5))
+    assert len(result.records) == 1
+    assert result.next_cursor == "nexttoken"
+    assert result.total == 1
+
+
+@respx.mock
+async def test_query_sites_corrupt_body_no_crash(connector):
+    """A corrupt/hostile response returning a non-dict body must not crash the
+    list endpoints — it falls back to an empty page with no cursor."""
+    respx.get(f"{_API}/sites").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await connector.query(ConnectorQuery(resource="sites"))
+    assert not result.records
+    assert result.next_cursor is None
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_lists_corrupt_body_no_crash(connector):
+    """A non-list ``value`` field must fall back to an empty page instead of
+    raising TypeError on the bare slice chain."""
+    respx.get(f"{_API}/sites/site1/lists").mock(return_value=httpx.Response(200, json={"value": "not-a-list"}))
+    result = await connector.query(ConnectorQuery(resource="lists", filters={"site_id": "site1"}))
+    assert not result.records
+    assert result.next_cursor is None
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_sites_non_string_next_link(connector):
+    """A corrupt response placing a non-string in ``@odata.nextLink`` must not
+    crash urlparse or leak a non-string cursor into the next request."""
+    respx.get(f"{_API}/sites").mock(
+        return_value=httpx.Response(200, json={"value": [{"id": "site1"}], "@odata.nextLink": 123}),
+    )
+    result = await connector.query(ConnectorQuery(resource="sites"))
+    assert len(result.records) == 1
+    assert result.next_cursor is None
+
+    respx.get(f"{_API}/sites").mock(
+        return_value=httpx.Response(200, json={"value": [{"id": "site1"}], "@odata.nextLink": {"$skiptoken": "x"}}),
+    )
+    result = await connector.query(ConnectorQuery(resource="sites"))
+    assert len(result.records) == 1
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_drive_empty_skiptoken_no_cursor(connector):
+    """A nextLink whose ``$skiptoken`` is empty must emit no cursor — an empty
+    string is not a meaningful pagination cursor."""
+    respx.get(f"{_API}/sites/site1/drives/drive1/root/children").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "value": [{"id": "file1", "name": "document.docx"}],
+                "@odata.nextLink": f"{_API}/sites/site1/drives/drive1/root/children?$skiptoken=&$top=5",
+            },
+        )
+    )
+    result = await connector.query(
+        ConnectorQuery(
+            resource="drive",
+            filters={"site_id": "site1", "drive_id": "drive1", "path": "/"},
+            limit=5,
+        )
+    )
+    assert len(result.records) == 1
+    assert result.next_cursor is None
 
 
 @respx.mock
