@@ -233,6 +233,92 @@ def _make_status_count_mock_session(status_counts: dict[str, int]) -> AsyncMock:
     return session
 
 
+def _make_empty_org_mock_session() -> AsyncMock:
+    """Session mock for an org with zero runs, pipelines, teams, and evals.
+
+    Every summary query returns an empty/zero result so the endpoint must
+    produce the zero-data shape: all-zero stat cards, empty ``teams`` array,
+    ``eval_pass_rate`` null, and a seven-day zero-filled trend.
+    """
+
+    def _execute_side_effect(stmt: object, *_args: object, **_kwargs: object) -> _MockResult:
+        text = str(stmt)
+        if "model_backends" in text:
+            return _MockResult(scalar_one_val=0)
+        if "archived_at" in text:
+            return _MockResult(scalar_one_val=0)
+        if "FROM eval_results" in text:
+            if "JOIN runs" in text or "GROUP BY" in text:
+                return _MockResult()
+            return _MockResult(rows=[_MockRow(total=0, passed=0)])
+        return _MockResult()
+
+    session = configure_mock_session(AsyncMock())
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    session.execute = AsyncMock(side_effect=_execute_side_effect)
+    return session
+
+
+def _make_many_teams_mock_session(team_count: int) -> AsyncMock:
+    """Session mock seeded with ``team_count`` teams and no runs or evals.
+
+    Teams are returned wholesale (the team query has no pagination), so the
+    summary endpoint must return every one of them with zeroed metrics.
+    """
+
+    def _execute_side_effect(stmt: object, *_args: object, **_kwargs: object) -> _MockResult:
+        text = str(stmt)
+        if "model_backends" in text:
+            return _MockResult(scalar_one_val=0)
+        if "FROM teams" in text:
+            return _MockResult(
+                rows=[_MockRow(id=uuid.UUID(int=i + 1), name=f"Team {i + 1}") for i in range(team_count)]
+            )
+        if "archived_at" in text:
+            return _MockResult(scalar_one_val=0)
+        if "FROM eval_results" in text:
+            if "JOIN runs" in text or "GROUP BY" in text:
+                return _MockResult()
+            return _MockResult(rows=[_MockRow(total=0, passed=0)])
+        return _MockResult()
+
+    session = configure_mock_session(AsyncMock())
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    session.execute = AsyncMock(side_effect=_execute_side_effect)
+    return session
+
+
+def _client_for_session(mock_session: AsyncMock, *, org_role: str = "admin") -> TestClient:
+    """Build a TestClient wired to ``mock_session`` for the given org role.
+
+    Used by the role-enforcement and edge-case tests so each can supply its own
+    session double without repeating the dependency-override boilerplate.
+    """
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role=org_role
+    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role=org_role
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    return TestClient(app)
+
+
 @pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
@@ -780,3 +866,88 @@ class TestFactsWindowRunDate:
         assert all(isinstance(s, datetime) and isinstance(e, datetime) for s, e in eval_calls)
         assert len(eval_calls) == 2
         assert all((e - s) == timedelta(days=7) for s, e in eval_calls)
+
+
+class TestDashboardSummaryEdgeCases:
+    """Zero-data and scale edge cases for the summary endpoint (product-map gap)."""
+
+    def test_empty_org_returns_zeroed_summary(self) -> None:
+        """An org with no runs/pipelines/teams/evals gets the zero-data shape.
+
+        Covers the product-map "Unit test: empty org state (zero data)" gap:
+        all-zero stat cards, empty ``teams`` array, null ``eval_pass_rate``,
+        and a seven-day zero-filled trend.
+        """
+        try:
+            client = _client_for_session(_make_empty_org_mock_session())
+            response = client.get("/api/v1/dashboard/summary")
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["total_runs"] == 0
+        assert body["active_pipelines"] == 0
+        assert body["run_counts_by_status"] == {"running": 0, "awaiting_human": 0, "failed": 0, "idle": 0}
+        assert body["teams"] == []
+        assert body["eval_pass_rate"] is None
+        assert len(body["trend"]) == 7
+        for point in body["trend"]:
+            assert point["run_count"] == 0
+            assert point["token_spend_usd"] == 0.0
+            assert point["eval_pass_rate"] is None
+        assert body["recent_runs"] == []
+
+    def test_many_teams_summary_returns_all_teams(self) -> None:
+        """100+ teams are all returned with correct per-team structure.
+
+        Covers the product-map "Unit test: many-teams performance" gap — the
+        team query is unpaginated, so the endpoint must return every team
+        (functional correctness at scale; no timing assertion, which would be
+        flaky in CI).
+        """
+        try:
+            client = _client_for_session(_make_many_teams_mock_session(100))
+            response = client.get("/api/v1/dashboard/summary")
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        teams = response.json()["teams"]
+        assert len(teams) == 100
+        assert {t["name"] for t in teams} == {f"Team {i + 1}" for i in range(100)}
+        for team in teams:
+            assert set(team.keys()) == {
+                "id",
+                "name",
+                "total_runs",
+                "active_pipelines",
+                "run_counts_by_status",
+            }
+            assert team["total_runs"] == 0
+            assert set(team["run_counts_by_status"].keys()) == {"running", "awaiting_human", "failed", "idle"}
+
+    def test_summary_forbidden_for_principal_without_org_role(self) -> None:
+        """A valid JWT with no org role gets 403, not 200.
+
+        The routes gate on ``require_permission("dashboard.summary")`` (min
+        role ``viewer``), so an authenticated principal without org membership
+        is denied — covering the product-map role-enforcement gap.
+        """
+        try:
+            client = _client_for_session(_make_mock_session(), org_role="")
+            response = client.get("/api/v1/dashboard/summary")
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 403
+
+    def test_trends_forbidden_for_principal_without_org_role(self) -> None:
+        """Same role gate applies to the trends endpoint."""
+        try:
+            client = _client_for_session(_make_mock_session(), org_role="")
+            response = client.get("/api/v1/dashboard/trends?days=7")
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 403

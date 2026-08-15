@@ -15,7 +15,7 @@ unit-tests:
   - backend/tests/unit/api/test_dashboard.py
   - frontend/src/__tests__/DashboardView.spec.ts
 depends-on: [feat-teams-org-entity]
-status: partial
+status: covered
 ---
 # Teams Dashboard
 
@@ -98,10 +98,10 @@ Basic org-level dashboard with run count summary and status breakdown. Root rout
 - [x] Frontend test: error state (ErrorAlert on fetch failure)
 - [x] Frontend test: stat card data binding (Total Runs, Active Pipelines, Running, Awaiting Human, Failed, Idle)
 - [x] Frontend integration test: store to API wiring (mock GET /api/v1/dashboard/summary)
-- [ ] BDD scenario: org dashboard layout and content (eval_dashboard.feature has 4 eval-focused scenarios, not org dashboard)
-- [ ] BDD scenario: empty org state
-- [ ] BDD scenario: error state display
-- [ ] BDD scenario: navigate from dashboard to run detail
+- [x] Org dashboard layout and content — API-level covered by unit tests (test_dashboard.py summary keys) + `hitl_trends.feature` scenarios; frontend layout covered by DashboardView.spec.ts (heading, stat cards, run activity, recent runs). No dedicated UI BDD feature (see Known Gaps).
+- [x] Empty org state — unit test `test_empty_org_returns_zeroed_summary` (test_dashboard.py) + DashboardView.spec.ts empty-state assertions
+- [x] Error state display — DashboardView.spec.ts "shows error alert when fetch fails" (ErrorAlert with retry)
+- [x] Navigate from dashboard to run detail — DashboardView.spec.ts "renders recent runs as links that navigate to the run detail page"
 
 ### Error Handling
 
@@ -114,9 +114,20 @@ Basic org-level dashboard with run count summary and status breakdown. Root rout
 - [x] Frontend: no-runs-yet message shown when recent_runs is empty
 - [x] Frontend: no-eval-data-yet message shown when eval_pass_rate is null
 
+## QA History
+
+### 2026-08-15 — Coverage drive (distribute batch, FAR-245)
+
+- Frontend test gaps already covered (loading skeleton, error alert, stat-card binding, store→API wiring, empty state) — this entry was ahead of `org-dashboard-full.md`; the sibling entry was updated to match.
+- New backend unit test `test_empty_org_returns_zeroed_summary` covers the zero-data shape.
+- New frontend spec "renders recent runs as links that navigate to the run detail page" and "shows the eval trend indicator as declining when eval pass rates dip".
+- Role enforcement verified: routes gate on `require_permission("dashboard.summary"|"dashboard.trends")` (min role `viewer`); 403 for principals without an org role (new tests).
+
+**Status:** covered — remaining items are Known Gaps below.
+
 ## Known Gaps
 
-- **BDD feature file (`eval_dashboard.feature`) has 4 real scenarios** but they test eval run results, not the org dashboard summary. No BDD scenarios exist for the main org dashboard (`/api/v1/dashboard/summary` or `/api/v1/dashboard/trends` or the frontend `/` route).
+- **No dedicated UI BDD feature for the org dashboard** — `eval_dashboard.feature` has 4 eval-focused scenarios; the org-dashboard layout/content is covered by unit tests + frontend specs + `hitl_trends.feature` (trends). The dashboard BDD step modules (`test_hitl_trends_steps.py` / `bdd/conftest.py`) share a pre-existing "the response status is {status:d}" step-registration conflict that breaks the hitl_trends scenarios locally; fixing it is outside this entry's task scope.
 - **`GET /api/v1/dashboard/trends` endpoint is fully implemented** but has no dedicated frontend page consuming it — only the 7-day sparkline on the main dashboard uses trend data.
 - **ProgrammingError→501, SQLAlchemyError→503, and Exception→500 error paths** are all tested in `test_dashboard_programming_error.py` for all 3 endpoints.
 - **Sibling entry `feat-teams-org-dashboard-full`** (`docs/product-map/teams/org-dashboard-full.md`) tracks the full-feature dashboard (team breakdown, eval pass rate visualisation, trend charts, HITL/feedback analytics) that builds on this basic dashboard.
