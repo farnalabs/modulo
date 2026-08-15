@@ -93,9 +93,9 @@ Async Jira REST API connector implementing `ConnectorBase`. Provides read/write 
 
 ### Prompt Portability — issue-tracker terminology
 
-- [ ] Connector type abstraction handles API operations
-- [ ] Agent prompt templates may use Jira-specific terminology ("issue", "story", "epic", "sprint")
-- [ ] Prompt portability is user's responsibility — documented limitation
+- [x] Connector type abstraction handles API operations
+- [x] Agent prompt templates may use Jira-specific terminology ("issue", "story", "epic", "sprint")
+- [x] Prompt portability is user's responsibility — documented limitation
 
 ### Error Handling
 
@@ -139,10 +139,22 @@ Async Jira REST API connector implementing `ConnectorBase`. Provides read/write 
 - [x] ~~**No remote links / components / versions**~~ — **RESOLVED (2026-08-06)**: added `query("issue_remote_links")` + `write("issue_remote_link")` + `write("remote_link_delete")`, and `query("project_components")` + `query("project_versions")`
 - [x] ~~**No field metadata**~~ — **RESOLVED (2026-08-05)**: agents can now discover create-issue fields + custom fields (`query("field_metadata")`), all instance fields (`query("fields")`), and per-project issue-type statuses (`query("statuses")`)
 - [ ] **Token-expiry vs invalid-URL distinction**: expired tokens and invalid instance URLs both surface HTTP 401 from `GET /myself` — only HTTP vs network error classes are distinguished
+- [ ] **Per-operation permission check before write operations**: write resources are not pre-verified against the credential's permissions before a mutation is sent — Jira rejects with 403 at execution time (surfaced as a `ValueError` with status + response text); there is no Jira token-scope-declaration endpoint analogous to GitLab's `/oauth/token/info`, so a pre-flight check would need new functionality
 
 ---
 
 ## QA History
+
+### 2026-08-15 — coverage-completion (FAR-239): prompt-portability + connector-type behaviours verified
+
+**Behaviour audit:** re-verified the unchecked behaviours against code, tests, and PRD §8.6.
+
+1. **Connector type abstraction handles API operations — `[ ]`→`[x]`**: the `ConnectorType` abstraction (read/write/health_check) is implemented and exercised — `JiraConnector.connector_type` returns `ConnectorType.JIRA` (tested in `test_jira.py::test_connector_type`), `ConnectorType.JIRA.capabilities` returns `{ISSUE_READ, ISSUE_WRITE, ISSUE_SEARCH}` (base.py), and `_build_connector()` constructs Jira via the hub from `instance`/`base_url`/`api_version` config (tested in `test_build_connector.py`).
+2. **Agent prompt templates may use Jira-specific terminology — `[ ]`→`[x]`** and **Prompt portability is user's responsibility — `[ ]`→`[x]`**: PRD §8.6 states verbatim: "connector type abstraction handles API operations. Agent prompt templates may use platform-specific terminology... Prompt portability is the user's responsibility — a known limitation of shareable workflows." Both are documented design facts, not code gaps.
+3. **Detect expired tokens vs invalid instance URL vs network errors — confirmed genuine gap (stays `[ ]`)**: Jira Cloud returns HTTP 401 from `GET /myself` for both an expired token and a reachable-but-wrong instance; only the HTTP-error vs network-error classes are distinguishable. Tracked in Known Gaps.
+4. **Per-operation permission check before write operations — confirmed genuine gap (stays `[ ]`)**: would require new functionality (Jira exposes no token-scope-declaration endpoint analogous to GitLab's `/oauth/token/info`). Added to Known Gaps.
+
+**Tests:** no code changes — 192/192 jira unit tests pass (test_jira.py + test_jira_resilience.py + test_build_connector.py), ruff check + format clean. Status: partial (expired-token-vs-invalid-URL distinction + per-operation permission checks remain).
 
 ### 2026-08-06 — improve-architecture: Jira Data Center + attachments + remote links + components/versions RESOLVED
 
