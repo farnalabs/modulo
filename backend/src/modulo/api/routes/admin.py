@@ -18,7 +18,7 @@ from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
 from modulo.core.eval_engine.okr import track_okr_progress
-from modulo.core.eval_engine.regression import detect_regressions
+from modulo.core.eval_engine.regression import VALID_TRENDS, detect_regressions
 from modulo.core.feature_flags import resolve_plan_context
 from modulo.core.hitl_manager.overdue_warning import get_overdue_claims
 from modulo.db.crud.account import get_account_by_email, get_account_by_id
@@ -67,8 +67,6 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
-
-_VALID_REGRESSION_TRENDS = frozenset({"declining", "stable", "improving"})
 
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -2392,10 +2390,10 @@ async def eval_regressions(
             detail="Only admin users can access eval regressions",
         )
 
-    if trend is not None and trend not in _VALID_REGRESSION_TRENDS:
+    if trend is not None and trend not in VALID_TRENDS:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"trend must be one of {sorted(_VALID_REGRESSION_TRENDS)}, got {trend!r}",
+            detail=f"trend must be one of {sorted(VALID_TRENDS)}, got {trend!r}",
         )
 
     try:

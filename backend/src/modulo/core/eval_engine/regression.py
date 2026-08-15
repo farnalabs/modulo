@@ -9,16 +9,19 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import get_args
 from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.eval_engine.okr import TrendDirection
+
 _log = logging.getLogger(__name__)
 
 
-_VALID_TRENDS = frozenset({"declining", "stable", "improving"})
+VALID_TRENDS = frozenset(get_args(TrendDirection))
 
 
 @dataclass
@@ -75,8 +78,8 @@ async def detect_regressions(
         raise ValueError(f"threshold must be >= 0, got {threshold}")
     if not 0 < recent_window_ratio <= 1.0:
         raise ValueError(f"recent_window_ratio must be > 0 and <= 1.0, got {recent_window_ratio}")
-    if trend is not None and trend not in _VALID_TRENDS:
-        raise ValueError(f"trend must be one of {sorted(_VALID_TRENDS)}, got {trend!r}")
+    if trend is not None and trend not in VALID_TRENDS:
+        raise ValueError(f"trend must be one of {sorted(VALID_TRENDS)}, got {trend!r}")
 
     now = datetime.now(UTC)
     recent_window_days = max(int(days * recent_window_ratio), 1)
