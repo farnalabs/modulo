@@ -790,6 +790,36 @@ async def test_cancelled_node_without_sentinel_writes_nothing():
     assert row.raw_output_markers is None
 
 
+async def test_cancelled_during_provisioning_reraises_cleanly():
+    """FAR-228 review fix: a CancelledError raised DURING sandbox provisioning —
+    strictly BEFORE the inner drain closure binds ``_drain_fn`` (the create await
+    at ``AsyncSandbox.create`` precedes the inner ``try:``) — must propagate as
+    CancelledError, NOT as an UnboundLocalError from the outer handler's
+    ``_drain_fn is not None`` guard."""
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(
+        _base_node_def(timeout_seconds=30, delivery_sentinel=_SENTINEL),
+        session_factory=_factory,
+    )
+
+    with (
+        patch(
+            "e2b.AsyncSandbox.create",
+            new=AsyncMock(side_effect=asyncio.CancelledError()),
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_run_state())
+
+    # Nothing was delivered and no sandbox was created — the cancellation
+    # escaped before any evidence existed, so no retention marker is written.
+    assert row.raw_output_markers is None
+
+
 async def test_guard_a_skips_when_prior_attempt_marked_delivery_done():
     """FAR-228 guard A: an opt-in single-node run whose PRIOR attempt's marker
     carries delivery_done=True returns the SKIPPED ENVELOPE without provisioning

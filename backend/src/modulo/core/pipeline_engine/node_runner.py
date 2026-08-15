@@ -1689,6 +1689,13 @@ def make_sandbox_agent_fn(
         agent_stdout: str = ""
         agent_stderr: str = ""
         output_json: Any = None
+        # FAR-228: the cancellation-retention handler below runs whenever a
+        # CancelledError escapes — including during provisioning, BEFORE the
+        # inner drain closure is ever defined. Pre-bind at function scope so
+        # the handler's guard (`_drain_fn is not None`) short-circuits safely
+        # instead of raising UnboundLocalError that replaces the cancellation.
+        _drain_fn: Any = None
+        _drained_chunks: list[str] = []
 
         # FAR-228 guard A (early skipped-return / fallback): when the run has
         # ALREADY delivered (a prior attempt's marker carries delivery_done=True)
