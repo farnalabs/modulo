@@ -14,7 +14,6 @@ import uuid
 from pathlib import Path
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -76,8 +75,8 @@ class TestAuditApiHasNoMutatingEndpoints:
 class TestAuditOrmImmutability:
     """Prove ORM-level listeners block UPDATE/DELETE on AuditEvent rows."""
 
-    @pytest_asyncio.fixture(autouse=True)
-    async def _register_guard(self) -> None:
+    @pytest.fixture(autouse=True)
+    def _register_guard(self) -> None:
         register_append_only_guard()
 
     async def _seed_org(self, db_session: AsyncSession, org_id: uuid.UUID, suffix: str = "") -> None:

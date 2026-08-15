@@ -473,8 +473,8 @@ async def _demo_login(client: AsyncClient) -> str:
 class TestDemoAuth:
     """Test that the demo user can authenticate via the auth API."""
 
-    @pytest_asyncio.fixture(autouse=True)
-    async def _ensure_demo_user(self, test_demo_user: uuid.UUID) -> None:
+    @pytest.fixture(autouse=True)
+    def _ensure_demo_user(self, test_demo_user: uuid.UUID) -> None:
         pass
 
     async def test_demo_user_can_login(self, demo_client: AsyncClient) -> None:
@@ -537,8 +537,8 @@ class TestDemoOnboarding:
         "run_first_pipeline",
     )
 
-    @pytest_asyncio.fixture(autouse=True)
-    async def _ensure_demo_user(self, test_demo_user: uuid.UUID) -> None:
+    @pytest.fixture(autouse=True)
+    def _ensure_demo_user(self, test_demo_user: uuid.UUID) -> None:
         pass
 
     async def test_onboarding_status_first_run(self, demo_client: AsyncClient) -> None:
@@ -642,8 +642,8 @@ class TestDemoOnboarding:
 class TestDemoPipeline:
     """Test that demo pipelines can be loaded and viewed."""
 
-    @pytest_asyncio.fixture(autouse=True)
-    async def _ensure_demo_user(self, test_demo_user: uuid.UUID) -> None:
+    @pytest.fixture(autouse=True)
+    def _ensure_demo_user(self, test_demo_user: uuid.UUID) -> None:
         pass
 
     async def test_list_pipelines_shows_demo_pipeline(

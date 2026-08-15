@@ -45,7 +45,7 @@ async def engine() -> AsyncGenerator[AsyncEngine, None]:
 
 
 @pytest.fixture
-async def factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+def factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
     # Production shape: expire_on_commit=False + autobegin=False (see
     # modulo.api.dependencies.get_or_create_session_factory).
     return async_sessionmaker(engine, expire_on_commit=False, autobegin=False)

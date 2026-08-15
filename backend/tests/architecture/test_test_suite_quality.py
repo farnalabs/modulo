@@ -120,6 +120,13 @@ regression that silently weakens the suite:
   hazard: anyone who later calls an ``async`` function and forgets the
   ``await`` will find the assertion comparing against a coroutine object
   (always truthy) instead of failing. Declare such tests as a plain ``def``.
+- ``async def`` fixtures whose body contains *no* async construct — the
+  fixture twin of the needlessly-async-test lens. The coroutine boundary is
+  the same silent-false-green hazard (a forgotten ``await`` silently builds
+  the fixture from a coroutine object instead of failing), and a sync
+  fixture is requested the same way by async tests, so declare these as a
+  plain ``def``. Unlike the test lens, a ``pass``-only body is flagged too —
+  the no-op-test lens skips fixtures, so nothing else covers it.
 - ``@pytest.mark.parametrize`` with an *empty* ``argvalues`` — the inverse
   twin of the single-case lens. A parametrize with zero cases is collected as
   zero test items, so the test body never runs at all: pytest emits a
@@ -2681,6 +2688,89 @@ def test_async_test_lens_flags_needlessly_async_tests():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _async_test_without_async_behavior_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _async_fixture_without_async_behavior_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``async def`` fixture whose
+    body contains no async construct at all (including async comprehensions)."""
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AsyncFunctionDef):
+            continue
+        if not any(_decorator_name(d) == "fixture" for d in node.decorator_list):
+            continue
+        if _function_is_async(node):
+            continue
+        found.append(
+            (
+                node.lineno,
+                f"async fixture {node.name}() — body never awaits, declares no async with/for, "
+                "yields nothing, and has no async comprehension; declare it a plain def",
+            )
+        )
+    return found
+
+
+def test_no_async_fixture_without_async_behavior():
+    """``async def`` fixtures whose body contains no async construct — no
+    ``await``, ``async with``, ``async for``, or ``yield`` — run plain
+    synchronous setup on the event loop for no reason. They are the fixture
+    twin of the needlessly-async-test lens: the coroutine boundary is a
+    silent-false-green hazard, because the first edit that calls an ``async``
+    helper and forgets the ``await`` will silently build the fixture from a
+    coroutine object instead of failing. A sync fixture is requested the same
+    way by async tests, so declaring it a plain ``def`` costs nothing and is
+    strictly more permissive (a sync test can also request it). Unlike the
+    test twin, a ``pass``-only body is flagged too: the no-op-test lens skips
+    fixtures, so a pass-only async fixture has no other net. ``yield``-based
+    async generators, ``await``, ``async with``, ``async for``, and async
+    comprehensions are left alone."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _async_fixture_without_async_behavior_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} async fixture(s) that never suspend.\n"
+        "An async fixture whose body contains no await/async with/async for/yield is a "
+        "needless coroutine boundary — and a future unawaited call inside it would "
+        "silently build the fixture from a coroutine object instead of failing.\n"
+        "Declare it a plain 'def' so the setup cannot silently pass.\n" + "\n".join(violations)
+    )
+
+
+def test_async_fixture_lens_flags_needlessly_async_fixtures():
+    """Synthetic positive/negative control for the needlessly-async-fixture
+    lens: must flag ``async def`` fixtures (``@pytest.fixture`` /
+    ``@pytest_asyncio.fixture``, including ``pass``-only bodies) whose body
+    contains no async construct and ignore fixtures that actually suspend
+    (``await``, ``async with``, ``async for``), async generators (``yield``),
+    sync fixtures, and tests."""
+    positive_sources = [
+        "@pytest.fixture\nasync def make_thing():\n    return 1\n",
+        "@pytest.fixture(autouse=True)\nasync def ensure_setup():\n    pass\n",
+        "@pytest_asyncio.fixture\nasync def broker():\n    b = Broker()\n    b.conn = fake()\n    return b\n",
+        "@pytest.fixture\nasync def settings():\n    x = env()\n    return Settings(x)\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _async_fixture_without_async_behavior_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "@pytest.fixture\nasync def make_thing():\n    await setup()\n    return 1\n",
+        "@pytest.fixture\nasync def conn():\n    async with pool() as c:\n        yield c\n",
+        "@pytest.fixture\nasync def feed():\n    async for x in gen():\n        yield x\n",
+        "@pytest.fixture\nasync def gen_thing():\n    yield 1\n",
+        "@pytest.fixture\ndef make_thing():\n    return 1\n",
+        "async def test_foo():\n    return 1\n",
+        "@pytest.fixture\nasync def feed():\n    return [x async for x in gen()]\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _async_fixture_without_async_behavior_violations(tree), f"lens should NOT flag:\n{source}"
 
 
 def _compound_isinstance_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:

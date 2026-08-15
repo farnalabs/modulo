@@ -23,14 +23,14 @@ pytestmark = pytest.mark.integration
 # ---------------------------------------------------------------------------
 
 
-@pytest_asyncio.fixture(scope="module")
-async def org_id(test_org: uuid.UUID) -> uuid.UUID:
+@pytest.fixture(scope="module")
+def org_id(test_org: uuid.UUID) -> uuid.UUID:
     """Alias for the shared test_org fixture — keeps test code readable."""
     return test_org
 
 
-@pytest_asyncio.fixture(scope="module")
-async def user_id(test_user: uuid.UUID) -> uuid.UUID:
+@pytest.fixture(scope="module")
+def user_id(test_user: uuid.UUID) -> uuid.UUID:
     """Alias for the shared test_user fixture."""
     return test_user
 
@@ -90,8 +90,8 @@ async def snapshot_id(
     return sid
 
 
-@pytest_asyncio.fixture(scope="module")
-async def source_pipeline_id() -> uuid.UUID:
+@pytest.fixture(scope="module")
+def source_pipeline_id() -> uuid.UUID:
     """A UUID representing the pipeline being watched (not an FK row)."""
     return uuid.uuid4()
 
