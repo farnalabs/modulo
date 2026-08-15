@@ -33,6 +33,12 @@ jobs:
         run: uv run --no-sync ruff format --check .
       - run: uv run --no-sync mypy src/modulo/
       - run: uv run --no-sync bandit -r src/modulo/ -ll
+      - name: Vulture (block new dead code)
+        # BLOCKING: no continue-on-error, no `|| true`. The repo-root
+        # .vulture_whitelist.py (framework-contract symbols) is the only
+        # sanctioned dead-code escape hatch; anything else fails CI.
+        working-directory: .
+        run: uv run --project backend --no-sync python scripts/run_vulture.py
       - name: Semgrep (block new findings)
         working-directory: .
         shell: bash
