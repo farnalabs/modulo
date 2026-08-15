@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.eval_engine import EvalDefinition as EvalDefinitionDTO
 from modulo.core.feedback_manager import (
     ConcurrentModificationError,
     FeedbackManager,
@@ -61,6 +62,30 @@ class UpdateStatusRequest(BaseModel):
 class ReviewFeedbackRequest(BaseModel):
     action: str  # mark_reviewed | dismiss | create_correction_run
     annotation: str | None = None
+
+
+def _eval_def_to_dto(row: EvalDefinition, org_id: uuid.UUID) -> EvalDefinitionDTO:
+    """Convert an ORM ``EvalDefinition`` row to the eval-engine DTO shape.
+
+    The engine reads ``eval_def.config`` (``EvalEngine.evaluate``), but the ORM
+    model exposes ``config_json``. This mirrors the executor's
+    ``_build_eval_defs_by_node`` pattern so the standalone eval path feeds the
+    engine the same DTO shape the live run path uses — without it, every eval
+    raises AttributeError inside ``evaluate()`` and gap detection reports
+    ``eval_gap=True`` for everything (FAR-233 review MAJOR-1).
+    """
+    return EvalDefinitionDTO(
+        id=row.id,
+        org_id=org_id,
+        pipeline_id=row.pipeline_id,
+        node_id=str(row.node_id) if row.node_id else None,
+        name=row.name,
+        eval_type=row.eval_type,
+        config=row.config_json,
+        failure_behaviour=row.failure_behaviour,
+        pass_threshold=float(row.pass_threshold) if row.pass_threshold is not None else None,
+        suite_id=row.suite_id,
+    )
 
 
 def _serialise_record(
@@ -477,11 +502,11 @@ async def detect_eval_gap(
             if record is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
 
-            eval_suite: list[EvalDefinition] = []
+            eval_suite: list[EvalDefinitionDTO] = []
             if record.run_id:
                 run = (await session.execute(select(Run).where(Run.id == record.run_id))).scalar_one_or_none()
                 if run is not None:
-                    eval_defs = (
+                    eval_rows = (
                         (
                             await session.execute(
                                 select(EvalDefinition).where(EvalDefinition.pipeline_id == run.pipeline_id)
@@ -490,7 +515,7 @@ async def detect_eval_gap(
                         .scalars()
                         .all()
                     )
-                    eval_suite = list(eval_defs)
+                    eval_suite = [_eval_def_to_dto(row, principal.organisation_id) for row in eval_rows]
 
             is_gap = await mgr.detect_eval_gap(record, eval_suite=eval_suite)
     except IntegrityError as exc:

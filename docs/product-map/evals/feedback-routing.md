@@ -76,8 +76,8 @@ human-in-the-loop resolution.
 - [x] DB-level CHECK constraint enforces valid status values
 - [x] Valid transitions:
   - `pending` → `routing`, `correcting`, `resolved`, `dismissed`
-  - `routing` → `escalated`, `correcting`, `resolved`
-  - `correcting` → `correcting`, `resolved`, `escalated`
+  - `routing` → `escalated`, `correcting`, `resolved`, `dismissed`
+  - `correcting` → `correcting`, `resolved`, `escalated`, `dismissed`
   - `escalated` → `resolved`, `dismissed`
   - `resolved` → terminal
   - `dismissed` → terminal
@@ -133,7 +133,7 @@ human-in-the-loop resolution.
 ## QA History
 
 ### 2026-08-15 — Coverage-completion (FAR-233)
-- **Fixed (PRD compliance)**: `dismiss` now transitions to `dismissed` (was `resolved`), matching PRD 8.20 and the DB CHECK constraint. `pending`/`escalated` → `dismissed` transitions added to `_VALID_STATUS_TRANSITIONS`; `PATCH /status` accepts `dismissed`.
+- **Fixed (PRD compliance)**: `dismiss` now transitions to `dismissed` (was `resolved`), matching PRD 8.20 and the DB CHECK constraint. `dismissed` is reachable from every non-terminal inbox state — `pending`, `routing`, `correcting`, `escalated` — so the dismiss button (shown for every inbox record) never 409s; `PATCH /status` accepts `dismissed`.
 - **Corrected**: "no LangGraph checkpoint seeding" was listed as a gap, but PRD 8.20 specifies fresh correction runs — the code matches the spec.
 - **Corrected**: eval proposals UI is no longer API-only — EvalProposalsQueueView.vue exists at /evals/proposals (Publish/Dismiss). Promotion to an active eval definition is still a gap.
 - **Remaining gaps**: auto-trigger of gap detection on feedback creation, AI-agent-drafted proposals, publish-to-active mechanism, post-correction eval lifecycle wiring, reject_routing_conflict validation.

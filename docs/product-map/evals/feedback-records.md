@@ -37,10 +37,10 @@ Discovered from 1 completed delivery task.
 
 ### Status Transitions
 
-- [x] Valid transitions: pending → routing/correcting/resolved
-- [x] Valid transitions: routing → escalated/correcting/resolved
-- [x] Valid transitions: correcting → correcting/resolved/escalated
-- [x] Valid transitions: escalated → resolved (terminal)
+- [x] Valid transitions: pending → routing/correcting/resolved/dismissed
+- [x] Valid transitions: routing → escalated/correcting/resolved/dismissed
+- [x] Valid transitions: correcting → correcting/resolved/escalated/dismissed
+- [x] Valid transitions: escalated → resolved/dismissed
 - [x] Valid transitions: resolved → (none — terminal)
 - [x] Invalid transitions raise ValueError with descriptive message listing allowed transitions
 - [x] Unknown record returns None on status update

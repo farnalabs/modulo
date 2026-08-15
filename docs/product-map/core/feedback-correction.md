@@ -103,14 +103,14 @@ Correction run spawning, linking, and post-correction evaluation for the Feedbac
 - [x] All DB queries in get_inbox_item run inside session.begin() with RLS context — fixed cross-tenant leak
 - [x] "dismiss" action sets "dismissed" status — aligned with PRD §8.20 (dismiss is a terminal state distinct from resolved); restored 2026-08-15 after earlier QA misread the PRD as excluding dismissed
 - [x] detect_eval_gap uses single transaction — no stale read risk between two transactions
-- [x] _VALID_STATUS_TRANSITIONS aligned with DB CHECK constraint and PRD §8.20 — "dismissed" is a valid terminal status (pending/escalated → dismissed), matching the DB CHECK constraint which always included it
+- [x] _VALID_STATUS_TRANSITIONS aligned with DB CHECK constraint and PRD §8.20 — "dismissed" is a valid terminal status reachable from every non-terminal inbox state (pending/routing/correcting/escalated → dismissed), matching the DB CHECK constraint which always included it; the un-gated inbox Dismiss button never 409s
 - [x] run_context_overrides can shadow standard _feedback_correction keys — caller responsibility, documented edge case
 
 ## QA History
 
 ### 2026-08-15 — Coverage-completion (FAR-233)
 - **Fixed (PRD compliance)**: the `dismiss` review action now sets `dismissed` instead of `resolved`; `_VALID_STATUS_TRANSITIONS` gained `pending`/`escalated` → `dismissed` and `PATCH /status` accepts `dismissed`. This reverts the Round-3 "dismiss → resolved" change, which misread PRD §8.20 (the PRD explicitly lists `dismissed` as a terminal state and says dismiss sets it).
-- **Fixed (bug)**: `detect_eval_gap` skipped real `EvalDefinition` objects as malformed, so the eval suite never ran via the /detect-gap endpoint — the guard now accepts `EvalDefinition`-shaped objects (covered by test_uses_real_eval_engine_standalone_path).
+- **Fixed (bug)**: `detect_eval_gap` skipped real `EvalDefinition` objects as malformed, so the eval suite never ran via the /detect-gap endpoint — the guard now accepts `EvalDefinition`-shaped objects. **Follow-up (2026-08-15 review MAJOR-1)**: the guard alone still sent ORM rows (which expose `config_json`, not `config`) into `EvalEngine.evaluate`, where the AttributeError was swallowed and every record came back `eval_gap=True`. The route now converts ORM rows to the eval-engine DTO (mirroring the executor's `_build_eval_defs_by_node`), and `detect_eval_gap` normalises ORM rows defensively — covered by `test_round_trips_orm_eval_definition_through_detect_gap`.
 - **Corrected**: checkpoint pre-seeding removed from Known Gaps — PRD 8.20 specifies fresh correction runs. Post-correction eval failure handling verified (escalate + structured fallback).
 - **Remaining gaps**: correction run that starts but fails during execution leaves the record in `correcting` (no runtime-failure escalation), run_post_correction_eval lifecycle wiring, BDD correction error-path scenarios, full-lifecycle integration test.
 
