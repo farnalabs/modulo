@@ -149,6 +149,16 @@ regression that silently weakens the suite:
   N times, while a reader (and a mutation-testing run) believes N distinct
   inputs are covered. Drop the unused parameter (and the parametrize when
   that leaves no other varying argument)
+- an async decorator on a *synchronous* ``def`` — ``@pytest.mark.asyncio`` /
+  ``@pytest.mark.anyio`` on a plain ``def``, and ``@pytest_asyncio.fixture``
+  on a plain ``def`` fixture. With ``asyncio_mode = auto``, pytest-asyncio
+  already infers async behaviour from ``async def``, so an async marker on a
+  ``def`` is a needless coroutine boundary: at best a misleading no-op (the
+  body never suspends, but readers expect it to) and at worst a runtime
+  mismatch (a sync fixture whose value pytest-asyncio expects to await).
+  These are almost always the leftover twin of the needlessly-async
+  conversion — when an ``async def`` was flipped to a plain ``def``, its
+  async decorator should have gone too
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -2966,3 +2976,103 @@ def test_unused_parametrize_arg_lens_flags_ignored_cases():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _unused_parametrize_arg_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _async_decorator_on_sync_function_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every asynchronous decorator
+    applied to a *synchronous* ``def``: ``@pytest.mark.asyncio`` /
+    ``@pytest.mark.anyio`` on a plain ``def``, and ``@pytest_asyncio.fixture``
+    on a plain ``def`` fixture.
+
+    A plain ``def`` can never suspend — no ``await``, ``async with``, or
+    ``async for`` (they are syntax errors), and no ``yield`` that would make
+    the marker meaningful. With ``asyncio_mode = auto``, pytest-asyncio
+    already infers async behaviour from ``async def``, so an async marker on a
+    ``def`` is a needless coroutine boundary: at best a misleading no-op
+    (readers expect the body to suspend when it never does) and at worst a
+    runtime mismatch (a sync fixture whose value pytest-asyncio expects to
+    await). These are almost always the leftover twin of the needlessly-async
+    conversion — when an ``async def`` was flipped to a plain ``def``, its
+    async decorator should have gone too. ``async def`` functions are never
+    flagged.
+    """
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        for dec in node.decorator_list:
+            func = dec.func if isinstance(dec, ast.Call) else dec
+            name = _decorator_name(func)
+            qualname = ast.unparse(func)
+            if name in ("asyncio", "anyio"):
+                found.append(
+                    (
+                        dec.lineno,
+                        f"sync def {node.name}() marked @{qualname} — the async marker is a "
+                        "no-op on a non-coroutine function (asyncio_mode=auto already infers "
+                        "async behaviour from async def)",
+                    )
+                )
+            elif name == "fixture" and "asyncio" in qualname:
+                found.append(
+                    (
+                        dec.lineno,
+                        f"sync def fixture {node.name}() decorated with @{qualname} — use "
+                        "@pytest.fixture for a synchronous fixture body",
+                    )
+                )
+    return found
+
+
+def test_no_async_decorator_on_sync_function():
+    """``@pytest.mark.asyncio``/``@pytest.mark.anyio`` on a plain ``def``, and
+    ``@pytest_asyncio.fixture`` on a plain ``def`` fixture, are needless
+    coroutine boundaries. A synchronous function can never suspend, so under
+    ``asyncio_mode = auto`` the marker is at best a misleading no-op (readers
+    expect the body to run on the loop) and at worst a runtime mismatch (a
+    sync fixture whose value pytest-asyncio expects to await). These are the
+    leftover twin of the needlessly-async conversion: drop the async decorator
+    alongside the ``async`` keyword (or, for a sync fixture, switch to plain
+    ``@pytest.fixture``)."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _async_decorator_on_sync_function_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} async decorator(s) on synchronous function(s).\n"
+        "A plain 'def' can never suspend, so @pytest.mark.asyncio/@pytest.mark.anyio on one is a\n"
+        "needless coroutine boundary — and @pytest_asyncio.fixture on a sync fixture should be\n"
+        "@pytest.fixture. These are leftovers from flipping async def -> def; remove them.\n" + "\n".join(violations)
+    )
+
+
+def test_async_decorator_on_sync_lens_flags_leftover_markers():
+    """Synthetic positive/negative control for the async-decorator-on-sync-
+    function lens: it must flag ``@pytest.mark.asyncio``/``@pytest.mark.anyio``
+    on a plain ``def`` and ``@pytest_asyncio.fixture`` on a sync fixture, and
+    ignore ``async def`` functions with the same decorators, plain ``def``
+    without async decorators, and non-async decorators."""
+    positive_sources = [
+        "def test_foo():\n    @pytest.mark.asyncio\n    def test_bar():\n        assert x == 1\n",
+        "def test_foo():\n    @pytest.mark.anyio\n    def test_bar():\n        assert x == 1\n",
+        "def test_foo():\n    @pytest.mark.asyncio(loop_scope='session')\n    def test_bar():\n        assert x == 1\n",
+        ("def test_foo():\n    @pytest_asyncio.fixture\n    def settings_mock():\n        return MagicMock()\n"),
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _async_decorator_on_sync_function_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "async def test_foo():\n    @pytest.mark.asyncio\n    async def test_bar():\n        await work()\n",
+        "def test_foo():\n    def test_bar():\n        assert x == 1\n",
+        "def test_foo():\n    @pytest.mark.integration\n    def test_bar():\n        assert x == 1\n",
+        ("def test_foo():\n    @pytest_asyncio.fixture\n    async def seeded_db():\n        await work()\n"),
+        "def test_foo():\n    @pytest.fixture\n    def settings_mock():\n        return MagicMock()\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _async_decorator_on_sync_function_violations(tree), f"lens should NOT flag:\n{source}"
