@@ -28,13 +28,15 @@ from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK, mask_conf
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.cron_helpers import (
     _count_ongoing_runs,
-    anchor_trigger_streak_epoch,
-    clear_trigger_streak_after_reenable,
     compute_next_fire,
     validate_cron_expression,
 )
 from modulo.core.exceptions import OrgDeletedError
 from modulo.core.trigger_engine import TriggerEngine
+from modulo.core.trigger_streak import (
+    anchor_trigger_streak_epoch,
+    clear_trigger_streak_after_reenable,
+)
 from modulo.core.trigger_validation import validate_ongoing_config
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline

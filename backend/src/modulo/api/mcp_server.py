@@ -89,8 +89,6 @@ from modulo.core.analytics.service import (
 from modulo.core.cost_controller.breakdown.constants import RAW_REPORTED_DISPLAY_CLAMP
 from modulo.core.cost_controller.finalize import finalize_cancelled_run
 from modulo.core.cron_helpers import (
-    anchor_trigger_streak_epoch,
-    clear_trigger_streak_after_reenable,
     compute_next_fire,
     validate_cron_expression,
 )
@@ -128,6 +126,10 @@ from modulo.core.library_service import (
 from modulo.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope
 from modulo.core.pipeline_engine.error_codes import present_error
 from modulo.core.rate_limiter import TokenBucketRegistry
+from modulo.core.trigger_streak import (
+    anchor_trigger_streak_epoch,
+    clear_trigger_streak_after_reenable,
+)
 from modulo.db.crud.hitl_gate_guard import HitlGateWeakeningDenied
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
 from modulo.db.crud.pipeline import get_pipeline
