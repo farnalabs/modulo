@@ -103,11 +103,6 @@ def migration_0101() -> ModuleType:
     return _load_migration(_MIGRATION_0101)
 
 
-@pytest.fixture(scope="module")
-def migration_0104() -> ModuleType:
-    return _load_migration(_MIGRATION_0104)
-
-
 def _script() -> ScriptDirectory:
     return ScriptDirectory(str(_VERSIONS_DIR.parent))
 

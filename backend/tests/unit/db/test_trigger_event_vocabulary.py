@@ -248,6 +248,9 @@ class TestSqliteRoundTrip:
         the FAR-190 deactivation transaction no longer rolls back."""
         await self._run_migration(sqlite_engine, "upgrade")
         await self._insert_event(sqlite_engine, "auto_deactivated")
+        async with sqlite_engine.begin() as conn:
+            rows = (await conn.execute(text("SELECT validation_result FROM trigger_events"))).scalars().all()
+        assert rows == ["auto_deactivated"]
 
     async def test_downgrade_restores_rejection_on_clean_table(self, sqlite_engine: AsyncEngine) -> None:
         """On a clean table (no orphan rows) the downgrade restores the 19-value
