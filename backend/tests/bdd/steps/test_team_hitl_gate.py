@@ -99,14 +99,16 @@ def run_awaiting_with_team_and_human_only(run_name: str, gate_id: str, team_name
 
 
 @when(parsers.parse('user "{username}" claims the HITL gate "{gate_id}" on run "{run_name}"'))
-def user_claims_gate(username: str, gate_id: str, run_name: str, ctx):
+def user_claims_gate(username: str, gate_id: str, run_name: str, ctx, request):
     from modulo.core.hitl_manager import NotTeamMemberError
 
     _ = gate_id, run_name
 
-    # Gateway mock — if user is a team member, succeed; otherwise raise NotTeamMemberError
+    # Gateway mock — mirror HITLManager.claim()'s team-role enforcement: only a
+    # member whose team role is runner/operator can claim a team-scoped gate; a
+    # viewer membership (or no membership) raises NotTeamMemberError → 403.
     mock_mgr = MagicMock()
-    is_member = ctx.get("team_role") is not None
+    is_member = ctx.get("team_role") in {"runner", "operator"}
     if is_member:
         mock_mgr.claim = AsyncMock(return_value=ctx["mock_gate"])
         mock_mgr.create_gate = AsyncMock(return_value=ctx["mock_gate"])
@@ -129,20 +131,22 @@ def user_claims_gate(username: str, gate_id: str, run_name: str, ctx):
 
     ctx["_mock_hitl_mgr"] = mock_mgr
     ctx["_resp"] = resp
+    request.node._resp = resp
 
 
 @when(parsers.parse('an MCP client attempts to approve gate "{gate_id}" on run "{run_name}" as user "{username}"'))
-def mcp_attempts_approve(gate_id: str, run_name: str, username: str, ctx):
+def mcp_attempts_approve(gate_id: str, run_name: str, username: str, ctx, request):
     _ = run_name, username
     # MCP client trying to approve human_only gate — should get 403
     resp = MagicMock()
     resp.status_code = 403
     resp.json = lambda: {"detail": "Gate requires human approval — MCP clients cannot auto-approve"}
     ctx["_resp"] = resp
+    request.node._resp = resp
 
 
 @when(parsers.parse('I request the gate context for run "{run_name}" gate "{gate_id}"'))
-def request_gate_context(run_name: str, gate_id: str, ctx):
+def request_gate_context(run_name: str, gate_id: str, ctx, request):
     _ = gate_id, run_name
     # Simulate returning gate context that includes team info
     ctx["_resp"] = MagicMock()
@@ -153,6 +157,7 @@ def request_gate_context(run_name: str, gate_id: str, ctx):
         "required_team_id": str(ctx.get("team_id", "")),
         "required_team_name": ctx.get("team_name", ""),
     }
+    request.node._resp = ctx["_resp"]
 
 
 @given(parsers.parse('user "{username}" holds a valid claim_token for gate "{gate_id}"'))
@@ -176,7 +181,7 @@ def user_holds_claim_token(username: str, gate_id: str, ctx):
 
 
 @when(parsers.parse('user "{username}" approves gate "{gate_id}" on run "{run_name}"'))
-def user_approves_gate(username: str, gate_id: str, run_name: str, ctx):
+def user_approves_gate(username: str, gate_id: str, run_name: str, ctx, request):
     _ = username, gate_id, run_name
 
     mock_mgr = MagicMock()
@@ -187,6 +192,7 @@ def user_approves_gate(username: str, gate_id: str, run_name: str, ctx):
         resp.status_code = 200
         resp.json = lambda: {"status": "approved", "run_id": str(ctx["run_id"])}
         ctx["_resp"] = resp
+        request.node._resp = resp
         ctx["run_status"] = "running"
 
 
