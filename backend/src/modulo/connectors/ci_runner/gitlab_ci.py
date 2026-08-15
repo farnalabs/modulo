@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors.base import CIRun, CIRunLog, CIRunStatus, HealthResult
 from modulo.connectors.ci_runner.base import CIRunnerBase
 
@@ -49,6 +50,8 @@ class GitLabCIRunner(CIRunnerBase):
     def _parse_run(self, raw: dict[str, Any]) -> CIRun:
         raw_status = raw.get("status", "")
         status = _STATUS_MAP.get(raw_status, CIRunStatus.UNKNOWN)
+        duration = raw.get("duration")
+        user = raw.get("user")
         return CIRun(
             id=str(raw.get("id", "")),
             pipeline_id=str(raw.get("project_id", "")),
@@ -58,8 +61,8 @@ class GitLabCIRunner(CIRunnerBase):
             commit_sha=raw.get("sha", ""),
             created_at=raw.get("created_at", ""),
             updated_at=raw.get("updated_at", ""),
-            duration_seconds=raw.get("duration"),
-            triggered_by=raw.get("user", {}).get("username", ""),
+            duration_seconds=_safe_int(duration) if duration is not None else None,
+            triggered_by=user.get("username", "") if isinstance(user, dict) else "",
         )
 
     async def health_check(self) -> HealthResult:

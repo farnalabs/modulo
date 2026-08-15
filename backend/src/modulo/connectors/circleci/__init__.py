@@ -57,9 +57,9 @@ class CircleCIConnector(CIRunnerBase):
     def _parse_run(self, raw: dict[str, Any]) -> CIRun:
         raw_state = raw.get("state", "")
         status = _STATUS_MAP.get(raw_state, CIRunStatus.UNKNOWN)
-        vcs = raw.get("vcs", {})
-        trigger = raw.get("trigger", {})
-        actor = trigger.get("actor", {})
+        vcs = raw.get("vcs")
+        trigger = raw.get("trigger")
+        actor = trigger.get("actor") if isinstance(trigger, dict) else None
         pipeline_number = raw.get("number", "")
         project_slug = raw.get("project_slug", "")
         pipeline_url = (
@@ -72,12 +72,12 @@ class CircleCIConnector(CIRunnerBase):
             pipeline_id=project_slug,
             status=status,
             url=pipeline_url,
-            branch=vcs.get("branch", ""),
-            commit_sha=vcs.get("revision", ""),
+            branch=vcs.get("branch", "") if isinstance(vcs, dict) else "",
+            commit_sha=vcs.get("revision", "") if isinstance(vcs, dict) else "",
             created_at=raw.get("created_at", ""),
             updated_at="",
             duration_seconds=None,
-            triggered_by=actor.get("login", ""),
+            triggered_by=actor.get("login", "") if isinstance(actor, dict) else "",
         )
 
     async def health_check(self) -> HealthResult:

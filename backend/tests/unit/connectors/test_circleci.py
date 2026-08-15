@@ -165,6 +165,28 @@ async def test_get_run_status_cancelled(cc_runner):
     assert run.status == CIRunStatus.CANCELLED
 
 
+def test_parse_run_non_dict_vcs(cc_runner):
+    run = cc_runner._parse_run({"id": "p1", "vcs": "gh/owner/repo"})
+    assert run.branch == ""
+    assert run.commit_sha == ""
+
+
+def test_parse_run_null_vcs(cc_runner):
+    run = cc_runner._parse_run({"id": "p1", "vcs": None})
+    assert run.branch == ""
+    assert run.commit_sha == ""
+
+
+def test_parse_run_non_dict_trigger(cc_runner):
+    run = cc_runner._parse_run({"id": "p1", "trigger": "manual"})
+    assert run.triggered_by == ""
+
+
+def test_parse_run_corrupt_actor(cc_runner):
+    run = cc_runner._parse_run({"id": "p1", "trigger": {"actor": "alice"}})
+    assert run.triggered_by == ""
+
+
 # ---------------------------------------------------------------------------
 # get_run_logs
 # ---------------------------------------------------------------------------

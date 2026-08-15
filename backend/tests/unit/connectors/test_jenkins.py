@@ -119,6 +119,16 @@ async def test_get_run_status_failure(jenkins):
     assert run.status == CIRunStatus.FAILURE
 
 
+def test_parse_build_corrupt_duration(jenkins):
+    run = jenkins._parse_build({"id": "42", "duration": "not-a-number"})
+    assert run.duration_seconds is None
+
+
+def test_parse_build_zero_duration(jenkins):
+    run = jenkins._parse_build({"id": "42", "duration": 0})
+    assert run.duration_seconds is None
+
+
 @respx.mock
 async def test_get_run_status_running(jenkins):
     respx.get(f"{_JENKINS_BASE}/job/my-job/42/api/json").mock(

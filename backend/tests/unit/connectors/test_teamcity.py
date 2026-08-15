@@ -171,6 +171,21 @@ async def test_get_run_status_failure(teamcity):
     assert run.status == CIRunStatus.FAILURE
 
 
+def test_run_from_build_non_dict_build_type(teamcity):
+    run = teamcity._run_from_build({"id": 42, "buildType": "MyBuild"})
+    assert run.pipeline_id == ""
+
+
+def test_run_from_build_null_build_type(teamcity):
+    run = teamcity._run_from_build({"id": 42, "buildType": None})
+    assert run.pipeline_id == ""
+
+
+def test_run_from_build_corrupt_duration(teamcity):
+    run = teamcity._run_from_build({"id": 42, "duration": "not-a-number"})
+    assert run.duration_seconds == 0
+
+
 @respx.mock
 async def test_get_run_status_running(teamcity):
     respx.get(f"{_TC_BASE}/app/rest/builds/id:42").mock(
