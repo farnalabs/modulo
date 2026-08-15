@@ -1197,8 +1197,7 @@ def _analytics_deep_link(result: dict[str, Any], params: AnalyticsParams) -> str
         parts.append(("trigger_type", params.trigger_type.value))
     if params.status is not None:
         parts.append(("status", params.status.value))
-    for pid in params.pipeline_ids:
-        parts.append(("pipeline_id", str(pid)))
+    parts.extend(("pipeline_id", str(pid)) for pid in params.pipeline_ids)
     if params.error_code is not None:
         parts.append(("error_code", params.error_code))
     if params.folder_id is not None:
