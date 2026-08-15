@@ -3066,8 +3066,7 @@ def test_no_split_once_with_call_assertions():
         "A call-count assertion immediately followed by an args assertion on the same mock is the\n"
         "split twin of the atomic assert_called_once_with/assert_awaited_once_with check. Merge them:\n"
         "    mock.assert_called_once()          ->  mock.assert_called_once_with(expected)\n"
-        "    mock.assert_called_with(expected)\n"
-        + "\n".join(violations)
+        "    mock.assert_called_with(expected)\n" + "\n".join(violations)
     )
 
 
