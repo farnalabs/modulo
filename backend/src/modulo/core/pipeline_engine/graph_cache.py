@@ -306,7 +306,7 @@ def _pipeline_state_reducer(current: dict[str, Any], update: dict[str, Any]) -> 
     result = dict(current)
     for k, v in update.items():
         if k in _CONCAT_KEYS and k in result and isinstance(result[k], list) and isinstance(v, list):
-            result[k] += v
+            result[k] = result[k] + v
         elif k == "run_context" and isinstance(v, dict) and isinstance(result.get(k), dict):
             result[k] = {**result[k], **v}
         else:
