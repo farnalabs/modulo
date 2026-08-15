@@ -338,3 +338,97 @@ class TestDeleteOrgImmediate:
         ):
             resp = client.delete(self.URL)
         assert resp.status_code == 409
+
+
+@pytest.fixture
+def admin_client_and_session() -> Generator[tuple[TestClient, AsyncMock], None, None]:
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="admin",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app), mock_session
+    app.dependency_overrides.clear()
+
+
+class TestAdminReassignAllTeamResources:
+    """POST /api/v1/admin/teams/{id}/reassign-all (PRD 9.3 bulk reassignment)."""
+
+    URL = f"/api/v1/admin/teams/{_ORG_ID}/reassign-all"
+
+    def test_reassign_all_reports_per_resource_counts(
+        self, admin_client_and_session: tuple[TestClient, AsyncMock]
+    ) -> None:
+        client, session = admin_client_and_session
+        counts = iter([3, 1, 0, 2])
+
+        def _execute(*args: object, **_kwargs: object) -> MagicMock:
+            # The require_permission authz kill-switch read must not consume a
+            # handler-side rowcount slot.
+            stmt = args[0] if args else None
+            if stmt is not None and "authz_enforce" in str(stmt):
+                result = MagicMock()
+                result.scalar_one_or_none.return_value = True
+                return result
+            # Extra calls beyond the four per-resource updates return rowcount 0.
+            return MagicMock(rowcount=next(counts, 0))
+
+        session.execute.side_effect = _execute
+        team = MagicMock()
+        team.id = _ORG_ID
+        with (
+            patch("modulo.api.routes.admin.get_team", return_value=team),
+            patch("modulo.api.routes.admin.set_rls_org"),
+            patch("modulo.api.routes.admin.set_rls_user_context"),
+        ):
+            resp = client.post(self.URL)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["reassigned"] == 6
+        assert data["resource_types"] == ["pipeline", "connector", "library primitive"]
+
+    def test_reassign_all_idempotent_when_team_has_no_resources(
+        self, admin_client_and_session: tuple[TestClient, AsyncMock]
+    ) -> None:
+        client, session = admin_client_and_session
+        session.execute.side_effect = lambda *_a, **_k: MagicMock(rowcount=0)
+        team = MagicMock()
+        team.id = _ORG_ID
+        with (
+            patch("modulo.api.routes.admin.get_team", return_value=team),
+            patch("modulo.api.routes.admin.set_rls_org"),
+            patch("modulo.api.routes.admin.set_rls_user_context"),
+        ):
+            resp = client.post(self.URL)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["reassigned"] == 0
+        assert data["resource_types"] == []
+
+    def test_reassign_all_missing_team_returns_404(
+        self, admin_client_and_session: tuple[TestClient, AsyncMock]
+    ) -> None:
+        client, _session = admin_client_and_session
+        with (
+            patch("modulo.api.routes.admin.get_team", return_value=None),
+            patch("modulo.api.routes.admin.set_rls_org"),
+            patch("modulo.api.routes.admin.set_rls_user_context"),
+        ):
+            resp = client.post(self.URL)
+        assert resp.status_code == 404
+
+    def test_reassign_all_non_admin_returns_403(self, operator_client: TestClient) -> None:
+        resp = operator_client.post(self.URL)
+        assert resp.status_code == 403

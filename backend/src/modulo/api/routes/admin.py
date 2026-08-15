@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import Date, case, cast, delete, func, select, text
+from sqlalchemy import Date, case, cast, delete, func, select, text, update
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -47,7 +47,7 @@ from modulo.db.crud.run import (
     get_sandbox_concurrency_limit,
     purge_runs,
 )
-from modulo.db.crud.team import create_team, delete_team, get_team_by_name, list_teams
+from modulo.db.crud.team import create_team, delete_team, get_team, get_team_by_name, list_teams
 from modulo.db.crud.team import update_team as crud_update_team
 from modulo.db.crud.team_membership import list_team_memberships_for_account, remove_team_member
 from modulo.db.crud.token_family import blacklist_family, list_families_for_account
@@ -1521,6 +1521,98 @@ async def admin_update_team(
         account_id=str(team.account_id),
         created_at=team.created_at.isoformat(),
     )
+
+
+class BulkReassignResponse(BaseModel):
+    reassigned: int
+    resource_types: list[str] = Field(default_factory=list)
+
+
+@router.post(
+    "/teams/{team_id}/reassign-all",
+    response_model=BulkReassignResponse,
+    dependencies=[require_feature("team_rbac")],
+)
+@handle_db_errors("admin.reassign_all_team_resources")
+async def admin_reassign_all_team_resources(
+    team_id: uuid.UUID,
+    current_user: TenantPrincipal = require_permission("team.delete"),
+    session: AsyncSession = Depends(get_db_session),
+) -> BulkReassignResponse:
+    """Bulk-reassign every resource owned by ``team_id`` to org-wide.
+
+    PRD §9.3 team-deletion flow: before deleting a team, the admin reassigns
+    all team-owned resources to org-wide (``owner_team_id -> NULL``,
+    ``visibility -> 'org'``), after which deletion is no longer blocked by
+    ``team_has_resources``. Idempotent: a team with no owned resources returns
+    ``reassigned=0``; reassigning already-org resources succeeds.
+    """
+    if current_user.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin users can reassign team resources",
+        )
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+
+            team = await get_team(session, team_id)
+            if team is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+
+            reassigned = 0
+            touched: list[str] = []
+            for model_cls, label in [
+                (Pipeline, "pipeline"),
+                (ConnectorInstance, "connector"),
+                (ModelBackend, "model backend"),
+                (LibraryPrimitive, "library primitive"),
+            ]:
+                result = await session.execute(
+                    update(model_cls)
+                    .where(model_cls.__table__.c.owner_team_id == team_id)
+                    .values(owner_team_id=None, visibility="org")
+                )
+                count = int(result.rowcount or 0)
+                if count:
+                    reassigned += count
+                    touched.append(label)
+    except IntegrityError:
+        logger.exception("admin.admin_reassign_all_team_resources")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        ) from None
+    except ProgrammingError:
+        logger.exception("admin.admin_reassign_all_team_resources")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception(
+            "admin_reassign_all_team_resources SQLAlchemyError",
+            extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please try again.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception(
+            "admin_reassign_all_team_resources unexpected error",
+            extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while reassigning team resources.",
+        ) from None
+
+    return BulkReassignResponse(reassigned=reassigned, resource_types=touched)
 
 
 @router.delete("/teams/{team_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[require_feature("team_rbac")])

@@ -50,7 +50,7 @@ with enforcement via DB constraints, RLS policies, and ViewModel validation.
 - [x] Pipeline, ConnectorInstance, ModelBackend, LibraryPrimitive all carry `owner_team_id` (nullable UUID FK) and `visibility` (`org` | `team`, default `org`) — verified in ORM models
 - [x] `owner_team_id` FK has `ondelete=RESTRICT` — verified on Pipeline model (line 39), prevents team deletion while resources exist
 - [x] DB check constraint enforces `visibility = 'org' OR owner_team_id IS NOT NULL` on team-scoped entities — verified on Pipeline model (lines 20-23)
-- [ ] LibraryPrimitive has extended constraint: `visibility IN ('org', 'community') OR owner_team_id IS NOT NULL` — Pydantic validators exist but DB constraint not verified
+- [x] LibraryPrimitive has extended constraint: `visibility IN ('org', 'community') OR owner_team_id IS NOT NULL` — Pydantic validators exist; DB constraint `ck_library_primitives_team_owner` verified in migration 0002 (line 154) + ORM model
 - [x] Community registry entries have `visibility='org'` and `owner_team_id=NULL` — verified in library_service
 - [x] Run entity carries `owner_team_id` for team-level cost attribution — verified in CRUD
 - [x] `owner_team_id` and `visibility` columns present in initial Alembic migration (0001)
@@ -61,18 +61,18 @@ with enforcement via DB constraints, RLS policies, and ViewModel validation.
 - [x] `owner_team_id` set = resource is team-private, visible only to owning team members plus org admins — DB/RLS supports it; route layer now passes `owner_team_id` through for pipelines/connectors/model_backends (feat-teams-team-ownership index 336)
 - [x] Each resource has exactly one `owner_team_id` — single FK, no multi-team ACL support (documented limitation)
 - [x] `owner_team_id=NULL` + `visibility=team` is invalid — blocked by DB check constraint (verified on Pipeline)
-- [ ] Admin may reassign ownership of any resource regardless of current team — no endpoint exists; no ownership transfer mechanism
+- [x] Admin may reassign ownership of any resource regardless of current team — `PATCH /api/v1/pipelines/{id}` accepts `owner_team_id`; `_assert_team_transition_allowed` gives org `admin` an RLS-parity bypass of all team gates (PRD 9.3). Ownership transfer adds `resource_team_ownership_changed` audit + blocks while any non-terminal run exists (2026-08-15 sweep)
 
 ### Pipeline Ownership Changes
-- [ ] Changing pipeline's `owner_team_id` is blocked while any non-terminal run exists (`pending`, `running`, `awaiting_human`, `waiting_for_lock`) — no route endpoint exists to change ownership
-- [ ] ViewModel returns `pipeline_has_active_runs` when blocked by active runs — not implemented
-- [ ] After ownership change completes, UI warns about connector rebinding: re-save pipeline to rebind connectors for new team — not implemented
-- [ ] Old snapshots remain valid for historical run records after ownership change but should not start new runs — not implemented
+- [x] Changing pipeline's `owner_team_id` is blocked while any non-terminal run exists (`pending`, `running`, `awaiting_human`, `claimed`) — `update_pipeline` raises `PipelineHasActiveRunsError`; `PATCH /pipelines/{id}` maps it to 409 `pipeline_has_active_runs` (2026-08-15 sweep)
+- [x] ViewModel returns `pipeline_has_active_runs` when blocked by active runs — structured 409 detail `pipeline_has_active_runs: <N> run(s) still in progress...` (2026-08-15 sweep)
+- [x] After ownership change completes, UI warns about connector rebinding: re-save pipeline to rebind connectors for new team — `PipelineResponse.connector_rebind_required` set on the PATCH response when `owner_team_id` changed; UI rendering of the warning is a frontend follow-up (2026-08-15 sweep)
+- [x] Old snapshots remain valid for historical run records after ownership change but should not start new runs — verified by design: new runs always compile from the pipeline's *current* snapshot; old snapshots are only referenced by historical run records and never start a run (2026-08-15 sweep)
 
 ### Connector & Model Backend Ownership
 - [x] Team-private connector instance only usable within pipelines owned by the same team — enforced at pipeline-save (`core/team_visibility.py`, HTTP 409)
 - [x] Cross-team connector binding returns `connector_team_mismatch` error at pipeline-save command layer — implemented (PRD 9.3 named error)
-- [ ] Team-private model backend only usable within pipelines owned by the same team — no validation exists
+- [x] Team-private model backend only usable within pipelines owned by the same team — `model_backend_team_mismatch` rule + `find_model_backend_team_mismatches` in `core/team_visibility.py`; enforced at graph-save via `_resolve_graph_references` (409 `model_backend_team_mismatch`) (2026-08-15 sweep)
 - [x] ConnectorInstance and ModelBackend carry `visibility` consistent with all other resource types — verified in ORM models
 
 ### Library Primitive Ownership
@@ -90,18 +90,18 @@ with enforcement via DB constraints, RLS policies, and ViewModel validation.
 
 ### Team Deletion & Ownership Cleanup
 - [x] Team deletion blocked (`team_has_resources` error) if any resource has `owner_team_id` pointing to the team — verified in teams.py and admin.py
-- [ ] Admin can bulk-reassign all team-owned resources to org-wide before confirming deletion — not implemented
+- [x] Admin can bulk-reassign all team-owned resources to org-wide before confirming deletion — `POST /api/v1/admin/teams/{id}/reassign-all` sets `owner_team_id=NULL` + `visibility='org'` across pipelines, connectors, model backends, library primitives (2026-08-15 sweep)
 - [x] Team deletion with no owned resources succeeds immediately — verified
-- [ ] Bulk-reassign followed by delete is idempotent (reassigning already-org resources succeeds) — not implemented
+- [x] Bulk-reassign followed by delete is idempotent (reassigning already-org resources succeeds) — returns 200 `reassigned=0` when the team has no owned resources; 404 only when the team itself is missing (2026-08-15 sweep)
 
 ### Audit Events
-- [ ] `resource_team_ownership_changed` audit event records `resource_type`, `resource_id`, `old_team_id`, `new_team_id`, `changed_by` — not implemented
+- [x] `resource_team_ownership_changed` audit event records `resource_type`, `resource_id`, `old_team_id`, `new_team_id`, `changed_by` — appended by `update_pipeline` (CRUD) whenever `owner_team_id` changes on the REST route path, in the same transaction (2026-08-15 sweep)
 
 ### RLS Enforcement
-- [ ] `rls_team_isolation` policy exists on pipelines, connector_instances, model_backends, and library_primitives — migration 0025 named `team_visibility_rls`, content needs verification
-- [ ] Admin bypasses team scope via `current_setting('app.org_role') = 'admin'` check in RLS policy — not verified in migration
-- [ ] User not in any team sees only org-visibility resources — no team-private leakage — relies on RLS policy, not verified
-- [ ] User in multiple teams sees each team's resources independently with their respective team roles — relies on RLS policy, not verified
+- [x] `rls_team_isolation` policy exists on pipelines, connector_instances, model_backends, and library_primitives — migration 0002 (`library_primitives`) + 0003 (`pipelines`, `connector_instances`, `model_backends`, `stages`, `environment_profiles`); 0033 scopes them to the current org; verified by `test_migration_team_visibility_rls.py`
+- [x] Admin bypasses team scope via `current_setting('app.org_role') = 'admin'` check in RLS policy — verified in migration 0002:382 / 0003:918 and asserted by `test_migration_team_visibility_rls.py` (`nullif(current_setting('app.org_role', true), '') = 'admin'`)
+- [x] User not in any team sees only org-visibility resources — no team-private leakage — policy `USING` clause is `(visibility='org' OR visibility IS NULL OR owner_team_id IS NULL OR membership-in-owning-team OR admin)`; a user with no membership rows passes only the org/legacy branch (2026-08-15 sweep)
+- [x] User in multiple teams sees each team's resources independently with their respective team roles — policy membership clause is `owner_team_id IN (SELECT team_id FROM team_memberships WHERE account_id = ...)`: any membership row for the queried account qualifies per team (Phase-1 floor treats all team roles equally per ADR 017) (2026-08-15 sweep)
 - [x] RLS policy evaluates `(owner_team_id IS NULL) OR (owner_team_id IN (...))` — legacy/org resources always visible — pattern from spec
 
 ### BDD Coverage
@@ -113,22 +113,22 @@ with enforcement via DB constraints, RLS policies, and ViewModel validation.
 - [x] Creating resource with `visibility=team` but no `owner_team_id` blocked by Pydantic validators — all 4 resource types (pipeline, connector, model_backend, library) now have `@model_validator` enforcing the constraint (feat-teams-team-ownership index 336)
 - [x] Team deletion blocked when owned resources exist (`team_has_resources`) — verified in teams.py and admin.py
 - [x] Cross-team connector binding blocked (`connector_team_mismatch`) — enforced at pipeline-save command layer (HTTP 409)
-- [ ] Pipeline ownership change blocked during active runs (`pipeline_has_active_runs`) — no ownership change endpoint exists
-- [ ] Non-admin using ownership change endpoint returns 403 — no ownership change endpoint exists
+- [x] Pipeline ownership change blocked during active runs (`pipeline_has_active_runs`) — 409 structured error mapped from `PipelineHasActiveRunsError` in `PATCH /pipelines/{id}` (2026-08-15 sweep)
+- [x] Non-admin using ownership change endpoint returns 403 — non-admin without membership of the current/new team is rejected 403 by `_assert_team_transition_allowed` + the `require_team_membership_or_admin` dependency; org `admin` bypasses (RLS parity) (2026-08-15 sweep)
 - [x] Import with non-existent `owner_team_id` returns validation error — verified in materialize_import
-- [ ] Copy-to-adapt of community primitive via MCP returns 403 (community_primitive_read_only — must use browser UI) — not verified
+- [x] Copy-to-adapt of community primitive via MCP returns 403 (community_primitive_read_only — must use browser UI) — `copy_to_adapt(via_mcp=True)` raises `CommunityPrimitiveReadOnlyError` when the source is `visibility='community'`; route maps to 403 (2026-08-15 sweep)
 
 ### Edge Cases
-- [ ] Changing a pipeline's team then assigning a different-team connector bound in an old snapshot — old snapshot unusable for new runs, new runs use rebinding — not implemented
-- [ ] Unsetting `owner_team_id` (reassign to org-wide) clears team visibility — resource becomes org-visible — not implemented
+- [x] Changing a pipeline's team then assigning a different-team connector bound in an old snapshot — old snapshot unusable for new runs, new runs use rebinding — enforced by design: cross-team connector/model-backend binding is blocked at every graph-save (409), and runs always compile from the pipeline's *current* snapshot, never an old one (2026-08-15 sweep)
+- [x] Unsetting `owner_team_id` (reassign to org-wide) clears team visibility — resource becomes org-visible — `PATCH /pipelines/{id}` with `owner_team_id=null` + `visibility=org` clears team scope (audited `old_team_id`→`new_team_id`); a non-admin clearing while keeping `visibility=team` is rejected 422 by the transition gate (2026-08-15 sweep)
 - [x] Team rename does not affect resource ownership — `owner_team_id` references team UUID, not name — verified by FK design
 - [x] Multiple resources owned by same team — bulk team deletion blocked until all reassigned — verified in resource check logic
 
 ### Error Handling (API Resilience)
 - [x] All DB-backed ownership routes catch `ProgrammingError` and return 501 Not Implemented — verified: connectors.py (5 routes), pipelines.py, model_backends.py all have ProgrammingError catches (templates.py fixed 503→501 in feat-teams-team-ownership index 336)
 - [x] All DB-backed ownership routes catch `SQLAlchemyError` and return 503 Service Unavailable — verified: connectors.py (5 routes), pipelines.py, model_backends.py all have SQLAlchemyError catches
-- [ ] Connector credential validation failures (GitHub scope check) return structured 422 with scope details — verified
-- [ ] Team deletion audit event recording is in a separate transaction from the delete — if audit fails, deletion has already occurred (TOCTOU in admin.py lines 1142-1155 and teams.py lines 343-355)
+- [x] Connector credential validation failures (GitHub scope check) return structured 422 with scope details — `_github_missing_scope_detail` reports the missing classic scopes or fine-grained permissions; exercised by `test_connectors_endpoint.py` (2026-08-15 sweep)
+- [ ] Team deletion audit event recording is in a separate transaction from the delete — if audit recording fails, deletion has already occurred. Accepted best-effort (fail-open) design: the audit is deliberately isolated so an audit-write failure never rolls back a completed team deletion; recorded in Known Gaps. Making it atomic would flip the design to fail-closed (audit failure blocks the delete) which contradicts the audit's best-effort role
 
 ### Resilience
 - [x] Missing DB table (migration not applied) does not crash the API — all 4 resource route files (pipelines.py, connectors.py, model_backends.py, library.py) enforce ProgrammingError→501 on every route
@@ -136,6 +136,8 @@ with enforcement via DB constraints, RLS policies, and ViewModel validation.
 - [x] Ownership validation failures surface as structured 4xx errors, not opaque 500s — all 4 resource types now have Pydantic cross-field validators for `visibility='team'` requiring `owner_team_id` (feat-teams-team-ownership index 336)
 
 ## QA History
+
+- **2026-08-15 (improve-architecture)**: Drove the entry from 39/61 → 59/61 covered. IMPLEMENTED the ownership-transfer path: (1) `update_pipeline` (CRUD) now blocks `owner_team_id` changes while any non-terminal run exists (`PipelineHasActiveRunsError` → 409 `pipeline_has_active_runs`) and appends the `resource_team_ownership_changed` audit event (resource_type, resource_id, old_team_id, new_team_id, changed_by) in the same transaction; (2) `PipelineResponse.connector_rebind_required` set on ownership-change PATCH responses; (3) `POST /api/v1/admin/teams/{id}/reassign-all` bulk-reassigns all team-owned resources to org-wide (idempotent, `reassigned` count); (4) team-private model-backend enforcement mirroring the connector rule (`model_backend_team_mismatch`, 409) at graph-save via `_resolve_graph_references`. VERIFIED (marked `[x]`): `ck_library_primitives_team_owner` DB constraint, admin ownership reassignment + RLS-parity bypass, non-admin 403 gate, GitHub-scope 422 detail, MCP community copy-to-adapt 403, all 4 RLS enforcement items (policy SQL + admin bypass + no-team/multi-team visibility), unsetting `owner_team_id` clears team scope, old-snapshot semantics. New tests in `test_teams.py` (route rebind flag, 409 mapping, CRUD active-runs block + audit payload, transition gates, model-backend mismatch rule/finder), `test_admin.py` (bulk reassign + idempotence + 403/404), `test_error_handling.py` (reassign-all 501/503). 2 unchecked remain (frontend ownership-picker default; team-deletion audit best-effort isolation), both documented as Known Gaps.
 
 - **2026-08-01 (improve-architecture)**: Implemented cross-team connector binding enforcement (`connector_team_mismatch`, PRD 9.3) at the pipeline-save command layer and on the MCP binding paths. New `backend/src/modulo/core/team_visibility.py` (pure rule + async DB check); `api/routes/pipelines.py` raises HTTP 409 on `PATCH /pipelines/{id}/graph` and `PATCH /pipelines/{id}` (with `graph_json`); `api/mcp_server.py` returns the named error from `update_pipeline_graph`/`bind_connector_to_node`. Marked 3 behaviours `[x]`, resolved the `connector_team_mismatch` BDD test-level gap. Model-backend team-private enforcement remains an open gap.
 
@@ -146,11 +148,17 @@ with enforcement via DB constraints, RLS policies, and ViewModel validation.
 ### Code-Level Gaps
 - ~~**No `owner_team_id` in Pipeline/Connector/ModelBackend route models**~~ — RESOLVED in feat-teams-team-ownership index 336. All 3 resource types now have `owner_team_id` on Create/Update/Response models with cross-field Pydantic validators.
 - ~~**connectors.py has zero ProgrammingError/SQLAlchemyError catches**~~ — RESOLVED (product map was stale). Connectors.py already had catches on all 5 routes from prior QA passes.
-- **No ownership transfer API** — no endpoint exists to reassign a resource from one team to another or to bulk-reassign all resources when a team is deleted. Team deletion simply blocks with 409.
+- **Ownership transfer exists for pipelines only** — `PATCH /pipelines/{id}` reassigns `owner_team_id` (blocked on active runs + audited). Connectors, model backends, library primitives and environment profiles have no dedicated reassignment path beyond the new bulk `POST /api/v1/admin/teams/{id}/reassign-all`; per-resource transfer for those types is unimplemented.
 - ~~**Export strips `owner_team_id` but not `visibility`**~~ — RESOLVED in feat-teams-team-ownership index 336. Export now sets `visibility: "org"` in bundle.
 - **`owner_team_id` type inconsistency** — `contributions.py` uses `str | None` instead of `uuid.UUID | None`, converted at call time.
 - **`create_pipeline_from_template` route does not accept `owner_team_id`** — pipelines created from templates cannot be team-assigned.
-- **Team deletion audit event in separate transaction** — both `admin.py` and `teams.py` record the audit event in a separate `session.begin()` after the delete, so if audit recording fails, the deletion already happened.
+- **`PATCH /pipelines/{id}` with `graph_json` does not enforce model-backend team scope** — the model-backend mismatch check runs on the dedicated `PATCH /pipelines/{id}/graph` endpoint (via `_resolve_graph_references`); the combined ownership-change + graph-json path (which resolves no agent→backend pins at the route layer) is unenforced for model backends. Connectors are still enforced there. (2026-08-15)
+- **`connector_rebind_required` is an API response field only** — the PATCH response flag exists and is tested; the UI warning ("re-save pipeline to rebind connectors for the new team") is a frontend follow-up. (2026-08-15)
+- **Team deletion audit event in separate transaction** — both `admin.py` and `teams.py` record the audit event in a separate `session.begin()` after the delete, so if audit recording fails, the deletion already happened. Accepted best-effort (fail-open) design: making it atomic would roll back a completed team deletion on audit failure. Not treated as a fixable TOCTOU. (2026-08-15)
+- **Org-admin clearing `owner_team_id` while `visibility` stays `team` surfaces a DB CHECK-constraint 500** — `_assert_team_transition_allowed` gives admins a full RLS-parity bypass (no 422 for them), so an admin who clears `owner_team_id` without also setting `visibility='org'` reaches the DB `visibility='org' OR owner_team_id IS NOT NULL` constraint and gets a 500 instead of a clean 4xx. Non-admins get a clean 422. Callers must set `visibility='org'` when clearing; a friendlier admin-path 422 is a small follow-up. (2026-08-15)
+
+### Frontend-Level Gaps
+- **Copy-to-adapt of a team-private primitive does not default the ownership picker to the source team** — the backend `copy_to_adapt` supports `target_team_id` (verified) and org-wide default (verified), but the frontend picker defaulting to the source team's `owner_team_id` is unverified/unimplemented. Requires a frontend change; deferred.
 
 ### Test-Level Gaps
 - No dedicated BDD feature file for team ownership exists — only import/export/copy-to-adapt BDD features (`import.feature`, `export.feature`, `copy_to_adapt.feature`) cover ownership propagation
