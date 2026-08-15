@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import shutil
@@ -123,13 +122,13 @@ def test_get_db_url_missing(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_run_pg_dump_success(tmp_manifest_dir):
+async def test_run_pg_dump_success(tmp_manifest_dir):
     output = os.path.join(tmp_manifest_dir, "dump.pgdump")
     proc = MagicMock()
     proc.returncode = 0
     proc.communicate = AsyncMock(return_value=(None, b""))
     with patch("scripts.backup.asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)) as mock_exec:
-        asyncio.run(run_pg_dump("postgresql://u:p@h/db", "pg_dump", output))
+        await run_pg_dump("postgresql://u:p@h/db", "pg_dump", output)
     args = mock_exec.await_args.args
     assert args[0] == "pg_dump"
     assert "--format=custom" in args
@@ -137,7 +136,7 @@ def test_run_pg_dump_success(tmp_manifest_dir):
     assert "postgresql://u:p@h/db" in args
 
 
-def test_run_pg_dump_failure_exits(tmp_manifest_dir, capsys):
+async def test_run_pg_dump_failure_exits(tmp_manifest_dir, capsys):
     proc = MagicMock()
     proc.returncode = 1
     proc.communicate = AsyncMock(return_value=(None, b"connection failed"))
@@ -145,7 +144,7 @@ def test_run_pg_dump_failure_exits(tmp_manifest_dir, capsys):
         patch("scripts.backup.asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)),
         pytest.raises(SystemExit),
     ):
-        asyncio.run(run_pg_dump("postgresql://u:p@h/db", "pg_dump", os.path.join(tmp_manifest_dir, "x")))
+        await run_pg_dump("postgresql://u:p@h/db", "pg_dump", os.path.join(tmp_manifest_dir, "x"))
     assert "pg_dump failed: connection failed" in capsys.readouterr().out
 
 
@@ -444,9 +443,9 @@ def test_parse_args_overrides(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_main_full_flow(tmp_manifest_dir, capsys):
+async def test_main_full_flow(tmp_manifest_dir, capsys):
     output = os.path.join(tmp_manifest_dir, "modulo-backup.tar.gz.enc")
-    Path(output).write_text("enc")  # exists so os.path.getsize() works
+    Path(output).write_text("enc")  # noqa: ASYNC240 — trivial 1-byte test setup, not a blocking risk
     ns = MagicMock()
     ns.output = output
     ns.passphrase = "pass"
@@ -466,7 +465,7 @@ def test_main_full_flow(tmp_manifest_dir, capsys):
         patch("scripts.backup.create_archive", return_value=tar_path) as mock_arc,
         patch("scripts.backup.encrypt_archive") as mock_enc,
     ):
-        asyncio.run(main())
+        await main()
 
     mock_disk.assert_called_once()
     mock_dump.assert_awaited_once()
@@ -479,20 +478,20 @@ def test_main_full_flow(tmp_manifest_dir, capsys):
     assert "Backup complete:" in out
 
 
-def test_main_exits_on_empty_passphrase(monkeypatch, capsys):
+async def test_main_exits_on_empty_passphrase(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["backup.py"])
     with (
         patch("scripts.backup.resolve_passphrase", return_value=""),
         pytest.raises(SystemExit),
     ):
-        asyncio.run(main())
+        await main()
     assert "passphrase cannot be empty" in capsys.readouterr().out
 
 
-def test_main_normalizes_output_without_enc_suffix(tmp_manifest_dir, capsys):
+async def test_main_normalizes_output_without_enc_suffix(tmp_manifest_dir, capsys):
     raw_output = os.path.join(tmp_manifest_dir, "modulo-backup.tar.gz")
     enc_output = raw_output + ".enc"
-    Path(enc_output).write_text("enc")  # exists so the final os.path.getsize() works
+    Path(enc_output).write_text("enc")  # noqa: ASYNC240 — trivial 1-byte test setup
     ns = MagicMock()
     ns.output = raw_output
     ns.passphrase = "pass"
@@ -511,7 +510,7 @@ def test_main_normalizes_output_without_enc_suffix(tmp_manifest_dir, capsys):
         patch("scripts.backup.create_archive", return_value=raw_output) as mock_arc,
         patch("scripts.backup.encrypt_archive") as mock_enc,
     ):
-        asyncio.run(main())
+        await main()
 
     # The encrypted archive must land exactly at the user-requested path, so
     # create_archive receives the .enc-normalised output and getsize reads the
@@ -521,9 +520,9 @@ def test_main_normalizes_output_without_enc_suffix(tmp_manifest_dir, capsys):
     assert "Backup complete:" in capsys.readouterr().out
 
 
-def test_main_keeps_enc_suffix_output_unchanged(tmp_manifest_dir, capsys):
+async def test_main_keeps_enc_suffix_output_unchanged(tmp_manifest_dir, capsys):
     output = os.path.join(tmp_manifest_dir, "modulo-backup.tar.gz.enc")
-    Path(output).write_text("enc")  # exists so the final os.path.getsize() works
+    Path(output).write_text("enc")  # noqa: ASYNC240 — trivial 1-byte test setup
     ns = MagicMock()
     ns.output = output
     ns.passphrase = "pass"
@@ -543,7 +542,7 @@ def test_main_keeps_enc_suffix_output_unchanged(tmp_manifest_dir, capsys):
         patch("scripts.backup.create_archive", return_value=tar_path) as mock_arc,
         patch("scripts.backup.encrypt_archive") as mock_enc,
     ):
-        asyncio.run(main())
+        await main()
 
     assert mock_arc.call_args.args[1] == output
     mock_enc.assert_called_once_with(tar_path, "pass")
