@@ -581,6 +581,35 @@ def test_run_response_gate_fired_true_on_marker_delivery_done(client: TestClient
     assert resp.json()["gate_fired"] is True
 
 
+def test_run_response_gate_fired_true_on_success_path_marker(client: TestClient) -> None:
+    """FAR-228 review fix: a delivery_done marker written on the SUCCESS path
+    (status ``completed``, empty parse_error — the shape the node persists)
+    drives gate_fired True via the shared marker scan, so a successful sentinel
+    run is API-distinguishable without waiting for classification."""
+    run = _make_run(status="complete", error_code=None)
+    run.run_classification = None
+    run.raw_output_markers = {
+        "run:run-1:node:n1:1": {
+            "_modulo_marker": True,
+            "status": "completed",
+            "summary": "Sandbox agent completed with delivery sentinel observed (idempotency gate)",
+            "parse_error": "",
+            "pr_url": "",
+            "exit_code": 0,
+            "attempt_key": "run:run-1:node:n1:1",
+            "node_id": "n1",
+            "delivery_done": True,
+        }
+    }
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.json()["gate_fired"] is True
+
+
 def test_run_response_populates_total_cost(client: TestClient) -> None:
     run = _make_run(status="complete", total_cost_usd=Decimal("1.234567"))
     with (

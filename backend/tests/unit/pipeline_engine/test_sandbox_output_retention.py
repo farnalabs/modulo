@@ -31,6 +31,7 @@ import pytest
 
 from modulo.core.pipeline_engine.node_runner import (
     SandboxNodeFailedError,
+    _marker_delivery_done_for_node,
     _persist_raw_output_marker,
     _retain_raw_output_marker,
     make_sandbox_agent_fn,
@@ -857,6 +858,52 @@ async def test_guard_a_skips_when_prior_attempt_marked_delivery_done():
     assert result["artifacts"][0]["output"]["output_json"]["delivery_done"] is True
 
 
+async def test_guard_a_skips_after_success_persisted_marker():
+    """FAR-228 review fix: a delivery_done marker persisted on the SUCCESS path
+    (not just the failure/cancel paths) is visible to guard A on re-entry — the
+    completed-node-then-process-death scenario. First execution succeeds and
+    persists the marker; a SECOND execution of the same node returns the skipped
+    envelope without provisioning a sandbox or re-sending."""
+    log_content = f"email sent\n{_SENTINEL}\n"
+    sandbox = _make_sandbox_mock(output_json='{"summary": "done"}', log_content=log_content)
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(
+        _base_node_def(timeout_seconds=30, delivery_sentinel=_SENTINEL),
+        session_factory=_factory,
+        single_sandbox_node=True,
+    )
+    settings = MagicMock(modulo_idempotency_gate_enabled=True)
+    state = _run_state()
+    state["_claim_lease"] = "tok-claim"
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.settings.get_settings", return_value=settings),
+    ):
+        first = await fn(state)
+
+    assert first["output"]["status"] == "completed"
+    assert _single_marker(row)["delivery_done"] is True
+    assert _marker_delivery_done_for_node(row.raw_output_markers, "run-1", "n1") is True
+
+    # Re-entry: the same node executes again (process death after completion).
+    # Guard A must read the SUCCESS-persisted marker and skip — no sandbox.
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.settings.get_settings", return_value=settings),
+    ):
+        second = await fn(state)
+
+    sandbox.commands.run.assert_awaited_once(), "only the FIRST execution provisions a sandbox"
+    assert second["artifacts"][0]["status"] == "skipped"
+    assert second["artifacts"][0]["output"]["output_json"]["idempotency_gate"] == "email_sent"
+    assert second["artifacts"][0]["output"]["output_json"]["delivery_done"] is True
+
+
 async def test_guard_a_skips_when_gate_disabled_by_kill_switch():
     """FAR-228 guard A kill-switch: with the gate disabled the run provisions
     normally even when a prior marker carries delivery_done."""
@@ -891,10 +938,13 @@ async def test_guard_a_skips_when_gate_disabled_by_kill_switch():
     assert result["output"]["status"] == "completed"
 
 
-async def test_success_path_stamps_delivery_done_when_sentinel_in_stdout():
-    """FAR-228 success-path stamp: an opt-in successful run whose FULL stdout
-    carries the sentinel as a full line stamps delivery_done into the success
-    output dict (closes the completed-node-then-process-death gap)."""
+async def test_success_path_persists_delivery_done_marker_when_sentinel_in_stdout():
+    """FAR-228 success-path marker: an opt-in successful run whose FULL stdout
+    carries the sentinel persists a ``delivery_done`` marker into
+    ``raw_output_markers`` — the ONLY column guard A / guard B / classification
+    / gate_fired read. The marker (not the returned envelope, which nothing
+    reads for delivery_done) is the observable record that closes the
+    completed-node-then-process-death gap."""
     log_content = f"email sent\n{_SENTINEL}\n"
     sandbox = _make_sandbox_mock(output_json='{"summary": "done"}', log_content=log_content)
     row = _FakeRunRow()
@@ -911,13 +961,16 @@ async def test_success_path_stamps_delivery_done_when_sentinel_in_stdout():
         result = await fn(_run_state())
 
     assert result["output"]["status"] == "completed"
-    assert result["output"]["delivery_done"] is True
-    assert result["artifacts"][0]["output"]["delivery_done"] is True
+    marker = _single_marker(row)
+    assert marker["delivery_done"] is True
+    assert marker["status"] == "completed"
+    assert marker["summary"] == "Sandbox agent completed with delivery sentinel observed (idempotency gate)"
+    assert _marker_delivery_done_for_node(row.raw_output_markers, "run-1", "n1") is True
 
 
 async def test_success_path_no_sentinel_no_stamp():
-    """FAR-228: a successful opt-in run WITHOUT the sentinel in stdout carries
-    no delivery_done field (opt-in but nothing delivered)."""
+    """FAR-228: a successful opt-in run WITHOUT the sentinel in stdout writes no
+    marker and no delivery_done field (opt-in but nothing delivered)."""
     sandbox = _make_sandbox_mock(output_json='{"summary": "done"}', log_content="no delivery here\n")
     row = _FakeRunRow()
 
@@ -934,6 +987,7 @@ async def test_success_path_no_sentinel_no_stamp():
 
     assert result["output"].get("delivery_done") is None
     assert result["artifacts"][0]["output"].get("delivery_done") is None
+    assert row.raw_output_markers is None, "no sentinel -> no success marker persisted"
 
 
 async def test_cancelled_node_persist_failure_fail_open_reraises():

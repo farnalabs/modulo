@@ -639,11 +639,15 @@ async def _retain_raw_output_marker(
     stdout_length: int,
     stderr_length: int,
     delivery_sentinel: str | None = None,
+    status: str = "failed",
 ) -> None:
     """Single builder + persist for a raw-output retention marker (FAR-188).
 
     Both failure branches (no-parseable output.json and stall/timeout) funnel
     through this ONE helper so the marker shape cannot drift between them.
+    *status* defaults to ``"failed"`` (the failure branches); the FAR-228
+    success path passes ``"completed"`` so a delivery_done marker written for a
+    successful run records its real status, never a misleading failure.
 
     ``source`` is the FULL pre-truncation evidence: for the no-parseable branch
     it is the union of the file content AND the captured stdout; for the
@@ -666,7 +670,7 @@ async def _retain_raw_output_marker(
     text = _normalize_marker_text(source)
     marker: dict[str, Any] = {
         "_modulo_marker": True,
-        "status": "failed",
+        "status": status,
         "summary": summary,
         "raw_output": _redact_raw_output(text)[:_MAX_ARTIFACT_LOG],
         "parse_error": parse_error,
@@ -2435,14 +2439,39 @@ def make_sandbox_agent_fn(
                     "sandbox_log_tail": _sandbox_log_tail,
                 }
 
-            # FAR-228 success-path stamp: when opt-in AND the sentinel is a
+            # FAR-228 success-path marker: when opt-in AND the sentinel is a
             # FULL-LINE match in the FULL pre-truncation stdout (``agent_stdout_raw``,
-            # NOT the head-truncated ``agent_stdout``), the success output carries
-            # delivery evidence — this closes the completed-node-then-process-death
-            # gap, so a normal successful run also records delivery_done.
-            _delivery_done_field: dict[str, Any] = {}
+            # NOT the head-truncated ``agent_stdout``), persist a delivery_done
+            # marker onto ``raw_output_markers`` — the ONLY column guard A /
+            # guard B / classification / gate_fired read. The envelope stamp
+            # alone was unobservable (nothing reads delivery_done from
+            # outputs_json); the marker is the durable record that closes the
+            # completed-node-then-process-death gap. Best-effort and fail-open:
+            # a persist failure must never break a successful run.
             if delivery_sentinel and _source_contains_delivery_sentinel(agent_stdout_raw, delivery_sentinel):
-                _delivery_done_field = {"delivery_done": True}
+                try:
+                    await _retain_raw_output_marker(
+                        session_factory,
+                        run_id=run_id,
+                        org_id_raw=org_id,
+                        node_id=node_id,
+                        attempt_key=attempt_key,
+                        summary="Sandbox agent completed with delivery sentinel observed (idempotency gate)",
+                        source=agent_stdout_raw,
+                        parse_error="",
+                        exit_code=exit_code,
+                        stdout_length=_stdout_len,
+                        stderr_length=_stderr_len,
+                        delivery_sentinel=delivery_sentinel,
+                        status=status,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.exception(
+                        "sandbox_agent.success_delivery_marker_persist_failed",
+                        extra={"node_id": node_id, "run_id": run_id},
+                    )
 
             return {
                 "artifacts": [
@@ -2465,7 +2494,6 @@ def make_sandbox_agent_fn(
                             "stderr_length": _stderr_len,
                             "agent_status": agent_status,
                             "agent_outcome": agent_outcome,
-                            **_delivery_done_field,
                             **_stall_reason_field,
                             **_sandbox_failure_fields,
                             "attempt_key": attempt_key,
@@ -2484,7 +2512,6 @@ def make_sandbox_agent_fn(
                     "stderr_length": _stderr_len,
                     "agent_status": agent_status,
                     "agent_outcome": agent_outcome,
-                    **_delivery_done_field,
                     **_stall_reason_field,
                     **_sandbox_failure_fields,
                     "attempt_key": attempt_key,

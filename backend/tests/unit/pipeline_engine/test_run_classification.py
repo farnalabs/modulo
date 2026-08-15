@@ -310,6 +310,61 @@ class TestDeliveryDoneClassification:
         )
         assert result.value == RunClassificationValue.no_delivery
 
+    def test_complete_with_success_path_marker_is_email_delivered(self) -> None:
+        """FAR-228 review fix: a marker persisted on the SUCCESS path (status
+        ``completed``, empty parse_error, exit_code 0 — the shape written by the
+        node's success-path retention) classifies a pr_url-less complete run as
+        delivered/email_delivered, NOT no_delivery/no_work. This is the
+        observable outcome the success marker must produce."""
+        result = classify_run(
+            "complete",
+            None,
+            outputs_json={},
+            telemetry_json={},
+            raw_output_markers={
+                "run:run-1:node:n1:1": {
+                    "_modulo_marker": True,
+                    "status": "completed",
+                    "summary": "Sandbox agent completed with delivery sentinel observed (idempotency gate)",
+                    "raw_output": "email sent\nEMAIL_SENT\n",
+                    "parse_error": "",
+                    "pr_url": "",
+                    "exit_code": 0,
+                    "stdout_length": 10,
+                    "stderr_length": 0,
+                    "attempt_key": "run:run-1:node:n1:1",
+                    "node_id": "n1",
+                    "delivery_done": True,
+                }
+            },
+        )
+        assert result.value == RunClassificationValue.delivered
+        assert result.reason == REASON_DELIVERED_EMAIL
+        assert result.delivered_pr_urls == ()
+
+    def test_complete_without_success_marker_still_no_work(self) -> None:
+        """FAR-228: without a delivery_done marker (and without pr_url) a
+        successful sentinel-free run stays no_delivery/no_work — the marker is
+        what flips the verdict, never the run status alone."""
+        result = classify_run(
+            "complete",
+            None,
+            outputs_json={},
+            telemetry_json={},
+            raw_output_markers={
+                "run:run-1:node:n1:1": {
+                    "_modulo_marker": True,
+                    "status": "completed",
+                    "parse_error": "",
+                    "pr_url": "",
+                    "attempt_key": "run:run-1:node:n1:1",
+                    "node_id": "n1",
+                }
+            },
+        )
+        assert result.value == RunClassificationValue.no_delivery
+        assert result.reason == REASON_NO_WORK
+
 
 class TestReasons:
     """Spec §7 — reason on no_delivery: no_work / needs_human / source_error /

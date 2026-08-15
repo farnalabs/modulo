@@ -32,7 +32,7 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.core.dispatch import dispatch_run
 from modulo.core.exceptions import OrgDeletedError
 from modulo.core.node_output_split import node_return, node_telemetry
-from modulo.core.pipeline_engine.classify import REASON_DELIVERED_EMAIL
+from modulo.core.pipeline_engine.classify import REASON_DELIVERED_EMAIL, _any_marker_delivery_done
 from modulo.core.pipeline_engine.error_codes import present_error, sanitize_error_text
 from modulo.core.pipeline_engine.event_broker import get_registry
 from modulo.core.pipeline_engine.recovery import (
@@ -386,11 +386,7 @@ def _run_gate_fired(run: Any) -> bool:
     if isinstance(classification, dict) and classification.get("reason") == REASON_DELIVERED_EMAIL:
         return True
     markers = getattr(run, "raw_output_markers", None)
-    if isinstance(markers, dict):
-        for marker in markers.values():
-            if isinstance(marker, dict) and marker.get("delivery_done") is True:
-                return True
-    return False
+    return bool(_any_marker_delivery_done(markers))
 
 
 def _build_run_response(
