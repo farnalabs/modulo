@@ -543,7 +543,7 @@ class TestRegisterTenantFilter:
 
             mock_listen.assert_not_called()
 
-    def test_registers_for_sqlite(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_registers_for_sqlite(self) -> None:
         from unittest.mock import patch
 
         from modulo.settings import Settings
@@ -560,7 +560,7 @@ class TestRegisterTenantFilter:
 
             mock_listen.assert_called_once()
 
-    def test_registers_for_mariadb(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_registers_for_mariadb(self) -> None:
         from unittest.mock import patch
 
         from modulo.settings import Settings
