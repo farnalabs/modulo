@@ -398,9 +398,7 @@ async def test_list_runs_corrupt_body_no_crash(teamcity):
 async def test_list_runs_non_list_build_value_no_crash(teamcity):
     """A corrupt body placing a non-list in ``build`` must fall back to an
     empty page instead of returning a bare string as the records list."""
-    respx.get(f"{_TC_BASE}/app/rest/builds").mock(
-        return_value=httpx.Response(200, json={"build": "not-a-list"})
-    )
+    respx.get(f"{_TC_BASE}/app/rest/builds").mock(return_value=httpx.Response(200, json={"build": "not-a-list"}))
     runs = await teamcity.list_runs()
     assert runs == []
 
