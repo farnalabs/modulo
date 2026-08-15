@@ -1492,6 +1492,9 @@ def make_sandbox_agent_fn(
         _stderr_len = 0
         _sandbox_id: str | None = None
         _sandbox_log_tail: str = ""
+        agent_stdout: str = ""
+        agent_stderr: str = ""
+        output_json: Any = None
 
         async def _acquire_dispatch_marker() -> str | None:
             """DB-atomic dispatch marker (dist/runtime-core A4): one transaction
@@ -1992,7 +1995,6 @@ def make_sandbox_agent_fn(
                 )
 
             raw_output: str = ""
-            output_json: Any = None
             output_read_error: str = ""
             if cmd_result is not None:
                 try:
@@ -2256,16 +2258,16 @@ def make_sandbox_agent_fn(
                 _span.add_event(
                     "sandbox.agent.output",
                     {
-                        "stdout": locals().get("agent_stdout", "")[:_MAX_OTEL_LOG_ATTR],
-                        "stderr": locals().get("agent_stderr", "")[:_MAX_OTEL_LOG_ATTR],
+                        "stdout": agent_stdout[:_MAX_OTEL_LOG_ATTR],
+                        "stderr": agent_stderr[:_MAX_OTEL_LOG_ATTR],
                         "stdout_length": _stdout_len,
                         "stderr_length": _stderr_len,
-                        "attempt_key": locals().get("attempt_key") or "",
+                        "attempt_key": attempt_key or "",
                     },
                 )
-            _exc_stdout = locals().get("agent_stdout", "")
-            _exc_stderr = locals().get("agent_stderr", "")
-            _exc_output_json = locals().get("output_json")
+            _exc_stdout = agent_stdout
+            _exc_stderr = agent_stderr
+            _exc_output_json = output_json
             # Best-effort sandbox trace on the generic-exception path too — the
             # sandbox may already be dead, in which case the helper returns "".
             _exc_log_tail = await _fetch_sandbox_log_tail(_sandbox_id)
@@ -2290,7 +2292,7 @@ def make_sandbox_agent_fn(
                             "stderr_length": _stderr_len,
                             "sandbox_id": _sandbox_id,
                             "sandbox_log_tail": _exc_log_tail,
-                            "attempt_key": locals().get("attempt_key"),
+                            "attempt_key": attempt_key,
                         },
                     }
                 ],
@@ -2306,7 +2308,7 @@ def make_sandbox_agent_fn(
                     "stderr_length": _stderr_len,
                     "sandbox_id": _sandbox_id,
                     "sandbox_log_tail": _exc_log_tail,
-                    "attempt_key": locals().get("attempt_key"),
+                    "attempt_key": attempt_key,
                 },
             }
         finally:

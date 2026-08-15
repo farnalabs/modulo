@@ -1660,6 +1660,30 @@ Stored per-run per-node. Displayed in run inspection UI (§7.9). Written to Audi
 
 A HITL gate's `condition` field (v1) references an eval: `{eval_id: "quality-check", threshold: 0.8, operator: "lt"}`. If the condition is true (score < 0.8), LangGraph `interrupt()` fires. If false, execution continues without pausing. The Eval Engine runs within the StateGraph node transition — before the conditional interrupt check. This ordering is non-negotiable; HITL gating cannot be conditional without it.
 
+#### Guardrails — the input-side seam (FAR-208)
+
+The eval system above is **output-side** (post-node). Guardrails are the **input-side** analogue: deterministic structured-credential boundary data-safety at the ingestion edge. A guardrail is an `EvalDefinition` with `eval_type="guardrail"` (additive to the eval_type vocabulary at the 5 authoritative sites). Shipped core:
+
+| Field | Description |
+|---|---|
+| `eval_type` | `guardrail` |
+| `config_json.interception_point` | `input` (ingestion edge; T1) |
+| `config_json.action` | `observe` \| `warn` \| `block` \| `redact` |
+| `config_json.redaction` | static field-path policies `{path, mode: transform\|drop\|block}` |
+| `config_json.required_capabilities` | optional conformance claim (empty = no claim) |
+| `detection` | deterministic pure evals ONLY: `regex` \| `json_schema` |
+
+Behaviour:
+
+- **Detection** is deterministic and pure. A guardrail is a *sibling* of the Eval Engine — routing a guardrail through `EvalEngine.evaluate` raises `GuardrailMisroutedError`.
+- **Interception** runs at run-creation (webhook trigger, manual, replay) inside `create_run` **before** `runs.input_payload` is persisted — persisted state is post-redaction. Two-phase pass: evaluate ALL bound guardrails against an immutable pre-act copy, then apply redaction masks in deterministic order. Zero-guardrail fast path.
+- **Redaction** is masks-only (fixed mask token, never payload-derived), static field paths with EXACT/ANCHOR matching (substring matching forbidden), and an allowlist of never-touch system fields.
+- **Block** is TERMINAL `eval_failed` (error_code `eval_blocked`); the run is never dispatched, never retried, and has no HITL gate. `failure_behaviour='retry'` is forbidden on guardrails (rejected at the API edge and the DB CHECK).
+- **Observe/warn** never block; observe-mode results stamp `eval_results.observed` so the guardrail_summary observed bucket counts once.
+- **Remediation** is the dedicated guardrail-override endpoint (`POST /runs/{run_id}/guardrail-override`). The generic recover endpoint REFUSES guardrail-blocked runs (`error_code` `eval_blocked`) — the generic path does not re-run the guardrail pass on the supplied input and would resume execution on the blocked payload. `deliver_manual` is unavailable for terminal runs (no HITL gate → 404). The override re-runs the guardrail pass on the operator-supplied input (re-block safe default; a still-violating input is refused and the run stays terminal), persists the post-redaction payload, flips the run to `pending`, sets `is_replay=True` so lifecycle-map journeys increment exactly once, and re-dispatches from run start (the blocked run never executed, so there is no checkpoint to resume).
+
+Planned (not shipped in T1): conformance enforcement wiring at dispatch time (three-state derivation is shipped as a pure helper; enforcement is planned), kill-switch rollout flag, snapshot pinning (`guardrail_pins_json`), guardrail_summary telemetry on run detail, canary guardrails, and the guardrail management UI.
+
 #### Alpha Note
 The Eval Engine component appears in the §6.1 architecture diagram. Eval System is a **v1 feature** — no eval definitions, no eval UI, and no conditional HITL in alpha. Alpha runs do not execute evals.
 

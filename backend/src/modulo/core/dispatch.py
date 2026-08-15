@@ -357,9 +357,19 @@ async def dispatch_run(
     session = _open_session()
     try:
         async with session.begin():
+            from modulo.db.crud.run import get_run
+            from modulo.db.models.run import TERMINAL_STATUSES
             from modulo.db.rls import set_rls_org
 
             await set_rls_org(session, oid)
+            run = await get_run(session, rid)
+            if run is not None and run.status in TERMINAL_STATUSES:
+                # A terminal run must NEVER be enqueued for execution — the
+                # executor would resurrect it to ``running``. Guardrail-blocked
+                # runs reach eval_failed at creation (FAR-208 item 2) and are
+                # refused here; this also hardens resumes against terminal runs.
+                _log.info("dispatch_run: run %s already terminal (%s) — not dispatched", rid, run.status)
+                return ("terminal_skipped", None)
             if await _capacity_deferred(session, rid, oid):
                 _log.info("dispatch_run: run %s capacity-deferred (no enqueue)", rid)
                 return ("deferred", None)

@@ -12,7 +12,7 @@ class EvalDefinition(OrgScoped):
     __tablename__ = "eval_definitions"
     __table_args__ = (
         CheckConstraint(
-            "eval_type IN ('llm_judge', 'regex', 'json_schema', 'custom_function')",
+            "eval_type IN ('llm_judge', 'regex', 'json_schema', 'custom_function', 'guardrail')",
             name="ck_eval_definitions_type",
         ),
         CheckConstraint(

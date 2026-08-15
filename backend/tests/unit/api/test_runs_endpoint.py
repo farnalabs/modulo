@@ -20,6 +20,11 @@ from modulo.api.routes.runs import RunNotFoundError, _validate_run_input_basics
 from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.exceptions import OrgDeletedError
+from modulo.core.pipeline_engine.recovery import (
+    GuardrailOverrideError,
+    GuardrailOverrideRejectedError,
+    GuardrailOverrideRequiredError,
+)
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -1153,6 +1158,125 @@ def test_recover_node_capacity_deferred_surfaces_500(client: TestClient) -> None
         resp = client.post(
             f"/api/v1/runs/{_RUN_ID}/nodes/manual-node-1/recover",
             json={},
+        )
+
+    assert resp.status_code == 500
+    assert "enqueue" in resp.json()["detail"].lower()
+
+
+def test_recover_node_refuses_guardrail_blocked_run(client: TestClient) -> None:
+    """A guardrail-blocked run (eval_failed / eval_blocked) must NOT be
+    resurrected through the generic recover endpoint — it 409s and directs the
+    caller to the guardrail-override endpoint (MAJOR-1)."""
+    with (
+        patch("modulo.api.routes.runs.set_rls_org"),
+        patch(
+            "modulo.api.routes.runs.recover_node",
+            new_callable=AsyncMock,
+            side_effect=GuardrailOverrideRequiredError(_RUN_ID),
+        ),
+    ):
+        resp = client.post(
+            f"/api/v1/runs/{_RUN_ID}/nodes/manual-node-1/recover",
+            json={"input_data": {"review": "approved"}},
+        )
+
+    assert resp.status_code == 409
+    assert "guardrail-override" in resp.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/runs/{run_id}/guardrail-override — FAR-208 remediation
+# ---------------------------------------------------------------------------
+
+
+def test_guardrail_override_clean_input_dispatches_execute_run(client: TestClient) -> None:
+    """A clean-input guardrail override flips the run to pending and
+    re-dispatches it from run start (execute_run, no resume data)."""
+    run = _make_run(status="pending")
+    with (
+        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("modulo.api.routes.runs.guardrail_override", new_callable=AsyncMock, return_value=run),
+        patch(
+            "modulo.api.routes.runs.dispatch_run",
+            new_callable=AsyncMock,
+            return_value=("enqueued", "job-id"),
+        ) as mock_dispatch,
+    ):
+        resp = client.post(
+            f"/api/v1/runs/{_RUN_ID}/guardrail-override",
+            json={"input_data": {"body": "clean replacement text"}},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["action"] == "override"
+    assert body["status"] == "pending"
+    mock_dispatch.assert_awaited_once()
+    # execute_run from run start — NOT resume_run. job_type is left at the
+    # dispatch_run default (execute_run) and no resume_data is passed.
+    assert mock_dispatch.await_args.kwargs.get("job_type", "execute_run") == "execute_run"
+    assert mock_dispatch.await_args.kwargs.get("resume_data") is None
+
+
+def test_guardrail_override_still_violating_input_rejected_422(client: TestClient) -> None:
+    """A still-violating supplied input is refused (422, re-block safe default)
+    and never dispatched."""
+    with (
+        patch("modulo.api.routes.runs.set_rls_org"),
+        patch(
+            "modulo.api.routes.runs.guardrail_override",
+            new_callable=AsyncMock,
+            side_effect=GuardrailOverrideRejectedError(_RUN_ID, "no-secrets", "still has SECRET_ABC12345"),
+        ),
+        patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock) as mock_dispatch,
+    ):
+        resp = client.post(
+            f"/api/v1/runs/{_RUN_ID}/guardrail-override",
+            json={"input_data": {"body": "still has SECRET_ABC12345"}},
+        )
+
+    assert resp.status_code == 422
+    assert "no-secrets" in resp.json()["detail"]
+    mock_dispatch.assert_not_called()
+
+
+def test_guardrail_override_non_guardrail_run_rejected_409(client: TestClient) -> None:
+    """An override against a run that is NOT guardrail-blocked terminal 409s."""
+    with (
+        patch("modulo.api.routes.runs.set_rls_org"),
+        patch(
+            "modulo.api.routes.runs.guardrail_override",
+            new_callable=AsyncMock,
+            side_effect=GuardrailOverrideError(_RUN_ID, "status='failed' error_code='agent.failed'"),
+        ),
+        patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock) as mock_dispatch,
+    ):
+        resp = client.post(
+            f"/api/v1/runs/{_RUN_ID}/guardrail-override",
+            json={"input_data": {"body": "clean"}},
+        )
+
+    assert resp.status_code == 409
+    mock_dispatch.assert_not_called()
+
+
+def test_guardrail_override_dispatch_deferred_surfaces_500(client: TestClient) -> None:
+    """A deferred/enqueue-failed dispatch after override surfaces as 500 so the
+    recovery is never silently dropped."""
+    run = _make_run(status="pending")
+    with (
+        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("modulo.api.routes.runs.guardrail_override", new_callable=AsyncMock, return_value=run),
+        patch(
+            "modulo.api.routes.runs.dispatch_run",
+            new_callable=AsyncMock,
+            return_value=("enqueue_failed", None),
+        ),
+    ):
+        resp = client.post(
+            f"/api/v1/runs/{_RUN_ID}/guardrail-override",
+            json={"input_data": {"body": "clean"}},
         )
 
     assert resp.status_code == 500

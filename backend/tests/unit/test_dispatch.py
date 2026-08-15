@@ -50,12 +50,20 @@ class _MockSession:
 
     def __init__(self) -> None:
         self.begin_cm = _MockBegin()
+        # dispatch_run's terminal-status guard reads the run via get_run; a
+        # plain run row that is NOT terminal must not block dispatch.
+        self._run = SimpleNamespace(status="pending")
 
     def begin(self) -> _MockBegin:
         return self.begin_cm
 
     async def close(self) -> None:
         return None
+
+    async def execute(self, *args: object, **kwargs: object) -> MagicMock:
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = self._run
+        return result
 
 
 def _make_settings(**overrides: object) -> MagicMock:
@@ -110,6 +118,29 @@ class TestDispatchRunRouting:
         assert job_id is None
         enqueue.assert_not_called()
         dispatched.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_terminal_run_never_dispatched(self) -> None:
+        """A terminal (eval_failed) run is refused at dispatch — no enqueue."""
+        session = _MockSession()
+        session._run = SimpleNamespace(status="eval_failed")
+        with (
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
+            _rls_patch(),
+            patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock) as cap,
+            patch.object(dispatch, "_org_capacity_deferred", new_callable=AsyncMock),
+            _enqueue_patch() as enqueue,
+            patch.object(dispatch, "_record_dispatched", new_callable=AsyncMock) as dispatched,
+            patch.object(dispatch, "_open_session", return_value=session),
+        ):
+            outcome, job_id = await dispatch.dispatch_run(RUN_ID, ORG_ID)
+
+        assert outcome == "terminal_skipped"
+        assert job_id is None
+        enqueue.assert_not_called()
+        dispatched.assert_not_called()
+        # Capacity gates are never consulted for a terminal run.
+        cap.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_execute_enqueues_and_sets_dispatcher(self) -> None:
