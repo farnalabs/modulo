@@ -23,6 +23,8 @@ from modulo.api.routes.lifecycle_maps import (
     LifecycleMapCreate,
     LifecycleMapUpdate,
     VersionSaveRequest,
+    _build_detail,
+    _build_version_entry,
     create_lifecycle_map_endpoint,
     delete_lifecycle_map_endpoint,
     graduate_lifecycle_map_stage_endpoint,
@@ -84,6 +86,7 @@ def _make_map(**overrides: object) -> MagicMock:
     m.content_json = overrides.get("content_json", {})
     m.archived_at = overrides.get("archived_at")
     m.account_id = overrides.get("account_id", _ACCOUNT_ID)
+    m.updated_by = overrides.get("updated_by")
     m.deleted_at = overrides.get("deleted_at")
     m.created_at = overrides.get("created_at", datetime.now(UTC))
     m.updated_at = overrides.get("updated_at", datetime.now(UTC))
@@ -976,6 +979,131 @@ async def test_update_lifecycle_map_normalizes_content_and_derives(session: Asyn
 
 
 # ---------------------------------------------------------------------------
+# Version-actor stamping — updated_by surfaces as the version entry's created_by
+#
+# v1 has no immutable version history: the map row IS the active version, so
+# every version-bumping write path stamps ``updated_by`` with the saving
+# account and the version serializers report it as ``created_by`` (falling back
+# to the original creator's ``account_id`` for pre-stamping rows). These tests
+# FAIL on main where the version entry's created_by was always null.
+# ---------------------------------------------------------------------------
+
+
+async def test_create_lifecycle_map_stamps_updated_by_as_account_id(session: AsyncMock) -> None:
+    """Create stamps the creator as the initial version actor."""
+    created = _make_map()
+    with patch("modulo.core.lifecycle_map.service.LifecycleMap", return_value=created) as model_cls:
+        result = await create_lifecycle_map(
+            session,
+            org_id=_ORG_ID,
+            name="Release Plan",
+            account_id=_ACCOUNT_ID,
+            content_json={"stages": [{"id": "s1", "name": "Manual", "type": "manual"}]},
+        )
+    assert result is created
+    assert model_cls.call_args.kwargs["updated_by"] == _ACCOUNT_ID
+
+
+async def test_save_map_version_stamps_updated_by(session: AsyncMock) -> None:
+    actor = uuid.UUID("00000000-0000-0000-0000-000000000099")
+    lm = _make_map(version=2, updated_by=None)
+    session.execute.return_value = MagicMock(
+        scalar_one_or_none=MagicMock(return_value=lm),
+        all=MagicMock(return_value=[]),
+    )
+
+    result = await save_map_version(session, _MAP_ID, stages=[], edges=[], notes="", updated_by=actor)
+
+    assert result is lm
+    assert lm.updated_by == actor
+
+
+async def test_save_map_version_leaves_updated_by_untouched_when_not_provided(session: AsyncMock) -> None:
+    lm = _make_map(version=2, updated_by=_ACCOUNT_ID)
+    session.execute.return_value = MagicMock(
+        scalar_one_or_none=MagicMock(return_value=lm),
+        all=MagicMock(return_value=[]),
+    )
+
+    await save_map_version(session, _MAP_ID, stages=[], edges=[], notes="")
+
+    assert lm.updated_by == _ACCOUNT_ID
+
+
+async def test_update_lifecycle_map_stamps_updated_by(session: AsyncMock) -> None:
+    actor = uuid.UUID("00000000-0000-0000-0000-000000000099")
+    lm = _make_map(version=1, updated_by=None)
+    session.execute.return_value = MagicMock(
+        scalar_one_or_none=MagicMock(return_value=lm),
+        all=MagicMock(return_value=[]),
+    )
+
+    result = await update_lifecycle_map(
+        session,
+        _MAP_ID,
+        {"description": "renamed"},
+        updated_by=actor,
+    )
+
+    assert result is lm
+    assert lm.updated_by == actor
+
+
+async def test_graduate_stage_stamps_updated_by(session: AsyncMock) -> None:
+    actor = uuid.UUID("00000000-0000-0000-0000-000000000099")
+    lm = _make_map(
+        version=1,
+        updated_by=None,
+        content_json={"stages": [{"id": "s1", "name": "Approve", "type": "manual"}], "edges": []},
+    )
+    session.execute.return_value = MagicMock(
+        scalar_one_or_none=MagicMock(return_value=lm),
+        all=MagicMock(return_value=[]),
+    )
+
+    await graduate_stage(session, _MAP_ID, stage_id="s1", pipeline_id=None, updated_by=actor)
+
+    assert lm.updated_by == actor
+
+
+async def test_restore_lifecycle_map_stamps_updated_by(session: AsyncMock) -> None:
+    actor = uuid.UUID("00000000-0000-0000-0000-000000000099")
+    lm = _make_map(deleted_at=datetime.now(UTC), updated_by=None)
+    session.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=lm))
+
+    await restore_lifecycle_map(session, _MAP_ID, updated_by=actor)
+
+    assert lm.updated_by == actor
+
+
+def test_build_version_entry_reports_updated_by_when_set() -> None:
+    actor = uuid.UUID("00000000-0000-0000-0000-000000000099")
+    lm = _make_map(updated_by=actor, account_id=_ACCOUNT_ID)
+
+    entry = _build_version_entry(lm)
+
+    assert entry.created_by == str(actor)
+
+
+def test_build_version_entry_falls_back_to_account_id_when_updated_by_none() -> None:
+    """Pre-stamping rows (updated_by null) still read back the original creator."""
+    lm = _make_map(updated_by=None, account_id=_ACCOUNT_ID)
+
+    entry = _build_version_entry(lm)
+
+    assert entry.created_by == str(_ACCOUNT_ID)
+
+
+def test_build_detail_reports_updated_by_in_version_meta() -> None:
+    actor = uuid.UUID("00000000-0000-0000-0000-000000000099")
+    lm = _make_map(updated_by=actor, account_id=_ACCOUNT_ID)
+
+    detail = _build_detail(lm)
+
+    assert detail.versions[0].created_by == str(actor)
+
+
+# ---------------------------------------------------------------------------
 # Concurrent-save semantics — atomic version counter via SELECT ... FOR UPDATE
 #
 # FAR-176: two agents saving versions of the same map concurrently must never
@@ -1398,6 +1526,55 @@ async def test_save_version_route_maps_content_error_to_422() -> None:
             principal=_RoutePrincipal(),
         )
     assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
+async def test_save_version_route_stamps_updated_by_actor() -> None:
+    """POST /versions must pass the principal as the version actor (updated_by)
+    so the saved version entry reports who produced it — the version entry's
+    created_by was always null before this change."""
+    lm = _make_map(updated_by=_RoutePrincipal.account_id)
+    session = _route_session()
+    with (
+        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch(
+            "modulo.api.routes.lifecycle_maps.save_map_version",
+            AsyncMock(return_value=lm),
+        ) as mock_save,
+        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()),
+    ):
+        resp = await save_lifecycle_map_version_endpoint(
+            lifecycle_map_id=_MAP_ID,
+            req=VersionSaveRequest(stages=[], edges=[]),
+            session=session,
+            principal=_RoutePrincipal(),
+        )
+    assert mock_save.await_args.kwargs["updated_by"] == _RoutePrincipal.account_id
+    assert resp.created_by == str(_RoutePrincipal.account_id)
+
+
+async def test_update_version_route_stamps_updated_by_actor() -> None:
+    """PUT /versions/{version_id} shares the save path and must also stamp the
+    principal as the version actor."""
+    lm = _make_map(updated_by=_RoutePrincipal.account_id)
+    session = _route_session()
+    with (
+        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch(
+            "modulo.api.routes.lifecycle_maps.save_map_version",
+            AsyncMock(return_value=lm),
+        ) as mock_save,
+        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()),
+    ):
+        await update_lifecycle_map_version_endpoint(
+            lifecycle_map_id=_MAP_ID,
+            version_id=_MAP_ID,
+            req=VersionSaveRequest(stages=[], edges=[]),
+            session=session,
+            principal=_RoutePrincipal(),
+        )
+    assert mock_save.await_args.kwargs["updated_by"] == _RoutePrincipal.account_id
 
 
 async def test_update_version_route_maps_content_error_to_422() -> None:

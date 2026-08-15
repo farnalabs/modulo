@@ -86,6 +86,7 @@ async def test_create_lifecycle_map_passes_all_fields(session: AsyncMock) -> Non
         organisation_id=_ORG_ID,
         name="Release Plan",
         account_id=_ACCOUNT_ID,
+        updated_by=_ACCOUNT_ID,
         description="Q3 release",
         owner_team_id=_TEAM_ID,
         visibility="team",
