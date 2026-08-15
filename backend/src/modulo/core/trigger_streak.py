@@ -252,6 +252,16 @@ _STREAK_NEWEST_REASON_SQL = (
 )
 
 
+# FAR-191 — read-only on-demand streak read. The SAME walk constant the sweep
+# uses, wrapped in a bare SELECT so the current streak is read WITHOUT the
+# deactivation UPDATE's active/threshold/window guards. Single source of truth
+# for "what IS the current streak" — the on-demand read and the deactivation
+# sweep can never disagree. Used only for reads, never for a write.
+_STREAK_STATUS_COUNT_SQL = (
+    "SELECT __STREAK_COUNT__ AS streak"  # nosec B608 - static constant fragments, never user input
+).replace("__STREAK_COUNT__", _STREAK_COUNT_SQL)
+
+
 # ---------------------------------------------------------------------------
 # Activation anchor + re-enable helpers
 # ---------------------------------------------------------------------------
@@ -372,6 +382,147 @@ def _streak_config(config: dict[str, Any] | None) -> tuple[int, int]:
     else:
         window = max(0, raw_window)
     return threshold, window
+
+
+# ---------------------------------------------------------------------------
+# Read-only streak status (FAR-191) — on-demand read for the API surface
+# ---------------------------------------------------------------------------
+
+
+async def get_trigger_streak_status(
+    session: AsyncSession,
+    trigger: Any,
+    config_threshold: int | None = None,
+) -> dict[str, Any]:
+    """FAR-191 — READ-ONLY on-demand streak status for ONE trigger.
+
+    Computes the current no-delivery streak / threshold / state for the trigger
+    detail + list serializers so the operator can see how close an ongoing
+    trigger is to auto-deactivation, whether it HAS been auto-deactivated (and
+    why), and the last-N outcome summary. Reuses the sweep's SQL walk constants
+    (``_STREAK_COUNT_SQL`` via ``_STREAK_STATUS_COUNT_SQL``) so the on-demand
+    read and the deactivation sweep count the SAME streak.
+
+    NEVER deactivates, NEVER writes, NEVER triggers the mass-cascade/cap/notify
+    machinery. Best-effort and NEVER raises: any failure is swallowed and logged
+    and the caller receives ``{enabled: False, state: 'unconfigured'}`` so the
+    API degrades gracefully instead of 500ing the trigger list.
+
+    ``enabled`` means the streak engine is active for this trigger (ongoing type
+    + the deactivate+notify kill switch on). It deliberately does NOT mean
+    ``active=True``: an auto-deactivated trigger still reports its deactivation
+    state and the streak that caused it.
+
+    Returns::
+
+        {
+            "enabled": bool,                 # engine active for this trigger
+            "streak": int,                   # current consecutive no-delivery count
+            "threshold": int,                # configured max_no_delivery_streak
+            "state": "ok" | "deactivated" | "unconfigured",
+            "deactivated_reason": "no_delivery_streak" | "config_failure" | None,
+            "last_outcomes": [{run_id, classification, reason, completed_at}],  # <=5, newest first
+        }
+    """
+    base: dict[str, Any] = {
+        "enabled": False,
+        "streak": 0,
+        "threshold": 0,
+        "state": "unconfigured",
+        "deactivated_reason": None,
+        "last_outcomes": [],
+    }
+    try:
+        if getattr(trigger, "trigger_type", None) != "ongoing":
+            return base
+        org_id = getattr(trigger, "organisation_id", None)
+        trigger_id = getattr(trigger, "id", None)
+        if org_id is None or trigger_id is None:
+            return base
+        threshold: int
+        if config_threshold is not None:
+            threshold = int(config_threshold)
+        else:
+            threshold, _ = _streak_config(trigger.config_json)
+
+        # The current streak — the SAME walk the sweep uses, read without the
+        # deactivation guards. ``text()`` raw SQL bypasses the tenant-filter
+        # listener, so the walk's ``organisation_id = :oid`` predicates scope it
+        # (the count fragment carries its own org/trigger bind params).
+        count_result = await session.execute(
+            text(_STREAK_STATUS_COUNT_SQL),
+            {"oid": str(org_id), "tid": str(trigger_id)},
+        )
+        streak = int(count_result.scalar_one() or 0)
+
+        # Last-N outcome summary — the trigger's own terminal classified runs,
+        # newest first. In-flight runs (completed_at NULL) are excluded.
+        from modulo.db.models.run import Run
+
+        outcome_rows = (
+            await session.execute(
+                select(Run.id, Run.run_classification, Run.completed_at)
+                .where(
+                    Run.organisation_id == org_id,
+                    Run.trigger_id == trigger_id,
+                    Run.completed_at.is_not(None),
+                )
+                .order_by(Run.completed_at.desc(), Run.id.desc())
+                .limit(5)
+            )
+        ).all()
+        last_outcomes: list[dict[str, Any]] = []
+        for run_id, classification, completed_at in outcome_rows:
+            if not isinstance(classification, dict):
+                continue
+            last_outcomes.append(
+                {
+                    "run_id": str(run_id),
+                    "classification": classification.get("value"),
+                    "reason": classification.get("reason"),
+                    "completed_at": completed_at.isoformat() if completed_at is not None else None,
+                }
+            )
+
+        # Deactivation reason — an auto-deactivated trigger (active=False) whose
+        # newest auto-deactivation audit record says config_failure vs the
+        # no-delivery-streak default. A manually-paused trigger has no such
+        # record and reports state 'ok' with deactivated_reason None.
+        deactivated_reason: str | None = None
+        if not getattr(trigger, "active", True):
+            from modulo.db.models.audit_event import AuditEvent
+
+            audit_row = (
+                await session.execute(
+                    select(AuditEvent.payload_json)
+                    .where(
+                        AuditEvent.organisation_id == org_id,
+                        AuditEvent.resource_type == "trigger",
+                        AuditEvent.resource_id == trigger_id,
+                        AuditEvent.event_type == STREAK_DEACTIVATION_EVENT_TYPE,
+                    )
+                    .order_by(AuditEvent.created_at.desc())
+                    .limit(1)
+                )
+            ).first()
+            if audit_row is not None:
+                payload = audit_row[0] or {}
+                deactivated_by = payload.get("deactivated_by") if isinstance(payload, dict) else None
+                deactivated_reason = "config_failure" if deactivated_by == "config_failure" else "no_delivery_streak"
+
+        return {
+            "enabled": _streak_deactivate_enabled(),
+            "streak": streak,
+            "threshold": threshold,
+            "state": "deactivated" if deactivated_reason is not None else "ok",
+            "deactivated_reason": deactivated_reason,
+            "last_outcomes": last_outcomes,
+        }
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("streak.status_read_failed trigger=%s", getattr(trigger, "id", None), exc_info=True)
+        return base
 
 
 # ---------------------------------------------------------------------------

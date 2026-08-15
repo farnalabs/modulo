@@ -36,6 +36,7 @@ from modulo.core.trigger_engine import TriggerEngine
 from modulo.core.trigger_streak import (
     anchor_trigger_streak_epoch,
     clear_trigger_streak_after_reenable,
+    get_trigger_streak_status,
 )
 from modulo.core.trigger_validation import validate_ongoing_config
 from modulo.db.models.organisation import Organisation
@@ -72,6 +73,21 @@ async def _ongoing_in_flight(session: AsyncSession, trigger: Trigger) -> int:
     if trigger.trigger_type != "ongoing":
         return 0
     return await _count_ongoing_runs(session, trigger.id)
+
+
+async def _streak_status_for(session: AsyncSession, trigger: Trigger) -> dict[str, Any]:
+    """FAR-191 — ``streak_status`` for a trigger serializer.
+
+    N+1 guard: the cheap ``{enabled: false, state: 'unconfigured'}`` shape is
+    returned for non-ongoing triggers (no queries at all). The full on-demand
+    read (the streak SQL walk + the last-N outcome summary + the deactivation
+    reason) runs only for ongoing triggers, which are typically few per org.
+    Best-effort — ``get_trigger_streak_status`` never raises, so a read failure
+    degrades to the same cheap shape instead of 500ing the list.
+    """
+    if trigger.trigger_type != "ongoing":
+        return {"enabled": False, "state": "unconfigured"}
+    return await get_trigger_streak_status(session, trigger)
 
 
 @router.get("/triggers", status_code=status.HTTP_200_OK)
@@ -166,6 +182,7 @@ async def list_triggers(
                 "next_fire_at": r.next_fire_at.isoformat() if r.next_fire_at else None,
                 "created_by": str(r.account_id),
                 "in_flight": await _ongoing_in_flight(session, r),
+                "streak_status": await _streak_status_for(session, r),
             }
         )
 
@@ -587,6 +604,7 @@ async def update_ongoing_config(
 
             await session.flush()
             updated_in_flight = await _ongoing_in_flight(session, trigger)
+            ongoing_streak_status = await _streak_status_for(session, trigger)
     except ProgrammingError:
         _log.exception("triggers.update_ongoing_config")
         raise HTTPException(
@@ -620,6 +638,7 @@ async def update_ongoing_config(
         "config_json": mask_config_json(trigger.config_json),
         "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
         "in_flight": updated_in_flight,
+        "streak_status": ongoing_streak_status,
     }
 
 
@@ -771,6 +790,7 @@ async def create_trigger(
             # Computed INSIDE the transaction (RLS context set) — after commit
             # the SET LOCAL is gone and the count could not be scoped.
             created_in_flight = await _ongoing_in_flight(session, trigger)
+            created_streak_status = await _streak_status_for(session, trigger)
     except ProgrammingError:
         _log.exception("triggers.create_trigger")
         raise HTTPException(
@@ -806,6 +826,7 @@ async def create_trigger(
         "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
         "input_template": trigger.config_json.get("input_template") if trigger.config_json else None,
         "in_flight": created_in_flight,
+        "streak_status": created_streak_status,
     }
 
 
@@ -943,6 +964,7 @@ async def update_trigger(
 
             await session.flush()
             updated_in_flight = await _ongoing_in_flight(session, trigger)
+            updated_streak_status = await _streak_status_for(session, trigger)
     except ProgrammingError:
         _log.exception("triggers.update_trigger")
         raise HTTPException(
@@ -981,6 +1003,7 @@ async def update_trigger(
         "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
         "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
         "in_flight": updated_in_flight,
+        "streak_status": updated_streak_status,
     }
 
 
@@ -1055,6 +1078,7 @@ async def restore_trigger(
             if trigger.active:
                 await anchor_trigger_streak_epoch(session, trigger_id=trigger.id)
             restored_in_flight = await _ongoing_in_flight(session, trigger)
+            restored_streak_status = await _streak_status_for(session, trigger)
     except ProgrammingError:
         _log.exception("triggers.restore_trigger")
         raise HTTPException(
@@ -1093,6 +1117,7 @@ async def restore_trigger(
         "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
         "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
         "in_flight": restored_in_flight,
+        "streak_status": restored_streak_status,
     }
 
 
@@ -1132,6 +1157,7 @@ async def toggle_trigger(
             if trigger.active:
                 await anchor_trigger_streak_epoch(session, trigger_id=trigger.id)
             await session.flush()
+            toggled_streak_status = await _streak_status_for(session, trigger)
     except ProgrammingError:
         _log.exception("triggers.toggle_trigger")
         raise HTTPException(
@@ -1157,7 +1183,11 @@ async def toggle_trigger(
     if trigger.active:
         await clear_trigger_streak_after_reenable(trigger.id)
 
-    return {"id": str(trigger.id), "active": trigger.active}
+    return {
+        "id": str(trigger.id),
+        "active": trigger.active,
+        "streak_status": toggled_streak_status,
+    }
 
 
 class TestTriggerRequest(BaseModel):
@@ -1436,6 +1466,7 @@ async def list_pipeline_triggers(
                 "created_by": str(r.account_id),
                 "created_at": r.created_at.isoformat() if r.created_at else None,
                 "in_flight": await _ongoing_in_flight(session, r),
+                "streak_status": await _streak_status_for(session, r),
             }
         )
 

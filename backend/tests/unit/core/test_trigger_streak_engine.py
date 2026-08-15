@@ -1383,3 +1383,179 @@ class TestDispatcherWiring:
         ):
             summary = await ch.dispatcher_reconcile()
         assert summary["streak_deactivated"] == 0
+
+
+# ---------------------------------------------------------------------------
+# FAR-191 — read-only on-demand streak status (get_trigger_streak_status)
+# ---------------------------------------------------------------------------
+
+
+class _StatusSession:
+    """Async session double routing the FAR-191 read-only status queries.
+
+    Routes by statement substring: the streak-count walk (``AS streak``), the
+    audit_events deactivation-reason lookup, and the runs outcome summary
+    (everything else). Records executed statements for the never-writes check.
+    """
+
+    def __init__(self, *, streak: int = 0, outcome_rows: list[Any] | None = None, audit_row: Any = None) -> None:
+        self._streak = streak
+        self._outcome_rows = outcome_rows or []
+        self._audit_row = audit_row
+        self.executed: list[tuple[Any, Any]] = []
+
+    async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
+        self.executed.append((stmt, params))
+        s = str(stmt).lower()
+        if "as streak" in s:
+            r = MagicMock()
+            r.scalar_one.return_value = self._streak
+            return r
+        if "audit_events" in s:
+            r = MagicMock()
+            r.first.return_value = self._audit_row
+            return r
+        r = MagicMock()
+        r.all.return_value = self._outcome_rows
+        return r
+
+
+def _ongoing_trigger(**overrides: Any) -> SimpleNamespace:
+    values: dict[str, Any] = {
+        "id": TRIGGER_ID,
+        "organisation_id": ORG,
+        "trigger_type": "ongoing",
+        "active": True,
+        "config_json": {"max_no_delivery_streak": 5},
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def _outcome(
+    run_id: uuid.UUID, classification: str, reason: str, completed_at: datetime
+) -> tuple[uuid.UUID, dict[str, Any], datetime]:
+    return (run_id, {"value": classification, "reason": reason}, completed_at)
+
+
+class TestGetTriggerStreakStatus:
+    @pytest.mark.asyncio
+    async def test_non_ongoing_returns_cheap_shape(self) -> None:
+        """A non-ongoing trigger gets the cheap unconfigured shape with NO
+        queries issued (the N+1 guard)."""
+        session = _StatusSession()
+        status = await ts.get_trigger_streak_status(session, SimpleNamespace(trigger_type="cron"))
+        assert status == {
+            "enabled": False,
+            "streak": 0,
+            "threshold": 0,
+            "state": "unconfigured",
+            "deactivated_reason": None,
+            "last_outcomes": [],
+        }
+        assert session.executed == [], "non-ongoing must not query"
+
+    @pytest.mark.asyncio
+    async def test_computes_streak_and_threshold(self) -> None:
+        """Ongoing trigger with a configured threshold returns the current
+        streak, the resolved threshold, state 'ok' and no deactivation reason."""
+        session = _StatusSession(streak=3)
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger())
+        assert status["enabled"] is True
+        assert status["streak"] == 3
+        assert status["threshold"] == 5
+        assert status["state"] == "ok"
+        assert status["deactivated_reason"] is None
+
+    @pytest.mark.asyncio
+    async def test_config_threshold_override_wins(self) -> None:
+        """The caller-supplied config_threshold overrides the per-trigger config
+        resolution (used when the serializer already resolved it)."""
+        session = _StatusSession(streak=1)
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger(), config_threshold=7)
+        assert status["threshold"] == 7
+
+    @pytest.mark.asyncio
+    async def test_last_outcomes_newest_first_shape(self) -> None:
+        """The last-N outcome summary maps classification value + reason +
+        completed_at, newest first, and only classified rows appear."""
+        now = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+        older = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
+        session = _StatusSession(
+            outcome_rows=[
+                _outcome(uuid.uuid4(), "no_delivery", "no_work", now),
+                _outcome(uuid.uuid4(), "delivered", "pr_merged", older),
+            ]
+        )
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger())
+        assert [o["classification"] for o in status["last_outcomes"]] == ["no_delivery", "delivered"]
+        assert status["last_outcomes"][0]["reason"] == "no_work"
+        assert status["last_outcomes"][0]["completed_at"] == now.isoformat()
+        assert status["last_outcomes"][0]["run_id"]
+
+    @pytest.mark.asyncio
+    async def test_deactivated_reason_no_delivery_streak(self) -> None:
+        """An inactive ongoing trigger with a no-delivery-streak deactivation
+        audit record reports state 'deactivated' + reason 'no_delivery_streak'."""
+        session = _StatusSession(
+            streak=5,
+            audit_row=({"deactivated_by": "no_delivery_streak", "streak": 5},),
+        )
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger(active=False))
+        assert status["state"] == "deactivated"
+        assert status["deactivated_reason"] == "no_delivery_streak"
+
+    @pytest.mark.asyncio
+    async def test_deactivated_reason_config_failure(self) -> None:
+        """A config-failure deactivation (FAR-158 ``_bump_ongoing_failure``)
+        surfaces as reason 'config_failure', distinct from the streak path."""
+        session = _StatusSession(streak=3, audit_row=({"deactivated_by": "config_failure"},))
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger(active=False))
+        assert status["state"] == "deactivated"
+        assert status["deactivated_reason"] == "config_failure"
+
+    @pytest.mark.asyncio
+    async def test_manually_paused_has_no_reason(self) -> None:
+        """A trigger toggled off by the operator (no auto-deactivation audit
+        record) reports state 'ok' with no deactivation reason — the UI's
+        regular inactive state, not a deactivation banner."""
+        session = _StatusSession(streak=0, audit_row=None)
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger(active=False))
+        assert status["state"] == "ok"
+        assert status["deactivated_reason"] is None
+
+    @pytest.mark.asyncio
+    async def test_kill_switch_off_reports_enabled_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The deactivate+notify kill switch gates the ``enabled`` flag (the
+        streak is still computed and shown; nothing will auto-deactivate)."""
+        monkeypatch.setenv("MODULO_STREAK_DEACTIVATE_KILL_SWITCH", "0")
+        session = _StatusSession(streak=2)
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger())
+        assert status["enabled"] is False
+        assert status["streak"] == 2
+        assert status["state"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_never_raises_on_error(self) -> None:
+        """Any read failure is swallowed and degrades to the base shape — the
+        API list/detail serializers must never 500 on a status read."""
+        session = _StatusSession()
+
+        async def _boom(*args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("db down")
+
+        session.execute = _boom  # type: ignore[method-assign]
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger())
+        assert status["enabled"] is False
+        assert status["state"] == "unconfigured"
+
+    @pytest.mark.asyncio
+    async def test_never_writes(self) -> None:
+        """The read-only contract: only SELECT-shaped statements are issued —
+        no UPDATE/INSERT/DELETE from the status read."""
+        session = _StatusSession(streak=4, outcome_rows=[], audit_row=None)
+        await ts.get_trigger_streak_status(session, _ongoing_trigger(active=False))
+        for stmt, _params in session.executed:
+            assert "update" not in str(stmt).lower()
+            assert "insert" not in str(stmt).lower()
+            assert "delete" not in str(stmt).lower()

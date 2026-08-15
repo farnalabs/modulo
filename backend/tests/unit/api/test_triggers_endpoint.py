@@ -1294,6 +1294,189 @@ def test_list_triggers_includes_in_flight_for_ongoing(client: TestClient) -> Non
     client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
 
 
+# ---------------------------------------------------------------------------
+# FAR-191 — streak_status surfacing + operator re-enable
+# ---------------------------------------------------------------------------
+
+
+def _full_streak_status(**overrides: object) -> dict[str, object]:
+    status: dict[str, object] = {
+        "enabled": True,
+        "streak": 4,
+        "threshold": 5,
+        "state": "ok",
+        "deactivated_reason": None,
+        "last_outcomes": [
+            {
+                "run_id": "run-1",
+                "classification": "no_delivery",
+                "reason": "no_work",
+                "completed_at": "2026-08-01T00:00:00Z",
+            }
+        ],
+    }
+    status.update(overrides)
+    return status
+
+
+def test_list_triggers_includes_full_streak_status_for_ongoing(client: TestClient) -> None:
+    """The trigger list carries the full streak_status for an ongoing trigger:
+    current streak / threshold / state / deactivation reason / last-N outcomes."""
+    trigger = _make_mock_trigger(trigger_type="ongoing", active=False, daily_spend_limit=Decimal(25))
+    streak_status = _full_streak_status(streak=5, state="deactivated", deactivated_reason="no_delivery_streak")
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch(
+            "modulo.api.routes.triggers.get_trigger_streak_status",
+            new_callable=AsyncMock,
+            return_value=streak_status,
+        ) as get_status,
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.get("/api/v1/triggers")
+
+    assert resp.status_code == 200
+    item = resp.json()["items"][0]
+    assert item["streak_status"] == streak_status
+    get_status.assert_awaited_once()
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_list_triggers_streak_status_cheap_for_non_ongoing(client: TestClient) -> None:
+    """Non-ongoing triggers get the cheap ``{enabled: false, state:
+    'unconfigured'}`` shape with NO streak-engine query (the N+1 guard)."""
+    trigger = _make_mock_trigger(trigger_type="cron")
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("modulo.api.routes.triggers.get_trigger_streak_status", new_callable=AsyncMock) as get_status,
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.get("/api/v1/triggers")
+
+    assert resp.status_code == 200
+    assert resp.json()["items"][0]["streak_status"] == {"enabled": False, "state": "unconfigured"}
+    get_status.assert_not_awaited()
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_list_pipeline_triggers_includes_streak_status(client: TestClient) -> None:
+    """The pipeline-scoped trigger list surfaces streak_status too."""
+    trigger = _make_mock_trigger(trigger_type="ongoing", daily_spend_limit=Decimal(25))
+    streak_status = _full_streak_status()
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch(
+            "modulo.api.routes.triggers.get_trigger_streak_status",
+            new_callable=AsyncMock,
+            return_value=streak_status,
+        ),
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/triggers")
+
+    assert resp.status_code == 200
+    assert resp.json()["items"][0]["streak_status"] == streak_status
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_toggle_deactivated_trigger_viewer_returns_403(client: TestClient) -> None:
+    """Re-enabling a deactivated trigger is an operator action: a viewer (or any
+    non-operator) is denied 403 at the permission gate — re-enable must never be
+    reachable by a runner/viewer (FAR-191 spec item 3)."""
+    trigger = _make_mock_trigger(trigger_type="ongoing", active=False, daily_spend_limit=Decimal(25))
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        client.app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="viewer", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
+        )
+        resp = client.post(f"/api/v1/triggers/{_TRIGGER_ID}/toggle", json={})
+
+    assert resp.status_code == 403
+    assert "operator" in resp.json()["detail"]
+    client.app.dependency_overrides[get_current_user] = app.dependency_overrides[get_current_user]
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_toggle_deactivated_trigger_operator_reenables(client: TestClient) -> None:
+    """Re-enabling a deactivated ongoing trigger (operator) succeeds, re-anchors
+    the streak epoch, clears the FAR-158 config-failure Redis counter, and the
+    response surfaces the refreshed (reset) streak_status."""
+    trigger = _make_mock_trigger(trigger_type="ongoing", active=False, daily_spend_limit=Decimal(25))
+    streak_status = _full_streak_status(streak=0, state="ok", deactivated_reason=None, last_outcomes=[])
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("modulo.api.routes.triggers.anchor_trigger_streak_epoch", new_callable=AsyncMock) as anchor,
+        patch("modulo.api.routes.triggers.clear_trigger_streak_after_reenable", new_callable=AsyncMock) as clear,
+        patch(
+            "modulo.api.routes.triggers.get_trigger_streak_status",
+            new_callable=AsyncMock,
+            return_value=streak_status,
+        ),
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.post(f"/api/v1/triggers/{_TRIGGER_ID}/toggle", json={})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["active"] is True
+    assert body["streak_status"] == streak_status
+    anchor.assert_awaited_once()
+    clear.assert_awaited_once()
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_restore_trigger_returns_streak_status(client: TestClient) -> None:
+    """The restore (re-enable) response surfaces streak_status for ongoing
+    triggers — the operator sees the reset streak immediately."""
+    trigger = _make_mock_trigger(trigger_type="ongoing", active=True, daily_spend_limit=Decimal(25))
+    streak_status = _full_streak_status(streak=0, state="ok")
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("modulo.db.crud.trigger.restore_trigger", return_value=trigger),
+        patch(
+            "modulo.api.routes.triggers.get_trigger_streak_status",
+            new_callable=AsyncMock,
+            return_value=streak_status,
+        ),
+    ):
+        resp = client.post(f"/api/v1/triggers/{_TRIGGER_ID}/restore")
+
+    assert resp.status_code == 200
+    assert resp.json()["streak_status"] == streak_status
+
+
 def test_trigger_type_regex_accepts_ongoing_and_agent_signal() -> None:
     from pydantic import ValidationError
 

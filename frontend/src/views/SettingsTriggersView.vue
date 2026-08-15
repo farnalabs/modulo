@@ -79,33 +79,61 @@
             </tr>
           </thead>
           <tbody class="divide-y">
-            <tr
-              v-for="t in items"
-              :key="t.id"
-              class="transition-colors hover:bg-muted/30"
-            >
-              <td class="px-4 py-3 font-medium">
-                {{ pipelineName(t.pipeline_id) }}
-              </td>
+            <template v-for="t in items" :key="t.id">
+              <tr class="transition-colors hover:bg-muted/30">
+                <td class="px-4 py-3 font-medium">
+                  {{ pipelineName(t.pipeline_id) }}
+                </td>
               <td class="px-4 py-3">
                 <span :class="typeBadgeClass(t.trigger_type)" class="badge">
                   {{ typeLabel(t.trigger_type) }}
                 </span>
               </td>
               <td class="px-4 py-3">
-                <button
-                  class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors disabled:opacity-50"
-                  :class="t.active ? 'bg-success/10 text-success hover:bg-success/20' : 'bg-muted text-muted-foreground hover:bg-muted/80'"
-                  :disabled="triggerToggling[t.id]"
-                  data-testid="settings-triggers-toggle"
-                  @click="toggleActive(t)"
-                >
+                <div class="flex flex-col items-start gap-1">
                   <span
-                    class="h-1.5 w-1.5 rounded-full"
-                    :class="t.active ? 'bg-success' : 'bg-muted-foreground'"
-                  />
-                  {{ triggerToggling[t.id] ? '...' : (t.active ? $t('views.SettingsTriggersView.active') : $t('views.SettingsTriggersView.inactive')) }}
-                </button>
+                    v-if="t.trigger_type === 'ongoing' && t.streak_status?.enabled"
+                    data-testid="settings-triggers-streak"
+                    :class="streakBadgeClass(t)"
+                    class="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium"
+                  >
+                    {{ $t('views.SettingsTriggersView.streak_display', { streak: t.streak_status.streak, threshold: t.streak_status.threshold }) }}
+                  </span>
+                  <span
+                    v-if="t.streak_status?.state === 'deactivated'"
+                    data-testid="settings-triggers-deactivated-badge"
+                    role="status"
+                    aria-live="polite"
+                    class="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2.5 py-0.5 text-xs font-medium text-destructive"
+                  >
+                    {{ $t('views.SettingsTriggersView.deactivated_badge', { reason: deactivatedReasonLabel(t) }) }}
+                  </span>
+                  <div class="flex items-center gap-2">
+                    <button
+                      class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors disabled:opacity-50"
+                      :class="t.active ? 'bg-success/10 text-success hover:bg-success/20' : 'bg-muted text-muted-foreground hover:bg-muted/80'"
+                      :disabled="triggerToggling[t.id]"
+                      data-testid="settings-triggers-toggle"
+                      @click="toggleActive(t)"
+                    >
+                      <span
+                        class="h-1.5 w-1.5 rounded-full"
+                        :class="t.active ? 'bg-success' : 'bg-muted-foreground'"
+                      />
+                      {{ triggerToggling[t.id] ? '...' : (t.active ? $t('views.SettingsTriggersView.active') : $t('views.SettingsTriggersView.inactive')) }}
+                    </button>
+                    <Button
+                      v-if="isDeactivatedOngoing(t) && isOrgOperator"
+                      data-testid="settings-triggers-reenable"
+                      size="sm"
+                      variant="outline"
+                      :disabled="triggerToggling[t.id]"
+                      @click="toggleActive(t)"
+                    >
+                      {{ $t('views.SettingsTriggersView.re_enable') }}
+                    </Button>
+                  </div>
+                </div>
               </td>
               <td class="px-4 py-3 text-muted-foreground">
                 {{ formatTimestamp(t.last_fired_at ?? null) }}
@@ -114,9 +142,42 @@
                 {{ formatTimestamp(t.next_fire_at ?? null) }}
               </td>
               <td class="px-4 py-3 text-right">
-                <TableActions :actions="triggerActions(t)" />
+                <div class="flex items-center justify-end gap-2">
+                  <TableActions :actions="triggerActions(t)" />
+                  <button
+                    v-if="hasOutcomes(t)"
+                    data-testid="settings-triggers-outcomes-toggle"
+                    class="text-xs text-muted-foreground hover:text-foreground"
+                    :aria-expanded="expandedOutcomes.has(t.id)"
+                    :aria-controls="`outcomes-${t.id}`"
+                    @click="toggleOutcomes(t.id)"
+                  >
+                    {{ expandedOutcomes.has(t.id) ? $t('views.SettingsTriggersView.hide_outcomes') : $t('views.SettingsTriggersView.show_outcomes') }}
+                  </button>
+                </div>
               </td>
-            </tr>
+              </tr>
+              <tr v-if="expandedOutcomes.has(t.id) && hasOutcomes(t)" :id="`outcomes-${t.id}`" class="bg-muted/20">
+                <td :colspan="6" class="px-4 py-3">
+                  <p class="text-xs font-medium uppercase text-muted-foreground">
+                    {{ $t('views.SettingsTriggersView.recent_outcomes') }}
+                  </p>
+                  <ul class="mt-2 space-y-1">
+                    <li
+                      v-for="(o, i) in t.streak_status?.last_outcomes ?? []"
+                      :key="o.run_id || i"
+                      class="flex items-center gap-2 text-xs"
+                    >
+                      <span :class="outcomeBadgeClass(o.classification)" class="rounded-full px-2 py-0.5 font-medium">
+                        {{ outcomeLabel(o.classification) }}
+                      </span>
+                      <span class="text-muted-foreground">{{ o.reason || '—' }}</span>
+                      <span class="ml-auto text-muted-foreground">{{ formatTimestamp(o.completed_at ?? null) }}</span>
+                    </li>
+                  </ul>
+                </td>
+              </tr>
+            </template>
           </tbody>
         </table>
       </div>
@@ -449,6 +510,13 @@ function readJwtPayload(): JwtPayload | null {
 }
 
 const isOrgAdmin = computed(() => readJwtPayload()?.org_role === 'admin')
+// FAR-191: the re-enable action is operator-or-above (backend trigger.update
+// resolves to operator). Admins are operators too (viewer < runner < operator
+// < admin), so both are granted.
+const isOrgOperator = computed(() => {
+  const role = readJwtPayload()?.org_role
+  return role === 'operator' || role === 'admin'
+})
 const orgId = computed(() => readJwtPayload()?.org_id ?? '')
 
 const orgTriggersPaused = computed<boolean>(() => Boolean((triggersData.value as { triggers_paused?: boolean } | null)?.triggers_paused ?? false))
@@ -483,6 +551,22 @@ async function togglePauseAll() {
   }
 }
 
+interface StreakOutcome {
+  run_id?: string | null
+  classification?: string | null
+  reason?: string | null
+  completed_at?: string | null
+}
+
+interface StreakStatus {
+  enabled: boolean
+  streak: number
+  threshold: number
+  state: 'ok' | 'deactivated' | 'unconfigured'
+  deactivated_reason?: 'no_delivery_streak' | 'config_failure' | null
+  last_outcomes?: StreakOutcome[]
+}
+
 interface TriggerItem {
   id: string
   pipeline_id: string
@@ -495,6 +579,7 @@ interface TriggerItem {
   cron_timezone?: string | null
   last_fired_at?: string | null
   next_fire_at?: string | null
+  streak_status?: StreakStatus
 }
 type PipelineItem = components['schemas']['PipelineResponse']
 
@@ -544,6 +629,7 @@ const saving = ref(false)
 const deleting = ref(false)
 const formError = ref<string | null>(null)
 const deleteTarget = ref<TriggerItem | null>(null)
+const expandedOutcomes = ref<Set<string>>(new Set())
 
 const defaultForm: TriggerForm = {
   pipeline_id: '',
@@ -607,6 +693,51 @@ function formatTimestamp(ts: string | null): string {
 function pipelineName(id: string): string {
   const p = pipelines.value.find(p => p.id === id)
   return p ? p.name : shortId(id)
+}
+
+function isDeactivatedOngoing(trigger: TriggerItem): boolean {
+  return trigger.trigger_type === 'ongoing' && trigger.streak_status?.state === 'deactivated'
+}
+
+function streakBadgeClass(trigger: TriggerItem): string {
+  const s = trigger.streak_status
+  if (!s) return 'bg-muted text-muted-foreground'
+  // Approaching deactivation: streak at threshold-1 or beyond gets a warning tint.
+  if (s.enabled && s.threshold > 0 && s.streak >= s.threshold - 1) return 'bg-amber-500/10 text-amber-600'
+  return 'bg-muted text-muted-foreground'
+}
+
+function deactivatedReasonLabel(trigger: TriggerItem): string {
+  const reason = trigger.streak_status?.deactivated_reason
+  if (reason === 'config_failure') return t('views.SettingsTriggersView.deactivated_reason_config_failure')
+  return t('views.SettingsTriggersView.deactivated_reason_no_delivery')
+}
+
+function hasOutcomes(trigger: TriggerItem): boolean {
+  return Boolean(trigger.streak_status?.last_outcomes?.length)
+}
+
+function toggleOutcomes(id: string): void {
+  const next = new Set(expandedOutcomes.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  expandedOutcomes.value = next
+}
+
+function outcomeBadgeClass(classification: string | null | undefined): string {
+  if (classification === 'delivered') return 'bg-success/10 text-success'
+  if (classification === 'no_delivery') return 'bg-amber-500/10 text-amber-600'
+  return 'bg-muted text-muted-foreground'
+}
+
+function outcomeLabel(classification: string | null | undefined): string {
+  const labels: Record<string, string> = {
+    delivered: t('views.SettingsTriggersView.outcome_delivered'),
+    no_delivery: t('views.SettingsTriggersView.outcome_no_delivery'),
+    excluded: t('views.SettingsTriggersView.outcome_excluded'),
+    unclassified: t('views.SettingsTriggersView.outcome_unclassified'),
+  }
+  return classification ? labels[classification] || classification : '\u2014'
 }
 
 function resetForm() {

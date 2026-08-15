@@ -376,3 +376,136 @@ describe('SettingsTriggersView — ongoing trigger (FAR-158)', () => {
     expect(options.body.config_json.input_template).toEqual({ topic: 'security' })
   })
 })
+
+describe('SettingsTriggersView — FAR-191 streak surfacing + operator re-enable', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  const streakStatus = (over: Record<string, unknown> = {}) => ({
+    enabled: true,
+    streak: 3,
+    threshold: 5,
+    state: 'ok',
+    deactivated_reason: null,
+    last_outcomes: [],
+    ...over,
+  })
+
+  const ongoing = (over: Record<string, unknown> = {}) => ({
+    id: 'trig-ongoing-1',
+    pipeline_id: 'p1',
+    trigger_type: 'ongoing',
+    active: true,
+    max_concurrent_runs: 4,
+    daily_spend_limit: 50,
+    config_json: { scan_interval_seconds: 300, input_template: { topic: 'security' } },
+    streak_status: streakStatus(),
+    ...over,
+  })
+
+  const deactivated = (over: Record<string, unknown> = {}) =>
+    ongoing({
+      active: false,
+      streak_status: streakStatus({ streak: 5, state: 'deactivated', deactivated_reason: 'no_delivery_streak' }),
+      ...over,
+    })
+
+  it('shows the x/N streak badge for an enabled ongoing trigger', async () => {
+    const wrapper = mountView(fakeJwt('admin'), { ...baseListData, items: [ongoing()] })
+    await flush()
+
+    const badge = wrapper.find('[data-testid="settings-triggers-streak"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.text()).toContain('3/5')
+  })
+
+  it('does not show a streak badge for non-ongoing triggers or disabled engines', async () => {
+    const wrapper = mountView(fakeJwt('admin'), {
+      ...baseListData,
+      items: [
+        { id: 't-cron', pipeline_id: 'p1', trigger_type: 'cron', active: true, config_json: {} },
+        ongoing({ streak_status: { enabled: false, streak: 0, threshold: 5, state: 'unconfigured', deactivated_reason: null, last_outcomes: [] } }),
+      ],
+    })
+    await flush()
+
+    expect(wrapper.findAll('[data-testid="settings-triggers-streak"]')).toHaveLength(0)
+  })
+
+  it('warns when the streak approaches the deactivation threshold', async () => {
+    const wrapper = mountView(fakeJwt('admin'), {
+      ...baseListData,
+      items: [ongoing({ streak_status: streakStatus({ streak: 4, state: 'ok' }) })],
+    })
+    await flush()
+
+    const badge = wrapper.find('[data-testid="settings-triggers-streak"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.classes()).toContain('text-amber-600')
+  })
+
+  it('shows the deactivated badge with reason (a11y: role=status) for a deactivated ongoing trigger', async () => {
+    const wrapper = mountView(fakeJwt('admin'), { ...baseListData, items: [deactivated()] })
+    await flush()
+
+    const badge = wrapper.find('[data-testid="settings-triggers-deactivated-badge"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.attributes('role')).toBe('status')
+    expect(badge.attributes('aria-live')).toBe('polite')
+    expect(badge.text()).toContain('Deactivated')
+  })
+
+  it('operator sees the re-enable button for a deactivated ongoing trigger and it toggles back on', async () => {
+    const wrapper = mountView(fakeJwt('admin'), { ...baseListData, items: [deactivated()] })
+    await flush()
+
+    const btn = wrapper.find('[data-testid="settings-triggers-reenable"]')
+    expect(btn.exists()).toBe(true)
+    await btn.trigger('click')
+    await flush()
+
+    expect(api.POST).toHaveBeenCalledTimes(1)
+    const [url, options] = (api.POST as any).mock.calls[0]
+    expect(url).toBe('/api/v1/triggers/{trigger_id}/toggle')
+    expect(options.params.path.trigger_id).toBe('trig-ongoing-1')
+  })
+
+  it('non-operator (viewer) does NOT see the re-enable button for a deactivated ongoing trigger', async () => {
+    const wrapper = mountView(fakeJwt('viewer'), { ...baseListData, items: [deactivated()] })
+    await flush()
+
+    expect(wrapper.find('[data-testid="settings-triggers-reenable"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="settings-triggers-deactivated-badge"]').exists()).toBe(true)
+  })
+
+  it('shows the last-N outcomes in an expandable detail', async () => {
+    const wrapper = mountView(fakeJwt('admin'), {
+      ...baseListData,
+      items: [
+        ongoing({
+          streak_status: streakStatus({
+            streak: 2,
+            last_outcomes: [
+              { run_id: 'r1', classification: 'no_delivery', reason: 'no_work', completed_at: '2026-08-01T00:00:00Z' },
+              { run_id: 'r2', classification: 'delivered', reason: 'pr_merged', completed_at: '2026-08-01T01:00:00Z' },
+            ],
+          }),
+        }),
+      ],
+    })
+    await flush()
+
+    const toggle = wrapper.find('[data-testid="settings-triggers-outcomes-toggle"]')
+    expect(toggle.exists()).toBe(true)
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+
+    await toggle.trigger('click')
+    await flush()
+
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+    expect(wrapper.text()).toContain('no_work')
+    expect(wrapper.text()).toContain('pr_merged')
+  })
+})
