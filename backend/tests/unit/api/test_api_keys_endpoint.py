@@ -419,8 +419,12 @@ def test_create_api_key_calls_set_rls_user_context(client: TestClient) -> None:
         patch("modulo.api.routes.api_keys.set_rls_user_context") as mock_ctx,
     ):
         client.post("/api/v1/api-keys", json={"name": "k", "role": "operator"})
-    mock_org.assert_awaited_once()
-    mock_ctx.assert_awaited_once_with(ANY, _USER_ID, "admin")
+    # set_rls_* is re-established in the fresh audit transaction (SET LOCAL
+    # reverts on COMMIT), so each helper is awaited twice: the main create tx
+    # and the api_key_created audit tx.
+    assert mock_org.await_count == 2
+    assert mock_ctx.await_count == 2
+    mock_ctx.assert_awaited_with(ANY, _USER_ID, "admin")
 
 
 def test_list_api_keys_calls_set_rls_user_context(client: TestClient) -> None:

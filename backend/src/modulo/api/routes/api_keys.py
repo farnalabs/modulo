@@ -227,9 +227,13 @@ async def create_api_key_endpoint(
 
     # PRD §8.12 ``api_key_created``: key minting was never audited. Written in a
     # fresh transaction (the create above already committed) and failure-isolated
-    # so a broken audit append never blocks a successful key creation.
+    # so a broken audit append never blocks a successful key creation. RLS context
+    # (SET LOCAL) reverts on COMMIT, so it must be re-established in this fresh
+    # transaction or the STRICT-RLS audit INSERT is rejected (see admin_create_team).
     try:
         async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             await append_audit_event(
                 session,
                 org_id=principal.organisation_id,
@@ -434,9 +438,13 @@ async def revoke_api_key_endpoint(
 
     # PRD §8.12 ``api_key_revoked``: key revocation was never audited. Written in
     # a fresh transaction (the revoke above already committed) and failure-isolated
-    # so a broken audit append never fails a completed revocation.
+    # so a broken audit append never fails a completed revocation. RLS context
+    # (SET LOCAL) reverts on COMMIT, so it must be re-established in this fresh
+    # transaction or the STRICT-RLS audit INSERT is rejected (see admin_create_team).
     try:
         async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             await append_audit_event(
                 session,
                 org_id=principal.organisation_id,
