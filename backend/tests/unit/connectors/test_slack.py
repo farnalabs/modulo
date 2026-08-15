@@ -775,6 +775,34 @@ async def test_channel_members_missing_channel(connector):
 
 
 @respx.mock
+async def test_channel_members_corrupt_cursor(connector):
+    """A corrupt/hostile response placing a non-dict in ``response_metadata``
+    (or a non-string in ``next_cursor``) must not crash pagination — the cursor
+    falls back to ``None`` instead of leaking into the next request."""
+    respx.get("https://slack.com/api/conversations.members").mock(
+        return_value=httpx.Response(
+            200,
+            json={"ok": True, "members": ["U001"], "response_metadata": ["garbage"]},
+        ),
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="channel_members", filters={"channel": "C001"}),
+    )
+    assert result.next_cursor is None
+
+    respx.get("https://slack.com/api/conversations.members").mock(
+        return_value=httpx.Response(
+            200,
+            json={"ok": True, "members": ["U001"], "response_metadata": {"next_cursor": {"page": 2}}},
+        ),
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="channel_members", filters={"channel": "C001"}),
+    )
+    assert result.next_cursor is None
+
+
+@respx.mock
 async def test_channel_members_api_error(connector):
     respx.get("https://slack.com/api/conversations.members").mock(
         return_value=httpx.Response(200, json={"ok": False, "error": "not_in_channel"}),
@@ -817,6 +845,34 @@ async def test_thread_replies_missing_channel(connector):
         await connector.query(
             ConnectorQuery(resource="thread_replies", filters={"thread_ts": "123456.000001"}),
         )
+
+
+@respx.mock
+async def test_thread_replies_corrupt_cursor(connector):
+    """A corrupt/hostile response placing a non-dict in ``response_metadata``
+    (or a non-string in ``next_cursor``) must not crash pagination — the cursor
+    falls back to ``None`` instead of leaking into the next request."""
+    respx.get("https://slack.com/api/conversations.replies").mock(
+        return_value=httpx.Response(
+            200,
+            json={"ok": True, "messages": [], "response_metadata": "garbage"},
+        ),
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="thread_replies", filters={"channel": "C001", "thread_ts": "123456.000001"}),
+    )
+    assert result.next_cursor is None
+
+    respx.get("https://slack.com/api/conversations.replies").mock(
+        return_value=httpx.Response(
+            200,
+            json={"ok": True, "messages": [], "response_metadata": {"next_cursor": False}},
+        ),
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="thread_replies", filters={"channel": "C001", "thread_ts": "123456.000001"}),
+    )
+    assert result.next_cursor is None
 
 
 @respx.mock

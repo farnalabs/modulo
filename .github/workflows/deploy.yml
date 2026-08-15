@@ -245,11 +245,13 @@ jobs:
           if [ -n "$PR_NUMBER" ]; then
             echo "Reusing existing PR #${PR_NUMBER} for ${BRANCH}"
           else
-            PR_NUMBER="$(gh pr create --base main --head "${BRANCH}" \
+            PR_URL="$(gh pr create --base main --head "${BRANCH}" \
               --title "fix(deploy): resolve pre-deploy test failures at ${SHORT_SHA}" \
               --body "Auto-created by deploy.yml notify-deploy-failure. Pre-deploy tests failed on main at ${GITHUB_SHA}. Failed step(s): ${FAILED_STEPS}. The Branch Fixer will resolve the failure autonomously." \
-              --label "agent-generated" \
-              --json number --jq '.number')"
+              --label "agent-generated")"
+            # `gh pr create` prints the PR URL; `--json` on pr create needs
+            # gh >= 2.52, so extract the number from the URL for older runners.
+            PR_NUMBER="$(printf '%s' "${PR_URL}" | grep -oE '[0-9]+$')"
             echo "Created PR #${PR_NUMBER} from ${BRANCH}"
           fi
           echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"

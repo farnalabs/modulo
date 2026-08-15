@@ -59,11 +59,14 @@ regression that silently weakens the suite:
   list/dict/set literals are freshly allocated on every evaluation, so the
   comparison can never hold (``is``) or can never fail (``is not``) and is
   dead either way (Python 3.8+ also emits a SyntaxWarning for it)
-- redundant ``assert <mock>.called`` right before the test inspects the same
-  mock's recorded calls (``<mock>.calls[0]``/``<mock>.call_args[0]``) — the
+- redundant call assertions right before the test inspects the same mock's
+  recorded calls (``<mock>.calls[0]``/``<mock>.call_args[0]``) — the
   introspection access that follows already fails loudly when the call never
-  happened, so the ``.called`` assert is dead code that can silently drift out
-  of sync with what the test actually inspects
+  happened, so the assertion is dead code that can silently drift out of sync
+  with what the test actually inspects. Both spellings are covered: the
+  statement form ``assert <mock>.called`` and the method-call form
+  ``<mock>.assert_called()`` / ``<mock>.assert_awaited()`` (the ``_once``
+  variants add the "exactly one call" guarantee and are left alone)
 - membership tests against an empty container literal (``assert x in []``,
   ``assert x not in {}``, ``assert x in ()``) — an empty container can never
   contain anything, so ``in`` always FAILS and ``not in`` always PASSES no
@@ -1645,57 +1648,81 @@ def test_identity_literal_lens_flags_tautologies():
         assert not _identity_literal_tautologies(tree), f"lens should NOT flag:\n{source}"
 
 
-_MOCK_CALL_INTROSPECTION = frozenset({"calls", "call_args", "call_args_list", "call_count"})
+_MOCK_CALL_INTROSPECTION = frozenset(
+    {"calls", "call_args", "call_args_list", "call_count", "await_args", "await_args_list", "await_count"}
+)
 """Mock attributes that inspect the recorded calls after the fact. Accessing
-``<mock>.calls[0]``/``<mock>.call_args[0]`` fails loudly (``IndexError``/
-``AttributeError``) when the call never happened, so a ``.called`` assertion
-immediately before such an access is dead — it duplicates the check the
-introspection access already performs, and can silently drift out of sync with
-what the test actually inspects."""
+``<mock>.calls[0]``/``<mock>.call_args[0]`` (or the ``await_*`` twins for
+AsyncMock) fails loudly (``IndexError``/``AttributeError``) when the call never
+happened, so a call assertion immediately before such an access is dead — it
+duplicates the check the introspection access already performs, and can
+silently drift out of sync with what the test actually inspects."""
+
+_MOCK_WEAK_ASSERT_METHODS = frozenset({"assert_called", "assert_awaited"})
+"""Mock assertion methods that verify only "called at least once" — the
+method-call twin of ``assert <mock>.called``. They add nothing over the
+introspection access that follows (which already fails loudly when the call
+never happened). The ``_once``/``_with`` variants are deliberately NOT in this
+set: ``assert_called_once`` adds the "exactly one call" guarantee and
+``assert_called_with`` pins the arguments, so neither is redundant."""
 
 
 def _redundant_called_assertions(tree: ast.AST) -> list[tuple[int, str]]:
-    """Return ``(lineno, detail)`` pairs for every ``assert <mock>.called`` that
-    is immediately followed by an introspection access on the same mock."""
+    """Return ``(lineno, detail)`` pairs for every weak call assertion —
+    ``assert <mock>.called`` or ``<mock>.assert_called()``/
+    ``<mock>.assert_awaited()`` — that is immediately followed by an
+    introspection access on the same mock."""
     found = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         for i, stmt in enumerate(node.body[:-1]):
-            test = stmt.test if isinstance(stmt, ast.Assert) else None
-            if not isinstance(test, ast.Attribute) or test.attr != "called":
-                continue
-            base = test.value
-            if not isinstance(base, (ast.Attribute, ast.Name)):
+            base = None
+            if isinstance(stmt, ast.Assert) and isinstance(stmt.test, ast.Attribute) and stmt.test.attr == "called":
+                base = stmt.test.value
+            elif isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+                f = stmt.value.func
+                if isinstance(f, ast.Attribute) and f.attr in _MOCK_WEAK_ASSERT_METHODS:
+                    base = f.value
+            if base is None or not isinstance(base, (ast.Attribute, ast.Name)):
                 continue
             nxt = node.body[i + 1]
             nxt_attrs = [
                 sub for sub in ast.walk(nxt) if isinstance(sub, ast.Attribute) and sub.attr in _MOCK_CALL_INTROSPECTION
             ]
             if any(ast.dump(sub.value) == ast.dump(base) for sub in nxt_attrs):
-                found.append(
-                    (
-                        stmt.lineno,
+                if isinstance(stmt, ast.Assert):
+                    detail = (
                         f"assert {ast.unparse(base)}.called is redundant — the "
                         f"following {ast.unparse(base)}.<calls>/<call_args> access already "
-                        "fails loudly when no call was recorded",
+                        "fails loudly when no call was recorded"
                     )
-                )
+                else:
+                    detail = (
+                        f"{ast.unparse(stmt.value)} is redundant — the "
+                        f"following {ast.unparse(base)}.<calls>/<call_args>/<await_args> "
+                        "access already fails loudly when no call was recorded"
+                    )
+                found.append((stmt.lineno, detail))
     return found
 
 
 def test_no_redundant_called_assertions():
-    """``assert <mock>.called`` immediately before the test inspects the same
-    mock's recorded calls (``<mock>.calls[0]``, ``<mock>.call_args[0]``, ...) is
-    dead code: the introspection access that follows fails loudly — an
-    ``IndexError`` on ``calls[0]``/``call_args[0]``, an empty ``call_args_list``
-    that makes later ``in``-style assertions fail — if the call never happened.
-    The ``.called`` assert therefore duplicates the very check the next line
-    performs, and because the two can drift apart (asserting one mock's
-    ``.called`` while inspecting a *different* call path), it quietly gives a
-    false sense of rigour. Drop the assert and keep the introspection access.
-    The lens only flags bare ``assert <x>.called`` used positively; a negated
-    ``assert not <x>.called`` is a genuine no-call check and is left alone."""
+    """A weak call assertion — ``assert <mock>.called`` or the method-call twin
+    ``<mock>.assert_called()``/``<mock>.assert_awaited()`` — immediately before
+    the test inspects the same mock's recorded calls (``<mock>.calls[0]``,
+    ``<mock>.call_args[0]``, ``<mock>.await_args``, ...) is dead code: the
+    introspection access that follows fails loudly — an ``IndexError`` on
+    ``calls[0]``/``call_args[0]``, an empty ``call_args_list`` that makes later
+    ``in``-style assertions fail — if the call never happened. The weak assert
+    therefore duplicates the very check the next line performs, and because the
+    two can drift apart (asserting one mock's call status while inspecting a
+    *different* call path), it quietly gives a false sense of rigour. Drop the
+    assert and keep the introspection access. The lens only flags the weak
+    positive forms; ``assert not <mock>.called`` /
+    ``<mock>.assert_not_called()`` are genuine no-call checks, and the ``_once``
+    variants (``assert_called_once``/``assert_awaited_once``) add the "exactly
+    one call" guarantee — both are left alone."""
     violations = []
     for path in _iter_test_modules():
         tree = _parse(path)
@@ -1705,24 +1732,31 @@ def test_no_redundant_called_assertions():
         for lineno, detail in _redundant_called_assertions(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
     assert not violations, (
-        f"Found {len(violations)} redundant 'assert <mock>.called' assertion(s).\n"
-        "The immediately following <mock>.calls[0]/<mock>.call_args access already fails "
-        "loudly when the call never happened, so the .called assert is dead code.\n"
+        f"Found {len(violations)} redundant call assertion(s).\n"
+        "The immediately following <mock>.calls[0]/<mock>.call_args/<mock>.await_args access already fails "
+        "loudly when the call never happened, so the weak assert is dead code.\n"
         "Drop the redundant assert and keep the introspection access.\n" + "\n".join(violations)
     )
 
 
 def test_redundant_called_lens_flags_dead_asserts():
-    """Synthetic positive/negative control for the redundant-``.called`` lens,
-    mirroring the identity-literal lens pattern: it must flag a bare
-    ``assert <mock>.called`` that is immediately followed by a recorded-calls
-    access on the same mock, and ignore negated no-call checks, ``.called``
-    without a follow-up introspection, and introspection on a different mock."""
+    """Synthetic positive/negative control for the redundant-call lens,
+    mirroring the identity-literal lens pattern: it must flag a weak call
+    assertion — ``assert <mock>.called`` OR ``<mock>.assert_called()`` /
+    ``<mock>.assert_awaited()`` — that is immediately followed by a
+    recorded-calls access on the same mock, and ignore negated no-call checks,
+    the ``_once`` variants (which add the "exactly one call" guarantee), weak
+    asserts without a follow-up introspection, and introspection on a different
+    mock."""
     positive_sources = [
         "def test_foo():\n    assert route.called\n    assert route.calls[0].request.url.endswith('/x')\n",
         "def test_foo():\n    assert session.add.called\n    row = session.add.call_args.args[0]\n",
         "def test_foo():\n    assert mock.execute.called\n    calls = mock.execute.call_args_list\n",
         "def test_foo():\n    assert response.called\n    response.calls[0]\n",
+        "def test_foo():\n    mock_append.assert_called()\n    call = mock_append.call_args\n",
+        "def test_foo():\n    mock_consume.assert_awaited()\n    assert mock_consume.await_args.kwargs['x'] == 1\n",
+        "def test_foo():\n    reenqueue.assert_awaited()\n    assert reenqueue.await_count == 2\n",
+        "def test_foo():\n    mock.execute.assert_called()\n    calls = mock.execute.calls\n",
     ]
     for source in positive_sources:
         tree = ast.parse(source)
@@ -1734,6 +1768,11 @@ def test_redundant_called_lens_flags_dead_asserts():
         "def test_foo():\n    assert mock.called\n    mock.other_attr\n",
         "def test_foo():\n    assert mock.called\n    other.calls[0]\n",
         "def test_foo():\n    assert mock.called\n    return\n    mock.calls[0]\n",
+        "def test_foo():\n    mock.assert_called_once()\n    call = mock.call_args\n",
+        "def test_foo():\n    mock.assert_awaited_once()\n    call = mock.await_args\n",
+        "def test_foo():\n    mock.assert_not_called()\n",
+        "def test_foo():\n    mock.assert_called()\n    other.call_args\n",
+        "def test_foo():\n    mock.assert_called_with(1, 2)\n    call = mock.call_args\n",
     ]
     for source in negative_sources:
         tree = ast.parse(source)

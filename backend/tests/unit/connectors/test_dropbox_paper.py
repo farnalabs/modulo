@@ -139,6 +139,40 @@ async def test_query_docs_with_cursor(connector):
     assert sent["cursor"] == "page_token"
 
 
+@respx.mock
+async def test_query_docs_corrupt_cursor(connector):
+    """A corrupt/hostile response placing a non-dict in ``cursor`` (or a
+    non-string in ``cursor.value``) must not crash pagination — the cursor
+    falls back to ``None`` instead of leaking into the next request."""
+    respx.post(f"{_BASE}/paper/docs/list").mock(
+        return_value=_mock_response(json={"doc_ids": ["doc1"], "cursor": ["garbage"]})
+    )
+    result = await connector.query(ConnectorQuery(resource="docs", filters={"filter_by": "docs_created"}))
+    assert len(result.records) == 1
+    assert result.next_cursor is None
+
+    respx.post(f"{_BASE}/paper/docs/list").mock(
+        return_value=_mock_response(json={"doc_ids": [], "cursor": {"value": {"offset": 2}}})
+    )
+    result = await connector.query(ConnectorQuery(resource="docs", filters={"filter_by": "docs_created"}))
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_folders_corrupt_cursor(connector):
+    """A corrupt/hostile response placing a non-dict/non-string in ``cursor``
+    must not leak it into the result as a pagination cursor."""
+    respx.post(f"{_BASE}/files/list_folder").mock(return_value=_mock_response(json={"entries": [], "cursor": 123}))
+    result = await connector.query(ConnectorQuery(resource="folders", filters={"path": "/Paper"}))
+    assert result.next_cursor is None
+
+    respx.post(f"{_BASE}/files/list_folder").mock(
+        return_value=_mock_response(json={"entries": [], "cursor": {"value": ["bad"]}})
+    )
+    result = await connector.query(ConnectorQuery(resource="folders", filters={"path": "/Paper"}))
+    assert result.next_cursor is None
+
+
 async def test_query_unsupported_resource(connector):
     with pytest.raises(ValueError, match="Unsupported Dropbox Paper resource"):
         await connector.query(ConnectorQuery(resource="users"))

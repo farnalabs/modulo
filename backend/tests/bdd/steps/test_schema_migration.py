@@ -320,7 +320,6 @@ def step_migrated_data_no_longer_contains(field: str, request):
 def step_audit_event_recorded(event_type: str, request):
     mock_append = getattr(request.node, "_audit_append", None)
     assert mock_append is not None, "append_audit_event was not patched for this scenario"
-    mock_append.assert_awaited()
     call = mock_append.await_args
     assert call.kwargs.get("event_type") == event_type, f"Expected event_type {event_type}, got {call.kwargs}"
 
@@ -329,7 +328,6 @@ def step_audit_event_recorded(event_type: str, request):
 def step_audit_event_recorded_dry_run(event_type: str, request):
     mock_append = getattr(request.node, "_audit_append", None)
     assert mock_append is not None, "append_audit_event was not patched for this scenario"
-    mock_append.assert_awaited()
     call = mock_append.await_args
     assert call.kwargs.get("event_type") == event_type, f"Expected event_type {event_type}, got {call.kwargs}"
     payload = call.kwargs.get("payload_json") or {}
