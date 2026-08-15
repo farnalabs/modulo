@@ -1,9 +1,11 @@
 """SharePointConnector — async Microsoft Graph API connector for SharePoint."""
 
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 
+from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -33,6 +35,39 @@ class SharePointConnector(ConnectorBase):
 
     _BASE_URL = "https://graph.microsoft.com/v1.0"
 
+    def _list_records(self, body: object) -> list[dict[str, Any]]:
+        """Safely extract the Graph ``value`` page from a list response body.
+
+        A corrupt or hostile response may return a non-dict body (list, string,
+        number, ...) or a non-list ``value``. Both must fall back to an empty
+        page instead of crashing the connector with ``AttributeError`` on the
+        bare ``body.get("value", [])`` chain.
+        """
+        if not isinstance(body, dict):
+            return []
+        value = body.get("value", [])
+        return value if isinstance(value, list) else []
+
+    def _page(
+        self,
+        body: object,
+        limit: int,
+    ) -> tuple[list[dict[str, Any]], str | None, int]:
+        """Safely extract records, next cursor, and total from a list page.
+
+        ``@odata.nextLink`` pagination cursors are only emitted when the link
+        is a non-empty string carrying a non-empty ``$skiptoken``, mirroring
+        the microsoft_teams / Snyk cursor-hardening programme.
+        """
+        records = self._list_records(body)
+        next_cursor: str | None = None
+        if isinstance(body, dict):
+            next_link = body.get("@odata.nextLink", "")
+            if isinstance(next_link, str) and next_link:
+                skiptoken = parse_qs(urlparse(next_link).query).get("$skiptoken", [""])[0]
+                next_cursor = _safe_cursor(skiptoken)
+        return records[: limit or len(records)], next_cursor, len(records)
+
     def __init__(self, token: str) -> None:
         self._token = token
 
@@ -60,7 +95,7 @@ class SharePointConnector(ConnectorBase):
                 return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
 
             site_info = r.json()
-            display_name = site_info.get("displayName", "")
+            display_name = site_info.get("displayName", "") if isinstance(site_info, dict) else ""
             return HealthResult(ok=True, detail=display_name)
         except httpx.HTTPStatusError as exc:
             return HealthResult(
@@ -82,32 +117,43 @@ class SharePointConnector(ConnectorBase):
                     search = q.filters.get("search")
                     if search:
                         params["search"] = search
+                    if q.limit:
+                        params["$top"] = q.limit
+                    if q.cursor:
+                        params["$skiptoken"] = q.cursor
                     r = await client.get("/sites", params=params)
                     r.raise_for_status()
-                    body: dict[str, Any] = r.json()
-                    records: list[dict[str, Any]] = body.get("value", [])
-                    return ConnectorResult(records=records)
+                    records, next_cursor, total = self._page(r.json(), q.limit)
+                    return ConnectorResult(records=records, next_cursor=next_cursor, total=total)
 
                 case "lists":
                     site_id = q.filters.get("site_id")
                     if not site_id:
                         raise ValueError("SharePoint lists query requires 'site_id' filter")
-                    r = await client.get(f"/sites/{site_id}/lists")
+                    params = {}
+                    if q.limit:
+                        params["$top"] = q.limit
+                    if q.cursor:
+                        params["$skiptoken"] = q.cursor
+                    r = await client.get(f"/sites/{site_id}/lists", params=params)
                     r.raise_for_status()
-                    body = r.json()
-                    records = body.get("value", [])
-                    return ConnectorResult(records=records)
+                    records, next_cursor, total = self._page(r.json(), q.limit)
+                    return ConnectorResult(records=records, next_cursor=next_cursor, total=total)
 
                 case "list_items":
                     site_id = q.filters.get("site_id")
                     list_id = q.filters.get("list_id")
                     if not site_id or not list_id:
                         raise ValueError("SharePoint list_items query requires 'site_id' and 'list_id' filters")
-                    r = await client.get(f"/sites/{site_id}/lists/{list_id}/items")
+                    params = {}
+                    if q.limit:
+                        params["$top"] = q.limit
+                    if q.cursor:
+                        params["$skiptoken"] = q.cursor
+                    r = await client.get(f"/sites/{site_id}/lists/{list_id}/items", params=params)
                     r.raise_for_status()
-                    body = r.json()
-                    records = body.get("value", [])
-                    return ConnectorResult(records=records)
+                    records, next_cursor, total = self._page(r.json(), q.limit)
+                    return ConnectorResult(records=records, next_cursor=next_cursor, total=total)
 
                 case "drive":
                     site_id = q.filters.get("site_id")
@@ -116,13 +162,18 @@ class SharePointConnector(ConnectorBase):
                         raise ValueError("SharePoint drive query requires 'site_id' and 'drive_id' filters")
                     path = q.filters.get("path", "/")
                     if path == "/" or not path:
-                        r = await client.get(f"/sites/{site_id}/drives/{drive_id}/root/children")
+                        url = f"/sites/{site_id}/drives/{drive_id}/root/children"
                     else:
-                        r = await client.get(f"/sites/{site_id}/drives/{drive_id}/root:/{path.strip('/')}:/children")
+                        url = f"/sites/{site_id}/drives/{drive_id}/root:/{path.strip('/')}:/children"
+                    params = {}
+                    if q.limit:
+                        params["$top"] = q.limit
+                    if q.cursor:
+                        params["$skiptoken"] = q.cursor
+                    r = await client.get(url, params=params)
                     r.raise_for_status()
-                    body = r.json()
-                    records = body.get("value", [])
-                    return ConnectorResult(records=records)
+                    records, next_cursor, total = self._page(r.json(), q.limit)
+                    return ConnectorResult(records=records, next_cursor=next_cursor, total=total)
 
                 case "file":
                     site_id = q.filters.get("site_id")
