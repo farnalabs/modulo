@@ -161,7 +161,7 @@ class TestDeterministicStateMerge:
         assert [w["node_name"] for w in merged["_run_context_write_log"]] == ["branch-a", "branch-b"]
         # The reducer must not mutate its input (non-mutating contract).
         assert [a["node_id"] for a in current["artifacts"]] == ["seed"]
-        assert current["_run_context_write_log"] == []
+        assert not current["_run_context_write_log"]
 
     def test_non_dict_run_context_update_replaces(self) -> None:
         """A non-dict run_context update falls back to whole-key replacement."""
