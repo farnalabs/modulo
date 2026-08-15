@@ -228,9 +228,8 @@ class TestLoadEvalDefsForPipeline:
         # never detect a dropped `node_id IS NOT NULL` filter.
         stmt = session.execute.call_args[0][0]
         where_sql = str(stmt.whereclause) if stmt.whereclause is not None else ""
-        assert "node_id" in where_sql and "IS NOT NULL" in where_sql, (
-            f"loading query must filter node_id IS NOT NULL, got: {where_sql}"
-        )
+        assert "node_id" in where_sql, f"loading query must filter on node_id, got: {where_sql}"
+        assert "IS NOT NULL" in where_sql, f"loading query must filter node_id IS NOT NULL, got: {where_sql}"
 
 
 # ---------------------------------------------------------------------------
@@ -358,9 +357,8 @@ class TestCheckEvalSuites:
         assert captured, "expected the suite-loading query to be executed"
         stmt = captured[0]
         where_sql = str(stmt.whereclause) if stmt.whereclause is not None else ""
-        assert "pass_threshold" in where_sql and "IS NOT NULL" in where_sql, (
-            f"suite query must filter pass_threshold IS NOT NULL, got: {where_sql}"
-        )
+        assert "pass_threshold" in where_sql, f"suite query must filter on pass_threshold, got: {where_sql}"
+        assert "IS NOT NULL" in where_sql, f"suite query must filter pass_threshold IS NOT NULL, got: {where_sql}"
 
 
 # ---------------------------------------------------------------------------
