@@ -1,4 +1,4 @@
-"""22 canonical library agent primitives.
+"""23 canonical library agent primitives.
 
 Each dict follows the pattern established in
 :mod:`modulo.core.library.complexity_reviewer` — a
@@ -1506,6 +1506,132 @@ SPEC_IMPLEMENTER: dict[str, Any] = {
         },
     },
     "tags": ["implementer", "canonical", "library", "spec", "simplest-workflow"],
+    "version": "1.0.0",
+    "author": "Modulo",
+}
+
+# ---------------------------------------------------------------------------
+# 23. collection-reviewer
+# ---------------------------------------------------------------------------
+COLLECTION_REVIEWER: dict[str, Any] = {
+    "name": "Collection Reviewer",
+    "description": (
+        "Reviews a day of merged work on main as a single collection, not "
+        "PR-by-PR. Runs collection-level lenses — logical conflicts across "
+        "commits, duplicate utilities introduced by separate PRs, and "
+        "inconsistent conventions — that cannot be seen at individual PR "
+        "scope, and outputs a structured findings list."
+    ),
+    "node_type": "agent",
+    "role": "reviewer",
+    "prompt_template": (
+        "You are a collection-level code reviewer. A set of pull requests "
+        "merged into {base_branch} within the last {window_hours} hours is "
+        "presented to you as a single collection.\n\n"
+        "Individual PR reviews validate composition (the merge ref). Your job "
+        "is the blind spot they miss: validate main as a coherent codebase. "
+        "Review the collection as a whole and look for:\n\n"
+        "1. Logical conflict — two PRs touch the same concept inconsistently "
+        "(e.g. one renames a field and another keeps using the old name; two "
+        "stores write the same key with different shapes).\n"
+        "2. DRY across PRs — two PRs each introduce a similar utility, helper, "
+        "or error-handling pattern that should be one shared abstraction. "
+        "Grep the day's new functions and look for duplicate implementations.\n"
+        "3. Inconsistent conventions — three PRs each introduce a slightly "
+        "different error-handling or naming pattern for the same kind of code.\n\n"
+        "Commits:\n"
+        "{commits}\n\n"
+        "Merged diff:\n"
+        "{merged_diff}\n\n"
+        "Respond with a JSON object:\n"
+        "- findings: array of objects with:\n"
+        "  - lens: string — 'logical_conflict', 'dr_across_prs', or 'convention_drift'\n"
+        "  - severity: string — 'info'/'warning'/'critical'\n"
+        "  - description: string — what is inconsistent or duplicated\n"
+        "  - affected_files: array of strings — the files involved\n"
+        "  - affected_commits: array of strings — the commit subjects involved\n"
+        "  - suggested_fix: string — the single shared abstraction or reconciliation\n"
+        "- summary: string — one-paragraph overview of the day's coherence"
+    ),
+    "input_schema": {
+        "type": "object",
+        "required": ["commits", "merged_diff"],
+        "properties": {
+            "base_branch": {
+                "type": "string",
+                "description": "Branch reviewed as a whole, e.g. main",
+            },
+            "window_hours": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Review window in hours",
+            },
+            "commits": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["sha", "subject", "files_changed"],
+                    "properties": {
+                        "sha": {"type": "string", "description": "Commit SHA"},
+                        "subject": {"type": "string", "description": "Commit subject line"},
+                        "files_changed": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "File paths touched by the commit",
+                        },
+                    },
+                },
+                "description": "Commits merged into the base branch within the window",
+            },
+            "merged_diff": {
+                "type": "string",
+                "description": "Aggregated diff of all merged changes within the window",
+            },
+        },
+    },
+    "output_schema": {
+        "type": "object",
+        "required": ["findings", "summary"],
+        "properties": {
+            "findings": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["lens", "severity", "description", "affected_files", "suggested_fix"],
+                    "properties": {
+                        "lens": {
+                            "type": "string",
+                            "enum": ["logical_conflict", "dr_across_prs", "convention_drift"],
+                            "description": "Collection-level lens that surfaced the finding",
+                        },
+                        "severity": {
+                            "type": "string",
+                            "enum": ["info", "warning", "critical"],
+                            "description": "Severity of the finding",
+                        },
+                        "description": {"type": "string", "description": "What is inconsistent or duplicated"},
+                        "affected_files": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Files involved in the finding",
+                        },
+                        "affected_commits": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Commit subjects involved in the finding",
+                        },
+                        "suggested_fix": {
+                            "type": "string",
+                            "description": "Single shared abstraction or reconciliation",
+                        },
+                    },
+                },
+                "description": "Collection-level findings not visible at PR scope",
+            },
+            "summary": {"type": "string", "description": "Overview of the day's coherence"},
+        },
+    },
+    "tags": ["reviewer", "canonical", "library", "collection-review", "daily-reviewer"],
     "version": "1.0.0",
     "author": "Modulo",
 }

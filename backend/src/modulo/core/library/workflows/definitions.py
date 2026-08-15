@@ -1,4 +1,4 @@
-"""14 canonical library workflow primitives.
+"""15 canonical library workflow primitives.
 
 Each dict defines a pre-built pipeline template that combines agents,
 schemas, and connector bindings into a reusable workflow.
@@ -775,5 +775,74 @@ SIMPLEST_WORKFLOW: dict[str, Any] = {
         "test_command": "",
         "auto_commit": False,
         "max_iterations": 3,
+    },
+}
+
+# ---------------------------------------------------------------------------
+# 15. daily-reviewer
+# ---------------------------------------------------------------------------
+DAILY_REVIEWER: dict[str, Any] = {
+    "name": "Daily Reviewer",
+    "description": (
+        "Scheduled collection-level review of main as a whole. Gathers every "
+        "commit merged into the base branch within the review window, runs "
+        "collection-level lenses (logical conflicts, DRY across PRs, "
+        "convention drift) that CI cannot see at PR scope, groups the "
+        "findings into bounded work batches, raises one Linear ticket per "
+        "batch, and implements each batch as a pull request. Phase 1 loops "
+        "the batches sequentially (Ticket-to-PR pattern); Phase 2 upgrades to "
+        "parallel coders once fan-out lands."
+    ),
+    "version": "1.0.0",
+    "author": "Modulo",
+    "tags": ["reviewer", "daily", "collection", "review", "pr", "sdlc", "canonical"],
+    "pipeline_steps": [
+        {
+            "id": "commits-collection",
+            "agent": None,
+            "connector_binding": {"type": "source_control", "required": True},
+            "description": "Gather commits merged into the base branch within the review window "
+            "with per-commit diffstats",
+        },
+        {
+            "id": "collection-review",
+            "agent": "collection-reviewer",
+            "depends_on": ["commits-collection"],
+            "description": "Run collection-level lenses over the day's merged commits and output findings[]",
+        },
+        {
+            "id": "batch-grouping",
+            "agent": "ticket-writer",
+            "depends_on": ["collection-review"],
+            "connector_binding": {"type": "issue_tracking", "required": True},
+            "description": "Group findings into bounded work batches and raise one Linear ticket per batch",
+        },
+        {
+            "id": "batch-implementation",
+            "agent": None,
+            "depends_on": ["batch-grouping"],
+            "connector_binding": {"type": "source_control", "required": True},
+            "description": "Implement each batch sequentially (Phase 1; parallel coders once fan-out lands)",
+        },
+        {
+            "id": "pr-creation",
+            "agent": None,
+            "depends_on": ["batch-implementation"],
+            "connector_binding": {"type": "source_control", "required": True},
+            "description": "Create one pull request per implemented batch against the base branch",
+        },
+    ],
+    "default_config": {
+        "schedule": "cron(0 5 * * *)",
+        "review_window_hours": 24,
+        "base_branch": "main",
+        "max_findings_per_batch": 3,
+        "max_file_footprint_per_batch": 1,
+        "batch_size_hint": "S",
+        "phase": "sequential",
+        "branch_prefix": "daily-reviewer/",
+        "ticket_labels": ["daily-reviewer", "groomed"],
+        "auto_test": True,
+        "pr_template": "default",
     },
 }
