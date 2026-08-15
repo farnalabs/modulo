@@ -131,6 +131,13 @@ class Settings(BaseSettings):
     # terminalizes as ``failed`` with error_code ``agent.failed`` instead of
     # landing ``complete``. Rollout flag — agent-failure-ux-proposal §15.4.
     modulo_agent_failure_elevation_enabled: bool = Field(True, alias="MODULO_AGENT_FAILURE_ELEVATION_ENABLED")
+    # FAR-228 kill-switch for the sandbox idempotency gate (opt-in per node via
+    # PipelineGraphNode.delivery_sentinel). Consumed at BOTH guards: guard A
+    # (node_runner early skip) and guard B (executor retry suppression). When
+    # disabled the gate never fires and transient node failures retry exactly as
+    # before. NOTE the ``saq_e2b_idempotency`` anti-pattern below (declared,
+    # zero consumers) — this flag MUST stay consumed at both call sites.
+    modulo_idempotency_gate_enabled: bool = Field(True, alias="MODULO_IDEMPOTENCY_GATE_ENABLED")
     # Web UI auth — FAIL-CLOSED (system worker refuses to boot without both).
     saq_auth_password: str | None = Field(default=None, alias="SAQ_AUTH_PASSWORD", repr=False)
     saq_auth_username: str | None = Field(default=None, alias="SAQ_AUTH_USERNAME")

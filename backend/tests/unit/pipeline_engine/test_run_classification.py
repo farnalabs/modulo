@@ -30,6 +30,7 @@ from modulo.core.pipeline_engine.classify import (
     REASON_BUDGET_EXCEEDED,
     REASON_CANCELLED,
     REASON_DELIVERED,
+    REASON_DELIVERED_EMAIL,
     REASON_NEEDS_HUMAN,
     REASON_NO_WORK,
     REASON_PARSE_ERROR,
@@ -246,6 +247,124 @@ class TestPrUrlSources:
             raw_output_markers=_markers(_PR),
         )
         assert result.value == RunClassificationValue.no_delivery
+
+
+def _email_markers(*attempt_keys: str) -> dict[str, dict[str, Any]]:
+    """raw_output_markers where each marker carries delivery_done (FAR-228)."""
+    return {
+        key: {
+            "_modulo_marker": True,
+            "status": "failed",
+            "pr_url": "",
+            "parse_error": "email sent then sandbox crashed",
+            "attempt_key": key,
+            "delivery_done": True,
+        }
+        for key in attempt_keys
+    }
+
+
+class TestDeliveryDoneClassification:
+    """FAR-228: a complete run whose raw-output marker carries delivery_done is
+    classified delivered (REASON_DELIVERED_EMAIL) — the delivery was made even
+    though the node later failed/retried. pr_url STILL wins when both exist."""
+
+    def test_complete_with_delivery_done_marker_is_delivered(self) -> None:
+        result = classify_run(
+            "complete",
+            None,
+            outputs_json={},
+            telemetry_json={},
+            raw_output_markers=_email_markers("run:run-1:node:n1:1"),
+        )
+        assert result.value == RunClassificationValue.delivered
+        assert result.reason == REASON_DELIVERED_EMAIL
+
+    def test_complete_without_marker_still_no_work(self) -> None:
+        result = classify_run("complete", None, outputs_json={}, telemetry_json={})
+        assert result.value == RunClassificationValue.no_delivery
+        assert result.reason == REASON_NO_WORK
+
+    def test_real_pr_url_still_wins_over_email_marker(self) -> None:
+        """A valid pr_url takes precedence — a run that made a PR AND sent the
+        email records REASON_DELIVERED (pr_delivered), not email_delivered."""
+        result = classify_run(
+            "complete",
+            None,
+            outputs_json={"n1": _node_return_with_pr(_PR)},
+            telemetry_json={"n1": {}},
+            raw_output_markers=_email_markers("run:run-1:node:n1:1"),
+        )
+        assert result.value == RunClassificationValue.delivered
+        assert result.reason == REASON_DELIVERED
+        assert result.delivered_pr_urls == (_PR,)
+
+    def test_failed_with_delivery_done_marker_is_still_no_delivery(self) -> None:
+        """The email verdict only applies to the complete bucket — a failed run
+        remains countable no_delivery (mirrors the pr_url rule)."""
+        result = classify_run(
+            "failed",
+            "node.cancelled",
+            outputs_json={},
+            telemetry_json={},
+            raw_output_markers=_email_markers("run:run-1:node:n1:1"),
+        )
+        assert result.value == RunClassificationValue.no_delivery
+
+    def test_complete_with_success_path_marker_is_email_delivered(self) -> None:
+        """FAR-228 review fix: a marker persisted on the SUCCESS path (status
+        ``completed``, empty parse_error, exit_code 0 — the shape written by the
+        node's success-path retention) classifies a pr_url-less complete run as
+        delivered/email_delivered, NOT no_delivery/no_work. This is the
+        observable outcome the success marker must produce."""
+        result = classify_run(
+            "complete",
+            None,
+            outputs_json={},
+            telemetry_json={},
+            raw_output_markers={
+                "run:run-1:node:n1:1": {
+                    "_modulo_marker": True,
+                    "status": "completed",
+                    "summary": "Sandbox agent completed with delivery sentinel observed (idempotency gate)",
+                    "raw_output": "email sent\nEMAIL_SENT\n",
+                    "parse_error": "",
+                    "pr_url": "",
+                    "exit_code": 0,
+                    "stdout_length": 10,
+                    "stderr_length": 0,
+                    "attempt_key": "run:run-1:node:n1:1",
+                    "node_id": "n1",
+                    "delivery_done": True,
+                }
+            },
+        )
+        assert result.value == RunClassificationValue.delivered
+        assert result.reason == REASON_DELIVERED_EMAIL
+        assert not result.delivered_pr_urls
+
+    def test_complete_without_success_marker_still_no_work(self) -> None:
+        """FAR-228: without a delivery_done marker (and without pr_url) a
+        successful sentinel-free run stays no_delivery/no_work — the marker is
+        what flips the verdict, never the run status alone."""
+        result = classify_run(
+            "complete",
+            None,
+            outputs_json={},
+            telemetry_json={},
+            raw_output_markers={
+                "run:run-1:node:n1:1": {
+                    "_modulo_marker": True,
+                    "status": "completed",
+                    "parse_error": "",
+                    "pr_url": "",
+                    "attempt_key": "run:run-1:node:n1:1",
+                    "node_id": "n1",
+                }
+            },
+        )
+        assert result.value == RunClassificationValue.no_delivery
+        assert result.reason == REASON_NO_WORK
 
 
 class TestReasons:

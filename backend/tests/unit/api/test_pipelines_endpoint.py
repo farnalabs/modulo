@@ -423,6 +423,62 @@ def test_replace_pipeline_graph_accepts_manual_node_contract(client: TestClient)
         )
 
 
+def _sandbox_node_json() -> dict[str, object]:
+    return {
+        "id": str(uuid.uuid4()),
+        "node_type": "sandbox_agent",
+        "agent_id": None,
+        "position": {"x": 10, "y": 20},
+        "connector_binding": None,
+        "agent_prompt": "Do the thing",
+        "agent_command": "opencode run --auto < /home/user/prompt.md",
+        "template_id": "opencode",
+    }
+
+
+def test_pipeline_graph_node_delivery_sentinel_round_trip() -> None:
+    """FAR-228: PipelineGraphNode carries delivery_sentinel (opt-in idempotency
+    gate marker) and tolerates its absence (legacy nodes default to None)."""
+    node = PipelineGraphNode.model_validate({**_sandbox_node_json(), "delivery_sentinel": "EMAIL_SENT"})
+    assert node.delivery_sentinel == "EMAIL_SENT"
+
+    legacy = PipelineGraphNode.model_validate(_sandbox_node_json())
+    assert legacy.delivery_sentinel is None
+
+
+def test_replace_pipeline_graph_round_trips_delivery_sentinel(client: TestClient) -> None:
+    """FAR-228 contract round-trip: a sandbox node sent with delivery_sentinel
+    is echoed back on the graph-update response (mocked CRUD)."""
+    node = _sandbox_node_json()
+    node["delivery_sentinel"] = "EMAIL_SENT"
+    validation = MagicMock(issues=[])
+
+    with (
+        patch(
+            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            return_value=([node], []),
+        ),
+        patch(
+            "modulo.api.routes.pipelines.GraphValidator.validate_definition",
+            return_value=validation,
+        ),
+        patch(
+            "modulo.api.routes.pipelines._resolve_graph_references",
+            return_value=([], []),
+        ),
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+            json={"nodes": [node], "edges": []},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["nodes"][0]["delivery_sentinel"] == "EMAIL_SENT"
+
+
 def test_replace_pipeline_graph_rejects_excessive_node_count(client: TestClient) -> None:
     nodes = [
         {"id": str(uuid.uuid4()), "agent_id": str(uuid.uuid4()), "position": {"x": i * 10, "y": 0}} for i in range(501)
