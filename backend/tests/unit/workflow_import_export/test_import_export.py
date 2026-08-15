@@ -279,41 +279,41 @@ def test_sanitize_retry_policy_returns_copy_not_reference() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_get_existing_names_returns_row_set() -> None:
+async def test_get_existing_names_returns_row_set() -> None:
     session = AsyncMock()
     session.execute.return_value = [("alpha",), ("beta",), ("alpha",)]
-    assert asyncio.run(_get_existing_names(session, _ORG_ID, mod.Pipeline)) == {"alpha", "beta"}
+    assert await _get_existing_names(session, _ORG_ID, mod.Pipeline) == {"alpha", "beta"}
 
 
-def test_get_existing_names_empty() -> None:
+async def test_get_existing_names_empty() -> None:
     session = AsyncMock()
     session.execute.return_value = []
-    assert not asyncio.run(_get_existing_names(session, _ORG_ID, mod.Pipeline))
+    assert not await _get_existing_names(session, _ORG_ID, mod.Pipeline)
 
 
-def test_get_existing_names_forwards_for_update(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_existing_names_forwards_for_update(monkeypatch: pytest.MonkeyPatch) -> None:
     select_mock = Mock()
     select_mock.where.return_value = select_mock
     select_mock.with_for_update.return_value = select_mock
     monkeypatch.setattr(mod, "select", Mock(return_value=select_mock))
     session = AsyncMock()
     session.execute.return_value = [("p",)]
-    assert asyncio.run(_get_existing_names(session, _ORG_ID, mod.Pipeline, for_update=True)) == {"p"}
+    assert await _get_existing_names(session, _ORG_ID, mod.Pipeline, for_update=True) == {"p"}
     select_mock.with_for_update.assert_called_once()
 
 
-def test_get_existing_names_propagates_db_error() -> None:
+async def test_get_existing_names_propagates_db_error() -> None:
     session = AsyncMock()
     session.execute.side_effect = SQLAlchemyError("read failed")
     with pytest.raises(SQLAlchemyError):
-        asyncio.run(_get_existing_names(session, _ORG_ID, mod.Pipeline))
+        await _get_existing_names(session, _ORG_ID, mod.Pipeline)
 
 
-def test_get_existing_names_reraise_cancelled() -> None:
+async def test_get_existing_names_reraise_cancelled() -> None:
     session = AsyncMock()
     session.execute.side_effect = asyncio.CancelledError()
     with pytest.raises(asyncio.CancelledError):
-        asyncio.run(_get_existing_names(session, _ORG_ID, mod.Pipeline))
+        await _get_existing_names(session, _ORG_ID, mod.Pipeline)
 
 
 async def test_get_existing_pipeline_names_delegates_with_pipeline_model(monkeypatch: pytest.MonkeyPatch) -> None:

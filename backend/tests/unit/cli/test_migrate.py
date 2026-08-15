@@ -1,6 +1,5 @@
 """Tests for the modulo-migrate CLI tool."""
 
-import asyncio
 import hashlib
 import json
 import uuid
@@ -118,7 +117,7 @@ class TestGroupRecords:
 
 
 class TestReadJsonl:
-    def test_reads_meta_and_records(self, tmp_path: Path) -> None:
+    async def test_reads_meta_and_records(self, tmp_path: Path) -> None:
         path = tmp_path / "export.jsonl"
         path.write_text(
             json.dumps({"__meta__": {"version": 1, "export_hash": "abc"}})
@@ -129,45 +128,45 @@ class TestReadJsonl:
             + "\n"
         )
 
-        meta, records = asyncio.run(_read_jsonl(path))
+        meta, records = await _read_jsonl(path)
         assert meta["version"] == 1
         assert meta["export_hash"] == "abc"
         assert len(records) == 2
 
-    def test_empty_file(self, tmp_path: Path) -> None:
+    async def test_empty_file(self, tmp_path: Path) -> None:
         path = tmp_path / "empty.jsonl"
         path.write_text("")
 
-        meta, records = asyncio.run(_read_jsonl(path))
+        meta, records = await _read_jsonl(path)
         assert meta == {}
         assert records == []
 
-    def test_blank_lines_skipped(self, tmp_path: Path) -> None:
+    async def test_blank_lines_skipped(self, tmp_path: Path) -> None:
         path = tmp_path / "blank.jsonl"
         path.write_text("\n\n" + json.dumps({"__table__": "accounts", "id": "1", "data": {}}) + "\n\n")
-        meta, records = asyncio.run(_read_jsonl(path))
+        meta, records = await _read_jsonl(path)
         assert meta == {}
         assert len(records) == 1
 
-    def test_record_before_meta(self, tmp_path: Path) -> None:
+    async def test_record_before_meta(self, tmp_path: Path) -> None:
         # The first line not being a header must not swallow the record.
         path = tmp_path / "no_meta.jsonl"
         path.write_text(json.dumps({"__table__": "accounts", "id": "1", "data": {}}) + "\n")
-        meta, records = asyncio.run(_read_jsonl(path))
+        meta, records = await _read_jsonl(path)
         assert meta == {}
         assert len(records) == 1
 
 
 class TestReadJsonlErrors:
-    def test_missing_file_raises(self, tmp_path: Path) -> None:
+    async def test_missing_file_raises(self, tmp_path: Path) -> None:
         with pytest.raises(ClickException, match="Input file not found"):
-            asyncio.run(_read_jsonl(tmp_path / "missing.jsonl"))
+            await _read_jsonl(tmp_path / "missing.jsonl")
 
-    def test_invalid_jsonl_line_raises(self, tmp_path: Path) -> None:
+    async def test_invalid_jsonl_line_raises(self, tmp_path: Path) -> None:
         path = tmp_path / "bad.jsonl"
         path.write_text("{not valid json\n")
         with pytest.raises(ClickException, match="Invalid JSONL line"):
-            asyncio.run(_read_jsonl(path))
+            await _read_jsonl(path)
 
 
 class TestParseUuid:
@@ -215,7 +214,7 @@ class TestVerifyExport:
 
 
 class TestVerifyExportRoundtrip:
-    def test_roundtrip_ok(self, tmp_path: Path) -> None:
+    async def test_roundtrip_ok(self, tmp_path: Path) -> None:
         # Write a bundle, read it back, and confirm verification recomputes the
         # same export hash from the per-row __hash__ fields.
         bundle = {
@@ -227,18 +226,18 @@ class TestVerifyExportRoundtrip:
         }
         path = tmp_path / "export.jsonl"
         _write_jsonl(bundle, path)
-        meta, records = asyncio.run(_read_jsonl(path))
+        meta, records = await _read_jsonl(path)
         assert meta["export_hash"] is not None
         assert _verify_export(meta, records) is True
 
-    def test_roundtrip_tampered_row_hash_fails(self, tmp_path: Path) -> None:
+    async def test_roundtrip_tampered_row_hash_fails(self, tmp_path: Path) -> None:
         bundle = {
             "accounts": [{"id": "u1", "name": "alice"}],
             "exported_at": "2024-01-01T00:00:00+00:00",
         }
         path = tmp_path / "export.jsonl"
         _write_jsonl(bundle, path)
-        meta, records = asyncio.run(_read_jsonl(path))
+        meta, records = await _read_jsonl(path)
         records[0]["__hash__"] = "0" * 64
         assert _verify_export(meta, records) is False
 

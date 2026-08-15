@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 import shutil
 import sys
@@ -374,19 +373,19 @@ def test_parse_args_flags(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_main_missing_input_exits(tmp_dir):
+async def test_main_missing_input_exits(tmp_dir):
     ns = MagicMock()
     ns.input = os.path.join(tmp_dir, "nonexistent.enc")
     with (
         patch("scripts.restore.parse_args", return_value=ns),
         pytest.raises(SystemExit),
     ):
-        asyncio.run(main())
+        await main()
 
 
-def test_main_mode_conflict_exits(tmp_dir, capsys):
+async def test_main_mode_conflict_exits(tmp_dir, capsys):
     input_path = os.path.join(tmp_dir, "backup.enc")
-    Path(input_path).write_text("x")
+    Path(input_path).write_text("x")  # noqa: ASYNC240 — trivial 1-byte test setup
     ns = MagicMock()
     ns.input = input_path
     ns.full = True
@@ -397,13 +396,13 @@ def test_main_mode_conflict_exits(tmp_dir, capsys):
         patch("scripts.restore.parse_args", return_value=ns),
         pytest.raises(SystemExit),
     ):
-        asyncio.run(main())
+        await main()
     assert "choose only one of --full, --data-only, --config-only" in capsys.readouterr().out
 
 
-def test_main_no_mode_exits(tmp_dir, capsys):
+async def test_main_no_mode_exits(tmp_dir, capsys):
     input_path = os.path.join(tmp_dir, "backup.enc")
-    Path(input_path).write_text("x")
+    Path(input_path).write_text("x")  # noqa: ASYNC240 — trivial 1-byte test setup
     ns = MagicMock()
     ns.input = input_path
     ns.full = False
@@ -414,13 +413,13 @@ def test_main_no_mode_exits(tmp_dir, capsys):
         patch("scripts.restore.parse_args", return_value=ns),
         pytest.raises(SystemExit),
     ):
-        asyncio.run(main())
+        await main()
     assert "specify --dry-run, --full, --data-only, or --config-only" in capsys.readouterr().out
 
 
-def test_main_empty_passphrase_exits(tmp_dir, capsys):
+async def test_main_empty_passphrase_exits(tmp_dir, capsys):
     input_path = os.path.join(tmp_dir, "backup.enc")
-    Path(input_path).write_text("x")
+    Path(input_path).write_text("x")  # noqa: ASYNC240 — trivial 1-byte test setup
     ns = MagicMock()
     ns.input = input_path
     ns.full = False
@@ -432,13 +431,13 @@ def test_main_empty_passphrase_exits(tmp_dir, capsys):
         patch("scripts.restore.resolve_passphrase", return_value=""),
         pytest.raises(SystemExit),
     ):
-        asyncio.run(main())
+        await main()
     assert "passphrase cannot be empty" in capsys.readouterr().out
 
 
-def test_main_dry_run_success(tmp_dir, capsys):
+async def test_main_dry_run_success(tmp_dir, capsys):
     input_path = os.path.join(tmp_dir, "backup.enc")
-    Path(input_path).write_text("x")
+    Path(input_path).write_text("x")  # noqa: ASYNC240 — trivial 1-byte test setup
     ns = MagicMock()
     ns.input = input_path
     ns.full = False
@@ -452,7 +451,7 @@ def test_main_dry_run_success(tmp_dir, capsys):
         patch("scripts.restore.extract_archive", return_value={"a": os.path.join(tmp_dir, "a")}) as mock_ext,
         patch("scripts.restore.verify_hashes", return_value=True) as mock_verify,
     ):
-        asyncio.run(main())
+        await main()
     mock_dec.assert_called_once()
     mock_ext.assert_called_once()
     mock_verify.assert_called_once()

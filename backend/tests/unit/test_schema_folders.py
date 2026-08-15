@@ -1,6 +1,5 @@
 """Unit tests for /api/v1/schema-folders endpoints and schema folder assignment."""
 
-import asyncio
 import os
 import uuid
 from collections.abc import AsyncGenerator, Generator
@@ -18,13 +17,22 @@ os.environ.setdefault("REDIS_URL", "")
 os.environ.setdefault("MODULO_ADMIN_PASSWORD", "test")
 os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.crud.schema_folder import _MAX_FOLDER_DEPTH, create_folder, update_folder
-from modulo.settings import Settings, get_settings
-from tests.unit.api.mock_session import configure_mock_session
+# get_settings() is lru_cached. An earlier-imported module (e.g. test_migrate
+# building the DB engine at import) may have cached Settings with CSRF enabled
+# before the env var above took effect; the app's CSRF middleware reads that
+# cached value at construction. Clear the cache so the middleware honours
+# MODULO_CSRF_ENABLED=false regardless of test collection order.
+from modulo.settings import get_settings
+
+get_settings.cache_clear()
+
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context  # noqa: E402
+from modulo.api.main import app  # noqa: E402
+from modulo.auth.dependencies import get_current_user  # noqa: E402
+from modulo.auth.jwt import AuthenticatedPrincipal  # noqa: E402
+from modulo.db.crud.schema_folder import _MAX_FOLDER_DEPTH, create_folder, update_folder  # noqa: E402
+from modulo.settings import Settings  # noqa: E402
+from tests.unit.api.mock_session import configure_mock_session  # noqa: E402
 
 _SF_PATCH_PREFIX = "modulo.api.routes.schema_folders."
 _SCHEMAS_PATCH_PREFIX = "modulo.api.routes.schemas."
@@ -247,14 +255,14 @@ def _session_returning(*values: Any) -> AsyncMock:
     return session
 
 
-def test_update_folder_rejects_self_parent() -> None:
+async def test_update_folder_rejects_self_parent() -> None:
     folder = _make_folder()
     session = _session_returning(folder)
     with pytest.raises(ValueError, match="own parent"):
-        asyncio.run(update_folder(session, _FOLDER_ID, {"parent_id": _FOLDER_ID}))
+        await update_folder(session, _FOLDER_ID, {"parent_id": _FOLDER_ID})
 
 
-def test_update_folder_rejects_descendant_parent() -> None:
+async def test_update_folder_rejects_descendant_parent() -> None:
     folder = _make_folder()
     descendant_id = uuid.uuid4()
     # get_folder -> folder; parent-exists check -> descendant exists in org;
@@ -262,22 +270,22 @@ def test_update_folder_rejects_descendant_parent() -> None:
     # being updated in its parent chain.
     session = _session_returning(folder, descendant_id, _FOLDER_ID)
     with pytest.raises(ValueError, match="descendants"):
-        asyncio.run(update_folder(session, _FOLDER_ID, {"parent_id": descendant_id}))
+        await update_folder(session, _FOLDER_ID, {"parent_id": descendant_id})
 
 
-def test_update_folder_accepts_valid_parent() -> None:
+async def test_update_folder_accepts_valid_parent() -> None:
     folder = _make_folder()
     new_parent_id = uuid.uuid4()
     # get_folder -> folder; parent-exists check -> new_parent_id;
     # ancestor walk terminates (parent is root); depth walk terminates
     # (parent is root) -> depth 1, within limit.
     session = _session_returning(folder, new_parent_id, None, None)
-    updated = asyncio.run(update_folder(session, _FOLDER_ID, {"parent_id": new_parent_id}))
+    updated = await update_folder(session, _FOLDER_ID, {"parent_id": new_parent_id})
     assert updated is folder
     assert folder.parent_id == new_parent_id
 
 
-def test_update_folder_enforces_depth_limit() -> None:
+async def test_update_folder_enforces_depth_limit() -> None:
     folder = _make_folder()
     # get_folder -> folder; parent-exists check -> the parent id (exists)
     session = _session_returning(folder, uuid.uuid4())
@@ -289,7 +297,7 @@ def test_update_folder_enforces_depth_limit() -> None:
         ),
         pytest.raises(ValueError, match="nesting depth"),
     ):
-        asyncio.run(update_folder(session, _FOLDER_ID, {"parent_id": uuid.uuid4()}))
+        await update_folder(session, _FOLDER_ID, {"parent_id": uuid.uuid4()})
 
 
 def test_update_folder_invalid_parent_returns_422(client: TestClient) -> None:
@@ -318,28 +326,28 @@ async def _create_folder(session: AsyncMock, parent_id: uuid.UUID | None) -> Any
     )
 
 
-def test_create_folder_rejects_foreign_parent() -> None:
+async def test_create_folder_rejects_foreign_parent() -> None:
     # Parent exists in another org: the org-scoped existence check sees nothing.
     session = _session_returning(None)
     with pytest.raises(ValueError, match="Parent folder not found"):
-        asyncio.run(_create_folder(session, uuid.uuid4()))
+        await _create_folder(session, uuid.uuid4())
 
 
-def test_create_folder_accepts_valid_parent() -> None:
+async def test_create_folder_accepts_valid_parent() -> None:
     parent_id = uuid.uuid4()
     # parent-exists check -> parent_id; depth walk -> None (parent is root)
     session = _session_returning(parent_id, None)
-    folder = asyncio.run(_create_folder(session, parent_id))
+    folder = await _create_folder(session, parent_id)
     assert folder.parent_id == parent_id
 
 
-def test_update_folder_rejects_foreign_parent() -> None:
+async def test_update_folder_rejects_foreign_parent() -> None:
     folder = _make_folder()
     foreign_parent_id = uuid.uuid4()
     # get_folder -> folder; parent-exists check -> None (not in this org)
     session = _session_returning(folder, None)
     with pytest.raises(ValueError, match="Parent folder not found"):
-        asyncio.run(update_folder(session, _FOLDER_ID, {"parent_id": foreign_parent_id}))
+        await update_folder(session, _FOLDER_ID, {"parent_id": foreign_parent_id})
 
 
 def test_schema_folder_create_foreign_parent_returns_422(client: TestClient) -> None:
