@@ -53,7 +53,7 @@ class TestLineDiff:
         ]
 
     def test_empty_listings_produce_no_rows(self) -> None:
-        assert materialize("", "") == []
+        assert not materialize("", "")
 
     def test_single_line_insert(self) -> None:
         assert materialize("", "hi\n") == [("added", "hi", None, 1)]

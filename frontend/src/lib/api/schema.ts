@@ -3562,7 +3562,7 @@ export interface paths {
          *
          *     Accepts two (run_id, node_id) pairs, fetches each node's output,
          *     applies sensitive masking, and returns a structured line-level diff
-         *     using difflib.SequenceMatcher.
+         *     via the shared modulo.core.line_diff helper.
          */
         post: operations["diff_node_output_api_v1_runs_diff_post"];
         delete?: never;
