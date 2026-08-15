@@ -113,7 +113,7 @@ async def health_check(self) -> HealthResult:
 
 Model backends are configured via the ModelBackend entity in the database.
 Sensitive fields (API keys) are encrypted with Fernet and never stored in
-plaintext. The `ModelBackendHub` decrypts credentials at health-check time.
+plaintext. The `ModelBackendHub` decrypts credentials at initialisation/load time; health checks do not re-decrypt.
 
 ## Registration
 

@@ -132,7 +132,7 @@ Two authenticated endpoints expose plugin information:
 | `GET` | `/api/v1/plugins` | List all discovered plugins with health status |
 | `GET` | `/api/v1/plugins/{plugin_id}/health` | Health check for a single plugin |
 
-Both require a valid JWT (`AuthenticatedPrincipal`). Plugin management (install, upgrade, remove) is not handled through this API — see [Installation](#installation).
+Both require `plugin.list` permission (returning a `TenantPrincipal`) and the `plugin_management` feature flag. Plugin management (install, upgrade, remove) is not handled through this API — see [Installation](#installation).
 
 ## How plugins interact with Modulo
 
@@ -167,7 +167,7 @@ case _:
 
 ### Pipeline execution
 
-When a run is triggered, graph validation checks that all connector type and model backend references exist — including plugin-provided types. If a plugin package has been uninstalled since discovery, pre-run health check fails with `connector_type_unavailable` and the run is blocked.
+When a run is triggered, graph validation confirms bound connector instances exist and are active (`CONNECTOR_*` codes). The connector or model backend *type* is resolved only when it is built at run time. If a plugin-provided type has been uninstalled since discovery, the run fails at build time with `ValueError("Unknown connector type: …")` / `ValueError("Unknown model backend provider: …")`.
 
 ## Creating a plugin
 
@@ -348,9 +348,9 @@ RUN pip install modulo-connector-slack==0.1.0
 If a plugin package is removed from the environment between restarts:
 
 - `ConnectorInstances` referencing the missing type still exist in the database.
-- Pre-run health check fails with `connector_type_unavailable` — the run is blocked.
+- When the connector is built at run time, the build fails with `ValueError("Unknown connector type: …")` — the run is blocked.
 - Existing completed runs are unaffected (they execute against immutable snapshots).
-- The admin UI surfaces the unavailable type with a warning badge.
+- The Plugins admin view shows each plugin's package health as Active/Inactive.
 - Resolution: reinstall the package or migrate affected instances to a different type.
 
 ### SaaS deployments (v3+)

@@ -11,7 +11,7 @@ ConnectorBase (ABC)          ← modulo/connectors/base.py
   │   linear, slack, shell, pagerduty, sentry, datadog, and more)
   │   see modulo/connectors/ for the full list
   ├── CIRunnerBase           ← modulo/connectors/ci_runner/ (abstract CI runner)
-  ├── TicketTrackerBase      ← modulo/connectors/ticket_tracker/ (abstract issue tracker mixin)
+  ├── TicketTrackerBase      ← modulo/connectors/ticket_tracker/ (abstract ticket-tracker base)
   └── YourConnector          ← your package (via entry point)
 ```
 

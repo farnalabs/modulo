@@ -49,7 +49,7 @@ Supported platforms, minimum resources, and database backends for running Modulo
 ### PostgreSQL Requirements
 
 - **Version**: 16 or later
-- **Extensions**: `pgcrypto` (for `gen_random_uuid()`)
+- **Extensions**: none required — `gen_random_uuid()` is built into PostgreSQL 16+ (core since PG 13)
 - **Connection**: Async via `asyncpg` driver
 - **TLS**: `sslmode=require` recommended for production
 - **Schema**: Alembic-managed migrations run on startup
@@ -63,7 +63,7 @@ SQLite mode skips these PostgreSQL-specific features:
 - `SELECT FOR UPDATE SKIP LOCKED` (flood protection)
 - Distributed rate limiting
 
-A startup warning is logged: *"SQLite mode: security and concurrency features disabled. Use Postgres for any shared deployment."*
+A startup warning (structured log key `startup.sqlite_mode`) is logged when running in SQLite mode.
 
 See [`docs/troubleshooting.md`](./troubleshooting.md) §8 for known limitations.
 

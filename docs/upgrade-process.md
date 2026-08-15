@@ -32,11 +32,10 @@ docker compose -f docker-compose.prod.yml pull
 docker compose -f docker-compose.prod.yml up -d
 
 # 3. Verify migration completed
-docker compose -f docker-compose.prod.yml logs modulo-api | grep alembic
-# Expected: "Migration successful"
+docker compose -f docker-compose.prod.yml logs modulo | grep alembic
 
 # 4. Check application health
-curl http://localhost:8000/health
+curl http://localhost:8000/healthz
 ```
 
 ### Self-Hosted (Bare Metal / VM)
@@ -57,7 +56,7 @@ sudo systemctl restart modulo
 
 # 5. Verify
 sudo journalctl -u modulo -n 50 --no-pager | grep alembic
-curl http://localhost:8000/health
+curl http://localhost:8000/healthz
 ```
 
 ---
@@ -67,12 +66,12 @@ curl http://localhost:8000/health
 Migrations run automatically on backend startup:
 
 1. The backend pod/process starts
-2. It acquires a PostgreSQL advisory lock (`pg_advisory_xact_lock(19910914)`)
-3. It runs `alembic upgrade head`
+2. It acquires a two-key PostgreSQL advisory lock `(72001, 1)` via `pg_try_advisory_lock`
+3. It runs `alembic upgrade heads` (idempotent)
 4. On success, it proceeds to serve traffic
-5. On failure, the process exits and restarts (crash loop)
+5. On failure, it retries up to 5 times with backoff, then fails boot
 
-The advisory lock prevents concurrent migrations across multiple replicas. The lock ID (`19910914`) must not conflict with other applications sharing the same Postgres instance.
+The advisory lock prevents concurrent migrations across multiple replicas. The lock key (`72001, 1`) must not conflict with other applications sharing the same Postgres instance.
 
 ---
 
@@ -97,8 +96,8 @@ between machine groups.
 
 ```bash
 # Docker Compose – re-tag and restart
-docker compose -f docker-compose.prod.yml stop modulo-api
-docker tag modulo-backend:old modulo-backend:latest
+docker compose -f docker-compose.prod.yml stop modulo
+docker tag ghcr.io/farnalabs/modulo:old ghcr.io/farnalabs/modulo:latest
 docker compose -f docker-compose.prod.yml up -d
 
 # Self-hosted
@@ -146,12 +145,12 @@ When upgrading, check for changes to:
 
 ## Post-Upgrade Verification
 
-- [ ] Backend `/health` or `/healthz` returns 200
+- [ ] Backend `/healthz` returns 200
 - [ ] API responds to authenticated requests
 - [ ] Existing pipeline runs appear in the UI
 - [ ] WebSocket connections establish successfully
 - [ ] Rate limiting is functional
-- [ ] Audit log chain is intact: `uv run modulo audit verify`
+- [ ] Audit log chain is intact (verified via the API's audit `verify_chain` endpoint)
 - [ ] All env vars are set correctly (no deprecation warnings in logs)
 - [ ] Frontend loads without errors (check browser console)
 - [ ] Cross-origin requests work (CORS)
