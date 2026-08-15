@@ -518,3 +518,38 @@ class TestPatchLevelErrors:
             detail = resp.json().get("detail", "")
             if isinstance(detail, str):
                 assert detail_check in detail.lower()
+
+
+def test_update_schema_patch_can_clear_nullable_field(client: TestClient) -> None:
+    """PATCH with an explicit null must clear a nullable field, not no-op.
+
+    The update endpoint uses ``model_dump(exclude_unset=True)`` — a key that is
+    present in the request with value ``null`` counts as "set" and is applied,
+    so setting ``abstract_name`` back to ``None`` is a valid, supported update.
+    """
+    schema = MagicMock()
+    schema.id = _SCHEMA_ID
+    schema.organisation_id = _ORG_ID
+    schema.name = "inferred-schema"
+    schema.description = None
+    schema.abstract_name = None
+    schema.folder_id = None
+    schema.account_id = _USER_ID
+    schema.created_at = MagicMock()
+    schema.updated_at = MagicMock()
+    schema.deprecated = False
+    schema.deprecated_at = None
+
+    with (
+        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("modulo.api.routes.schemas.update_schema", new_callable=AsyncMock, return_value=schema) as mock_update,
+    ):
+        resp = client.patch(
+            f"/api/v1/schemas/{_SCHEMA_ID}",
+            json={"abstract_name": None},
+        )
+
+    assert resp.status_code == 200
+    mock_update.assert_awaited_once()
+    updates = mock_update.await_args.args[2]
+    assert updates == {"abstract_name": None}
