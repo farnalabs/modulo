@@ -147,7 +147,7 @@ class _PreserveRegistry:
 class TestPublishPullVerifyFlow(_PreserveRegistry):
     """End-to-end tests for the v2 publish-pull-verify workflow via crypto module."""
 
-    async def test_full_publish_pull_verify_cycle(self):
+    def test_full_publish_pull_verify_cycle(self):
         from modulo.core.registry import get_registry_primitive, publish_primitive
 
         kp = generate_keypair()

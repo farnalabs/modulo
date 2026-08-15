@@ -735,7 +735,7 @@ class TestFailureAndIdempotency:
         assert record is not None
         assert record["value"] == "unclassified"
 
-    async def test_result_to_dict_roundtrip(self) -> None:
+    def test_result_to_dict_roundtrip(self) -> None:
         result = ClassificationResult(
             RunClassificationValue.delivered,
             REASON_DELIVERED,

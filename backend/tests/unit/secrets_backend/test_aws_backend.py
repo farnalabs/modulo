@@ -283,7 +283,7 @@ class TestEnsureClient:
         with pytest.raises(asyncio.CancelledError):
             await backend._ensure_client()
 
-    async def test_constructor_raises_without_boto3(self):
+    def test_constructor_raises_without_boto3(self):
         with (
             patch("modulo.core.secrets_backend.aws._MODULE_AVAILABLE", False),
             pytest.raises(RuntimeError, match="boto3"),

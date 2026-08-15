@@ -189,7 +189,7 @@ async def test_redis_broadcast_propagates_cancellation() -> None:
         await EventBus(redis_broker=broker)._redis_broadcast(broker, "org-1", {"type": "run"})
 
 
-async def test_redis_broadcast_if_configured_noop_without_broker(bus: EventBus) -> None:
+def test_redis_broadcast_if_configured_noop_without_broker(bus: EventBus) -> None:
     bus._redis_broadcast_if_configured("org-1", {"type": "run"})
     assert not eb._background_tasks
 

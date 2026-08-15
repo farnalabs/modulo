@@ -111,7 +111,7 @@ async def test_initialise_youtrack_missing_base_url_is_skipped():
         hub.get(ci.id)
 
 
-async def test_get_unknown_raises():
+def test_get_unknown_raises():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     hub = ConnectorHub(secrets_backend=backend)
     unknown_id = uuid.uuid4()
@@ -578,7 +578,7 @@ async def test_acl_returns_acl_for_connector(tmp_path):
     assert acl.allowed_operations == frozenset({"read", "write"})
 
 
-async def test_acl_unknown_connector_raises():
+def test_acl_unknown_connector_raises():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     hub = ConnectorHub(secrets_backend=backend)
     with pytest.raises(ConnectorNotFoundError):

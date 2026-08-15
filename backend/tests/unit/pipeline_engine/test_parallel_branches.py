@@ -619,7 +619,7 @@ class TestBackwardCompat:
         node_ids = [a["node_id"] for a in result["artifacts"]]
         assert node_ids == ["start", "middle", "end"]
 
-    async def test_sequential_run_context_write_still_replaces_legacy_semantics(self) -> None:
+    def test_sequential_run_context_write_still_replaces_legacy_semantics(self) -> None:
         """A single context-setter write through the sequential path behaves as
         before — its own key lands (per-key merge on a single writer is
         equivalent to the legacy whole-dict replacement for that key)."""

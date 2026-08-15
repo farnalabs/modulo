@@ -107,7 +107,7 @@ def test_missing_agent_commands_only_raises_value_error():
         make_sandbox_agent_fn(node_def)
 
 
-async def test_with_agent_command_returns_callable():
+def test_with_agent_command_returns_callable():
     """A node_def with agent_command resolves without raising and returns a callable."""
     node_def = {
         "id": "n1",
@@ -118,7 +118,7 @@ async def test_with_agent_command_returns_callable():
     assert callable(fn)
 
 
-async def test_with_agent_commands_returns_callable():
+def test_with_agent_commands_returns_callable():
     """agent_commands list is joined and resolved without raising."""
     node_def = {
         "id": "n1",

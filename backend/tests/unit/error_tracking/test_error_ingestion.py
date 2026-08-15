@@ -257,7 +257,7 @@ class TestIngestBatch:
             assert len(results) == 2
             assert all("group_id" in r for r in results)
 
-    async def test_batch_max_20(self) -> None:
+    def test_batch_max_20(self) -> None:
         with pytest.raises(ValidationError):
             ErrorIngestRequest(events=[{"level": "error", "message": "x", "source": "backend"}] * 21)
 

@@ -277,7 +277,7 @@ def _make_set(values: dict, schema_id: uuid.UUID, schema_version: int = 2) -> Ma
 
 
 @pytest.mark.asyncio
-async def test_resolve_parameters_schema_defaults_only() -> None:
+def test_resolve_parameters_schema_defaults_only() -> None:
     """Resolution from schema defaults alone."""
     schema = _make_schema(
         [
@@ -296,7 +296,7 @@ async def test_resolve_parameters_schema_defaults_only() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resolve_parameters_set_overrides_defaults() -> None:
+def test_resolve_parameters_set_overrides_defaults() -> None:
     """Parameter Set values override schema defaults."""
     schema = _make_schema(
         [
@@ -318,7 +318,7 @@ async def test_resolve_parameters_set_overrides_defaults() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resolve_parameters_overrides_beat_set() -> None:
+def test_resolve_parameters_overrides_beat_set() -> None:
     """Inline overrides beat Parameter Set values."""
     schema = _make_schema(
         [
@@ -343,7 +343,7 @@ async def test_resolve_parameters_overrides_beat_set() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resolve_parameters_full_chain() -> None:
+def test_resolve_parameters_full_chain() -> None:
     """Full resolution chain: schema defaults → set → overrides."""
     schema = _make_schema(
         [
@@ -418,7 +418,7 @@ def test_parameter_empty_dict_renders() -> None:
 
 
 @pytest.mark.asyncio
-async def test_parameter_references_valid() -> None:
+def test_parameter_references_valid() -> None:
     """Valid parameter schema and set references produce no errors."""
     from modulo.core.graph_validator._types import try_parse_uuid
 

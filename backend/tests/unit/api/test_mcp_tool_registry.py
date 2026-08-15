@@ -137,7 +137,7 @@ class TestBuildToolRegistry:
 
 
 class TestGetMcpToolDefinitions:
-    async def test_returns_empty_list_before_build(self, fake_mcp: SimpleNamespace) -> None:
+    def test_returns_empty_list_before_build(self, fake_mcp: SimpleNamespace) -> None:
         assert not get_mcp_tool_definitions()
 
     async def test_returns_defensive_copy(self, fake_mcp: SimpleNamespace) -> None:

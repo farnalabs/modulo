@@ -256,7 +256,7 @@ _CONDITIONAL_GRAPH: dict[str, Any] = {
 }
 
 
-async def test_conditional_graph_compiles():
+def test_conditional_graph_compiles():
     compiled = build_graph_from_json(_CONDITIONAL_GRAPH)
     assert compiled is not None
 
