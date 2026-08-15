@@ -46,6 +46,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
 import { getAccessToken, clearAccessToken } from "../lib/api/client";
+import { decodeJwtPayload } from "../lib/jwt";
 import { usePlanStore } from "../stores/planStore";
 import Breadcrumb from "./Breadcrumb.vue";
 import RemyPanel from "./remy/RemyPanel.vue";
@@ -112,22 +113,16 @@ function logout() {
   window.location.reload();
 }
 
-function decodeBase64Url(s: string): string {
-  s = s.replace(/-/g, "+").replace(/_/g, "/");
-  const pad = s.length % 4;
-  if (pad) s += "=".repeat(4 - pad);
-  return atob(s);
+interface AppLayoutJwtPayload {
+  sub?: string;
+  is_system_admin?: boolean;
+  org_role?: string | null;
+  permissions?: unknown;
 }
 
-const jwtPayload = computed(() => {
-  const token = getAccessToken();
-  if (!token) return null;
-  try {
-    return JSON.parse(decodeBase64Url(token.split(".")[1]));
-  } catch {
-    return null;
-  }
-});
+const jwtPayload = computed<AppLayoutJwtPayload | null>(() =>
+  decodeJwtPayload(getAccessToken()) as AppLayoutJwtPayload | null,
+);
 
 const userEmail = computed(() => jwtPayload.value?.sub || "");
 

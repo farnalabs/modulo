@@ -508,4 +508,44 @@ describe('SettingsTriggersView — FAR-191 streak surfacing + operator re-enable
     expect(wrapper.text()).toContain('no_work')
     expect(wrapper.text()).toContain('pr_merged')
   })
+
+  it('FIX 4: a failed toggle shows an inline row error without wiping the loaded list', async () => {
+    ;(api.POST as any).mockRejectedValue(new Error('network down'))
+    const wrapper = mountView(fakeJwt('admin'), { ...baseListData, items: [ongoing()] })
+    await flush()
+
+    expect(wrapper.find('[data-testid="settings-triggers-toggle-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="settings-triggers-toggle"]').exists()).toBe(true)
+
+    await wrapper.find('[data-testid="settings-triggers-toggle"]').trigger('click')
+    await flush()
+
+    const inline = wrapper.find('[data-testid="settings-triggers-toggle-error"]')
+    expect(inline.exists()).toBe(true)
+    expect(inline.attributes('role')).toBe('alert')
+    expect(inline.text()).toContain('toggling trigger')
+
+    // The list survives: the row, its toggle, and the streak badge are all
+    // still rendered (no page-level ErrorAlert replaced the whole table).
+    expect(wrapper.find('[data-testid="settings-triggers-toggle"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="settings-triggers-streak"]').exists()).toBe(true)
+  })
+
+  it('FIX 5: a streak at/over threshold gets the red tier, and a threshold=1 fresh trigger (0/1) is never amber', async () => {
+    const wrapper = mountView(fakeJwt('admin'), {
+      ...baseListData,
+      items: [
+        ongoing({ id: 'trig-at-threshold', streak_status: streakStatus({ streak: 5, threshold: 5, state: 'ok' }) }),
+        ongoing({ id: 'trig-fresh-1', streak_status: streakStatus({ streak: 0, threshold: 1 }) }),
+      ],
+    })
+    await flush()
+
+    const badges = wrapper.findAll('[data-testid="settings-triggers-streak"]')
+    expect(badges).toHaveLength(2)
+    expect(badges[0].classes()).toContain('text-destructive')
+    expect(badges[0].classes()).not.toContain('text-amber-600')
+    expect(badges[1].classes()).not.toContain('text-amber-600')
+    expect(badges[1].classes()).not.toContain('text-destructive')
+  })
 })

@@ -563,6 +563,98 @@ async def test_unclassified_run_breaks_fail_closed(
     assert deactivated is None, "the unclassified run stops the walk"
 
 
+async def _insert_audit_deactivation(
+    db_engine: AsyncEngine,
+    *,
+    org_id: uuid.UUID,
+    trigger_id: uuid.UUID,
+    created_at: datetime | None = None,
+) -> None:
+    """Insert an ``ongoing_trigger.auto_deactivated`` audit record (the
+    lifecycle record the on-demand reader maps to a deactivation reason)."""
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO audit_events (id, organisation_id, event_type, resource_type, "
+                "resource_id, payload_json, created_at) "
+                "VALUES (:id, :oid, :etype, :rtype, :rid, :payload, :created)",
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "oid": str(org_id),
+                "etype": ts.STREAK_DEACTIVATION_EVENT_TYPE,
+                "rtype": "trigger",
+                "rid": str(trigger_id),
+                "payload": json.dumps(
+                    {
+                        "trigger_id": str(trigger_id),
+                        "deactivated_by": ts.STREAK_DEACTIVATED_BY_STREAK,
+                    }
+                ),
+                "created": created_at or _now() - timedelta(hours=1),
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_get_trigger_streak_status_is_tenant_isolated(
+    db_engine: AsyncEngine,
+    app_factory: async_sessionmaker[AsyncSession],
+    org: uuid.UUID,
+    pipeline: uuid.UUID,
+    snapshot: uuid.UUID,
+    user: uuid.UUID,
+) -> None:
+    """FIX 7 — cross-tenant isolation for the on-demand streak read. Org B's
+    runs + auto-deactivation audit record must be invisible to a reader scoped
+    to org A (the walk's ``:oid`` bind predicates + the RLS ``SET LOCAL``). Org
+    A's trigger reads streak 0 / empty outcomes / null reason even though org B
+    has a no-delivery run and a deactivation audit record for its own trigger."""
+    from sqlalchemy import select
+
+    from modulo.core import cron_helpers as ch
+    from modulo.db.models.trigger import Trigger
+
+    org_b = await _seed_org(db_engine, "StreakEngineB")
+    user_b = await _seed_user(db_engine, org_b, "streak-b@test.local")
+    pipeline_b = await _seed_pipeline(db_engine, org_b, user_b, "StreakEngineB-Pipeline")
+    snapshot_b = await _seed_snapshot(db_engine, org_b, pipeline_b)
+
+    # Org A's inactive ongoing trigger with a real streak_epoch.
+    trigger_a = await _seed_ongoing_trigger(
+        db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=1)
+    )
+    # Org B: a no-delivery run + an auto-deactivated audit record — the data the
+    # org-A read must NOT see.
+    trigger_b = await _seed_ongoing_trigger(
+        db_engine, org_id=org_b, pipeline_id=pipeline_b, account_id=user_b, streak_epoch=_now() - timedelta(days=1)
+    )
+    await _insert_run(
+        db_engine,
+        org_id=org_b,
+        pipeline_id=pipeline_b,
+        snapshot_id=snapshot_b,
+        trigger_id=trigger_b,
+        status="failed",
+        completed_at=_now() - timedelta(hours=2),
+        classification_value="no_delivery",
+    )
+    await _insert_audit_deactivation(db_engine, org_id=org_b, trigger_id=trigger_b)
+
+    # Read org A's trigger through the RLS-scoped app engine.
+    async with app_factory() as session, session.begin():
+        await ch._set_rls_org(session, org)
+        trigger_row = (
+            await session.execute(select(Trigger).where(Trigger.id == trigger_a, Trigger.organisation_id == org))
+        ).scalar_one()
+        status = await ts.get_trigger_streak_status(session, trigger_row)
+
+    assert status["streak"] == 0, "org B's no-delivery run must not count toward org A's trigger"
+    assert status["last_outcomes"] == [], "org B's runs must not appear in org A's outcome panel"
+    assert status["deactivated_reason"] is None, "org B's audit record must not mark org A's trigger deactivated"
+    assert status["state"] == "ok", "org A's manually-paused trigger stays 'ok'"
+
+
 @pytest.mark.asyncio
 async def test_streak_sql_uses_the_reshaped_index(
     db_engine: AsyncEngine,

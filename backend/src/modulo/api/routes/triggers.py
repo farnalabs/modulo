@@ -34,6 +34,7 @@ from modulo.core.cron_helpers import (
 from modulo.core.exceptions import OrgDeletedError
 from modulo.core.trigger_engine import TriggerEngine
 from modulo.core.trigger_streak import (
+    _streak_config,
     anchor_trigger_streak_epoch,
     clear_trigger_streak_after_reenable,
     get_trigger_streak_status,
@@ -78,16 +79,17 @@ async def _ongoing_in_flight(session: AsyncSession, trigger: Trigger) -> int:
 async def _streak_status_for(session: AsyncSession, trigger: Trigger) -> dict[str, Any]:
     """FAR-191 — ``streak_status`` for a trigger serializer.
 
-    N+1 guard: the cheap ``{enabled: false, state: 'unconfigured'}`` shape is
-    returned for non-ongoing triggers (no queries at all). The full on-demand
-    read (the streak SQL walk + the last-N outcome summary + the deactivation
-    reason) runs only for ongoing triggers, which are typically few per org.
-    Best-effort — ``get_trigger_streak_status`` never raises, so a read failure
-    degrades to the same cheap shape instead of 500ing the list.
+    Returns the UNIFORM 6-key shape for every trigger (FIX 5): always delegates
+    to ``get_trigger_streak_status``, whose base handles non-ongoing triggers
+    (``{enabled: false, streak: 0, threshold: 0, state: 'unconfigured',
+    deactivated_reason: null, last_outcomes: []}``) without issuing any query.
+    The threshold is resolved here and passed in so the reader is
+    self-contained. Best-effort — ``get_trigger_streak_status`` never raises,
+    so a read failure degrades to the unconfigured base instead of 500ing the
+    list.
     """
-    if trigger.trigger_type != "ongoing":
-        return {"enabled": False, "state": "unconfigured"}
-    return await get_trigger_streak_status(session, trigger)
+    threshold, _ = _streak_config(trigger.config_json)
+    return await get_trigger_streak_status(session, trigger, config_threshold=threshold)
 
 
 @router.get("/triggers", status_code=status.HTTP_200_OK)
@@ -101,6 +103,7 @@ async def list_triggers(
     principal: TenantPrincipal = require_permission("trigger.list"),
 ) -> dict[str, Any]:
     """List all triggers, optionally filtered by pipeline or type."""
+    items: list[dict[str, Any]] = []
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -144,6 +147,31 @@ async def list_triggers(
                 triggers_paused_col, paused_at, status = org_state
                 org_triggers_paused = org_row_is_paused(status, triggers_paused_col)
                 org_paused_at = paused_at.isoformat() if paused_at else None
+
+            # Serialize the items INSIDE the RLS transaction (FIX 2): the
+            # in-flight + streak-status reads rely on the ``SET LOCAL
+            # app.organisation_id`` context, which is transaction-scoped — a read
+            # after commit sees zero rows on strict-RLS Postgres, silently
+            # showing a deactivated trigger as state 'ok'.
+            for r in rows:
+                items.append(
+                    {
+                        "id": str(r.id),
+                        "pipeline_id": str(r.pipeline_id),
+                        "trigger_type": r.trigger_type,
+                        "active": r.active,
+                        "max_concurrent_runs": r.max_concurrent_runs,
+                        "daily_spend_limit": _serialize_spend_limit(r.daily_spend_limit),
+                        "config_json": mask_config_json(r.config_json),
+                        "cron_expression": r.cron_expression,
+                        "cron_timezone": r.cron_timezone,
+                        "last_fired_at": r.last_fired_at.isoformat() if r.last_fired_at else None,
+                        "next_fire_at": r.next_fire_at.isoformat() if r.next_fire_at else None,
+                        "created_by": str(r.account_id),
+                        "in_flight": await _ongoing_in_flight(session, r),
+                        "streak_status": await _streak_status_for(session, r),
+                    }
+                )
     except ProgrammingError:
         _log.exception("triggers.list_triggers")
         raise HTTPException(
@@ -164,27 +192,6 @@ async def list_triggers(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error",
         ) from None
-
-    items: list[dict[str, Any]] = []
-    for r in rows:
-        items.append(
-            {
-                "id": str(r.id),
-                "pipeline_id": str(r.pipeline_id),
-                "trigger_type": r.trigger_type,
-                "active": r.active,
-                "max_concurrent_runs": r.max_concurrent_runs,
-                "daily_spend_limit": _serialize_spend_limit(r.daily_spend_limit),
-                "config_json": mask_config_json(r.config_json),
-                "cron_expression": r.cron_expression,
-                "cron_timezone": r.cron_timezone,
-                "last_fired_at": r.last_fired_at.isoformat() if r.last_fired_at else None,
-                "next_fire_at": r.next_fire_at.isoformat() if r.next_fire_at else None,
-                "created_by": str(r.account_id),
-                "in_flight": await _ongoing_in_flight(session, r),
-                "streak_status": await _streak_status_for(session, r),
-            }
-        )
 
     return {
         "items": items,

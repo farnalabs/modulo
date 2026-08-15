@@ -1390,18 +1390,49 @@ class TestDispatcherWiring:
 # ---------------------------------------------------------------------------
 
 
+class TestStatusSQLBindParams:
+    def test_status_read_sql_carries_org_and_trigger_bind_params(self) -> None:
+        """FIX 7 — the on-demand streak read's SQL constants scope every walk by
+        BIND PARAMETERS, never interpolation: ``text()`` raw SQL bypasses the
+        tenant-filter listener, so the ``:oid``/``:tid`` predicates are the
+        ONLY cross-tenant guard on strict-RLS Postgres. The count walk and the
+        boundary subqueries must all carry them."""
+        assert "r.organisation_id = :oid" in ts._STREAK_STATUS_COUNT_SQL
+        assert "r.trigger_id = :tid" in ts._STREAK_STATUS_COUNT_SQL
+        assert "r2.organisation_id = :oid" in ts._STREAK_BOUNDARY_SQL
+        assert "r2.trigger_id = :tid" in ts._STREAK_BOUNDARY_SQL
+        assert "tr.organisation_id = :oid" in ts._STREAK_BOUNDARY_SQL
+        assert "tr.id = :tid" in ts._STREAK_BOUNDARY_SQL
+
+
 class _StatusSession:
     """Async session double routing the FAR-191 read-only status queries.
 
     Routes by statement substring: the streak-count walk (``AS streak``), the
     audit_events deactivation-reason lookup, and the runs outcome summary
     (everything else). Records executed statements for the never-writes check.
+
+    ``audit_created_at`` models the FIX 1 audit aging: the reader constrains
+    the deactivation-reason query to ``created_at >= streak_epoch`` (the
+    append-only audit log keeps every auto-deactivation forever; only
+    deactivations SINCE the last activation count). When the canned audit
+    record predates the epoch cutoff baked into the query, the mock returns no
+    row — a re-enabled -> manually-paused trigger must not surface the
+    pre-re-enable deactivation record.
     """
 
-    def __init__(self, *, streak: int = 0, outcome_rows: list[Any] | None = None, audit_row: Any = None) -> None:
+    def __init__(
+        self,
+        *,
+        streak: int = 0,
+        outcome_rows: list[Any] | None = None,
+        audit_row: Any = None,
+        audit_created_at: datetime | None = None,
+    ) -> None:
         self._streak = streak
         self._outcome_rows = outcome_rows or []
         self._audit_row = audit_row
+        self._audit_created_at = audit_created_at
         self.executed: list[tuple[Any, Any]] = []
 
     async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
@@ -1412,6 +1443,21 @@ class _StatusSession:
             r.scalar_one.return_value = self._streak
             return r
         if "audit_events" in s:
+            # Extract the ``created_at >= :epoch`` cutoff baked into the
+            # statement (the reader binds the trigger's streak_epoch here).
+            cutoff: datetime | None = None
+            try:
+                compiled = stmt.compile()
+                for value in compiled.params.values():
+                    if isinstance(value, datetime):
+                        cutoff = value
+                        break
+            except Exception:
+                cutoff = None
+            if cutoff is not None and self._audit_created_at is not None and self._audit_created_at < cutoff:
+                r = MagicMock()
+                r.first.return_value = None
+                return r
             r = MagicMock()
             r.first.return_value = self._audit_row
             return r
@@ -1523,6 +1569,116 @@ class TestGetTriggerStreakStatus:
         status = await ts.get_trigger_streak_status(session, _ongoing_trigger(active=False))
         assert status["state"] == "ok"
         assert status["deactivated_reason"] is None
+
+    @pytest.mark.asyncio
+    async def test_reenabled_then_manually_paused_ignores_pre_reenable_deactivation(self) -> None:
+        """FIX 1 (audit aging) — auto-deactivated -> re-enabled -> manually
+        paused: the append-only audit log keeps the old auto-deactivation
+        record forever, and re-enable only re-anchors ``streak_epoch``. The
+        reader constrains the deactivation-reason query to ``created_at >=
+        streak_epoch``, so the PRE-re-enable record is ignored and the trigger
+        reports state 'ok' with no reason (no false deactivated badge /
+        Re-enable button for a manually-paused trigger)."""
+        pre_reenable_deactivation = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
+        session = _StatusSession(
+            streak=0,
+            audit_row=({"deactivated_by": ts.STREAK_DEACTIVATED_BY_STREAK, "streak": 5},),
+            audit_created_at=pre_reenable_deactivation,
+        )
+        trigger = _ongoing_trigger(active=False, streak_epoch=datetime.now(UTC))
+        status = await ts.get_trigger_streak_status(session, trigger)
+        assert status["state"] == "ok"
+        assert status["deactivated_reason"] is None
+
+    @pytest.mark.asyncio
+    async def test_deactivation_after_reenable_still_surfaces(self) -> None:
+        """FIX 1 (audit aging) — the epoch filter must NOT over-prune: a
+        deactivation that happened AFTER the re-anchor still surfaces. The
+        epoch re-anchors at re-enable (2h ago) and the deactivation record is
+        newer (1h ago), so it is inside the ``created_at >= streak_epoch``
+        window and reports state 'deactivated'."""
+        reenabled_at = datetime.now(UTC) - timedelta(hours=2)
+        deactivated_at = datetime.now(UTC) - timedelta(hours=1)
+        session = _StatusSession(
+            streak=5,
+            audit_row=({"deactivated_by": ts.STREAK_DEACTIVATED_BY_STREAK},),
+            audit_created_at=deactivated_at,
+        )
+        trigger = _ongoing_trigger(active=False, streak_epoch=reenabled_at)
+        status = await ts.get_trigger_streak_status(session, trigger)
+        assert status["state"] == "deactivated"
+        assert status["deactivated_reason"] == "no_delivery_streak"
+
+    @pytest.mark.asyncio
+    async def test_reason_read_failure_preserves_streak_and_outcomes(self) -> None:
+        """FIX 3 (per-sub-read degradation) — a reason-read failure must NOT
+        discard the already-computed streak + last_outcomes (the old single-try
+        reader returned the bare base, hiding a deactivated trigger's streak).
+        The trigger is inactive, so the state degrades to 'deactivated' (never
+        'unconfigured') with the reason unknown."""
+        now = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+        session = _StatusSession(
+            streak=3,
+            outcome_rows=[_outcome(uuid.uuid4(), "no_delivery", "no_work", now)],
+        )
+
+        async def _route(stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
+            s = str(stmt).lower()
+            if "as streak" in s:
+                r = MagicMock()
+                r.scalar_one.return_value = 3
+                return r
+            if "audit_events" in s:
+                raise RuntimeError("audit read down")
+            r = MagicMock()
+            r.all.return_value = session._outcome_rows
+            return r
+
+        session.execute = _route  # type: ignore[method-assign]
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger(active=False))
+        assert status["streak"] == 3
+        assert len(status["last_outcomes"]) == 1
+        assert status["last_outcomes"][0]["classification"] == "no_delivery"
+        assert status["state"] == "deactivated"
+        assert status["deactivated_reason"] is None
+
+    @pytest.mark.asyncio
+    async def test_outcomes_read_failure_keeps_streak_and_threshold(self) -> None:
+        """FIX 3 (per-sub-read degradation) — an outcomes-read failure keeps the
+        computed streak + threshold and degrades last_outcomes to [] — the
+        reader never collapses a partially-computed read to unconfigured."""
+        session = _StatusSession(streak=2)
+
+        async def _route(stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
+            s = str(stmt).lower()
+            if "as streak" in s:
+                r = MagicMock()
+                r.scalar_one.return_value = 2
+                return r
+            raise RuntimeError("outcomes read down")
+
+        session.execute = _route  # type: ignore[method-assign]
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger())
+        assert status["streak"] == 2
+        assert status["threshold"] == 5
+        assert status["last_outcomes"] == []
+        assert status["state"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_count_read_failure_degrades_to_base(self) -> None:
+        """FIX 3 (per-sub-read degradation) — a count-read failure degrades to
+        the bare unconfigured base (nothing computable); the never-raises
+        contract holds."""
+        session = _StatusSession()
+
+        async def _boom(stmt: Any, params: dict[str, Any] | None = None) -> None:
+            raise RuntimeError("db down")
+
+        session.execute = _boom  # type: ignore[method-assign]
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger())
+        assert status["state"] == "unconfigured"
+        assert status["enabled"] is False
+        assert status["streak"] == 0
 
     @pytest.mark.asyncio
     async def test_kill_switch_off_reports_enabled_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
