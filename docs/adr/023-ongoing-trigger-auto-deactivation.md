@@ -126,6 +126,22 @@ re-anchored) and a stale sweep tick can never be hit; concurrent ticks produce
 one rowcount=1 and the second is a no-op. `RETURNING` carries the streak value so
 no second walk is needed for the audit record.
 
+**Known limitation (the deactivation cannot commit on real Postgres yet).** The
+deactivation transaction writes a fire-outcome TriggerEvent with
+`validation_result='auto_deactivated'` through `cron_helpers._log_ongoing_event`
+inside the SAME transaction as the `active=false` UPDATE and the AuditEvent
+(see `record_ongoing_deactivation_lifecycle`). But `auto_deactivated` is NOT in
+the `ck_trigger_events_validation_result` CHECK-constraint vocabulary —
+`VALIDATION_RESULT_VALUES` in `db/models/trigger_event.py` and the hardcoded twin
+in migration 0069 — so real Postgres rejects the insert and rolls back the whole
+deactivation transaction: the engine can never deactivate anything on real
+Postgres today. The mock-based unit tests stay green because they route by
+SQL-substring matching and never execute the constraint (AGENTS.md §12). This is
+not the intended design — it is the current shipped state. The vocabulary fix
+must ship together (add `auto_deactivated` to `VALIDATION_RESULT_VALUES` AND a
+NEW migration widening `ck_trigger_events_validation_result`; never edit
+migration 0069 in place); once it does, the Consequences below become accurate.
+
 **Notification.** Post-commit, a deactivation dispatches the existing
 `EVENT_TRIGGER_DEACTIVATED` notifier event with a sanitised payload
 (identifiers + titles + allow-listed reason fields only — never tokens or raw
@@ -206,6 +222,11 @@ every minute) and leaves no persisted record. Persisted classification (Decision
   auto-deactivated (default N=5) and the operator is notified — a silently-dry
   daemon no longer runs forever. The operator re-enables after investigating;
   re-enable restarts the streak from zero (epoch re-anchored).
+  **Known limitation:** this consequence does NOT hold on real Postgres today —
+  the deactivation transaction is rejected by `ck_trigger_events_validation_result`
+  until `auto_deactivated` is added to `VALIDATION_RESULT_VALUES` and a new
+  migration widens the constraint (AGENTS.md §12). It becomes accurate once that
+  vocabulary fix ships.
 - Two auto-deactivation mechanisms now exist for ongoing triggers (config
   failure via Redis, no-delivery via DB). They guard different failure domains,
   deactivate the same entity, and share one audit ceremony — new guards must
