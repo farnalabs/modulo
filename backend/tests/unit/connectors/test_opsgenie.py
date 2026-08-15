@@ -220,6 +220,53 @@ async def test_query_teams_corrupt_total_inf(connector: OpsgenieConnector) -> No
     assert result.total == 0
 
 
+@respx.mock
+async def test_query_alerts_corrupt_body_no_crash(connector: OpsgenieConnector) -> None:
+    """A non-dict body from the alerts list endpoint must degrade to an empty
+    page instead of crashing with AttributeError on ``.get()``."""
+    respx.get(f"{_BASE}/alerts").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await connector.query(ConnectorQuery(resource="alerts"))
+    assert not result.records
+    assert result.total is None
+
+
+@respx.mock
+async def test_query_alerts_non_list_data_no_crash(connector: OpsgenieConnector) -> None:
+    """A corrupt body placing a non-list in ``data`` must fall back to an
+    empty page instead of returning a bare string as the records list."""
+    respx.get(f"{_BASE}/alerts").mock(return_value=httpx.Response(200, json={"data": "not-a-list"}))
+    result = await connector.query(ConnectorQuery(resource="alerts"))
+    assert not result.records
+    assert result.total is None
+
+
+@respx.mock
+async def test_query_teams_corrupt_body_no_crash(connector: OpsgenieConnector) -> None:
+    """A non-dict teams body must degrade to an empty page, not crash."""
+    respx.get(f"{_BASE}/teams").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await connector.query(ConnectorQuery(resource="teams"))
+    assert not result.records
+    assert result.total is None
+
+
+@respx.mock
+async def test_query_schedules_corrupt_body_no_crash(connector: OpsgenieConnector) -> None:
+    """A non-dict schedules body must degrade to an empty page, not crash."""
+    respx.get(f"{_BASE}/schedules").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await connector.query(ConnectorQuery(resource="schedules"))
+    assert not result.records
+    assert result.total is None
+
+
+@respx.mock
+async def test_query_escalations_corrupt_body_no_crash(connector: OpsgenieConnector) -> None:
+    """A non-dict escalations body must degrade to an empty page, not crash."""
+    respx.get(f"{_BASE}/escalations").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await connector.query(ConnectorQuery(resource="escalations"))
+    assert not result.records
+    assert result.total is None
+
+
 # ── Pagination helpers — direct unit coverage ──────────────────────────
 
 
@@ -231,6 +278,7 @@ def test_paging_total_count() -> None:
     assert _paging_total_count({"totalCount": True}) == 0
     assert _paging_total_count({"totalCount": "garbage"}) == 0
     assert _paging_total_count({}) is None
+    assert _paging_total_count(["garbage"]) is None
 
 
 def test_next_offset_cursor() -> None:

@@ -365,6 +365,62 @@ async def test_query_runs(cc_runner):
     assert len(result.records) == 1
 
 
+# ---------------------------------------------------------------------------
+# corrupt/hostile list payload hardening
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_list_runs_corrupt_body_no_crash(cc_runner):
+    """A non-dict body from the pipeline list endpoint must degrade to an
+    empty page instead of crashing with AttributeError on ``.get()``."""
+    respx.get(f"{_CIRCLECI_API}/project/gh/owner/repo/pipeline").mock(
+        return_value=httpx.Response(200, json=["garbage"])
+    )
+    runs = await cc_runner.list_runs(pipeline_id="gh/owner/repo")
+    assert runs == []
+
+
+@respx.mock
+async def test_list_runs_non_list_items_no_crash(cc_runner):
+    """A corrupt body placing a non-list in ``items`` must fall back to an
+    empty page instead of returning a bare string as the records list."""
+    respx.get(f"{_CIRCLECI_API}/project/gh/owner/repo/pipeline").mock(
+        return_value=httpx.Response(200, json={"items": "not-a-list"})
+    )
+    runs = await cc_runner.list_runs(pipeline_id="gh/owner/repo")
+    assert runs == []
+
+
+@respx.mock
+async def test_query_pipelines_corrupt_body_no_crash(cc_runner):
+    """A non-dict pipelines body must degrade to an empty page, not crash."""
+    respx.get(f"{_CIRCLECI_API}/project/gh/owner/repo/pipeline").mock(
+        return_value=httpx.Response(200, json=["garbage"])
+    )
+    result = await cc_runner.query(ConnectorQuery(resource="pipelines", filters={"slug": "gh/owner/repo"}))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_workflows_corrupt_body_no_crash(cc_runner):
+    """A non-dict workflows body must degrade to an empty page, not crash."""
+    respx.get(f"{_CIRCLECI_API}/pipeline/pipe-uuid/workflow").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await cc_runner.query(ConnectorQuery(resource="workflows", filters={"pipeline_id": "pipe-uuid"}))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_jobs_corrupt_body_no_crash(cc_runner):
+    """A non-dict jobs body must degrade to an empty page, not crash."""
+    respx.get(f"{_CIRCLECI_API}/workflow/wf-1/job").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await cc_runner.query(ConnectorQuery(resource="jobs", filters={"workflow_id": "wf-1"}))
+    assert not result.records
+    assert result.total == 0
+
+
 @respx.mock
 async def test_query_unsupported_resource(cc_runner):
     q = ConnectorQuery(resource="invalid", filters={})

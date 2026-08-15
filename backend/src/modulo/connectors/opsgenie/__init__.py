@@ -6,6 +6,7 @@ from typing import Any, cast
 import httpx
 
 from modulo.connectors._safe_int import safe_int as _safe_int
+from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -18,15 +19,18 @@ from modulo.connectors.base import (
 _BASE = "https://api.opsgenie.com/v2"
 
 
-def _paging_total_count(body: dict[str, Any]) -> int | None:
+def _paging_total_count(body: object) -> int | None:
     """Extract Opsgenie's ``totalCount`` as a safe int.
 
     Guards against non-finite floats (``inf``/``nan``) which otherwise crash
     downstream ``int()`` coercion — Python's json parser produces ``inf`` for
     overflowing literals such as ``1e999``, so a corrupt or hostile Opsgenie
     response must not be able to poison the reported total. A missing
-    ``totalCount`` keeps the historical ``None`` behaviour.
+    ``totalCount`` keeps the historical ``None`` behaviour. A non-dict body
+    (list, string, number, ...) from a corrupt response is treated as absent.
     """
+    if not isinstance(body, dict):
+        return None
     raw = body.get("totalCount")
     if raw is None:
         return None
@@ -128,11 +132,13 @@ class OpsgenieConnector(ConnectorBase):
         resp = await c.get("/alerts", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = body.get("data", [])
+        records = _safe_records(body, "data")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=_paging_total_count(body),
-            next_cursor=_next_offset_cursor(params.get("offset", 0), records, body.get("paging")),
+            next_cursor=_next_offset_cursor(
+                params.get("offset", 0), records, body.get("paging") if isinstance(body, dict) else None
+            ),
         )
 
     async def _query_alert(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -144,7 +150,7 @@ class OpsgenieConnector(ConnectorBase):
         resp = await c.get(f"/alerts/{identifier}", params=params)
         resp.raise_for_status()
         body = resp.json()
-        data = body.get("data", {})
+        data = body.get("data", {}) if isinstance(body, dict) else {}
         return ConnectorResult(records=[data] if data else [], total=1 if data else 0)
 
     async def _query_alert_notes(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -160,7 +166,7 @@ class OpsgenieConnector(ConnectorBase):
         resp = await c.get(f"/alerts/{identifier}/notes", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = body.get("data", [])
+        records = _safe_records(body, "data")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=_paging_total_count(body),
@@ -180,7 +186,7 @@ class OpsgenieConnector(ConnectorBase):
         resp = await c.get(f"/alerts/{identifier}/logs", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = body.get("data", [])
+        records = _safe_records(body, "data")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=_paging_total_count(body),
@@ -198,7 +204,7 @@ class OpsgenieConnector(ConnectorBase):
         resp = await c.get("/teams", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = body.get("data", [])
+        records = _safe_records(body, "data")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=_paging_total_count(body),
@@ -214,7 +220,7 @@ class OpsgenieConnector(ConnectorBase):
         resp = await c.get("/schedules", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = body.get("data", [])
+        records = _safe_records(body, "data")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=_paging_total_count(body),
@@ -234,7 +240,7 @@ class OpsgenieConnector(ConnectorBase):
         resp = await c.get(f"/schedules/{identifier}/on-calls", params=params)
         resp.raise_for_status()
         body = resp.json()
-        data = body.get("data", {})
+        data = body.get("data", {}) if isinstance(body, dict) else {}
         records = [data] if data else []
         return ConnectorResult(records=records, total=len(records))
 
@@ -247,7 +253,7 @@ class OpsgenieConnector(ConnectorBase):
         resp = await c.get("/escalations", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = body.get("data", [])
+        records = _safe_records(body, "data")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=_paging_total_count(body),
