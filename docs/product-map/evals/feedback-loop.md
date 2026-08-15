@@ -33,7 +33,7 @@ The Feedback System treats every human rejection as structured signal. Handles F
 - [x] Invalid status transitions raise ValueError with descriptive message
 - [x] Correction run linked via correction_run_id field
 - [x] Organisation-scoped RLS enforced on all FeedbackRecord operations
-  - [ ] FeedbackRecord status transitions are audited (no audit trail yet � audit_logger not integrated)
+  - [x] FeedbackRecord status transitions are audited — `feedback.status_changed` dispatched from the `PATCH /feedback/{id}/status` and `POST /feedback/inbox/{id}/review` routes (old_status, new_status, action, run_id, gate_id, correction_run_id), written in a fresh transaction after the primary op commits and failure-isolated (broken audit append never fails the transition)
 
 ### Feedback routing
 - [ ] Pipeline-level default_feedback_handler field is defined on Pipeline model but NEVER consumed � create API hardcodes "human", no runtime code reads the field
@@ -110,6 +110,10 @@ The Feedback System treats every human rejection as structured signal. Handles F
 
 ### Security & concurrency
 - [x] Organisation-scoped RLS enforced via _rls decorator on all public methods
+- [x] Feedback record creation audited — `feedback.created` dispatched from the create route (run_id, gate_id, feedback_handler_type), resource_type `feedback_record`
+- [x] Feedback status transitions audited — `feedback.status_changed` dispatched from the update-status and review routes (old_status, new_status, action, run_id, gate_id, correction_run_id)
+- [x] Audit append is failure-isolated — `asyncio.CancelledError` re-raised, any other audit failure logged (`feedback.audit_append_failed`) and never blocks the completed operation (api_keys/teams gold pattern)
+- [x] 404 transitions emit no audit event
 - [x] Concurrent status transitions guarded via optimistic locking — update_status/link_correction_run use UPDATE ... WHERE status = expected ... RETURNING and raise ConcurrentModificationError on stale writes
 - [x] Input validation on rejection_reason length — max 5000 characters (create_feedback_record), covered by tests
 - [x] Input validation on rejected_output size — max 100KB when serialized, covered by tests
@@ -146,7 +150,7 @@ The Feedback System treats every human rejection as structured signal. Handles F
 - BDD feature file (feedback_system.feature) has 7 real scenarios � covers create, status transitions, invalid transitions, gap detection, and correction run spawning
 - [Removed 2026-08-15] Correction-run checkpoint seeding was listed as a gap, but PRD 8.20 explicitly specifies correction runs as fresh runs — this is the intended design, not a gap
 - No feedback_handler supersedes reject_target enforcement at validation/gate level
-- No audit events recorded for FeedbackRecord status transitions
+- ~~No audit events recorded for FeedbackRecord status transitions~~ **RESOLVED (2026-08-15)**: `feedback.status_changed` is dispatched from the update-status and review routes (fresh post-commit transaction, RLS re-established, failure-isolated), plus `feedback.created` on record creation. Both documented in `core/audit-trail.md` implemented-event list.
 - No eval proposal curation UI (draft eval editor, publish, immediate activation) — the queue view exists (EvalProposalsQueueView.vue) but has no editor and "Publish" does not create an eval definition
 - Review endpoint catches FeedbackManagerError (base class) as 404 � too broad, should be narrowed to specific subclasses
 - run_post_correction_eval escalates the FeedbackRecord on eval failure (implemented); it is not yet wired into the run completion lifecycle so the escalation never auto-triggers in production
@@ -156,14 +160,20 @@ The Feedback System treats every human rejection as structured signal. Handles F
 
 ## QA History
 
+### 2026-08-15 — improve-architecture (feedback audit gaps)
+- **RESOLVED the "No audit events recorded for FeedbackRecord status transitions" known gap** (`api/routes/feedback.py`).
+- New `_append_feedback_audit_event()` helper appends in a fresh transaction after the primary operation commits (RLS re-established — SET LOCAL reverts on COMMIT), failure-isolated per the api_keys/teams gold pattern (`asyncio.CancelledError: raise` + broad `except Exception` → logged warning, never fails the completed op).
+- **`feedback.created`** — the create route appends it (payload `run_id`/`gate_id`/`feedback_handler_type`, record id as `resource_id`, actor = creating user).
+- **`feedback.status_changed`** — the update-status route appends it with `old_status` (captured from a pre-update `get_feedback_record` fetch — this also turns a missing record into a clean 404 before `update_status` runs instead of the previously-uncaught `FeedbackRecordNotFoundError` → 500) and the review route appends it for all three actions (`mark_reviewed`/`dismiss` → resolved, `create_correction_run` → correcting, with the action and `correction_run_id` in the payload). A 404 emits nothing.
+- **Tests** — 7 new endpoint unit tests in `test_feedback_endpoint.py`: create-emits + create audit-failure isolation, update-status emits full payload + audit-failure isolation + 404-no-emit, review mark_reviewed emits + create_correction_run emits (payload incl. correction_run_id) + review audit-failure isolation.
+- Updated product map `evals/feedback-loop.md` (3 behaviours `[ ]`→`[x]`, Known Gap → RESOLVED, QA History) + `evals/feedback-records.md` (Status Transitions + Auth & Security behaviours) + `core/audit-trail.md` (2 implemented-event entries). Verification: 30/30 `test_feedback_endpoint.py`, 129 feedback_manager + error-handling unit tests, 2633/2633 `tests/unit/api/`, 83 route-introspection + audit-logger tests, ruff check + format clean, mypy --strict clean. Status: partial (correction-run lifecycle auto-transitions — link_correction_run/_escalate_record — are not individually audited; only the user-facing routes that trigger them).
+
 ### 2026-08-15 — Coverage-completion (FAR-233)
 - **Fixed (bug)**: `detect_eval_gap` skipped every real `EvalDefinition` object as "malformed", so gap detection always returned `True` when the pipeline had eval definitions. The malformed guard now accepts `EvalDefinition`-shaped objects; covered by `test_uses_real_eval_engine_standalone_path`.
 - **Fixed (PRD compliance)**: the `dismiss` review action now sets status to `dismissed` (PRD 8.20 terminal state) instead of `resolved`; `_VALID_STATUS_TRANSITIONS` and `PATCH /status` accept `dismissed` (`pending`/`escalated` -> `dismissed`, terminal). Covered by new unit + endpoint tests. The earlier "dismiss -> resolved" QA decisions misread the PRD, which explicitly includes `dismissed`.
 - **Marked `[x]` (verified)**: optimistic locking exists on status transitions; rejection_reason length and rejected_output size are enforced; standalone EvalEngine.evaluate path is exercised via gap detection.
 - **Corrected**: "checkpoint pre-seeding" checkboxes were not PRD requirements — PRD 8.20 specifies fresh correction runs; the code already matches. Eval-failure escalation (record -> `escalated`) is implemented; the correction run uses the standard run lifecycle.
 - **Remaining gaps**: audit trail for status transitions, pipeline/gate default_feedback_handler consumption, reject_routing_conflict, accept/reject UI for ai_correction_with_human_review, run_post_correction_eval lifecycle wiring, eval proposal curation.
-
-
 
 ### QA index 342 (2026-07-09) � Cross-cutting QA sweep
 - **Fixed:** spawn_correction_run now checks correction_run_id before spawning � prevents leaked runs (raises ConcurrentModificationError).

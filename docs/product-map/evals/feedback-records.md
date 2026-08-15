@@ -47,6 +47,8 @@ Discovered from 1 completed delivery task.
 - [x] RLS enforced on all status transitions (org-scoped)
 - [x] API rejects invalid status string with 422
 - [x] API updates status via PATCH /feedback/{id}/status
+- [x] Status transitions recorded in audit trail — `feedback.status_changed` (old_status, new_status, action, run_id, gate_id) dispatched from the update-status and review routes
+- [x] 404 status update emits no audit event
 
 ### Handler Types & Auto-Correction
 
@@ -119,6 +121,8 @@ Discovered from 1 completed delivery task.
 - [x] RLS org-scoping on all feedback operations (cross-org isolation)
 - [x] Create feedback validates run exists and belongs to user's org (404 if not)
 - [x] API serialises all FeedbackRecord fields in responses
+- [x] Feedback record creation recorded in audit trail — `feedback.created` (run_id, gate_id, feedback_handler_type)
+- [x] Audit appends are failure-isolated — a broken audit write (log `feedback.audit_append_failed`) never fails the completed create/transition
 
 ### Integration / Persistence
 
@@ -165,13 +169,17 @@ Discovered from 1 completed delivery task.
 
 ## QA History
 
+### 2026-08-15 — improve-architecture (feedback audit events)
+- **RESOLVED the "No audit events recorded for FeedbackRecord status transitions" gap** (tracked in `evals/feedback-loop.md`). `api/routes/feedback.py` now dispatches `feedback.created` (create route) and `feedback.status_changed` (update-status + review routes) via a new `_append_feedback_audit_event()` helper — written in a fresh post-commit transaction with RLS re-established (SET LOCAL reverts on COMMIT) and failure-isolated so a broken append never fails the completed operation (api_keys/teams gold pattern).
+- `update_feedback_status` now fetches the record first for `old_status` (and returns a clean 404 for a missing record before `update_status`, previously an uncaught `FeedbackRecordNotFoundError` → 500).
+- Review route audits all three actions: `mark_reviewed`/`dismiss` → resolved, `create_correction_run` → correcting (payload includes the action and `correction_run_id`).
+- **Tests** — 7 new endpoint unit tests (create-emits + failure isolation; update-status emits full payload + failure isolation + 404-no-emit; review mark_reviewed-emits + create-correction-run-emits + failure isolation). 30/30 `test_feedback_endpoint.py`, 2633/2633 `tests/unit/api/` pass; ruff check + format clean; mypy --strict clean.
+
 ### 2026-08-15 — Coverage-completion (FAR-233)
 - **Fixed (PRD compliance)**: the `dismiss` review action now sets status to `dismissed` (PRD 8.20 terminal state). `_VALID_STATUS_TRANSITIONS`, `PATCH /feedback/{id}/status` valid-status set, and review-endpoint action mapping updated to match the DB CHECK constraint (which always allowed `dismissed`). Covered by `test_dismisses_feedback`, `test_mark_reviewed_uses_resolved_status`, `test_accepts_dismissed_status`, and manager transition tests.
 - **Fixed (bug)**: `detect_eval_gap` treated real `EvalDefinition` objects as malformed and skipped the whole suite, always returning `True` (gap) when the pipeline had eval definitions. The guard now accepts `EvalDefinition`-shaped objects; covered by `test_uses_real_eval_engine_standalone_path`.
 - **Added**: 18 ProgrammingError→501 / SQLAlchemyError→503 cases for all 9 feedback routes in `test_error_handling.py` (the file previously claimed this coverage but had none). `list_eval_proposals` node-name resolution is confirmed inside the try/except block.
 - **Removed stale gaps**: checkpoint pre-seeding (not a PRD requirement — correction runs are fresh by design), eval-failure-does-not-escalate (escalation is implemented and tested), the failing `test_detects_eval_gap` note (the test passes with a `run_id=None` mock record that skips the eval-suite query).
-
-
 
 ### 2026-07-03 — Cross-cutting QA (index 87)
 - **Fixed**: Stale "No feedback inbox UI implemented" gap — the view exists.
