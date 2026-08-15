@@ -1,6 +1,7 @@
 from modulo.core.library.workflows.definitions import (
     ADR_WORKFLOW,
     CICD_WORKFLOW,
+    DAILY_REVIEWER,
     DOGFOODING_PIPELINE,
     FEATURE_PROPOSAL,
     FULL_SDLC,
@@ -18,6 +19,7 @@ from modulo.core.library.workflows.definitions import (
 __all__ = [
     "ADR_WORKFLOW",
     "CICD_WORKFLOW",
+    "DAILY_REVIEWER",
     "DOGFOODING_PIPELINE",
     "FEATURE_PROPOSAL",
     "FULL_SDLC",

@@ -1,5 +1,6 @@
 """Team management REST routes."""
 
+import asyncio
 import logging
 import uuid
 
@@ -228,21 +229,11 @@ async def create_team_endpoint(
                 resource_id=team.id,
                 payload_json={"team_id": str(team.id), "name": team.name},
             )
-    except IntegrityError as exc:
-        _log.exception("teams.create_team_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        ) from exc
-    except ProgrammingError:
-        _log.exception("teams.create_team_endpoint")
+    except asyncio.CancelledError:
+        raise
+    except Exception:
         _log.warning(
-            "create_team audit event ProgrammingError — team was created",
-            extra={"org_id": str(current_user.organisation_id), "team_id": str(team.id)},
-        )
-    except SQLAlchemyError:
-        _log.exception(
-            "create_team audit event SQLAlchemyError — team was created",
+            "create_team audit event failed — team was created",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team.id)},
         )
 
@@ -383,21 +374,11 @@ async def update_team_endpoint(
                 resource_id=team_id,
                 payload_json={"team_id": str(team_id), "updates": updates},
             )
-    except IntegrityError as exc:
-        _log.exception("teams.update_team_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        ) from exc
-    except ProgrammingError:
-        _log.exception("teams.update_team_endpoint")
+    except asyncio.CancelledError:
+        raise
+    except Exception:
         _log.warning(
-            "update_team audit event ProgrammingError — team was updated",
-            extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
-        )
-    except SQLAlchemyError:
-        _log.exception(
-            "update_team audit event SQLAlchemyError — team was updated",
+            "update_team audit event failed — team was updated",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
         )
 
@@ -502,21 +483,11 @@ async def delete_team_endpoint(
                 resource_id=team_id,
                 payload_json={"team_id": str(team_id)},
             )
-    except IntegrityError as exc:
-        _log.exception("teams.delete_team_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        ) from exc
-    except ProgrammingError:
-        _log.exception("teams.delete_team_endpoint")
+    except asyncio.CancelledError:
+        raise
+    except Exception:
         _log.warning(
-            "delete_team audit event ProgrammingError — team was deleted",
-            extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
-        )
-    except SQLAlchemyError:
-        _log.exception(
-            "delete_team audit event SQLAlchemyError — team was deleted",
+            "delete_team audit event failed — team was deleted",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
         )
 
@@ -677,6 +648,32 @@ async def add_member_endpoint(
             detail="An unexpected error occurred while adding the member.",
         ) from None
 
+    from modulo.core.audit_logger import append_audit_event
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await append_audit_event(
+                session,
+                org_id=current_user.organisation_id,
+                event_type="team_member_added",
+                actor_user_id=current_user.account_id,
+                resource_type="team_membership",
+                resource_id=membership.id,
+                payload_json={
+                    "team_id": str(team_id),
+                    "user_id": str(membership.account_id),
+                    "role": membership.role,
+                },
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "add_member audit event failed — member was added",
+            extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
+        )
+
     return MembershipResponse(
         id=str(membership.id),
         team_id=str(membership.team_id),
@@ -756,6 +753,32 @@ async def remove_member_endpoint(
             detail="An unexpected error occurred while removing the member.",
         ) from None
 
+    from modulo.core.audit_logger import append_audit_event
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await append_audit_event(
+                session,
+                org_id=current_user.organisation_id,
+                event_type="team_member_removed",
+                actor_user_id=current_user.account_id,
+                resource_type="team_membership",
+                resource_id=membership_id,
+                payload_json={
+                    "team_id": str(team_id),
+                    "user_id": str(membership.account_id),
+                    "role": membership.role,
+                },
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "remove_member audit event failed — member was removed",
+            extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
+        )
+
 
 @router.patch(
     "/{team_id}/members/{membership_id}",
@@ -792,8 +815,12 @@ async def change_member_role_endpoint(
                         detail=f"Cannot grant role '{req.role}' above your own team role '{caller_membership.role}'",
                     )
 
+            existing = await get_membership(session, membership_id)
+            if existing is None or existing.team_id != team_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+            old_role = existing.role
             membership = await update_member_role(session, membership_id, req.role)
-            if membership is None or membership.team_id != team_id:
+            if membership is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
     except IntegrityError as exc:
         _log.exception("teams.change_member_role_endpoint")
@@ -835,6 +862,33 @@ async def change_member_role_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while changing the member role.",
         ) from None
+
+    from modulo.core.audit_logger import append_audit_event
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await append_audit_event(
+                session,
+                org_id=current_user.organisation_id,
+                event_type="team_member_role_changed",
+                actor_user_id=current_user.account_id,
+                resource_type="team_membership",
+                resource_id=membership.id,
+                payload_json={
+                    "team_id": str(team_id),
+                    "user_id": str(membership.account_id),
+                    "old_role": old_role,
+                    "new_role": membership.role,
+                },
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "change_member_role audit event failed — member role was changed",
+            extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
+        )
 
     return MembershipResponse(
         id=str(membership.id),

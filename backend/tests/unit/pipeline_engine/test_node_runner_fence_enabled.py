@@ -310,7 +310,8 @@ async def test_same_claim_attempt_key_stable_across_invocations():
         result = await _run_fence(node_fn, create_mock)
         keys.append(result["output"]["attempt_key"])
 
-    assert keys[0] == keys[1] == "run:run-1:node:n1:4"
+    assert keys[0] == "run:run-1:node:n1:4"
+    assert keys[1] == "run:run-1:node:n1:4"
 
 
 async def test_marker_carries_attempt_key():

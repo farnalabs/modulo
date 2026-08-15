@@ -273,7 +273,7 @@ class TestEvalDashboardSections:
         assert gap["pipeline_name"] == "Data Pipeline"
         assert gap["node_id"] == str(_NODE_2)
 
-    def test_coverage_gaps_none(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_coverage_gaps_none(self, client: TestClient) -> None:
         mock_session = _make_mock_session()
         _configure_execute(
             mock_session,
@@ -316,7 +316,7 @@ class TestEvalDashboardSections:
 class TestEvalDashboardEmptyState:
     URL = "/api/v1/admin/evals/dashboard"
 
-    def test_empty_database(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_empty_database(self, client: TestClient) -> None:
         mock_session = _make_mock_session()
 
         summary_row = _make_row(total_results=0, passed=0, failed=0)
@@ -350,7 +350,7 @@ class TestEvalDashboardEmptyState:
 class TestEvalDashboardMultiType:
     URL = "/api/v1/admin/evals/dashboard"
 
-    def test_multiple_type_breakdown(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_multiple_type_breakdown(self, client: TestClient) -> None:
         mock_session = _make_mock_session()
 
         summary_row = _make_row(total_results=10, passed=6, failed=4)

@@ -696,6 +696,77 @@ def version_list_exactly(count: int, version: int, request: Any) -> None:
     assert data[0]["version"] == version, f"Expected version {version}, got {data[0]['version']}"
 
 
+@given(parsers.parse('a lifecycle map with an external stage "{stage_id}" exists'))
+def lifecycle_map_exists_with_external_stage(stage_id: str, ctx: dict[str, Any], request: Any) -> None:
+    content_json = {"stages": [{"id": stage_id, "name": stage_id.replace("-", " ").title(), "type": "external"}]}
+    lm = _make_lifecycle_map(name="SDLC Workflow", content_json=content_json)
+    ctx["lifecycle_map"] = lm
+    request.node._lifecycle_map = lm
+
+
+@when(parsers.parse('I self-report "{kind}" "{ref}" with stage_id "{stage_id}"'))
+def self_report_with_stage_id(
+    kind: str, ref: str, stage_id: str, ctx: dict[str, Any], request: Any, client: Any, mock_session: Any
+) -> None:
+    """POST .../journeys/self-report naming the completed stage.
+
+    The route resolves ``stage_id`` against the map's current
+    ``lifecycle_map_stages`` projection and passes the row to
+    ``advance_journeys`` as the explicit stage (external stages have no
+    ``pipeline_id``, so the pipeline path can never move the journey). The
+    junction lookup is faked on the mock session; the captured explicit stage
+    proves the journey would advance into it.
+    """
+    lm = ctx.get("lifecycle_map", _make_lifecycle_map())
+
+    stage_mock = MagicMock()
+    stage_mock.map_id = lm.id
+    stage_mock.version = lm.version
+    stage_mock.stage_id = stage_id
+    stage_mock.stage_name = stage_id.replace("-", " ").title()
+    stage_mock.position = 7
+    junction_result = AsyncMock()
+    junction_result.scalar_one_or_none = MagicMock(return_value=stage_mock)
+    mock_session.execute.return_value = junction_result
+
+    async def _fake_advance(
+        session: Any,
+        organisation_id: Any,
+        run_id: Any = None,
+        pipeline_id: Any = None,
+        refs: Any = None,
+        status: str = "complete",
+        completed_at: Any = None,
+        run_created_at: Any = None,
+        explicit_stage: Any = None,
+    ) -> int:
+        ctx["advance_explicit_stage"] = explicit_stage
+        return 1
+
+    with (
+        patch("modulo.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock(return_value=lm)),
+        patch(
+            "modulo.api.routes.lifecycle_maps.confirm_reported_refs",
+            new=AsyncMock(return_value=([{"kind": kind, "ref": ref, "source": "reported"}], 0)),
+        ),
+        patch("modulo.api.routes.lifecycle_maps.advance_journeys", new=_fake_advance),
+    ):
+        resp = client.post(
+            f"/api/v1/lifecycle-maps/{lm.id}/journeys/self-report",
+            json={"work_item_refs": [{"kind": kind, "ref": ref}], "stage_id": stage_id},
+        )
+    _store_response(request, ctx, resp)
+    ctx["advance_called"] = True
+
+
+@then(parsers.parse('the journey is at stage "{stage_id}"'))
+def journey_is_at_stage(stage_id: str, ctx: dict[str, Any]) -> None:
+    assert ctx.get("advance_called"), "advance_journeys was not called"
+    explicit = ctx.get("advance_explicit_stage")
+    assert explicit is not None, "expected an explicit_stage resolved from the reported stage_id"
+    assert explicit.stage_id == stage_id, f"Expected journey at stage {stage_id!r}, got {explicit.stage_id!r}"
+
+
 @then(parsers.parse('the response contains a lifecycle map named "{name}"'))
 def response_contains_lifecycle_map(name: str, request: Any) -> None:
     resp = request.node._resp

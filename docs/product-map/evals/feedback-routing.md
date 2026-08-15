@@ -43,7 +43,7 @@ human-in-the-loop resolution.
 - [x] `GET /api/v1/feedback/proposals` lists records with `eval_gap=True` and status in `pending`/`routing`
 - [x] Paginated response with `page`, `page_size`, `total`
 - [x] Returns producing node name resolved from pipeline snapshot graph JSON
-- [ ] No frontend UI for reviewing/publishing eval proposals — API-only
+- [x] Frontend UI for the eval proposals queue exists — EvalProposalsQueueView.vue at /evals/proposals (router line 273) lists proposals and offers Publish/Dismiss; no draft-eval editor and no promotion to an active eval definition
 - [ ] No mechanism to promote a detected gap into an active eval definition
 
 ## Post-Correction Eval
@@ -67,7 +67,7 @@ human-in-the-loop resolution.
 - [x] Concurrent-safe: uses `FOR UPDATE` pattern on status updates via WHERE status match + returning
 - [x] Raises `ValueError` if feedback record or original run not found
 - [x] Auto-triggers correction run for `ai_correction` and `ai_correction_with_human_review` handlers on `create_feedback_record()`
-- [ ] No LangGraph checkpoint seeding — correction runs start fresh, not pre-seeded
+- [x] Correction runs start fresh — PRD 8.20 specifies fresh correction runs that do not inherit checkpoint state; the code creates a new run, matching the spec
 - [ ] No AI correction agent library primitive exists to produce diagnosis + correction proposal
 
 ## Status State Machine
@@ -76,8 +76,8 @@ human-in-the-loop resolution.
 - [x] DB-level CHECK constraint enforces valid status values
 - [x] Valid transitions:
   - `pending` → `routing`, `correcting`, `resolved`, `dismissed`
-  - `routing` → `escalated`, `correcting`, `resolved`
-  - `correcting` → `correcting`, `resolved`, `escalated`
+  - `routing` → `escalated`, `correcting`, `resolved`, `dismissed`
+  - `correcting` → `correcting`, `resolved`, `escalated`, `dismissed`
   - `escalated` → `resolved`, `dismissed`
   - `resolved` → terminal
   - `dismissed` → terminal
@@ -85,7 +85,7 @@ human-in-the-loop resolution.
 - [x] Concurrent transition detection: `WHERE feedback_status == current_status` pattern detects stale updates
 - [x] UPDATE ... RETURNING pattern ensures atomic read-after-write on status changes
 - [x] `PATCH /feedback/{record_id}/status` validates status in allowed set before delegation
-- [x] Review endpoint actions: `mark_reviewed` (→resolved), `dismiss` (→dismissed), `create_correction_run` (→correcting)
+- [x] Review endpoint actions: `mark_reviewed` (→resolved), `dismiss` (→dismissed, PRD 8.20), `create_correction_run` (→correcting) — dismiss now actually transitions to `dismissed` (fixed 2026-08-15; previously it resolved)
 
 ## API Endpoints
 
@@ -131,6 +131,14 @@ human-in-the-loop resolution.
 - [x] Foreign keys: `run_id` → runs.id (CASCADE), `account_id` → accounts.id (RESTRICT), `correction_run_id` → runs.id (SET NULL), `producing_agent_id` → agents.id (SET NULL)
 
 ## QA History
+
+### 2026-08-15 — Coverage-completion (FAR-233)
+- **Fixed (PRD compliance)**: `dismiss` now transitions to `dismissed` (was `resolved`), matching PRD 8.20 and the DB CHECK constraint. `dismissed` is reachable from every non-terminal inbox state — `pending`, `routing`, `correcting`, `escalated` — so the dismiss button (shown for every inbox record) never 409s; `PATCH /status` accepts `dismissed`.
+- **Corrected**: "no LangGraph checkpoint seeding" was listed as a gap, but PRD 8.20 specifies fresh correction runs — the code matches the spec.
+- **Corrected**: eval proposals UI is no longer API-only — EvalProposalsQueueView.vue exists at /evals/proposals (Publish/Dismiss). Promotion to an active eval definition is still a gap.
+- **Remaining gaps**: auto-trigger of gap detection on feedback creation, AI-agent-drafted proposals, publish-to-active mechanism, post-correction eval lifecycle wiring, reject_routing_conflict validation.
+
+
 
 ### 2026-07-08 — Cross-cutting QA (index 334)
 

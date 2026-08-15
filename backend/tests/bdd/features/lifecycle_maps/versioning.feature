@@ -75,3 +75,9 @@ Feature: Lifecycle Map Versioning
     Given a lifecycle map with dangling legacy content exists
     When the legacy content backfill cleans the map
     Then the repaired map content is accepted by editor validation
+
+  Scenario: A workflow self-report with a stage_id advances the journey to that stage
+    Given a lifecycle map with an external stage "merge" exists
+    When I self-report "github_pr" "#123" with stage_id "merge"
+    Then the response status is 200
+    And the journey is at stage "merge"

@@ -5,6 +5,7 @@ from typing import Any, cast
 import httpx
 
 from modulo.connectors._safe_int import safe_int as _safe_int
+from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     CIRun,
     CIRunLog,
@@ -159,7 +160,7 @@ class TeamCityConnector(ConnectorBase):
             r = await client.get("/app/rest/builds", params={"locator": locator})
             r.raise_for_status()
             data = r.json()
-            builds: list[dict[str, Any]] = data.get("build", [])
+            builds: list[dict[str, Any]] = _safe_records(data, "build")
             runs = [self._run_from_build(b) for b in builds]
             if status:
                 runs = [r for r in runs if r.status == status]
@@ -172,7 +173,7 @@ class TeamCityConnector(ConnectorBase):
                     r = await client.get("/app/rest/projects")
                     r.raise_for_status()
                     data = r.json()
-                    records = data.get("project", [])
+                    records = _safe_records(data, "project")
                     return ConnectorResult(records=records, total=len(records))
             case "buildTypes":
                 project_id = q.filters.get("project_id", "")
@@ -182,7 +183,7 @@ class TeamCityConnector(ConnectorBase):
                     r = await client.get("/app/rest/buildTypes", params=params)
                     r.raise_for_status()
                     data = r.json()
-                    records = data.get("buildType", [])
+                    records = _safe_records(data, "buildType")
                     return ConnectorResult(records=records, total=len(records))
             case "builds":
                 build_type_id = q.filters.get("buildTypeId", "")
@@ -195,14 +196,14 @@ class TeamCityConnector(ConnectorBase):
                     r = await client.get("/app/rest/builds", params={"locator": locator})
                     r.raise_for_status()
                     data = r.json()
-                    records = data.get("build", [])
+                    records = _safe_records(data, "build")
                     return ConnectorResult(records=records, total=len(records))
             case "agents":
                 async with self._client() as client:
                     r = await client.get("/app/rest/agents")
                     r.raise_for_status()
                     data = r.json()
-                    records = data.get("agent", [])
+                    records = _safe_records(data, "agent")
                     return ConnectorResult(records=records, total=len(records))
             case _:
                 raise ValueError(f"Unsupported query resource: {q.resource!r}")

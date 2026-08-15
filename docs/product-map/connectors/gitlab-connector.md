@@ -100,7 +100,7 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [x] Detect expired tokens (401) vs insufficient scopes (403) vs network errors
 - [x] Report which scope/endpoint is denied in health check detail
 - [x] Report the GitLab instance version on self-hosted health checks (best-effort `GET /version` probe, appended as `(GitLab <version>)`; a missing/forbidden/failed probe never fails the health check)
-- [ ] Per-operation scope verification — no granular check before `write()` calls
+- [x] Per-operation scope verification — granular scope check runs before `write()` calls, failing fast with a descriptive `ValueError` when the token lacks the required scope (see OAuth Scopes)
 
 ### Error Handling
 
@@ -148,6 +148,15 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [ ] **Self-hosted discovery**: `base_url` is configurable per connector instance, but there is no instance-discovery/onboarding flow for self-hosted GitLab
 
 ## QA History
+
+### 2026-08-15 — coverage-completion (FAR-239): per-operation scope verification verified, remaining gaps confirmed
+
+**Behaviour audit:** re-verified the unchecked behaviours against code + tests.
+
+1. **Per-operation scope verification — `[ ]`→`[x]`**: the Health Check checkbox ("no granular check before `write()` calls") was a stale duplicate that contradicted the implemented behaviour. `GitLabConnector.write()` now runs `_ensure_write_scope()` at the top of every write — repository-file writes (`file`, `files`/`commit`, `file_delete`) require `write_repository`; all other writes (MR/issue/label/milestone/pipeline) require `api` (`_WRITE_SCOPE_REQUIREMENTS`). Declared scopes come from the instance `GET /oauth/token/info` probe, cached per instance for `_SCOPE_CACHE_TTL` (5 min) and warmed by `health_check()`; probe failures (404 on older self-hosted, network error, unparseable body) fail open. Public `verify_write_scopes(resource)` returns the missing-scope set. Covered by 11 unit tests in `test_gitlab.py` (blocked-without-scope where the write endpoint is never called, scope-error detail lists declared scopes, `api`-only token satisfies MR + file writes, 404/network-error fail-open, cache avoids re-probing, health check warms the cache).
+2. **Block run start when scopes are insufficient — confirmed genuine gap (stays `[ ]`)**: the ConnectorHub pre-run health check flags insufficient scopes (`HealthResult(ok=False)` with "Missing scopes: ...") but the hub does not refuse to build/execute a connector on that basis — the run still starts and writes fail fast. Resolving this requires ConnectorHub-level changes (`connector_hub/__init__.py`), outside this task's scope; tracked in Known Gaps.
+
+**Tests:** no code changes — 184/184 gitlab unit tests pass (test_gitlab.py + test_gitlab_issues.py + test_gitlab_resilience.py), ruff check + format clean. Status: partial (pre-run ConnectorHub scope blocking + self-hosted discovery remain).
 
 ### 2026-08-10 — improve-architecture: construction-time token validation + malformed project ID handling RESOLVED
 

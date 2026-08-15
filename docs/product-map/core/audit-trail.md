@@ -18,6 +18,7 @@ code:
   - backend/src/modulo/core/hitl_manager/expiry_job.py
   - backend/src/modulo/core/pipeline_engine/executor.py
   - backend/src/modulo/core/pipeline_engine/recovery.py
+  - backend/src/modulo/api/routes/teams.py
 unit-tests:
   - backend/tests/unit/audit_logger/test_audit_logger.py
   - backend/tests/unit/audit_logger/test_append_only.py
@@ -25,6 +26,7 @@ unit-tests:
   - backend/tests/unit/pipeline_engine/test_executor.py
   - backend/tests/unit/hitl_manager/test_hitl_manager.py
   - backend/tests/unit/api/test_api_keys_endpoint.py
+  - backend/tests/unit/api/test_teams.py
 
 depends-on: [feat-core-db-abstraction-core]
 status: partial
@@ -108,8 +110,11 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 - [x] `api_key_created` — key_id (not raw key), user_id
 - [x] `api_key_revoked` — key_id, revoked_by
 - [ ] `auth_event` — type (login/logout/failed), user_id, ip
-- [ ] `team_created` / `team_renamed` / `team_deleted` — team id/name, user
-- [ ] `team_member_added` / `team_member_removed` / `team_member_role_changed` — team_id, user_id, role
+- [x] `team_created` — team id/name, user (dispatched as `team_created`)
+- [x] `team_renamed` / `team_deleted` — team id/name, user (deletion dispatched as `team_deleted`; rename dispatched as `team_updated` — PRD-name divergence remains)
+- [x] `team_member_added` — team_id, user_id, role
+- [x] `team_member_removed` — team_id, user_id, role (role the removed member held)
+- [x] `team_member_role_changed` — team_id, user_id, old_role, new_role
 - [ ] `resource_team_ownership_changed` — resource_type, resource_id, old/new team_id
 - [ ] `team_membership_revoked` — team_id, user_id, revoked_by
 - [ ] `hitl_output_delivered` — V1 event, data: run_id, gate_id, user_id, output hash
@@ -142,6 +147,11 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 - [x] `hitl_claimed` — run_id, gate_id, user_id, team_id, expiry_minutes (dispatched from `HITLManager.claim`)
 - [x] `api_key_created` — name, role, team_id (dispatched from the api-keys create route, key id as `resource_id`)
 - [x] `api_key_revoked` — revoked_by (dispatched from the api-keys revoke route, key id as `resource_id`)
+- [x] `team_member_added` — team_id, user_id, role (dispatched from `teams.add_member_endpoint`, membership id as `resource_id`)
+- [x] `team_member_removed` — team_id, user_id, role (dispatched from `teams.remove_member_endpoint`, membership id as `resource_id`)
+- [x] `team_member_role_changed` — team_id, user_id, old_role, new_role (dispatched from `teams.change_member_role_endpoint`, membership id as `resource_id`)
+- [x] `feedback.created` — run_id, gate_id, feedback_handler_type (dispatched from `feedback.create_feedback`, record id as `resource_id`)
+- [x] `feedback.status_changed` — old_status, new_status, action, run_id, gate_id, correction_run_id (dispatched from the feedback update-status and inbox-review routes, record id as `resource_id`; failure-isolated — a broken append never fails the transition)
 
 ### Edge Cases
 
@@ -197,7 +207,7 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 - **PRD-vs-implementation divergence**: 14 of the 18 PRD-specified event types (`hitl_approved`, `hitl_rejected`, `team_created`, etc.) are NOT dispatched. Production code uses 19 different dot-notation event types (`pipeline.autonomy_level_changed`, `hitl.output_delivered`, etc.) with no overlap to the PRD table. The naming convention, granularity, and payload structure differ entirely. **[RESOLVED 2026-08-15]** — 4 PRD event types are now dispatched under their PRD names: `run_started`, `hitl_claimed`, `api_key_created`, `api_key_revoked`.
 - ~~**No `run_started` event**: pipeline runs start without an audit event. The `run_started` PRD event is not dispatched anywhere.~~ **[RESOLVED 2026-08-15]** — dispatched from `PipelineExecutor._check_capacity` at the pending→running claim transition (fires once per run; resumes excluded).
 - ~~**No `hitl_claimed` audit event**: Claim acquisition is not recorded in the audit trail (`hitl.claim_expired` is dispatched, but the initial claim itself is not).~~ **[RESOLVED 2026-08-15]** — dispatched from `HITLManager.claim()` with run_id/gate_id/user_id/team_id/expiry_minutes.
-- **No team CRUD audit events**: team creation, rename, deletion, membership changes, and role changes are not audited.
+- ~~**No team CRUD audit events**: team creation, rename, deletion, membership changes, and role changes are not audited.~~ **[RESOLVED]** — team create/update/delete were already dispatched (`team_created`/`team_updated`/`team_deleted`); team membership add/remove/role-change are now dispatched too (`team_member_added`/`team_member_removed`/`team_member_role_changed` from the teams membership routes). Remaining divergence: the rename event fires as `team_updated` rather than PRD's `team_renamed`.
 - **No permission change audit**: `user_permission_changed` event not dispatched.
 - ~~**No API key audit**: `api_key_created`/`api_key_revoked` not dispatched.~~ **[RESOLVED 2026-08-15]** — dispatched from the api-keys create/revoke routes (key id as `resource_id`, raw key never logged).
 - **No auth event audit**: login, logout, and failed auth attempts not recorded.
@@ -209,6 +219,16 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 - **8 unguarded audit dispatch calls fixed**: All previously uncovered dispatch calls now have error handling protection (expiry_job, recovery, sso_provider, admin team deletion, run_purge transaction scoping, rotation deadlock)
 
 ## QA History
+
+### 2026-08-15 — improve-architecture (team membership audit gaps)
+
+**RESOLVED the "No team CRUD audit events" known gap — team membership changes now audited** (`api/routes/teams.py`):
+- **`team_member_added`** — `add_member_endpoint` now appends the event after the primary operation commits (fresh transaction, RLS re-established), payload `team_id`/`user_id`/`role`, membership id as `resource_id`.
+- **`team_member_removed`** — `remove_member_endpoint` now appends the event (payload `team_id`/`user_id`/`role` — the role the removed member held before revocation), membership id as `resource_id`; a 404 revoke emits nothing.
+- **`team_member_role_changed`** — `change_member_role_endpoint` now captures the pre-update role (`get_membership` before `update_member_role`) and appends the event with `old_role`/`new_role`; a 404 emits nothing.
+- **Failure isolation hardened to the api_keys pattern** — all six team audit appends (create/update/delete + the three membership events) now catch `asyncio.CancelledError: raise` + broad `except Exception` (logged warning, never fails the completed operation), replacing the previous IntegrityError/ProgrammingError/SQLAlchemyError-only catches that let a generic audit failure bubble into a 500 (and previously turned a successful team create with an audit INSERT conflict into a 409).
+- **Tests** — 11 new unit tests in `test_teams.py`: 2 per membership route (emits event with full payload; audit failure does not block the operation) + add-member not-found-no-emit, remove-member 404 no-emit, and 4 new `TestChangeMemberRole` cases (200, 404, invalid role 422, audit failure isolation).
+- Updated product map `core/audit-trail.md` (2 PRD event-type rows `[ ]`→`[x]` + `team_member_*` rows, 3 new implemented-event entries, Known Gap → RESOLVED, `code:` frontmatter + `team-rbac.md` role-change Known Gap → RESOLVED). Verification: 124/124 teams + audit-logger + route-introspection unit tests pass, ruff check + format clean, mypy --strict clean on `teams.py`. Status: partial (14 remaining PRD event types undispatched; `team_renamed` still fires as `team_updated`).
 
 ### 2026-08-15 — improve-architecture (audit event gaps)
 

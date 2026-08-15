@@ -29,6 +29,13 @@ Advancement semantics per ref entry:
   For a pipeline that is not a map stage, the stage columns are left
   untouched — a run on a non-map pipeline updates the latest evidence but does
   not move the journey's stage.
+* An ``explicit_stage`` row may be supplied by the caller (workflow
+  self-reports that name the completed stage via ``stage_id``) so journeys
+  advance into EXTERNAL stages — GitHub Actions workflows (merge queue,
+  deploy agent) that have no ``pipeline_id`` and therefore cannot be resolved
+  by the pipeline path. The explicit stage is used only when pipeline
+  resolution yields no stage (``pipeline_id`` is ``None`` or the pipeline is
+  not a map stage); a pipeline-resolved stage always takes precedence.
 
 Evidence-timestamp anchor (DEV IATION from the FAR-143 spec)
 ------------------------------------------------------------
@@ -243,6 +250,7 @@ async def advance_journeys(
     run_created_at: datetime,
     is_replay: bool = False,
     variant_group_id: uuid.UUID | None = None,
+    explicit_stage: LifecycleMapStage | None = None,
 ) -> int:
     """Advance ``journeys`` rows for every canonical work-item ref of a run.
 
@@ -267,6 +275,13 @@ async def advance_journeys(
         run_created_at: The run's ``created_at``.
         is_replay: History-only replay run — never advances.
         variant_group_id: Variant run — never advances.
+        explicit_stage: A pre-resolved lifecycle-map stage row supplied by the
+            caller (external-stage self-reports that cannot attribute a
+            ``pipeline_id``). The caller owns resolving it org-scoped and
+            map-scoped against ``lifecycle_map_stages``. Used only when
+            pipeline resolution yields no stage — a pipeline-resolved stage
+            always takes precedence. ``None`` (the default) preserves the
+            pipeline-only behaviour.
 
     Returns:
         The number of journeys advanced (evidence + possibly ``run_count``
@@ -290,6 +305,8 @@ async def advance_journeys(
     stage: LifecycleMapStage | None = None
     if advancing and pipeline_id is not None:
         stage = await _resolve_stage_identity(session, organisation_id, pipeline_id)
+    if advancing and stage is None and explicit_stage is not None:
+        stage = explicit_stage
 
     advanced = 0
     seen: set[tuple[str, str]] = set()

@@ -325,7 +325,7 @@ def _write_backup_stream(tmp_path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_main_missing_dir_exits(monkeypatch, capsys, tmp_path):
+def test_main_missing_dir_exits(capsys, tmp_path):
     ns = _main_ns(str(tmp_path / "does-not-exist"), dry_run=False)
     with (
         patch.object(prune, "parse_args", return_value=ns),
@@ -336,7 +336,7 @@ def test_main_missing_dir_exits(monkeypatch, capsys, tmp_path):
     assert "backup directory not found" in capsys.readouterr().out
 
 
-def test_main_empty_dir_reports_zero(monkeypatch, capsys, tmp_path):
+def test_main_empty_dir_reports_zero(capsys, tmp_path):
     ns = _main_ns(str(tmp_path), dry_run=False)
     with patch.object(prune, "parse_args", return_value=ns):
         prune.main()
@@ -345,7 +345,7 @@ def test_main_empty_dir_reports_zero(monkeypatch, capsys, tmp_path):
     assert "Done." not in out
 
 
-def test_main_dry_run_flow(monkeypatch, capsys, tmp_path):
+def test_main_dry_run_flow(capsys, tmp_path):
     _write_backup_stream(tmp_path)
     ns = _main_ns(str(tmp_path), dry_run=True)
 
@@ -365,7 +365,7 @@ def test_main_dry_run_flow(monkeypatch, capsys, tmp_path):
     assert mock_prune.call_args.args[2] is True
 
 
-def test_main_real_delete(monkeypatch, capsys, tmp_path):
+def test_main_real_delete(capsys, tmp_path):
     _write_backup_stream(tmp_path)
     ns = _main_ns(str(tmp_path), dry_run=False)
 
@@ -378,7 +378,7 @@ def test_main_real_delete(monkeypatch, capsys, tmp_path):
     assert "Deleted: modulo-backup-abc123-20260702T010101.tar.gz.enc" in out
 
 
-def test_main_honours_custom_keep_flags(monkeypatch, capsys, tmp_path):
+def test_main_honours_custom_keep_flags(capsys, tmp_path):
     _write_backup_stream(tmp_path)
     ns = prune.argparse.Namespace(backup_dir=str(tmp_path), dry_run=False, keep_daily=3, keep_weekly=4, keep_monthly=12)
 

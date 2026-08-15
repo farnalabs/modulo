@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -352,3 +353,131 @@ def test_infer_schema_unauthenticated_returns_4xx(unauth_client: TestClient) -> 
         },
     )
     assert resp.status_code in (401, 403)
+
+
+def test_infer_schema_emits_audit_event_with_tool_source_and_model(client: TestClient) -> None:
+    """Successful inference records an audit event carrying the tool source,
+    connector type, resource, sample count, and model backend used."""
+    ci = _make_mock_connector_instance()
+    mb = _make_mock_model_backend()
+    page_result = MagicMock(items=[mb], total=1, page=1, page_size=1)
+    backend_id = uuid.uuid4()
+
+    with (
+        patch("modulo.api.routes.schemas.get_connector_instance", return_value=ci),
+        patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("modulo.api.routes.schemas.ConnectorHub.sample", return_value=[{"id": "1", "title": "Test"}]),
+        patch(
+            "modulo.api.routes.schemas.SchemaInferenceService.infer", return_value={"type": "object", "properties": {}}
+        ),
+        patch("modulo.api.routes.schemas.ConnectorHub.initialise"),
+        patch("modulo.api.routes.schemas.ModelBackendHub.initialise"),
+        patch(
+            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            new_callable=PropertyMock(return_value=frozenset({backend_id})),
+        ),
+        patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
+        patch("modulo.api.routes.schemas.create_secrets_backend"),
+        patch("modulo.api.routes.schemas.append_audit_event", new_callable=AsyncMock) as mock_append,
+    ):
+        resp = client.post(
+            "/api/v1/schemas/infer",
+            json={
+                "connector_instance_id": str(_CONNECTOR_ID),
+                "sample_query": {"resource": "issues", "filters": {}, "limit": 5},
+            },
+        )
+
+    assert resp.status_code == 200
+    mock_append.assert_awaited_once()
+    call = mock_append.await_args
+    assert call.kwargs["org_id"] == _ORG_ID
+    assert call.kwargs["event_type"] == "schema_inference_completed"
+    payload = call.kwargs["payload_json"]
+    assert payload["connector_name"] == "Test Connector"
+    assert payload["connector_type"] == "github"
+    assert payload["resource"] == "issues"
+    assert payload["sample_count"] == 1
+    assert payload["model_backend_id"] == str(backend_id)
+
+
+def test_infer_schema_response_does_not_contain_or_persist_sample_records(client: TestClient) -> None:
+    """Sampled data must never be persisted or echoed back — the response only
+    carries the inferred definition and metadata, never the raw sample records."""
+    ci = _make_mock_connector_instance()
+    mb = _make_mock_model_backend()
+    page_result = MagicMock(items=[mb], total=1, page=1, page_size=1)
+    backend_id = uuid.uuid4()
+    secret_ish = "sample-secret-value-2f8c1a"
+    samples = [{"id": "1", "api_token": secret_ish, "title": "internal note"}]
+    expected_schema = {"type": "object", "properties": {"title": {"type": "string"}}}
+
+    with (
+        patch("modulo.api.routes.schemas.get_connector_instance", return_value=ci),
+        patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("modulo.api.routes.schemas.ConnectorHub.sample", return_value=samples),
+        patch("modulo.api.routes.schemas.SchemaInferenceService.infer", return_value=expected_schema),
+        patch("modulo.api.routes.schemas.ConnectorHub.initialise"),
+        patch("modulo.api.routes.schemas.ModelBackendHub.initialise"),
+        patch(
+            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            new_callable=PropertyMock(return_value=frozenset({backend_id})),
+        ),
+        patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
+        patch("modulo.api.routes.schemas.create_secrets_backend"),
+        patch("modulo.api.routes.schemas.append_audit_event", new_callable=AsyncMock),
+    ):
+        resp = client.post(
+            "/api/v1/schemas/infer",
+            json={
+                "connector_instance_id": str(_CONNECTOR_ID),
+                "sample_query": {"resource": "issues", "filters": {}, "limit": 5},
+            },
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert set(data.keys()) == {"definition_json", "sample_count", "suggestion_name", "suggestion_description"}
+    assert secret_ish not in resp.text
+    assert data["definition_json"] == expected_schema
+
+
+def test_infer_schema_programming_error_returns_501(client: TestClient) -> None:
+    """Missing DB table (migration not applied) must surface as 501."""
+    with (
+        patch(
+            "modulo.api.routes.schemas.get_connector_instance",
+            side_effect=ProgrammingError("stmt", {}, Exception("table does not exist")),
+        ),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+    ):
+        resp = client.post(
+            "/api/v1/schemas/infer",
+            json={
+                "connector_instance_id": str(_CONNECTOR_ID),
+                "sample_query": {"resource": "issues"},
+            },
+        )
+    assert resp.status_code == 501
+    assert "migrations" in resp.json()["detail"].lower()
+
+
+def test_infer_schema_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    """Connection/deadlock failures must surface as 503, not 500."""
+    with (
+        patch(
+            "modulo.api.routes.schemas.get_connector_instance",
+            side_effect=SQLAlchemyError("connection reset"),
+        ),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+    ):
+        resp = client.post(
+            "/api/v1/schemas/infer",
+            json={
+                "connector_instance_id": str(_CONNECTOR_ID),
+                "sample_query": {"resource": "issues"},
+            },
+        )
+    assert resp.status_code == 503

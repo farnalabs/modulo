@@ -41,11 +41,11 @@ Discovered from 1 completed delivery task.
 - [ ] Group is complete when all variants reach terminal state (success, failed, abandoned)
 
 ### Running Variants
-- [ ] Fire one run per variant — same input payload, same pipeline snapshot
+- [x] Fire one run per variant — same input payload, same pipeline snapshot (run_variant_batch; covered by test_fires_one_run_per_variant_in_insertion_order + BDD "Batch run fires one run per variant in insertion order")
 - [x] `run_variant_weighted` merges `run_context_overrides` into the run payload
 - [x] Runs are counted individually against org/team/trigger run limits
 - [x] Pre-flight quota check: breach by any variant rejects the entire group (`variant_group_quota_exceeded`)
-- [ ] Prompt version comparison via `run_context_overrides` containing `prompt_version`
+- [x] Prompt version comparison via `run_context_overrides` containing `prompt_version` (covered by test_prompt_version_override_merged_into_payload)
 - [ ] Agents read `run_context.prompt_version` to select prompt template
 - [ ] Abandon a variant run — marked `abandoned`, excluded from aggregate scores
 
@@ -68,11 +68,11 @@ Discovered from 1 completed delivery task.
 - [x] Admin eval dashboard identifies pipeline nodes with no eval definitions as coverage gaps
 - [x] Feedback system: `detect_eval_gap()` flags when human rejection is not caught by existing evals
 - [x] `POST /api/v1/feedback/{record_id}/detect-gap` endpoint triggers eval gap check on a feedback record (fetches eval definitions instead of passing eval_suite=[])
-- [ ] FeedbackRecords with `eval_gap = True` feed into eval proposal generation
+- [x] FeedbackRecords with `eval_gap = True` feed into eval proposal generation (`get_eval_proposals` filters `eval_gap.is_(True)`, exposed via `GET /api/v1/feedback/proposals`; covered by TestGetEvalProposals + test_feedback_endpoint)
 - [x] `GET /api/v1/variant-groups/{group_id}/prompt-diffs` — compares prompt hash diffs between variants
 
 ### Prompt Version Comparison
-- [ ] Variant groups support model backend differences and prompt version differences
+- [x] Variant groups support model backend differences and prompt version differences (both flow through `run_context_overrides` merge — model_backend_id tested in existing batch tests, prompt_version in test_prompt_version_override_merged_into_payload)
 - [x] Prompt diffs endpoint compares `prompt_pins_json` hashes between variant snapshots
 - [x] Prompt diffs returns agent-level diff entries per variant pair
 - [ ] Agents declare multiple prompt template versions and select by `run_context.prompt_version`
@@ -88,8 +88,8 @@ Discovered from 1 completed delivery task.
 - [x] Non-dict variant elements in `pick_variant_weighted` — filtered out gracefully (new in 310)
 - [x] None `prompt_pins_json` on snapshot — `get_prompt_diffs` returns empty (new in 310)
 - [x] Non-list `prompt_pins_json` on snapshot — `get_prompt_diffs` returns empty (new in 310)
-- [ ] DB-level `selection_strategy` check constraint violations return 409 — should be 422 ValidationError
-- [ ] Negative weight bypasses Pydantic `ge=0` if variants are set directly via CRUD API (JSON column)
+- [x] `selection_strategy` validated at the API — `Literal["weighted", "single"]` on CreateVariantGroupRequest returns 422 for invalid values (fixed 2026-08-15, was 409 IntegrityError; covered by test_invalid_selection_strategy_rejected)
+- [x] Negative weight rejected at the API — `VariantDef.weight` enforces `ge=0`, so negative weights return 422 (covered by test_negative_weight_rejected)
 - [ ] Concurrent delete + run race: run reads group then delete removes it before FOR UPDATE — run gets None
 
 ### Resilience & Integration Robustness
@@ -134,10 +134,23 @@ Discovered from 1 completed delivery task.
 - Variant comparison view is not yet implemented (PRD 8.19 comparison view)
 - Eval coverage gap warning on variant comparison view not wired (frontend + backend signal)
 - `detect_eval_gap` endpoint fetches eval definitions but passes them as raw model objects — EvalEngine.evaluate expects specific format; integration test needed
-- `selection_strategy` check constraint violation returns 409 (IntegrityError) instead of 422 (ValidationError) — Pydantic model doesn't validate against allowed values
 - Concurrent delete + run race: run reads group then delete removes it before FOR UPDATE — run gets None rather than a clear error
 
 ## QA History
-- 2026-07-04: Cross-cutting QA (index 120). Fixed CRITICAL: detect_eval_gap endpoint passed eval_suite=[] instead of fetching pipeline's eval definitions — always returned False. Added 6 missing ProgrammingError→501 unit tests. Updated product map: marked ~20 behaviour checkboxes [ ]→[x], added Error Handling section (18 checkboxes), updated Known Gaps. Status: partial.
+### 2026-08-15 — Coverage completion (FAR-232)
+
+**What was fixed:**
+- Marked [ ]→[x]: "Fire one run per variant — same input payload, same pipeline snapshot" — `run_variant_batch` implements this and it was already tested (`test_fires_one_run_per_variant_in_insertion_order` + active BDD scenario "Batch run fires one run per variant in insertion order").
+- Marked [ ]→[x]: "Prompt version comparison via `run_context_overrides` containing `prompt_version`" — the override-merge path carries any key including `prompt_version`; added `test_prompt_version_override_merged_into_payload`.
+- Marked [ ]→[x]: "FeedbackRecords with `eval_gap = True` feed into eval proposal generation" — `get_eval_proposals()` filters `FeedbackRecord.eval_gap.is_(True)` and is exposed via `GET /api/v1/feedback/proposals`; already tested by `TestGetEvalProposals` and `test_feedback_endpoint`.
+- Marked [ ]→[x]: "Variant groups support model backend differences and prompt version differences" — both flow through the generic `run_context_overrides` merge (model_backend_id in existing batch tests, prompt_version in the new test).
+- FIXED (in-place): `selection_strategy` is now `Literal["weighted", "single"]` on `CreateVariantGroupRequest` — an invalid value returns 422 ValidationError instead of a DB CHECK-constraint IntegrityError (409). Added `test_invalid_selection_strategy_rejected`, `test_selection_strategy_weighted_accepted`, `test_selection_strategy_single_accepted`.
+- Marked [ ]→[x]: Negative weight handling — the API already enforced `VariantDef.weight ge=0`, so negative weights return 422 (previously unchecked because untested). Added `test_negative_weight_rejected` + `test_zero_weight_accepted`.
+- Removed the resolved `selection_strategy → 409` gap from Known Gaps (now a 422 at the API edge).
+
+**Test results:** All variant unit + BDD tests pass (test_variants.py, test_variant_group.py, test_variant_groups.py BDD).
+**Status:** partial (comparison view, abandon semantics, agent prompt-version selection, and 2 remaining BDD scenario groups still genuine gaps).
+
+### 2026-07-04: Cross-cutting QA (index 120). Fixed CRITICAL: detect_eval_gap endpoint passed eval_suite=[] instead of fetching pipeline's eval definitions — always returned False. Added 6 missing ProgrammingError→501 unit tests. Updated product map: marked ~20 behaviour checkboxes [ ]→[x], added Error Handling section (18 checkboxes), updated Known Gaps. Status: partial.
 - 2026-07-09: Cross-cutting QA (index 277). Fixed CRITICAL — `list_variant_groups` CRUD silently swallowed ProgrammingError without logging; added `_log.warning()`. Added 4 CRUD unit tests for `get_coverage_gaps` (happy path, missing eval detection, provided eval_def_ids, partial coverage, missing eval_definition_ids key). Added Exception→500 test for `eval_coverage` endpoint. Corrected product map: marked admin eval dashboard 403 [ ]→[x] (role check already exists at admin.py:1599-1603), added missing SQLAlchemyError→503 and Exception→500 rows for eval_coverage error handling table. Removed resolved Known Gap "No unit tests for get_coverage_gaps CRUD function". Status: partial.
 - 2026-07-11: Cross-cutting QA (index 310). Fixed CRITICAL — `get_prompt_diffs` `_pins()` crashes with TypeError when `snapshot.prompt_pins_json` is None; added `isinstance(raw, list)` guard. Fixed MAJOR — `pick_variant_weighted` crashes with AttributeError on non-dict variant elements; added isinstance filter. Added 4 new unit tests (None prompt_pins_json, non-list prompt_pins_json, non-dict variant filtered, all-non-dict returns None). Updated Known Gaps: corrected stale "run_variants.feature placeholder" claim (4 of 5 scenarios are active), added selection_strategy validation gap and concurrent delete+run race gap. Added Edge Cases & Data Integrity section (10 checkboxes, 9 verified [x], 2 unchecked). All 80 variant tests pass (76 active + 4 skipped awaiting-implementation). Status: partial.

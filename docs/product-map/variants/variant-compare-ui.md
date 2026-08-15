@@ -140,7 +140,7 @@ Side-by-side eval scores, token costs, and output diffs across A/B test variants
 - **No prompt version comparison UI**: Backend `prompt-diffs` endpoint exists but has no frontend display.
 - **No cancel/abandon variant UI**: PRD 8.19 specifies operators can cancel a variant run; no cancel button exists.
 - **No "Run as variant" entry point from pipeline detail page**: PRD 8.19 specifies creating variant groups from the pipeline detail page; the current UI requires navigating to /variants/compare directly.
-- **BDD coverage is thin**: `run_variants.feature` has 5 scenarios (1 @awaiting-implementation); `variant_groups.feature` has 7 scenarios (6 @awaiting-implementation for batch, sequential, comparison, coverage signal, cost breakdown, quota batch). Only the zero-weight and basic CRUD/run/404/429 scenarios are wired.
+- **BDD coverage is thin**: `run_variants.feature` has 5 scenarios (1 @awaiting-implementation — "Coverage gaps are reported for a variant group", pinned by `tests/architecture/test_test_suite_safety_nets.py`; the endpoint itself IS implemented and unit/integration tested, only the Gherkin scenario remains deselected); `variant_groups.feature` has 7 scenarios (6 @awaiting-implementation for sequential, comparison, coverage signal, cost breakdown, quota batch — genuine gaps). Only the zero-weight and basic CRUD/run/404/429 scenarios are wired.
 - **No frontend Playwright E2E tests**: No end-to-end test for the comparison view interaction.
 
 ## QA History
@@ -153,3 +153,15 @@ Side-by-side eval scores, token costs, and output diffs across A/B test variants
 ### 2026-07-31 — improve-architecture (product-map walk)
 
 - Fixed stale CODE ref: website doc lives at `Website/modulo-website/src/docs/evals/variant-compare-ui.md` (not `variants/`).
+
+### 2026-08-15 — coverage-completion pass (FAR-235)
+
+- Audited every unchecked behaviour against code (`frontend/src/views/VariantCompareView.vue`, `backend/src/modulo/api/routes/variants.py`) and the test suite. All 10 remaining unchecked items are genuine gaps requiring new feature work — no in-place fixes possible within scope:
+  - Coverage gaps: frontend does not call `coverage-gaps` (API-only) — verified no `coverage-gaps` call in the view.
+  - Prompt diffs: frontend does not display `prompt-diffs` (API-only) — verified no `prompt-diffs` call in the view.
+  - Pre-eval degraded mode: cost + output-diff-only rendering works (implicit), but no eval-configuration banner.
+  - Eval coverage signal: no warning text wired anywhere in the view.
+  - HITL: footer hardcodes approved/rejected/pending to 0; no pending indicator; no cancel/abandon; no group-complete tracking.
+  - Prompt version comparison: backend `prompt-diffs` endpoint exists but has no frontend surface.
+- Added frontend spec coverage for behaviours already `[x]`: per-node pass/fail/partial badges + eval scores side by side, and summary-footer token/cost totals (proves token-cost-per-run behaviour). All 4 spec tests pass; `pnpm run lint` and `vue-tsc --noEmit` clean.
+- The `run_variants.feature` coverage-gaps scenario remains `@awaiting-implementation` (pinned by `test_test_suite_safety_nets.py`); wiring it requires updating that pin — flagged for the Conductor. Status: partial.
