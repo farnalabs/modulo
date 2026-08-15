@@ -935,12 +935,15 @@ class TestNotifyStreakDeactivation:
 class TestPendingRetry:
     @pytest.mark.asyncio
     async def test_retry_success_removes_member(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A still-deactivated trigger's pending member IS dispatched (the member
+        exists precisely because the trigger was JUST auto-deactivated), and the
+        member is removed on success."""
         _patch_env(monkeypatch)
         redis_client = AsyncMock()
         member = ts._streak_pending_member(_deactivated_data(), threshold=5, pipeline_name="p")
         redis_client.smembers.return_value = {member}
         with (
-            patch.object(ts, "_trigger_active_state", new_callable=AsyncMock, return_value=True),
+            patch.object(ts, "_trigger_active_state", new_callable=AsyncMock, return_value=False),
             patch.object(ts, "_notify_streak_deactivation", new_callable=AsyncMock, return_value=True),
         ):
             retried = await ts._retry_pending_streak_notifications(ORG, redis_client)
@@ -957,7 +960,7 @@ class TestPendingRetry:
         member = ts._streak_pending_member(_deactivated_data(), threshold=5, pipeline_name="p")
         redis_client.smembers.return_value = {member}
         with (
-            patch.object(ts, "_trigger_active_state", new_callable=AsyncMock, return_value=True),
+            patch.object(ts, "_trigger_active_state", new_callable=AsyncMock, return_value=False),
             patch.object(ts, "_notify_streak_deactivation", new_callable=AsyncMock, return_value=False),
         ):
             retried = await ts._retry_pending_streak_notifications(ORG, redis_client)
@@ -988,21 +991,108 @@ class TestPendingRetry:
 
     @pytest.mark.asyncio
     async def test_retry_drops_member_when_trigger_reenabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Before dispatching a retry the trigger's active state is re-checked: a
-        re-enabled (or deleted) trigger drops the pending member — no stale
-        'auto-deactivated' notification after re-enable (FAR-190 qa FIX 4c)."""
+        """Before dispatching a retry the trigger's active state is re-checked
+        (FAR-190 qa FIX 4c): a RE-ENABLED trigger (active=True) drops the pending
+        member — no stale 'auto-deactivated' notification after re-enable; a
+        still-DEACTIVATED trigger (active=False) is dispatched (its member exists
+        precisely because the deactivation happened, so the notification is still
+        valid)."""
         _patch_env(monkeypatch)
+
+        # Re-enabled: the member is dropped, never dispatched.
         redis_client = AsyncMock()
         member = ts._streak_pending_member(_deactivated_data(), threshold=5, pipeline_name="p")
         redis_client.smembers.return_value = {member}
         with (
-            patch.object(ts, "_trigger_active_state", new_callable=AsyncMock, return_value=False),
+            patch.object(ts, "_trigger_active_state", new_callable=AsyncMock, return_value=True),
             patch.object(ts, "_notify_streak_deactivation", new_callable=AsyncMock) as notify,
         ):
             retried = await ts._retry_pending_streak_notifications(ORG, redis_client)
         assert retried == 0
         notify.assert_not_awaited()
         redis_client.srem.assert_awaited_once_with(ts._streak_notify_pending_key(ORG), member)
+
+    @pytest.mark.asyncio
+    async def test_retry_dispatches_when_trigger_still_deactivated(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A still-deactivated trigger's pending member IS dispatched: the member
+        exists precisely because the trigger was JUST auto-deactivated
+        (active=False), so the 'auto-deactivated' notification is still valid —
+        the retry guard must NOT drop it (FAR-190 qa round 2 FIX 1)."""
+        _patch_env(monkeypatch)
+        redis_client = AsyncMock()
+        member = ts._streak_pending_member(_deactivated_data(), threshold=5, pipeline_name="p")
+        redis_client.smembers.return_value = {member}
+        with (
+            patch.object(ts, "_trigger_active_state", new_callable=AsyncMock, return_value=False),
+            patch.object(ts, "_notify_streak_deactivation", new_callable=AsyncMock, return_value=True) as notify,
+        ):
+            retried = await ts._retry_pending_streak_notifications(ORG, redis_client)
+        assert retried == 1
+        notify.assert_awaited_once()
+        redis_client.srem.assert_awaited_once_with(ts._streak_notify_pending_key(ORG), member)
+
+    @pytest.mark.asyncio
+    async def test_retry_skipped_when_budget_exhausted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A budget-exhausted sweep skips the retry pass entirely (FAR-190 qa
+        round 2 FIX 2): once the sweep deadline has passed the pass returns 0
+        without reading the pending set, dispatching, or dropping members."""
+        _patch_env(monkeypatch)
+        redis_client = AsyncMock()
+        member = ts._streak_pending_member(_deactivated_data(), threshold=5, pipeline_name="p")
+        redis_client.smembers.return_value = {member}
+        with (
+            patch.object(ts, "_trigger_active_state", new_callable=AsyncMock) as active_state,
+            patch.object(ts, "_notify_streak_deactivation", new_callable=AsyncMock) as notify,
+        ):
+            retried = await ts._retry_pending_streak_notifications(ORG, redis_client, deadline=time.monotonic() - 1.0)
+        assert retried == 0
+        redis_client.smembers.assert_not_awaited()
+        active_state.assert_not_awaited()
+        notify.assert_not_awaited()
+        redis_client.srem.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_retry_truncated_by_deadline_mid_pass(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A retry pass that overruns the sweep deadline mid-pass truncates: the
+        members after the deadline are left pending (never dropped) so the pass
+        can never blow the enclosing 120s tick (FAR-190 qa round 2 FIX 2)."""
+        _patch_env(monkeypatch)
+        redis_client = AsyncMock()
+        members = {
+            ts._streak_pending_member(_deactivated_data(id=uuid.uuid4()), threshold=5, pipeline_name="p")
+            for _ in range(3)
+        }
+        redis_client.smembers.return_value = members
+        with (
+            patch.object(ts, "_trigger_active_state", new_callable=AsyncMock, return_value=False),
+            patch.object(ts, "_notify_streak_deactivation", new_callable=AsyncMock, return_value=True),
+            patch.object(ts, "time") as tm,
+        ):
+            # First two monotonic() calls are within budget (deadline 15s); the
+            # deadline elapses before the third member's turn.
+            tm.monotonic.side_effect = [0.0, 10.0, 20.0, 20.0]
+            retried = await ts._retry_pending_streak_notifications(ORG, redis_client, deadline=15.0)
+        assert retried >= 1, "members before the deadline are dispatched"
+        assert retried < 3, "the pass truncates once the deadline elapses"
+
+    @pytest.mark.asyncio
+    async def test_retry_capped_per_tick(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The retry pass dispatches at most ``_STREAK_NOTIFY_MAX_PER_TICK``
+        members per tick — a mass-cascade backlog defers to later ticks instead
+        of blowing the sweep budget (FAR-190 qa round 2 FIX 2)."""
+        _patch_env(monkeypatch)
+        redis_client = AsyncMock()
+        members = {
+            ts._streak_pending_member(_deactivated_data(id=uuid.uuid4()), threshold=5, pipeline_name="p")
+            for _ in range(5)
+        }
+        redis_client.smembers.return_value = members
+        with (
+            patch.object(ts, "_trigger_active_state", new_callable=AsyncMock, return_value=False),
+            patch.object(ts, "_notify_streak_deactivation", new_callable=AsyncMock, return_value=True),
+        ):
+            retried = await ts._retry_pending_streak_notifications(ORG, redis_client, max_retries=2)
+        assert retried == 2, "at most max_retries dispatches per tick, the rest stay pending"
 
     @pytest.mark.asyncio
     async def test_retry_srems_corrupt_member(self, monkeypatch: pytest.MonkeyPatch) -> None:

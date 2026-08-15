@@ -404,10 +404,11 @@ async def test_equal_completed_at_ordering(
     same_instant = _now() - timedelta(hours=1)
     # A no-delivery and a delivered run at the SAME completed_at. The delivered
     # one has a LARGER id (created later) -> it is the newest at that instant ->
-    # the walk stops immediately (streak 0).
+    # the walk stops immediately (streak 0). The ids are constructed
+    # deterministically (``dl.int = nd.int + 1``) so the tie-break ordering is
+    # always as specified — independent random draws would fail ~50% of runs.
     nd = uuid.uuid4()
-    dl = uuid.uuid4()
-    assert dl.int > nd.int  # delivered run has the larger id
+    dl = uuid.UUID(int=nd.int + 1)  # delivered run always has the larger id
     await _insert_run(
         db_engine,
         org_id=org,

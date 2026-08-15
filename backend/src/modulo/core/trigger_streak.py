@@ -867,14 +867,26 @@ async def _srem_streak_member(redis_client: AsyncRedis, key: str, raw: str) -> N
         _log.warning("streak.notify_pending_remove_failed key=%s", key)
 
 
-async def _retry_pending_streak_notifications(org_id: uuid.UUID, redis_client: AsyncRedis | None) -> int:
+async def _retry_pending_streak_notifications(
+    org_id: uuid.UUID,
+    redis_client: AsyncRedis | None,
+    *,
+    deadline: float | None = None,
+    max_retries: int = _STREAK_NOTIFY_MAX_PER_TICK,
+) -> int:
     """Retry deactivation notifications whose first dispatch failed (persisted
     notified_at + retry on scheduler tick). Reads the per-org pending SET,
     re-dispatches each, removes on success. Bounded (cooldown) + deduplicated
-    (single critical audit on first failure). Best-effort — never raises.
+    (single critical audit on first failure) + deadline-gated: the pass runs
+    only while the sweep's wall-clock budget remains (``deadline``) and
+    dispatches at most ``max_retries`` members per tick, so a mass-cascade
+    retry pass can never blow the enclosing 120s tick. Best-effort — never
+    raises.
     """
     if redis_client is None:
         return 0
+    if deadline is not None and time.monotonic() > deadline:
+        return 0  # sweep budget already exhausted — skip the pass entirely
     key = _streak_notify_pending_key(org_id)
     try:
         # redis.asyncio stubs type the set ops as ``Union[Awaitable, value]``
@@ -886,7 +898,10 @@ async def _retry_pending_streak_notifications(org_id: uuid.UUID, redis_client: A
         _log.warning("streak.notify_pending_read_failed org=%s", org_id)
         return 0
     retried = 0
+    attempted = 0
     for raw in members or []:
+        if deadline is not None and time.monotonic() > deadline:
+            break  # budget exhausted mid-pass — truncate, never drop
         try:
             data = json.loads(raw)
             if not isinstance(data, dict):
@@ -900,17 +915,26 @@ async def _retry_pending_streak_notifications(org_id: uuid.UUID, redis_client: A
             trigger_id = uuid.UUID(data["trigger_id"])
             pipeline_id = uuid.UUID(data["pipeline_id"]) if data.get("pipeline_id") else None
             threshold = int(data.get("threshold") or 0)
-            # Re-check the trigger's active state before dispatching: a re-enabled
+            # Re-check the trigger's active state before dispatching. A pending
+            # member exists precisely because the trigger was JUST auto-
+            # deactivated (active=False), so dispatch while it stays deactivated;
+            # drop only when it has been re-enabled (active=True) — a re-enabled
             # trigger must NOT receive a stale "auto-deactivated" notification.
+            # A read failure (None) skips the member this tick without dropping.
             active = await _trigger_active_state(org_id, trigger_id)
-            if active is not True:
+            if active is None:
+                continue  # read failure — skip, don't drop
+            if active is True:
                 await _srem_streak_member(redis_client, key, raw)
                 _log.warning(
-                    "streak.notify_pending_dropped org=%s trigger=%s (re-enabled or gone)",
+                    "streak.notify_pending_dropped org=%s trigger=%s (re-enabled)",
                     org_id,
                     trigger_id,
                 )
                 continue
+            attempted += 1
+            if attempted > max_retries:
+                break  # per-tick dispatch cap reached — leave the rest pending
             deactivation: dict[str, Any] = {
                 "id": trigger_id,
                 "pipeline_id": pipeline_id,
@@ -1234,7 +1258,9 @@ async def enforce_no_delivery_streaks(
                     if len(page) < max_triggers_per_tick:
                         break
                     after_id = page[-1].id
-                summary["notify_retried"] += await _retry_pending_streak_notifications(org_id, redis_client)
+                summary["notify_retried"] += await _retry_pending_streak_notifications(
+                    org_id, redis_client, deadline=deadline
+                )
             except asyncio.CancelledError:
                 raise
             except Exception:
