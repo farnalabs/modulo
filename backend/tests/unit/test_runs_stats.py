@@ -12,7 +12,6 @@ Covers the two dialect paths:
 
 from __future__ import annotations
 
-import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -76,7 +75,7 @@ def _run(
     )
 
 
-def test_get_run_stats_postgres_uses_percentile_cont_sql() -> None:
+async def test_get_run_stats_postgres_uses_percentile_cont_sql() -> None:
     session = _make_session("postgresql")
     captured: list = []
     now = datetime.now(UTC)
@@ -91,7 +90,7 @@ def test_get_run_stats_postgres_uses_percentile_cont_sql() -> None:
         )
     )
 
-    result = asyncio.run(get_run_stats(session, "30d"))
+    result = await get_run_stats(session, "30d")
 
     overall_stmt = captured[1]
     compiled = overall_stmt.compile(dialect=postgresql.dialect())
@@ -115,7 +114,7 @@ def test_get_run_stats_postgres_uses_percentile_cont_sql() -> None:
     assert result["avg_duration_by_day"] == [{"date": str(now.date()), "avg_ms": 100}]
 
 
-def test_get_run_stats_postgres_empty_percentile_group_returns_none() -> None:
+async def test_get_run_stats_postgres_empty_percentile_group_returns_none() -> None:
     """Runs exist but none are completed: percentiles are NULL -> None, no crash."""
     session = _make_session("postgresql")
     captured: list = []
@@ -131,7 +130,7 @@ def test_get_run_stats_postgres_empty_percentile_group_returns_none() -> None:
         )
     )
 
-    result = asyncio.run(get_run_stats(session, "30d"))
+    result = await get_run_stats(session, "30d")
 
     assert result["total_runs"] == 1
     assert result["p50_duration_ms"] is None
@@ -141,7 +140,7 @@ def test_get_run_stats_postgres_empty_percentile_group_returns_none() -> None:
     assert not result["avg_duration_by_day"]
 
 
-def test_get_run_stats_postgres_single_row_returns_that_value() -> None:
+async def test_get_run_stats_postgres_single_row_returns_that_value() -> None:
     """A one-row percentile group returns exactly that row's duration."""
     session = _make_session("postgresql")
     captured: list = []
@@ -157,14 +156,14 @@ def test_get_run_stats_postgres_single_row_returns_that_value() -> None:
         )
     )
 
-    result = asyncio.run(get_run_stats(session, "30d"))
+    result = await get_run_stats(session, "30d")
 
     assert result["p50_duration_ms"] == 42
     assert result["p95_duration_ms"] == 42
     assert result["p99_duration_ms"] == 42
 
 
-def test_get_run_stats_postgres_empty_window_returns_zero_shape() -> None:
+async def test_get_run_stats_postgres_empty_window_returns_zero_shape() -> None:
     """No runs at all: identical zero-shaped response to the generic path."""
     session = _make_session("postgresql")
     captured: list = []
@@ -177,7 +176,7 @@ def test_get_run_stats_postgres_empty_window_returns_zero_shape() -> None:
         )
     )
 
-    result = asyncio.run(get_run_stats(session, "30d"))
+    result = await get_run_stats(session, "30d")
 
     assert result == {
         "total_runs": 0,
@@ -192,7 +191,7 @@ def test_get_run_stats_postgres_empty_window_returns_zero_shape() -> None:
     }
 
 
-def test_get_run_stats_generic_path_still_uses_percentile() -> None:
+async def test_get_run_stats_generic_path_still_uses_percentile() -> None:
     """SQLite/MariaDB fall back to loading runs and calling ``_percentile``."""
     session = _make_session("sqlite")
     now = datetime.now(UTC)
@@ -222,7 +221,7 @@ def test_get_run_stats_generic_path_still_uses_percentile() -> None:
     session.execute = AsyncMock(return_value=res)
 
     with patch("modulo.db.crud.run._percentile", return_value=42.0) as pctl:
-        result = asyncio.run(get_run_stats(session, "30d"))
+        result = await get_run_stats(session, "30d")
 
     assert pctl.call_count == 3
     assert result["total_runs"] == 3
@@ -233,20 +232,20 @@ def test_get_run_stats_generic_path_still_uses_percentile() -> None:
     assert result["failure_by_reason"] == [{"reason": "boom", "count": 1}]
 
 
-def test_get_run_stats_generic_empty_window_returns_zero_shape() -> None:
+async def test_get_run_stats_generic_empty_window_returns_zero_shape() -> None:
     session = _make_session("sqlite")
     res = MagicMock()
     res.scalars.return_value.all.return_value = []
     session.execute = AsyncMock(return_value=res)
 
-    result = asyncio.run(get_run_stats(session, "30d"))
+    result = await get_run_stats(session, "30d")
 
     assert result["total_runs"] == 0
     assert result["p50_duration_ms"] == 0
     assert not result["runs_by_day"]
 
 
-def test_get_run_stats_generic_counts_cancelled_expired_eval_failed_as_failed() -> None:
+async def test_get_run_stats_generic_counts_cancelled_expired_eval_failed_as_failed() -> None:
     """Non-complete terminal statuses land in the per-day failed bucket."""
     session = _make_session("sqlite")
     now = datetime.now(UTC)
@@ -288,7 +287,7 @@ def test_get_run_stats_generic_counts_cancelled_expired_eval_failed_as_failed() 
     res.scalars.return_value.all.return_value = runs
     session.execute = AsyncMock(return_value=res)
 
-    result = asyncio.run(get_run_stats(session, "30d"))
+    result = await get_run_stats(session, "30d")
 
     assert result["total_runs"] == 5
     assert result["success_rate"] == 0.0
@@ -302,7 +301,7 @@ def test_get_run_stats_generic_counts_cancelled_expired_eval_failed_as_failed() 
     assert result["failure_by_reason"] == [{"reason": "boom", "count": 1}, {"reason": "executor_stalled", "count": 1}]
 
 
-def test_get_run_stats_generic_period_mapping() -> None:
+async def test_get_run_stats_generic_period_mapping() -> None:
     """7d/30d/90d map to the correct cutoffs; unknown periods fall back to 30d."""
     session = _make_session("sqlite")
     now = datetime.now(UTC)
@@ -314,7 +313,7 @@ def test_get_run_stats_generic_period_mapping() -> None:
             return _empty_stats()
 
         with patch("modulo.db.crud.run._get_run_stats_python", side_effect=_fake_python):
-            asyncio.run(get_run_stats(session, period))
+            await get_run_stats(session, period)
 
         expected_cutoff = now - timedelta(days=days)
         assert len(captured_cutoff) == 1, f"period {period}"
@@ -335,7 +334,7 @@ def _empty_stats() -> dict:
     }
 
 
-def test_get_run_stats_postgres_period_mapping() -> None:
+async def test_get_run_stats_postgres_period_mapping() -> None:
     """Postgres fast path receives the same cutoff mapping as the generic path."""
     session = _make_session("postgresql")
     now = datetime.now(UTC)
@@ -347,7 +346,7 @@ def test_get_run_stats_postgres_period_mapping() -> None:
             return _empty_stats()
 
         with patch("modulo.db.crud.run._get_run_stats_postgres", side_effect=_fake_postgres):
-            asyncio.run(get_run_stats(session, period))
+            await get_run_stats(session, period)
 
         expected_cutoff = now - timedelta(days=days)
         assert len(captured_cutoff) == 1, f"period {period}"
@@ -374,15 +373,15 @@ def test_percentile_clamps_last_bucket_to_final_value() -> None:
     assert _percentile([100.0, 200.0], 95) == 195.0
 
 
-def test_get_dialect_name_awaits_coroutine_bind() -> None:
+async def test_get_dialect_name_awaits_coroutine_bind() -> None:
     session = _make_session("postgresql")
-    assert asyncio.run(_get_dialect_name(session)) == "postgresql"
+    assert await _get_dialect_name(session) == "postgresql"
 
 
-def test_get_dialect_name_handles_sync_bind() -> None:
+async def test_get_dialect_name_handles_sync_bind() -> None:
     bind = MagicMock()
     bind.dialect.name = "sqlite"
     session = AsyncMock(spec=AsyncSession)
     session.get_bind.return_value = bind
 
-    assert asyncio.run(_get_dialect_name(session)) == "sqlite"
+    assert await _get_dialect_name(session) == "sqlite"
