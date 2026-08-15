@@ -18,7 +18,8 @@ No live Postgres here (integration territory) — instead:
   (FAR-189) sits on top of it; this branch's FAR-208 ``0101_guardrails``
   migration (renumbered from ``0100_guardrails`` to clear the numeric-prefix
   collision with FAR-189's ``0100_run_classification``) sits on top of that;
-  the chain head is ``0102_lifecycle_map_version_actor``.
+  the chain head is ``0103_lifecycle_map_version_actor`` (on top of main's
+  ``0102_ongoing_streak_epoch``).
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ _MIGRATION_0097 = "0097_ongoing_trigger_enabled_by_default"
 _MIGRATION_0098 = "0098_slack_app_mention_trigger_type"
 _MIGRATION_0099 = "0099_run_raw_output_markers"
 _MIGRATION_0101 = "0101_guardrails"
-_MIGRATION_0102 = "0102_lifecycle_map_version_actor"
+_MIGRATION_0103 = "0103_lifecycle_map_version_actor"
 
 _VERSIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 
@@ -100,8 +101,8 @@ def migration_0101() -> ModuleType:
 
 
 @pytest.fixture(scope="module")
-def migration_0102() -> ModuleType:
-    return _load_migration(_MIGRATION_0102)
+def migration_0103() -> ModuleType:
+    return _load_migration(_MIGRATION_0103)
 
 
 def _script() -> ScriptDirectory:
@@ -161,11 +162,11 @@ class TestMigration0095OngoingFlag:
         # which is superseded by 0099_run_raw_output_markers, which is
         # superseded by 0100_run_classification, which is superseded by this
         # branch's FAR-208 migration 0101_guardrails, which is superseded by
-        # the current chain head 0102_lifecycle_map_version_actor.
+        # the current chain head 0103_lifecycle_map_version_actor.
         heads = script.get_heads()
         assert migration_0095.revision not in heads
         assert migration_0096.revision not in heads
-        assert heads == [_MIGRATION_0102], f"expected a single head, got {heads}"
+        assert heads == [_MIGRATION_0103], f"expected a single head, got {heads}"
         assert _MIGRATION_0098 not in heads
         assert _MIGRATION_0099 not in heads
 
@@ -188,9 +189,9 @@ class TestMigration0097OngoingFlagEnabled:
         # 0097 is superseded as the head by 0099_run_raw_output_markers,
         # which is superseded by 0100_run_classification, which is superseded
         # by this branch's FAR-208 migration 0101_guardrails, which is
-        # superseded by the current chain head 0102_lifecycle_map_version_actor.
+        # superseded by the current chain head 0103_lifecycle_map_version_actor.
         assert migration_0097.revision not in heads
-        assert heads == [_MIGRATION_0102], f"expected a single head, got {heads}"
+        assert heads == [_MIGRATION_0103], f"expected a single head, got {heads}"
 
     def test_flag_flips_ongoing_trigger_active(self, migration_0097: ModuleType) -> None:
         assert "ongoing_trigger" in migration_0097._FLAGS
@@ -212,16 +213,16 @@ class TestMigration0098SlackAppMention:
         assert migration_0098.down_revision == "0097_ongoing_trigger_enabled_by_default"
         assert migration_0098.branch_labels is None
 
-    def test_single_head_chain(self, migration_0098: ModuleType, migration_0102: ModuleType) -> None:
+    def test_single_head_chain(self, migration_0098: ModuleType, migration_0103: ModuleType) -> None:
         script = _script()
         heads = script.get_heads()
         # 0098 is superseded as the head by 0099_run_raw_output_markers, which
         # is superseded by 0100_run_classification, which is superseded by this
         # branch's FAR-208 migration 0101_guardrails, which is superseded by
-        # the current chain head 0102_lifecycle_map_version_actor.
+        # the current chain head 0103_lifecycle_map_version_actor.
         assert migration_0098.revision not in heads
-        assert migration_0102.revision in heads
-        assert heads == [_MIGRATION_0102], f"expected a single head, got {heads}"
+        assert migration_0103.revision in heads
+        assert heads == [_MIGRATION_0103], f"expected a single head, got {heads}"
 
     def test_upgrade_widens_both_checks_with_slack_app_mention(self, migration_0098: ModuleType) -> None:
         source = _source(migration_0098)
@@ -252,9 +253,9 @@ class TestMigration0099RunRawOutputMarkers:
     def test_single_head_chain(self, migration_0099: ModuleType) -> None:
         script = _script()
         heads = script.get_heads()
-        assert heads == [_MIGRATION_0102], f"expected a single head, got {heads}"
+        assert heads == [_MIGRATION_0103], f"expected a single head, got {heads}"
         assert migration_0099.revision not in heads
-        assert _MIGRATION_0102 in heads
+        assert _MIGRATION_0103 in heads
 
     def test_upgrade_adds_raw_output_markers_column(self, migration_0099: ModuleType) -> None:
         source = _source(migration_0099)
@@ -273,12 +274,12 @@ class TestMigration0101Guardrails:
         assert migration_0101.down_revision == "0100_run_classification"
         assert migration_0101.branch_labels is None
 
-    def test_single_head_chain(self, migration_0101: ModuleType, migration_0102: ModuleType) -> None:
+    def test_single_head_chain(self, migration_0101: ModuleType, migration_0103: ModuleType) -> None:
         script = _script()
         heads = script.get_heads()
         assert migration_0101.revision not in heads
-        assert migration_0102.revision in heads
-        assert heads == [_MIGRATION_0102], f"expected a single head, got {heads}"
+        assert migration_0103.revision in heads
+        assert heads == [_MIGRATION_0103], f"expected a single head, got {heads}"
 
     def test_upgrade_widens_eval_type_check_with_guardrail(self, migration_0101: ModuleType) -> None:
         source = _source(migration_0101)

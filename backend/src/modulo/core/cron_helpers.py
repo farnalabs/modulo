@@ -45,6 +45,15 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from modulo.core.dispatch import SAQ_RUN_TIMEOUT
 from modulo.core.exceptions import TriggersPausedError
 from modulo.core.pipeline_engine.error_codes import sanitize_error_text
+
+# FAR-190 streak engine lives in its own module (extracted so cron_helpers can
+# stay focused on scheduling). Re-exported here for the dispatcher_reconcile
+# wiring and for callers that historically imported them from cron_helpers.
+# trigger_streak imports cron_helpers helpers lazily (never at module import
+# time), so this module-level import cannot form a circular import.
+from modulo.core.trigger_streak import (
+    enforce_no_delivery_streaks,
+)
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, ONGOING_ACTIVE_STATUSES, Run
 from modulo.db.settings_resolver import PAUSE_SKIP_REASON, org_is_paused, org_row_is_paused
 from modulo.settings import get_settings
@@ -104,6 +113,7 @@ ONGOING_MAX_ENQUEUE_PER_TICK = 50
 # advance stops once active=False).
 ONGOING_MAX_CONSECUTIVE_FAILURES = 5
 _ONGOING_FAILURE_COUNTER_TTL = 6 * 3600  # 6h
+
 
 # dispatcher_reconcile (system cron) — every 60s.
 RECONCILE_STALE_HEARTBEAT_FACTOR = 2  # 2 * SAQ_JOB_HEARTBEAT = 600s
@@ -196,6 +206,11 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     "enqueue_failed_ttl_terminalized": 0,
     "enqueue_failed_redispatched": 0,
     "enqueue_failed_capped": 0,
+    "streak_scanned": 0,
+    "streak_deactivated": 0,
+    "streak_capped": 0,
+    "streak_alerts": 0,
+    "streak_notify_failed": 0,
 }
 
 
@@ -216,6 +231,11 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["enqueue_failed_ttl_terminalized"] = stats.get("enqueue_failed_ttl_terminalized", 0)
     _dispatcher_reconcile_stats["enqueue_failed_redispatched"] = stats.get("enqueue_failed_redispatched", 0)
     _dispatcher_reconcile_stats["enqueue_failed_capped"] = stats.get("enqueue_failed_capped", 0)
+    _dispatcher_reconcile_stats["streak_scanned"] = stats.get("streak_scanned", 0)
+    _dispatcher_reconcile_stats["streak_deactivated"] = stats.get("streak_deactivated", 0)
+    _dispatcher_reconcile_stats["streak_capped"] = stats.get("streak_capped", 0)
+    _dispatcher_reconcile_stats["streak_alerts"] = stats.get("streak_alerts", 0)
+    _dispatcher_reconcile_stats["streak_notify_failed"] = stats.get("streak_notify_failed", 0)
 
 
 # Shared Redis key for dispatcher_reconcile outcome stats (cross-process).
@@ -1172,6 +1192,7 @@ async def _bump_ongoing_failure(
     session: AsyncSession,
     redis_client: AsyncRedis | None,
     trigger_id: uuid.UUID,
+    org_id: uuid.UUID | None = None,
 ) -> None:
     """Increment the consecutive-failure counter; deactivate after the cap.
 
@@ -1179,8 +1200,12 @@ async def _bump_ongoing_failure(
     failure) or a broken pinned snapshot would otherwise log ~1440 no_pipeline
     events/day forever. After ``ONGOING_MAX_CONSECUTIVE_FAILURES`` consecutive
     failures the trigger is set ``active=False`` (the scan's ``active IS TRUE``
-    filter then stops advancing next_fire_at). Best-effort — a Redis failure
-    must never crash the top-up job.
+    filter then stops advancing next_fire_at). When ``org_id`` is provided the
+    deactivation branch also emits the shared auto-deactivation lifecycle
+    ceremony (AuditEvent + TriggerEvent, ``deactivated_by='config_failure'``) so
+    the config-failure path leaves the same searchable audit records as the
+    FAR-190 no-delivery-streak path. Best-effort — a Redis failure must never
+    crash the top-up job.
     """
     if redis_client is None:
         return
@@ -1193,7 +1218,22 @@ async def _bump_ongoing_failure(
 
             from modulo.db.models.trigger import Trigger
 
-            await session.execute(update(Trigger).where(Trigger.id == trigger_id).values(active=False))
+            stmt = update(Trigger).where(Trigger.id == trigger_id)
+            if org_id is not None:
+                stmt = stmt.where(Trigger.organisation_id == org_id)
+            await session.execute(stmt.values(active=False))
+            if org_id is not None:
+                from modulo.core.trigger_streak import record_ongoing_deactivation_lifecycle
+
+                await record_ongoing_deactivation_lifecycle(
+                    session,
+                    org_id=org_id,
+                    trigger_id=trigger_id,
+                    streak=int(count),
+                    threshold=ONGOING_MAX_CONSECUTIVE_FAILURES,
+                    reason="persistent_failure",
+                    deactivated_by="config_failure",
+                )
             _log.warning(
                 "ongoing trigger %s deactivated after %d consecutive failures",
                 trigger_id,
@@ -1357,7 +1397,7 @@ async def _ongoing_topup(
                 result="no_pipeline",
                 error_detail=f"Invalid snapshot_id pinned in ongoing trigger config: {pinned!r}",
             )
-            await _bump_ongoing_failure(session, redis_client, trigger_id)
+            await _bump_ongoing_failure(session, redis_client, trigger_id, org_id=org_id)
             if outcome is not None:
                 outcome.update({"status": "skipped", "reason": "invalid_pinned_snapshot"})
             return []
@@ -1372,7 +1412,7 @@ async def _ongoing_topup(
                 result="no_pipeline",
                 error_detail=f"Pinned snapshot_id not found: {candidate}",
             )
-            await _bump_ongoing_failure(session, redis_client, trigger_id)
+            await _bump_ongoing_failure(session, redis_client, trigger_id, org_id=org_id)
             if outcome is not None:
                 outcome.update({"status": "skipped", "reason": "pinned_snapshot_missing"})
             return []
@@ -1391,7 +1431,7 @@ async def _ongoing_topup(
                 result="no_pipeline",
                 error_detail="Pipeline not found when trying to auto-create snapshot",
             )
-            await _bump_ongoing_failure(session, redis_client, trigger_id)
+            await _bump_ongoing_failure(session, redis_client, trigger_id, org_id=org_id)
             if outcome is not None:
                 outcome.update({"status": "skipped", "reason": "pipeline_not_found"})
             return []
@@ -3078,6 +3118,11 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         "enqueue_failed_redispatched": 0,
         "enqueue_failed_capped": 0,
         "capacity_deferred": 0,
+        "streak_scanned": 0,
+        "streak_deactivated": 0,
+        "streak_capped": 0,
+        "streak_alerts": 0,
+        "streak_notify_failed": 0,
     }
     # Runs terminalised by this tick's terminalizers — (run_id, org_id) — whose
     # compensating daily fact must be recorded once the per-org transactions
@@ -3422,6 +3467,32 @@ async def dispatcher_reconcile() -> dict[str, Any]:
             raise
         except Exception:
             _log.warning("dispatcher_reconcile.classification_sweep_failed", exc_info=True)
+        # FAR-190 (P6'''): ongoing-trigger no-delivery streak sweep. Runs AFTER
+        # the classification reconcile so the newest terminal runs have their
+        # classification records before the streak walk reads them. Best-effort
+        # and never raises — an isolated sweep failure must never fail the
+        # reconcile tick, break the fire_due_triggers top-up (separate cron),
+        # or stop any other trigger's evaluation.
+        try:
+            streak = await enforce_no_delivery_streaks(redis_client=redis_client)
+            summary["streak_scanned"] = streak.get("scanned", 0)
+            summary["streak_deactivated"] = streak.get("deactivated", 0)
+            summary["streak_capped"] = streak.get("capped", 0)
+            summary["streak_alerts"] = streak.get("alerts", 0)
+            summary["streak_notify_failed"] = streak.get("notify_failed", 0)
+            if streak.get("deactivated") or streak.get("alerts"):
+                _log.info(
+                    "dispatcher_reconcile.streak_sweep",
+                    extra={
+                        "deactivated": streak.get("deactivated", 0),
+                        "alerts": streak.get("alerts", 0),
+                        "capped": streak.get("capped", 0),
+                    },
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning("dispatcher_reconcile.streak_sweep_failed", exc_info=True)
         # Record the outcome for /healthz/ready BEFORE the client is closed:
         # the shared Redis key is what the WEB process reads (the in-process
         # dict lives only in this worker process).

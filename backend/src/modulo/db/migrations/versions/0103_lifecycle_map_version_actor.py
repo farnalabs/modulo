@@ -1,7 +1,7 @@
 """Add the ``updated_by`` actor column to lifecycle_maps (version actor stamping).
 
-Revision ID: 0102_lifecycle_map_version_actor
-Revises: 0101_guardrails
+Revision ID: 0103_lifecycle_map_version_actor
+Revises: 0102_ongoing_streak_epoch
 Create Date: 2026-08-15
 
 The map row carries ``account_id`` (the ORIGINAL creator, set at create) but no
@@ -16,6 +16,10 @@ audit payloads reference actors loosely).
 The column uses ``sa.Uuid()`` (the codebase's cross-backend pattern for UUID
 columns) so the migration renders on Postgres, SQLite, and MariaDB. Additive +
 nullable + never backfilled — safe to downgrade by dropping the column.
+
+Renumbered from ``0102_lifecycle_map_version_actor`` to clear the numeric-prefix
+collision with FAR-190's ``0102_ongoing_streak_epoch`` (merged to main while this
+PR was open); this migration now sits on top of it as the chain head.
 """
 
 from __future__ import annotations
@@ -25,8 +29,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0102_lifecycle_map_version_actor"
-down_revision: str | None = "0101_guardrails"
+revision: str = "0103_lifecycle_map_version_actor"
+down_revision: str | None = "0102_ongoing_streak_epoch"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -33,6 +33,7 @@ from modulo.core.notifier import (
     EVENT_RUN_FAILED,
     EVENT_RUN_STALLED,
     EVENT_SYSTEM_ANNOUNCEMENT,
+    EVENT_TRIGGER_DEACTIVATED,
 )
 from modulo.db.crud.notifications import create_notification
 from modulo.db.models.notification import Notification
@@ -142,6 +143,14 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
         "dismissible_at_scope": True,
         "ttl_hours": None,
     },
+    EVENT_TRIGGER_DEACTIVATED: {
+        "level": "warning",
+        "scope": "org",
+        "category": "triggers.auto_deactivated",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
 }
 
 _TITLE_TEMPLATES: dict[str, str] = {
@@ -157,6 +166,7 @@ _TITLE_TEMPLATES: dict[str, str] = {
     EVENT_EVAL_BLOCKED: "Eval blocked — {pipeline_name}",
     EVENT_FEEDBACK_PENDING: "Feedback awaiting review",
     EVENT_SYSTEM_ANNOUNCEMENT: "System announcement",
+    EVENT_TRIGGER_DEACTIVATED: "Ongoing trigger auto-deactivated — {pipeline_name}",
 }
 
 _BODY_TEMPLATES: dict[str, str] = {
@@ -174,6 +184,10 @@ _BODY_TEMPLATES: dict[str, str] = {
     EVENT_EVAL_BLOCKED: 'An eval check blocked pipeline "{pipeline_name}".',
     EVENT_FEEDBACK_PENDING: "A feedback record is pending your review.",
     EVENT_SYSTEM_ANNOUNCEMENT: "{message}",
+    EVENT_TRIGGER_DEACTIVATED: (
+        'Ongoing trigger "{pipeline_name}" was auto-deactivated after {streak} consecutive no-delivery runs '
+        "(threshold {threshold})."
+    ),
 }
 
 _ACTION_URL_TEMPLATES: dict[str, str | None] = {
@@ -189,6 +203,7 @@ _ACTION_URL_TEMPLATES: dict[str, str | None] = {
     EVENT_EVAL_BLOCKED: "/runs/{run_id}",
     EVENT_FEEDBACK_PENDING: "/feedback/inbox",
     EVENT_SYSTEM_ANNOUNCEMENT: None,
+    EVENT_TRIGGER_DEACTIVATED: None,
 }
 
 
