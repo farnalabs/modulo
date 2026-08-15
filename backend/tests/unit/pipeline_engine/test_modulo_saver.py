@@ -1,5 +1,6 @@
 """Unit tests for ModuloPostgresSaver — org isolation, encryption, SQL."""
 
+import asyncio
 import json
 import uuid
 from unittest.mock import AsyncMock, MagicMock
@@ -33,23 +34,39 @@ def mock_conn():
     return MagicMock()
 
 
+def _make_saver(mock_conn, *, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY):
+    """Construct ``ModuloPostgresSaver`` inside a running event loop.
+
+    ``AsyncPostgresSaver.__init__`` calls ``asyncio.get_running_loop()``, so a
+    plain sync construction fails. The methods under test here
+    (``_encrypt_checkpoint``, ``_decrypt_checkpoint``, ``_encrypt_blob``,
+    ``_decrypt_blobs``, ``_decrypt_writes``) are loop-independent, so a
+    throwaway loop just for construction is enough.
+    """
+
+    async def _build():
+        return ModuloPostgresSaver(mock_conn, organisation_id=organisation_id, fernet_key=fernet_key)
+
+    return asyncio.run(_build())
+
+
 class TestInit:
     def test_stores_org_id(self, mock_conn):
-        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        saver = _make_saver(mock_conn)
         assert saver._org_id == _ORG_ID
 
     def test_stores_fernet_key(self, mock_conn):
-        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        saver = _make_saver(mock_conn)
         assert saver._fernet is not None
 
     def test_no_fernet_when_not_given(self, mock_conn):
-        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=None)
+        saver = _make_saver(mock_conn, fernet_key=None)
         assert saver._fernet is None
 
 
 class TestEncryption:
     def test_encrypt_decrypt_roundtrip(self, mock_conn):
-        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        saver = _make_saver(mock_conn)
         checkpoint = {"id": "test", "channel_values": {"key": "value"}}
         encrypted = saver._encrypt_checkpoint(checkpoint)
         parsed = json.loads(encrypted)
@@ -61,7 +78,7 @@ class TestEncryption:
         assert decrypted["channel_values"]["key"] == "value"
 
     def test_no_encryption_when_not_configured(self, mock_conn):
-        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=None)
+        saver = _make_saver(mock_conn, fernet_key=None)
         checkpoint = {"id": "plain"}
         serialized = saver._encrypt_checkpoint(checkpoint)
         assert '"__encrypted__"' not in serialized
@@ -69,16 +86,16 @@ class TestEncryption:
         assert decrypted["id"] == "plain"
 
     def test_decrypt_plain_dict(self, mock_conn):
-        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        saver = _make_saver(mock_conn)
         result = saver._decrypt_checkpoint({"id": "plain"})
         assert result["id"] == "plain"
 
     def test_encrypt_decrypt_with_different_saver(self, mock_conn):
         checkpoint = {"secret": "data"}
-        saver1 = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        saver1 = _make_saver(mock_conn)
         encrypted = saver1._encrypt_checkpoint(checkpoint)
 
-        saver2 = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        saver2 = _make_saver(mock_conn)
         result = saver2._decrypt_checkpoint(encrypted)
         assert result["secret"] == "data"
 
@@ -222,7 +239,7 @@ class TestBlobEncryption:
     """Tests for blob-level encryption (_encrypt_blob, _decrypt_blobs, _decrypt_writes)."""
 
     def test_blob_encryption_roundtrip(self, mock_conn):
-        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        saver = _make_saver(mock_conn)
         original = b"hello world sensitive data"
         encrypted = saver._encrypt_blob(original)
         assert isinstance(encrypted, bytes)
@@ -231,12 +248,12 @@ class TestBlobEncryption:
         assert result == {"ch1": original}
 
     def test_encrypted_blob_starts_with_fernet_prefix(self, mock_conn):
-        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        saver = _make_saver(mock_conn)
         encrypted = saver._encrypt_blob(b"anything")
         assert encrypted.startswith(b"gAAAAA")
 
     def test_decrypt_blobs_returns_original_channel_values(self, mock_conn):
-        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        saver = _make_saver(mock_conn)
         original = b'{"key": "value"}'
         encrypted = saver._encrypt_blob(original)
         blobs = [[b"channel1", b"json", encrypted]]
@@ -244,7 +261,7 @@ class TestBlobEncryption:
         assert result == {"channel1": original}
 
     def test_decrypt_writes_returns_original_writes(self, mock_conn):
-        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        saver = _make_saver(mock_conn)
         original = b"write_data"
         encrypted = saver._encrypt_blob(original)
         writes = [[b"task1", b"channel1", b"type1", encrypted]]
@@ -271,32 +288,32 @@ class TestBlobEncryption:
         assert blob_arg.startswith(b"gAAAAA")
 
     def test_no_encryption_when_fernet_key_none(self, mock_conn):
-        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=None)
+        saver = _make_saver(mock_conn, fernet_key=None)
         original = b"plaintext data"
         result = saver._encrypt_blob(original)
         assert result is original
 
     def test_decrypt_blobs_plaintext_fallback(self, mock_conn):
-        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        saver = _make_saver(mock_conn)
         plaintext = b'{"key": "value"}'
         blobs = [[b"ch1", b"json", plaintext]]
         result = saver._decrypt_blobs(blobs)
         assert result == {"ch1": plaintext}
 
     def test_decrypt_writes_plaintext_fallback(self, mock_conn):
-        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        saver = _make_saver(mock_conn)
         plaintext = b"plain_write_data"
         writes = [[b"task1", b"ch1", b"type1", plaintext]]
         result = saver._decrypt_writes(writes)
         assert result == [("ch1", "type1", plaintext)]
 
     def test_decrypt_blobs_none(self, mock_conn):
-        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        saver = _make_saver(mock_conn)
         assert saver._decrypt_blobs(None) is None
         assert saver._decrypt_blobs([]) is None
 
     def test_no_decryption_when_saver_has_no_key(self, mock_conn):
-        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=None)
+        saver = _make_saver(mock_conn, fernet_key=None)
         encrypted = Fernet(_FERNET_KEY.encode()).encrypt(b"secret-data")
         blobs = [[b"ch1", b"bytes", encrypted]]
         result = saver._decrypt_blobs(blobs)
