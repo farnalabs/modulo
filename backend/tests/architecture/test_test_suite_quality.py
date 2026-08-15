@@ -187,6 +187,16 @@ regression that silently weakens the suite:
   broke. Range checks (``assert lo <= x <= hi``) use ordering operators and
   are deliberately exempt: a bounds assertion is a single fact that reads
   naturally as a chain, so only ``==`` chains are flagged
+- ``@pytest.mark.parametrize`` whose ``argvalues`` holds a *duplicate* case —
+  the single-case and empty-case lenses guard the degenerate ends of the case
+  list, and this lens guards the copy-paste trap in the middle: two cases with
+  the *same value* run the test body twice with identical inputs, so the second
+  run adds no coverage while the parametrize advertises one more distinct case
+  than it exercises. A reader (and a mutation-testing run) believes N distinct
+  inputs are covered when only N-1 are. The lens compares each case by value
+  (after ``ast.literal_eval``), so ``1`` and ``True`` are deliberately treated
+  as distinct and only byte-identical values are flagged — an unambiguous
+  duplicate
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -3443,3 +3453,134 @@ def test_equality_chain_lens_flags_opaque_chains():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _equality_chain_assert_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _duplicate_parametrize_case_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``@...parametrize`` whose
+    ``argvalues`` holds a *duplicate* case.
+
+    Only decorator applications are considered — a bare ``parametrize(...)``
+    call inside a body is not pytest parametrization and belongs to a
+    different lens. ``argvalues`` must be a ``list``/``tuple`` literal whose
+    elements are all statically evaluable; if any element is not (a call, a
+    variable, a ``pytest.param(...)`` wrapper), the whole list is skipped
+    because equality with a runtime value cannot be decided statically. Cases
+    are compared by value after ``ast.literal_eval`` and ``repr``, so only
+    byte-identical values (``1`` vs ``True`` are distinct) are flagged.
+    """
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        for dec in node.decorator_list:
+            if not isinstance(dec, ast.Call):
+                continue
+            if _decorator_name(dec) != "parametrize":
+                continue
+            if len(dec.args) >= 2:
+                argvalues = dec.args[1]
+            else:
+                argvalues = next((kw.value for kw in dec.keywords if kw.arg == "argvalues"), None)
+            if not isinstance(argvalues, (ast.List, ast.Tuple)):
+                continue
+            keys: list[str] = []
+            for element in argvalues.elts:
+                try:
+                    keys.append(repr(ast.literal_eval(element)))
+                except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+                    keys = []
+                    break
+            if not keys:
+                continue
+            seen: dict[str, list[int]] = {}
+            for key, element in zip(keys, argvalues.elts, strict=True):
+                seen.setdefault(key, []).append(element.lineno)
+            for key, lines in seen.items():
+                if len(lines) < 2:
+                    continue
+                found.append(
+                    (
+                        dec.lineno,
+                        f"parametrize case {key} appears {len(lines)} times (lines {lines}) — "
+                        "duplicate cases run the same assertion with identical inputs, "
+                        "so the advertised matrix coverage is inflated",
+                    )
+                )
+    return found
+
+
+def test_no_duplicate_parametrize_cases():
+    """``@pytest.mark.parametrize`` whose ``argvalues`` holds a duplicate case
+    runs the test body twice with *identical* inputs — the second run adds no
+    coverage while the parametrize advertises one more distinct case than it
+    exercises. It is almost always a copy-paste leftover: a case duplicated
+    while editing the list, or a list trimmed in place without removing the
+    now-redundant twin. A reader — and a mutation-testing run — believes N
+    distinct inputs are covered when only N-1 are, so a regression in the
+    behaviour the duplicate case was meant to pin is masked by the twin. Drop
+    the duplicate case (and its ``id`` when ``ids=`` is a parallel list). The
+    single-case and empty-case lenses guard the degenerate ends of the case
+    list; this lens guards the copy-paste trap in the middle."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _duplicate_parametrize_case_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} parametrize case(s) duplicated in argvalues.\n"
+        "A duplicate case runs the same assertion with identical inputs — the matrix coverage "
+        "is inflated, not extended. Remove the redundant twin (and its id when ids= is parallel).\n"
+        + "\n".join(violations)
+    )
+
+
+def test_duplicate_parametrize_lens_flags_repeated_cases():
+    """Synthetic positive/negative control for the duplicate-case parametrize
+    lens: it must flag a case that repeats in ``argvalues`` (list or tuple,
+    scalars, tuples, dicts, declared positionally or via ``argvalues=``) and
+    ignore unique case lists, parametrizes with a non-literal case list, and
+    parametrizes with a non-evaluable element anywhere in the list."""
+    positive_sources = [
+        "def test_foo():\n    @pytest.mark.parametrize('x', [1, 2, 2])\n    def test_bar(x):\n        assert x == 1\n",
+        "def test_foo():\n    @pytest.mark.parametrize('x', ('a', 'a', 'b'))\n    def test_bar(x):\n        assert x\n",
+        (
+            "def test_foo():\n"
+            "    @pytest.mark.parametrize('a,b', [(1, 2), (3, 4), (1, 2)])\n"
+            "    def test_bar(a, b):\n        assert a + b == 3\n"
+        ),
+        (
+            "def test_foo():\n"
+            "    @pytest.mark.parametrize('x', argvalues=[{'k': 1}, {'k': 1}])\n"
+            "    def test_bar(x):\n        assert x['k'] == 1\n"
+        ),
+        "def test_foo():\n    @pytest.mark.parametrize('x', [0.5, 0.5])\n"
+        "    def test_bar(x):\n        assert x == 0.5\n",
+        (
+            "def test_foo():\n"
+            "    @pytest.mark.parametrize('x', [1, 2, 1])\n"
+            "    @pytest.mark.parametrize('y', [3])\n"
+            "    def test_bar(x, y):\n        assert x + y == 4\n"
+        ),
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _duplicate_parametrize_case_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    @pytest.mark.parametrize('x', [1, 2, 3])\n    def test_bar(x):\n        assert x == 1\n",
+        "def test_foo():\n    @pytest.mark.parametrize('x', [1, True])\n    def test_bar(x):\n        assert x\n",
+        "def test_foo():\n    @pytest.mark.parametrize('x', CASES)\n    def test_bar(x):\n        assert x\n",
+        (
+            "def test_foo():\n"
+            "    @pytest.mark.parametrize('x', [1, make_case()])\n"
+            "    def test_bar(x):\n        assert x == 1\n"
+        ),
+        "def test_foo():\n    @pytest.mark.parametrize('x', [1])\n    def test_bar(x):\n        assert x == 1\n",
+        "def test_foo():\n    parametrize('x', [1, 1])\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _duplicate_parametrize_case_violations(tree), f"lens should NOT flag:\n{source}"
