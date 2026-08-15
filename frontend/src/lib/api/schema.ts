@@ -12379,6 +12379,10 @@ export interface components {
             recent_window_ratio: number;
             /** Lookback Days */
             lookback_days: number;
+            /** Pipeline Id */
+            pipeline_id?: string | null;
+            /** Trend */
+            trend?: string | null;
         };
         /** RejectRequest */
         RejectRequest: {
@@ -15731,6 +15735,10 @@ export interface operations {
                 threshold?: number;
                 /** @description Fraction of the lookback period used as the recent window (e.g. 0.5 = last half) */
                 recent_window_ratio?: number;
+                /** @description Scope alerts to eval results from runs of a single pipeline */
+                pipeline_id?: string | null;
+                /** @description Filter alerts by trend direction: 'declining', 'stable' or 'improving'. Use 'declining' to surface true regressions only. */
+                trend?: string | null;
                 _fresh?: boolean;
             };
             header?: never;

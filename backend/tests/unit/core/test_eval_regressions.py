@@ -316,6 +316,146 @@ class TestDetectRegressionsDirect:
         with pytest.raises(ValueError, match="recent_window_ratio"):
             await detect_regressions(session, _ORG_ID, days=7, threshold=0.15, recent_window_ratio=ratio)
 
+    # ── pipeline scoping ────────────────────────────────────────────────
+
+    async def test_pipeline_id_passed_through_to_query(self) -> None:
+        """pipeline_id is bound into the regression query params."""
+        session = _make_mock_session()
+        session.execute.return_value = _make_result(all_value=[])
+
+        pipeline_id = uuid.UUID("00000000-0000-0000-0000-000000000030")
+        await detect_regressions(session, _ORG_ID, days=7, pipeline_id=pipeline_id)
+
+        bound = session.execute.call_args[0][1]
+        assert bound["pipeline_id"] == pipeline_id
+
+    async def test_pipeline_id_none_bound(self) -> None:
+        """Without pipeline_id the query param is bound as None."""
+        session = _make_mock_session()
+        session.execute.return_value = _make_result(all_value=[])
+
+        await detect_regressions(session, _ORG_ID, days=7)
+
+        bound = session.execute.call_args[0][1]
+        assert bound["pipeline_id"] is None
+
+    # ── trend filter ────────────────────────────────────────────────────
+
+    async def test_trend_filter_keeps_only_matching_trend(self) -> None:
+        session = _make_mock_session()
+        rows = [
+            _make_row(
+                eval_id=_EVAL_ID_1,
+                eval_name="declining-eval",
+                recent_total=10,
+                recent_passed=3,
+                baseline_total=10,
+                baseline_passed=9,
+                affected_run_ids=[_RUN_ID_1],
+            ),
+            _make_row(
+                eval_id=_EVAL_ID_2,
+                eval_name="stable-eval",
+                recent_total=10,
+                recent_passed=8,
+                baseline_total=10,
+                baseline_passed=8,
+                affected_run_ids=[],
+            ),
+            _make_row(
+                eval_id=_EVAL_ID_3,
+                eval_name="improving-eval",
+                recent_total=10,
+                recent_passed=9,
+                baseline_total=10,
+                baseline_passed=3,
+                affected_run_ids=[],
+            ),
+        ]
+        session.execute.return_value = _make_result(all_value=rows)
+
+        alerts = await detect_regressions(session, _ORG_ID, days=7, threshold=0.15, trend="declining")
+
+        assert [a.eval_id for a in alerts] == [_EVAL_ID_1]
+        assert all(a.trend == "declining" for a in alerts)
+
+    async def test_trend_filter_stable(self) -> None:
+        session = _make_mock_session()
+        rows = [
+            _make_row(
+                eval_id=_EVAL_ID_1,
+                eval_name="declining-eval",
+                recent_total=10,
+                recent_passed=3,
+                baseline_total=10,
+                baseline_passed=9,
+                affected_run_ids=[],
+            ),
+            _make_row(
+                eval_id=_EVAL_ID_2,
+                eval_name="stable-eval",
+                recent_total=10,
+                recent_passed=8,
+                baseline_total=10,
+                baseline_passed=8,
+                affected_run_ids=[],
+            ),
+        ]
+        session.execute.return_value = _make_result(all_value=rows)
+
+        alerts = await detect_regressions(session, _ORG_ID, days=7, threshold=0.15, trend="stable")
+
+        assert [a.eval_id for a in alerts] == [_EVAL_ID_2]
+
+    async def test_trend_filter_improving(self) -> None:
+        session = _make_mock_session()
+        rows = [
+            _make_row(
+                eval_id=_EVAL_ID_1,
+                eval_name="declining-eval",
+                recent_total=10,
+                recent_passed=3,
+                baseline_total=10,
+                baseline_passed=9,
+                affected_run_ids=[],
+            ),
+            _make_row(
+                eval_id=_EVAL_ID_3,
+                eval_name="improving-eval",
+                recent_total=10,
+                recent_passed=9,
+                baseline_total=10,
+                baseline_passed=3,
+                affected_run_ids=[],
+            ),
+        ]
+        session.execute.return_value = _make_result(all_value=rows)
+
+        alerts = await detect_regressions(session, _ORG_ID, days=7, threshold=0.15, trend="improving")
+
+        assert [a.eval_id for a in alerts] == [_EVAL_ID_3]
+
+    @pytest.mark.parametrize("trend", ["declining", "stable", "improving"])
+    async def test_trend_filter_returns_none_for_no_match(self, trend: str) -> None:
+        session = _make_mock_session()
+        session.execute.return_value = _make_result(all_value=[])
+
+        alerts = await detect_regressions(session, _ORG_ID, days=7, trend=trend)
+
+        assert alerts == []
+
+    @pytest.mark.parametrize("trend", ["bogus", "DECLINING", "", "declining ", None])
+    async def test_invalid_trend_raises_value_error(self, trend: str | None) -> None:
+        session = _make_mock_session()
+        if trend is None:
+            # None means "no filter" — valid.
+            session.execute.return_value = _make_result(all_value=[])
+            alerts = await detect_regressions(session, _ORG_ID, days=7, trend=trend)
+            assert alerts == []
+            return
+        with pytest.raises(ValueError, match="trend"):
+            await detect_regressions(session, _ORG_ID, days=7, trend=trend)
+
 
 # ── API endpoint tests ────────────────────────────────────────────────────
 
@@ -423,11 +563,15 @@ class TestRegressionAlertsEndpoint:
             "threshold",
             "recent_window_ratio",
             "lookback_days",
+            "pipeline_id",
+            "trend",
         }
         assert data["total_regressions"] == 1
         assert data["threshold"] == pytest.approx(0.15)
         assert data["recent_window_ratio"] == 0.25
         assert data["lookback_days"] == 7
+        assert data["pipeline_id"] is None
+        assert data["trend"] is None
 
     def test_alert_shape(self, client: TestClient) -> None:
         resp = client.get(self.URL)
@@ -509,6 +653,91 @@ class TestRegressionAlertsEndpoint:
         recent_start = mock_session.execute.call_args_list[1][0][1]["recent_start"]
         baseline_start = mock_session.execute.call_args_list[1][0][1]["baseline_start"]
         assert (recent_start - baseline_start).days == 14
+
+    def test_pipeline_id_param_echoed_and_bound(self) -> None:
+        mock_session = _make_mock_session()
+        mock_session.execute.side_effect = [
+            _make_result(scalar_value=None),  # set_rls_org
+            _make_result(all_value=[]),  # regression query
+        ]
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        pipeline_id = "00000000-0000-0000-0000-000000000030"
+        app.dependency_overrides[get_db_session] = override_session
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="admin",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="admin",
+        )
+        resp = TestClient(app).get(self.URL + f"?pipeline_id={pipeline_id}")
+        data = resp.json()
+        assert data["pipeline_id"] == pipeline_id
+
+        bound = mock_session.execute.call_args_list[1][0][1]
+        assert str(bound["pipeline_id"]) == pipeline_id
+
+    def test_pipeline_id_not_set_returns_none(self) -> None:
+        mock_session = _make_mock_session()
+        mock_session.execute.side_effect = [
+            _make_result(scalar_value=None),
+            _make_result(all_value=[]),
+        ]
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="admin",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="admin",
+        )
+        resp = TestClient(app).get(self.URL)
+        data = resp.json()
+        assert data["pipeline_id"] is None
+        assert data["trend"] is None
+
+    def test_trend_param_echoed_and_passed(self) -> None:
+        mock_session = _make_mock_session()
+        mock_session.execute.side_effect = [
+            _make_result(scalar_value=None),
+            _make_result(all_value=[]),
+        ]
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="admin",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="admin",
+        )
+        resp = TestClient(app).get(self.URL + "?trend=declining")
+        data = resp.json()
+        assert data["trend"] == "declining"
+
+    @pytest.mark.parametrize("trend", ["bogus", "DECLINING", ""])
+    def test_invalid_trend_returns_422(self, trend: str) -> None:
+        mock_session = _make_mock_session()
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="admin",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="admin",
+        )
+        resp = TestClient(app).get(self.URL + f"?trend={trend}")
+        assert resp.status_code == 422
 
     @pytest.mark.parametrize("ratio", ["0", "1.5", "-0.5"])
     def test_invalid_recent_window_ratio_returns_422(self, ratio: str) -> None:

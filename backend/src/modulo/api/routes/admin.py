@@ -18,7 +18,7 @@ from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
 from modulo.core.eval_engine.okr import track_okr_progress
-from modulo.core.eval_engine.regression import detect_regressions
+from modulo.core.eval_engine.regression import VALID_TRENDS, detect_regressions
 from modulo.core.feature_flags import resolve_plan_context
 from modulo.core.hitl_manager.overdue_warning import get_overdue_claims
 from modulo.db.crud.account import get_account_by_email, get_account_by_id
@@ -2355,6 +2355,8 @@ class RegressionAlertsResponse(BaseModel):
     threshold: float
     recent_window_ratio: float
     lookback_days: int
+    pipeline_id: str | None = None
+    trend: str | None = None
 
 
 @router.get("/evals/regressions", response_model=RegressionAlertsResponse)
@@ -2368,6 +2370,17 @@ async def eval_regressions(
         le=1.0,
         description="Fraction of the lookback period used as the recent window (e.g. 0.5 = last half)",
     ),
+    pipeline_id: uuid.UUID | None = Query(
+        default=None,
+        description="Scope alerts to eval results from runs of a single pipeline",
+    ),
+    trend: str | None = Query(
+        default=None,
+        description=(
+            "Filter alerts by trend direction: 'declining', 'stable' or 'improving'. "
+            "Use 'declining' to surface true regressions only."
+        ),
+    ),
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> RegressionAlertsResponse:
@@ -2375,6 +2388,12 @@ async def eval_regressions(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admin users can access eval regressions",
+        )
+
+    if trend is not None and trend not in VALID_TRENDS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"trend must be one of {sorted(VALID_TRENDS)}, got {trend!r}",
         )
 
     try:
@@ -2386,6 +2405,8 @@ async def eval_regressions(
                 days=days,
                 threshold=threshold,
                 recent_window_ratio=recent_window_ratio,
+                pipeline_id=pipeline_id,
+                trend=trend,
             )
     except IntegrityError:
         logger.exception("admin.eval_regressions")
@@ -2436,6 +2457,8 @@ async def eval_regressions(
         threshold=threshold,
         recent_window_ratio=recent_window_ratio,
         lookback_days=days,
+        pipeline_id=str(pipeline_id) if pipeline_id is not None else None,
+        trend=trend,
     )
 
 
