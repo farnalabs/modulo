@@ -16,16 +16,30 @@ from modulo.connectors.base import (
 )
 
 
-def _paging_total(body: dict[str, Any]) -> int | None:
+def _list_records(body: object) -> list[dict[str, Any]]:
+    """Safely extract the Azure Repos ``value`` page from a list response body.
+
+    A corrupt or hostile response may return a non-dict body (list, string,
+    number, ...) or a non-list ``value``. Both must fall back to an empty page
+    instead of crashing the connector with ``AttributeError`` on the bare
+    ``body.get("value", [])`` chain.
+    """
+    if not isinstance(body, dict):
+        return []
+    value = body.get("value", [])
+    return value if isinstance(value, list) else []
+
+
+def _paging_total(body: object) -> int | None:
     """Extract Azure Repos' ``count`` field as a safe int.
 
     Guards against non-finite floats (``inf``/``nan``) which otherwise poison
     aggregation — Python's json parser produces ``inf`` for overflowing
     literals such as ``1e999``, so a corrupt or hostile response must not be
-    able to poison the reported total. A missing ``count`` keeps the
-    historical ``None`` behaviour.
+    able to poison the reported total. A non-dict body is treated as absent,
+    and a missing ``count`` keeps the historical ``None`` behaviour.
     """
-    raw = body.get("count")
+    raw = body.get("count") if isinstance(body, dict) else None
     if raw is None:
         return None
     return _safe_int(raw)
@@ -94,7 +108,7 @@ class AzureReposConnector(ConnectorBase):
                 return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
 
             profile = r.json()
-            display_name = profile.get("displayName", "")
+            display_name = profile.get("displayName", "") if isinstance(profile, dict) else ""
             return HealthResult(ok=True, detail=display_name)
         except httpx.HTTPStatusError as exc:
             return HealthResult(
@@ -120,7 +134,7 @@ class AzureReposConnector(ConnectorBase):
                     r.raise_for_status()
                     body = r.json()
                     return ConnectorResult(
-                        records=body.get("value", []),
+                        records=_list_records(body),
                         total=_paging_total(body),
                     )
                 case "file":
@@ -153,7 +167,7 @@ class AzureReposConnector(ConnectorBase):
                     r.raise_for_status()
                     body = r.json()
                     return ConnectorResult(
-                        records=body.get("value", []),
+                        records=_list_records(body),
                         total=_paging_total(body),
                     )
                 case "commits":
@@ -171,7 +185,7 @@ class AzureReposConnector(ConnectorBase):
                     r.raise_for_status()
                     body = r.json()
                     return ConnectorResult(
-                        records=body.get("value", []),
+                        records=_list_records(body),
                         total=_paging_total(body),
                     )
                 case _:
@@ -195,7 +209,7 @@ class AzureReposConnector(ConnectorBase):
                     )
                     refs_r.raise_for_status()
                     refs_body = refs_r.json()
-                    refs = refs_body.get("value", [])
+                    refs = _list_records(refs_body)
                     if not refs:
                         raise ValueError(f"Branch {branch!r} not found in repo {repo!r}")
                     old_object_id = refs[0].get("objectId", "0000000000000000000000000000000000000000")
