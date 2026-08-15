@@ -76,10 +76,11 @@ correction trigger, and resolution.
 - [x] API schema includes `page` and `page_size` query params
 - [ ] Frontend does not yet wire pagination controls (gap)
 
-### Eval proposals (not yet implemented in UI)
+### Eval proposals
 
 - [x] API endpoint `GET /api/v1/feedback/proposals` exists in schema
-- [ ] No frontend UI for eval proposals queue or draft eval editor (gap)
+- [x] Eval proposals queue UI exists %s EvalProposalsQueueView.vue at /evals/proposals (router line 273) lists proposals with status badges, pipeline/node context, and Publish/Dismiss actions
+- [ ] No draft eval editor UI (gap %s required by PRD 8.20)
 
 ### BDD coverage
 
@@ -112,13 +113,19 @@ correction trigger, and resolution.
 ## Known Gaps
 
 - Pagination controls not wired in the frontend (API supports `page`/`page_size`)
-- No eval proposals queue or draft eval editor UI (required by PRD 8.20)
+- No draft eval editor UI %s the queue view exists (EvalProposalsQueueView.vue at /evals/proposals) but there is no editor for drafting/editing eval content, and "Publish" does not create an eval definition
 - No `producing_agent` filter in frontend (API schema includes `agent_id` but UI does not expose it)
 - No `ai_correction_with_human_review` accept/reject UI (PRD requires it for that handler type)
 - "Save Annotation" and "Mark Resolved" buttons send identical API payloads (`action: mark_reviewed`) — no semantic difference exists in the API for saving annotation without resolving
 - No explicit API request timeouts
 
 ## QA History
+
+### 2026-08-15 — Coverage-completion (FAR-233)
+- **Verified**: the eval proposals queue is no longer "API-only" — EvalProposalsQueueView.vue exists at /evals/proposals with Publish/Dismiss actions. The draft-eval-editor gap remains.
+- **Remaining gaps**: pagination controls, status-staleness handling, producing_agent filter, ai_correction_with_human_review accept/reject UI, draft eval editor.
+
+
 
 ### 2026-07-04 — Cross-cutting QA (index 130)
 - **Fixed**: 39 behaviour checkboxes verified, review schema corrected to use `action` field, stale BDD placeholder gap removed, 18 i18n wrappers added, Error Handling + Edge Cases sections added.

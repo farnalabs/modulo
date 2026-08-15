@@ -417,6 +417,86 @@ class TestUpdateStatus:
         with pytest.raises(InvalidTransitionError, match="Cannot transition"):
             await mgr.update_status(sample_record.id, "routing")
 
+    async def test_allows_pending_to_dismissed(
+        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
+    ) -> None:
+        """The dismiss review action sets 'dismissed' (PRD 8.20) — pending may transition there."""
+        updated = MagicMock(spec=FeedbackRecord)
+        updated.id = sample_record.id
+        updated.feedback_status = "dismissed"
+        fetch_result = MagicMock()
+        fetch_result.scalar_one_or_none.return_value = sample_record
+        update_result = MagicMock()
+        update_result.scalar_one_or_none.return_value = updated
+        mock_session.execute = AsyncMock(side_effect=[fetch_result, update_result])
+
+        record = await mgr.update_status(sample_record.id, "dismissed")
+        assert record.feedback_status == "dismissed"
+
+    async def test_allows_escalated_to_dismissed(
+        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
+    ) -> None:
+        """Escalated records may still be dismissed (PRD 8.20)."""
+        sample_record.feedback_status = "escalated"
+        updated = MagicMock(spec=FeedbackRecord)
+        updated.id = sample_record.id
+        updated.feedback_status = "dismissed"
+        fetch_result = MagicMock()
+        fetch_result.scalar_one_or_none.return_value = sample_record
+        update_result = MagicMock()
+        update_result.scalar_one_or_none.return_value = updated
+        mock_session.execute = AsyncMock(side_effect=[fetch_result, update_result])
+
+        record = await mgr.update_status(sample_record.id, "dismissed")
+        assert record.feedback_status == "dismissed"
+
+    async def test_allows_routing_to_dismissed(
+        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
+    ) -> None:
+        """The inbox shows the dismiss action for every record, and routing records appear
+        in the inbox — dismiss must not 409 on them (FAR-233 review MAJOR-2)."""
+        sample_record.feedback_status = "routing"
+        updated = MagicMock(spec=FeedbackRecord)
+        updated.id = sample_record.id
+        updated.feedback_status = "dismissed"
+        fetch_result = MagicMock()
+        fetch_result.scalar_one_or_none.return_value = sample_record
+        update_result = MagicMock()
+        update_result.scalar_one_or_none.return_value = updated
+        mock_session.execute = AsyncMock(side_effect=[fetch_result, update_result])
+
+        record = await mgr.update_status(sample_record.id, "dismissed")
+        assert record.feedback_status == "dismissed"
+
+    async def test_allows_correcting_to_dismissed(
+        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
+    ) -> None:
+        """Correcting records also surface in the inbox with a dismiss button — allow it."""
+        sample_record.feedback_status = "correcting"
+        updated = MagicMock(spec=FeedbackRecord)
+        updated.id = sample_record.id
+        updated.feedback_status = "dismissed"
+        fetch_result = MagicMock()
+        fetch_result.scalar_one_or_none.return_value = sample_record
+        update_result = MagicMock()
+        update_result.scalar_one_or_none.return_value = updated
+        mock_session.execute = AsyncMock(side_effect=[fetch_result, update_result])
+
+        record = await mgr.update_status(sample_record.id, "dismissed")
+        assert record.feedback_status == "dismissed"
+
+    async def test_dismissed_is_terminal(
+        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
+    ) -> None:
+        """Once dismissed, no further transition is allowed (terminal state)."""
+        sample_record.feedback_status = "dismissed"
+        fetch_result = MagicMock()
+        fetch_result.scalar_one_or_none.return_value = sample_record
+        mock_session.execute = AsyncMock(return_value=fetch_result)
+
+        with pytest.raises(InvalidTransitionError, match="Cannot transition"):
+            await mgr.update_status(sample_record.id, "resolved")
+
 
 class TestLinkCorrectionRun:
     async def test_links_correction_run(
@@ -582,6 +662,114 @@ class TestDetectEvalGap:
                 eval_suite=[{"name": "quality"}],
             )
         assert sample_record.eval_gap is None
+
+    async def test_double_detection_is_idempotent(
+        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
+    ) -> None:
+        """Re-running gap detection on the same record keeps eval_gap True (idempotent read)."""
+        mock_eval_engine = MagicMock()
+        mock_eval_engine.evaluate = MagicMock(return_value=await self._fake_eval_result(True))
+
+        first = await mgr.detect_eval_gap(
+            sample_record,
+            eval_engine=mock_eval_engine,
+            eval_suite=[{"name": "quality"}],
+        )
+        assert first is True
+        assert sample_record.eval_gap is True
+
+        second = await mgr.detect_eval_gap(
+            sample_record,
+            eval_engine=mock_eval_engine,
+            eval_suite=[{"name": "quality"}],
+        )
+        assert second is True
+        assert sample_record.eval_gap is True
+
+    async def test_uses_real_eval_engine_standalone_path(
+        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
+    ) -> None:
+        """Gap detection exercises the standalone EvalEngine.evaluate() interface against
+        the rejected output with real regex eval definitions (PRD 8.20 ¶Eval suite growth)."""
+        from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalType
+
+        sample_record.rejected_output = {"answer": "the answer is 42"}
+        engine = EvalEngine()
+        passing_def = EvalDefinition(
+            id=uuid.uuid4(),
+            org_id=_ORG_ID,
+            name="answer-must-mention-42",
+            eval_type=EvalType.REGEX,
+            config={"pattern": "42", "field": "answer"},
+        )
+
+        is_gap = await mgr.detect_eval_gap(sample_record, eval_engine=engine, eval_suite=[passing_def])
+        assert is_gap is True
+        assert sample_record.eval_gap is True
+
+        failing_record = MagicMock(spec=FeedbackRecord)
+        failing_record.id = uuid.uuid4()
+        failing_record.organisation_id = _ORG_ID
+        failing_record.run_id = _RUN_ID
+        failing_record.rejected_output = {"answer": "the answer is 42"}
+        failing_record.eval_gap = None
+
+        failing_def = EvalDefinition(
+            id=uuid.uuid4(),
+            org_id=_ORG_ID,
+            name="answer-must-mention-99",
+            eval_type=EvalType.REGEX,
+            config={"pattern": "99", "field": "answer"},
+        )
+        no_gap = await mgr.detect_eval_gap(failing_record, eval_engine=engine, eval_suite=[failing_def])
+        assert no_gap is False
+        assert failing_record.eval_gap is None
+
+    async def test_round_trips_orm_eval_definition_through_detect_gap(
+        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
+    ) -> None:
+        """The real ORM EvalDefinition shape (config_json, string eval_type) must survive
+        detect_eval_gap — EvalEngine.evaluate reads eval_def.config, so the ORM row must
+        be normalised to the DTO first, else every eval is swallowed as eval_gap=True
+        (FAR-233 review MAJOR-1)."""
+        from modulo.core.eval_engine import EvalEngine
+        from modulo.db.models.eval_definition import EvalDefinition
+
+        sample_record.rejected_output = {"answer": "the answer is 42"}
+        engine = EvalEngine()
+
+        passing_orm = EvalDefinition(
+            id=uuid.uuid4(),
+            organisation_id=_ORG_ID,
+            pipeline_id=uuid.uuid4(),
+            name="answer-must-mention-42",
+            eval_type="regex",
+            config_json={"pattern": "42", "field": "answer"},
+            failure_behaviour="warn",
+        )
+        is_gap = await mgr.detect_eval_gap(sample_record, eval_engine=engine, eval_suite=[passing_orm])
+        assert is_gap is True
+        assert sample_record.eval_gap is True
+
+        failing_record = MagicMock(spec=FeedbackRecord)
+        failing_record.id = uuid.uuid4()
+        failing_record.organisation_id = _ORG_ID
+        failing_record.run_id = _RUN_ID
+        failing_record.rejected_output = {"answer": "the answer is 42"}
+        failing_record.eval_gap = None
+
+        failing_orm = EvalDefinition(
+            id=uuid.uuid4(),
+            organisation_id=_ORG_ID,
+            pipeline_id=uuid.uuid4(),
+            name="answer-must-mention-99",
+            eval_type="regex",
+            config_json={"pattern": "99", "field": "answer"},
+            failure_behaviour="warn",
+        )
+        no_gap = await mgr.detect_eval_gap(failing_record, eval_engine=engine, eval_suite=[failing_orm])
+        assert no_gap is False
+        assert failing_record.eval_gap is None
 
 
 class TestSpawnCorrectionRun:

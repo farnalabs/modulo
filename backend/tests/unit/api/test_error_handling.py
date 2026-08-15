@@ -31,6 +31,7 @@ _SCHEMA_ID = uuid.UUID("00000000-0000-0000-0000-000000000070")
 _NODE_ID = uuid.UUID("00000000-0000-0000-0000-000000000080")
 _PROFILE_ID = uuid.UUID("00000000-0000-0000-0000-000000000090")
 _EVAL_DEF_ID = uuid.UUID("00000000-0000-0000-0000-0000000000b0")
+_RECORD_ID = uuid.UUID("00000000-0000-0000-0000-0000000000c0")
 
 
 def _make_settings() -> Settings:
@@ -198,6 +199,105 @@ SESSION_CASES: list[tuple[str, str, str, type, int, dict | None, str | None]] = 
     ("evals_update_sqla", "PUT", f"/api/v1/evals/{_EVAL_DEF_ID}", SQLAlchemyError, 503, {"name": "x"}, "database"),
     ("evals_delete_prog", "DELETE", f"/api/v1/evals/{_EVAL_DEF_ID}", ProgrammingError, 501, None, "database"),
     ("evals_delete_sqla", "DELETE", f"/api/v1/evals/{_EVAL_DEF_ID}", SQLAlchemyError, 503, None, "database"),
+    # Feedback system (all 9 routes)
+    (
+        "feedback_create_prog",
+        "POST",
+        f"/api/v1/runs/{_RUN_ID}/feedback",
+        ProgrammingError,
+        501,
+        {"gate_id": "gate-1", "rejection_reason": "Wrong output", "rejected_output": {}, "producing_node_id": "n"},
+        "database",
+    ),
+    (
+        "feedback_create_sqla",
+        "POST",
+        f"/api/v1/runs/{_RUN_ID}/feedback",
+        SQLAlchemyError,
+        503,
+        {"gate_id": "gate-1", "rejection_reason": "Wrong output", "rejected_output": {}, "producing_node_id": "n"},
+        None,
+    ),
+    ("feedback_list_prog", "GET", "/api/v1/feedback", ProgrammingError, 501, None, "database"),
+    ("feedback_list_sqla", "GET", "/api/v1/feedback", SQLAlchemyError, 503, None, None),
+    ("feedback_inbox_prog", "GET", "/api/v1/feedback/inbox", ProgrammingError, 501, None, "database"),
+    ("feedback_inbox_sqla", "GET", "/api/v1/feedback/inbox", SQLAlchemyError, 503, None, None),
+    ("feedback_proposals_prog", "GET", "/api/v1/feedback/proposals", ProgrammingError, 501, None, "database"),
+    ("feedback_proposals_sqla", "GET", "/api/v1/feedback/proposals", SQLAlchemyError, 503, None, None),
+    ("feedback_get_prog", "GET", f"/api/v1/feedback/{_RECORD_ID}", ProgrammingError, 501, None, "database"),
+    ("feedback_get_sqla", "GET", f"/api/v1/feedback/{_RECORD_ID}", SQLAlchemyError, 503, None, None),
+    (
+        "feedback_patch_status_prog",
+        "PATCH",
+        f"/api/v1/feedback/{_RECORD_ID}/status",
+        ProgrammingError,
+        501,
+        {"status": "resolved"},
+        "database",
+    ),
+    (
+        "feedback_patch_status_sqla",
+        "PATCH",
+        f"/api/v1/feedback/{_RECORD_ID}/status",
+        SQLAlchemyError,
+        503,
+        {"status": "resolved"},
+        None,
+    ),
+    (
+        "feedback_detect_gap_prog",
+        "POST",
+        f"/api/v1/feedback/{_RECORD_ID}/detect-gap",
+        ProgrammingError,
+        501,
+        None,
+        "database",
+    ),
+    (
+        "feedback_detect_gap_sqla",
+        "POST",
+        f"/api/v1/feedback/{_RECORD_ID}/detect-gap",
+        SQLAlchemyError,
+        503,
+        None,
+        None,
+    ),
+    (
+        "feedback_inbox_item_prog",
+        "GET",
+        f"/api/v1/feedback/inbox/{_RECORD_ID}",
+        ProgrammingError,
+        501,
+        None,
+        "database",
+    ),
+    (
+        "feedback_inbox_item_sqla",
+        "GET",
+        f"/api/v1/feedback/inbox/{_RECORD_ID}",
+        SQLAlchemyError,
+        503,
+        None,
+        None,
+    ),
+    (
+        "feedback_review_prog",
+        "POST",
+        f"/api/v1/feedback/inbox/{_RECORD_ID}/review",
+        ProgrammingError,
+        501,
+        {"action": "mark_reviewed"},
+        "database",
+    ),
+    (
+        "feedback_review_sqla",
+        "POST",
+        f"/api/v1/feedback/inbox/{_RECORD_ID}/review",
+        SQLAlchemyError,
+        503,
+        {"action": "mark_reviewed"},
+        None,
+    ),
     # Environments
     ("env_list_prog", "GET", "/api/v1/environments", ProgrammingError, 501, None, "database"),
     ("env_list_sqla", "GET", "/api/v1/environments", SQLAlchemyError, 503, None, "database"),
@@ -518,3 +618,38 @@ class TestPatchLevelErrors:
             detail = resp.json().get("detail", "")
             if isinstance(detail, str):
                 assert detail_check in detail.lower()
+
+
+def test_update_schema_patch_can_clear_nullable_field(client: TestClient) -> None:
+    """PATCH with an explicit null must clear a nullable field, not no-op.
+
+    The update endpoint uses ``model_dump(exclude_unset=True)`` — a key that is
+    present in the request with value ``null`` counts as "set" and is applied,
+    so setting ``abstract_name`` back to ``None`` is a valid, supported update.
+    """
+    schema = MagicMock()
+    schema.id = _SCHEMA_ID
+    schema.organisation_id = _ORG_ID
+    schema.name = "inferred-schema"
+    schema.description = None
+    schema.abstract_name = None
+    schema.folder_id = None
+    schema.account_id = _USER_ID
+    schema.created_at = MagicMock()
+    schema.updated_at = MagicMock()
+    schema.deprecated = False
+    schema.deprecated_at = None
+
+    with (
+        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("modulo.api.routes.schemas.update_schema", new_callable=AsyncMock, return_value=schema) as mock_update,
+    ):
+        resp = client.patch(
+            f"/api/v1/schemas/{_SCHEMA_ID}",
+            json={"abstract_name": None},
+        )
+
+    assert resp.status_code == 200
+    mock_update.assert_awaited_once()
+    updates = mock_update.await_args.args[2]
+    assert updates == {"abstract_name": None}

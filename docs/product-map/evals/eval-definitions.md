@@ -115,7 +115,7 @@ Eval definitions describe automated quality checks that run as a post-node step 
 ### Failure Behaviour
 - [x] failure_behaviour="block" raises EvalBlockedError when eval fails
 - [x] EvalBlockedError is caught by pipeline executor and run transitions to "eval_failed" with error_code "eval_blocked"
-- [ ] Block failure is recorded in AuditEvent with type "eval_blocked" — not wired to AuditEvent DB table
+- [x] Block failure is recorded in AuditEvent with type "eval_blocked" — wired at executor level (executor.py:1394-1409, 1876-1891 append_audit_event event_type="eval.blocked")
 - [x] Multiple evals on one node — first block failure halts evaluation of remaining evals
 - [x] failure_behaviour="warn" logs a warning and pipeline execution continues
 - [x] Warn failure does not transition run to "eval_failed"
@@ -155,8 +155,8 @@ Eval definitions describe automated quality checks that run as a post-node step 
 ### Edge Cases
 - [x] Eval definition with empty config_json defaults to empty dict
 - [x] Eval definition node_id can be null (pipeline-level eval, not node-specific)
-- [ ] Deleted eval definition cascades to delete associated eval_results (DB-level CASCADE, no test)
-- [ ] Eval "from-run" with missing run output creates an eval with empty config (no test)
+- [x] Deleted eval definition cascades to delete associated eval_results — DB-level CASCADE configured on eval_results.eval_id FK (covered by test_eval_result_fk_cascades_on_eval_delete)
+- [x] Eval "from-run" with missing run output creates an eval with empty config (covered by test_from_run_no_return_node_yields_empty_sample)
 - [x] Coverage endpoint returns coverage_pct=0.0 when no nodes exist in pipeline
 - [x] Eval engine with unknown eval_type raises ValueError
 
@@ -186,6 +186,7 @@ Eval definitions describe automated quality checks that run as a post-node step 
 - [x] ErrorAlert component used for page-level errors with retry callback
 
 ### QA History
+- **2026-08-15**: Coverage completion (FAR-232). Marked [ ]→[x]: (1) "Block failure recorded in AuditEvent" — wired at executor level (executor.py:1394-1409, 1876-1891 append_audit_event event_type="eval.blocked"); the "not wired" claim was stale. (2) "Deleted eval definition cascades to eval_results" — DB-level CASCADE is configured on eval_results.eval_id FK; added test_eval_result_fk_cascades_on_eval_delete. (3) "Eval from-run with missing run output" — already covered by test_from_run_no_return_node_yields_empty_sample. Remaining unchecked items are genuine gaps (name uniqueness, created_at, mixed-behaviour ordering note, advisory lock).
 - **2026-07-08**: Cross-cutting architecture QA (index 264) by Worker sub-agent (worktree arch-264)
   - **Fixed CRITICAL** — Added `except Exception → 500` catches to all 9 eval route handlers with `except HTTPException: raise` guard (create, list, get, update, delete, coverage, list_run_evals, compare with 2 blocks, from-run with 2 blocks) — previously only caught ProgrammingError→501 and SQLAlchemyError→503, allowing Python-level errors (TypeError, KeyError, AttributeError) to propagate as raw 500 to CatchAllMiddleware
   - **Fixed CRITICAL** — `compare_evals` second transaction block (line 593) missing `set_rls_org()` and `set_rls_user_context()` calls — eval definitions query ran without RLS context on non-Postgres backends. Added both calls.

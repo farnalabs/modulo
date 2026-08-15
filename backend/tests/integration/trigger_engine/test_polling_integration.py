@@ -199,7 +199,7 @@ def _make_polling_config_json() -> str:
 # ---------------------------------------------------------------------------
 
 
-@pytest_asyncio.fixture
+@pytest.fixture
 def settings_mock(db_url: str) -> MagicMock:
     sm = MagicMock()
     sm.database_url = db_url

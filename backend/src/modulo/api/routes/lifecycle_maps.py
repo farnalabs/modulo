@@ -7,6 +7,7 @@ from typing import Any, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,6 +42,7 @@ from modulo.core.lifecycle_map.validation import (
     LifecycleMapContentError,
     LifecycleMapPipelineConflictError,
 )
+from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _log = logging.getLogger(__name__)
@@ -257,10 +259,17 @@ class JourneySelfReportRequest(BaseModel):
     failing the whole request with a 422 — fail-open per ref.
     ``pipeline_id`` is the optional Modulo pipeline that completed the stage;
     when it is a stage of this map, the matched journey advances into it.
+    ``stage_id`` is the map stage id the workflow completed; used when the
+    stage is external (a GitHub Actions workflow, not a Modulo pipeline) and
+    has no ``pipeline_id`` — the stage is resolved against this map's current
+    ``lifecycle_map_stages`` projection so the journey advances into it
+    (e.g. the merge queue reports ``stage_id: "merge"``, the deploy agent
+    ``stage_id: "deploy"``).
     """
 
     work_item_refs: list[Any] = Field(default_factory=list)
     pipeline_id: uuid.UUID | None = None
+    stage_id: str | None = Field(None, max_length=255)
 
 
 class JourneySelfReportResponse(BaseModel):
@@ -1337,6 +1346,17 @@ async def self_report_journeys_endpoint(
     run-output trees). A malformed entry is rejected and counted, never a
     whole-request 422 (fail-open per ref).
 
+    When ``stage_id`` is supplied it is resolved against this map's CURRENT
+    ``lifecycle_map_stages`` projection (the table's ``(map_id, version,
+    stage_id)`` unique key, org-scoped via the RLS context already set) and
+    passed to ``advance_journeys`` as the explicit stage. This lets external
+    workflows — merge queue (``stage_id: "merge"``), deploy agent
+    (``stage_id: "deploy"``) — advance journeys into stages that are external
+    (GitHub Actions, no ``pipeline_id``) and therefore unresolvable via
+    ``pipeline_id``. An unresolved stage_id (unknown id, or a pipeline-bound
+    stage already handled via ``pipeline_id``) simply falls back to the
+    pipeline-based path — never an error.
+
     Auth: the documented CI/CD credential path (PRD §5.2) — a user JWT or an
     org API key (``mk_...``). A GitHub Actions workflow calls this with
     ``Authorization: Bearer mk_<key>`` for a key whose owner holds the
@@ -1353,6 +1373,17 @@ async def self_report_journeys_endpoint(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map not found")
             reported, counters = validate_and_normalise_reported_refs(req.work_item_refs)
             confirmed, unmatched = await confirm_reported_refs(session, principal.organisation_id, reported)
+            explicit_stage: LifecycleMapStage | None = None
+            if req.stage_id is not None:
+                explicit_stage = (
+                    await session.execute(
+                        select(LifecycleMapStage).where(
+                            LifecycleMapStage.map_id == lifecycle_map_id,
+                            LifecycleMapStage.stage_id == req.stage_id,
+                            LifecycleMapStage.version == lifecycle_map.version,
+                        )
+                    )
+                ).scalar_one_or_none()
             now = datetime.now(UTC)
             advanced = await advance_journeys(
                 session,
@@ -1363,6 +1394,7 @@ async def self_report_journeys_endpoint(
                 status="complete",
                 completed_at=now,
                 run_created_at=now,
+                explicit_stage=explicit_stage,
             )
     except ProgrammingError as exc:
         _log.exception("lifecycle_maps.self_report_journeys_endpoint")

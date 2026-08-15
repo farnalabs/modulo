@@ -65,7 +65,8 @@ async def test_multiple_subscribers_all_receive_event():
     broker.publish("run_completed", {})
     r1 = await asyncio.wait_for(q1.get(), timeout=1.0)
     r2 = await asyncio.wait_for(q2.get(), timeout=1.0)
-    assert r1.seq == r2.seq == 1
+    assert r1.seq == 1
+    assert r2.seq == 1
 
 
 def test_unsubscribe_removes_queue():

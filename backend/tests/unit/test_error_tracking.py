@@ -123,7 +123,7 @@ def _stale_trigger() -> SimpleNamespace:
     )
 
 
-async def _run_probe(monkeypatch: pytest.MonkeyPatch, *, cooldown_ok: bool) -> tuple[int, Any]:
+async def _run_probe(*, cooldown_ok: bool) -> tuple[int, Any]:
     rows = [_stale_trigger()]
     aengine = MagicMock()
     aengine.connect.return_value = _FakeConn([ORG])
@@ -146,22 +146,22 @@ async def _run_probe(monkeypatch: pytest.MonkeyPatch, *, cooldown_ok: bool) -> t
 
 
 class TestMissedFireProbeCooldown:
-    async def test_cooldown_active_suppresses_alert(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_cooldown_active_suppresses_alert(self) -> None:
         """Within the cooldown window the probe emits NO alert."""
-        emitted, create = await _run_probe(monkeypatch, cooldown_ok=False)
+        emitted, create = await _run_probe(cooldown_ok=False)
         assert emitted == 0
         create.assert_not_awaited()
 
-    async def test_cooldown_clear_alerts(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_cooldown_clear_alerts(self) -> None:
         """Outside the cooldown window the probe emits exactly one alert."""
-        emitted, create = await _run_probe(monkeypatch, cooldown_ok=True)
+        emitted, create = await _run_probe(cooldown_ok=True)
         assert emitted == 1
         create.assert_awaited_once()
         event_kwargs = create.await_args.kwargs
         assert event_kwargs["source"] == "saq"
         assert event_kwargs["level"] == "error"
 
-    async def test_redis_failure_fails_open_to_alert(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_redis_failure_fails_open_to_alert(self) -> None:
         """A Redis failure inside the probe FAILS OPEN: the alert still fires
         (``_missed_fire_cooldown_ok`` returns True) and is logged — never
         suppressed by an unavailable Redis."""

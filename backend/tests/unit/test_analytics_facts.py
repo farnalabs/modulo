@@ -678,7 +678,7 @@ class TestBackfillLedger:
         assert "date_trunc('day', coalesce(runs.started_at, runs.created_at))" in agg_sql
         assert "'2026-08-06'" in agg_sql
 
-    async def test_returns_zero_when_no_terminal_runs_for_the_day(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_returns_zero_when_no_terminal_runs_for_the_day(self) -> None:
         session = _session(execute_side_effect=[SimpleNamespace(all=lambda: [])])
         result = await maintenance_mod.backfill_ledger(session, date(2026, 8, 6))
         assert result == 0

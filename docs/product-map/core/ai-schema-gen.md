@@ -79,9 +79,9 @@ Schema Inference (8.16) samples records from a connected tool and uses an LLM to
 - [ ] Fields appearing in <10% of records flagged as rarely-used, excluded from default draft
 - [ ] Inferred `abstract_name` suggestion surfaced in response
 - [ ] Draft opens in schema editor for operator review before publishing
-- [ ] Sandboxed LLM prompt (`SandboxedEnvironment`) for untrusted record data
-- [ ] Sampled data not stored after inference completes (data lifecycle statement)
-- [ ] SDLC onboarding path: connect, infer, review, publish, browse library, wire agents #### BDD coverage
+- [x] ~~**Sandboxed LLM prompt (`SandboxedEnvironment`) for untrusted record data**~~ **RESOLVED 2026-08-12/15**: sample/example data is sanitised (`schema_registry/sanitize.py`) and rendered between `<<<SAMPLE_DATA>>>` / `<<<END_SAMPLE_DATA>>>` structural separators with an explicit untrusted-input instruction in the system prompt; Jinja `SandboxedEnvironment` itself is not used because there is no user-authored template in the inference/generation path
+- [x] ~~**Sampled data not stored after inference completes**~~ **RESOLVED 2026-08-15**: regression test (`test_infer_schema_response_does_not_contain_or_persist_sample_records`) asserts the infer response carries no raw sample records and only the documented response keys; samples are held in memory for the request only and never written to the DB
+- [ ] SDLC onboarding path: connect, infer, review, publish, browse library, wire agents — PARTIAL: OnboardingWizard.vue implements connect → Run Inference → Review Schemas → publish (and browse-library/wire-pipeline steps exist as UI steps); the library-browse step filtered by inferred `abstract_name` is blocked on the `abstract_name` inference gap #### BDD coverage
 - [x] Gherkin scenarios in `schema_inference.feature` — 6 scenarios covering infer, 404, 400, validation, migration plan, and unsupported connector types #### Error Handling — DB ProgrammingError → 501
 - [x] `list_schemas_endpoint` (line 142) — caught, returns 501
 - [x] `create_schema_endpoint` (line 173) — caught, returns 501
@@ -93,9 +93,9 @@ Schema Inference (8.16) samples records from a connected tool and uses an LLM to
 - [x] `create_version_endpoint` (line 336) — caught, returns 501
 - [x] `get_schema_version_endpoint` (line 356) — caught, returns 501
 - [x] `list_schema_fields_endpoint` (line 385 → now fixed) — caught, returns 501
-- [ ] `POST /api/v1/schemas/validate` — no DB access, no catch needed
-- [ ] `POST /api/v1/schemas/import` — no DB access yet, no catch needed
-- [ ] `POST /api/v1/schemas/migrate/plan` — no DB access, no catch needed
+- [x] `POST /api/v1/schemas/validate` — pure structural validation, no DB access, no ProgrammingError/SQLAlchemyError catch needed
+- [x] `POST /api/v1/schemas/import` — pure parse + structural validation, no DB access, no catch needed
+- [x] `POST /api/v1/schemas/migrate/plan` — no schema-table reads; records a `schema_migration_planned` audit event whose ProgrammingError is caught and logged (never breaks the response)
 - [x] `POST /api/v1/schemas/infer` — ProgrammingError caught, returns 501
 - [x] `POST /api/v1/schemas/infer` — SQLAlchemyError caught, returns 503
 - [x] `POST /api/v1/schemas/infer` — Exception caught, returns 500
@@ -109,8 +109,8 @@ Schema Inference (8.16) samples records from a connected tool and uses an LLM to
   - **Misleading API response:** `SchemaInferResponse.sample_count` reports total sampled records, not the count actually sent to the LLM.
 - **No enum/rare-field logic:** Inference prompt doesn't instruct for enum detection or rare-field flagging (8.16)
 - **No `abstract_name` inference:** `abstract_name` field exists on `SchemaCreate`/`SchemaUpdate`/`SchemaResponse` models (CRUD layer supports it), but `/infer` endpoint (`SchemaInferResponse`) does NOT include `abstract_name`. `suggestion_name` is hardcoded `"Inferred from {ci.name}"`, not AI-inferred.
-- **No SandboxedEnvironment:** LLM prompt doesn't isolate untrusted record values per 8.16 security requirement
-- **No data lifecycle enforcement:** No mechanism to ensure sampled data is not persisted after inference
+- **SandboxedEnvironment resolved (2026-08-12/15):** untrusted record/example values are sanitised (`schema_registry/sanitize.py` — credential masking, control-char stripping, length/cardinality/depth bounds) and isolated behind `<<<SAMPLE_DATA>>>` structural separators with an explicit untrusted-input instruction; Jinja `SandboxedEnvironment` itself is not used (no user-authored template in the prompt path)
+- **Data lifecycle (verified 2026-08-15):** samples are never persisted — they live in memory for the request and the response carries only the inferred definition + metadata; a regression test asserts the response contains no raw sample records
 
 ## Resilience & Integration Robustness
 
@@ -148,6 +148,11 @@ Schema Inference (8.16) samples records from a connected tool and uses an LLM to
 - [x] Backend_ids empty between check and initialisation → 503 guard
 
 ## QA History
+
+### 2026-08-15 — Coverage drive (FAR-234)
+
+Verified and checked off: retry/backoff on LLM calls (`_common.invoke_and_parse`: up to 3 attempts, exponential backoff, timeout path retries without sleep — proven by `test_infer_retries_transient_failures_then_succeeds`); no-DB-access endpoints (validate/import are pure; migrate/plan's audit ProgrammingError is caught+logged); resolved the SandboxedEnvironment PRD-gap (sanitisation + structural separators, matching `feat-core-schema-inference` 2026-08-12); resolved the sampled-data-lifecycle gap with a no-sample-persistence regression test. Added ProgrammingError→501 + SQLAlchemyError→503 tests for the generate endpoint (`test_schema_generate_endpoint.py`). Clarified the SDLC onboarding path gap: the wizard implements connect → infer → review → publish; the browse-library-by-`abstract_name` step stays blocked on the `abstract_name` inference gap. **Status:** partial (remaining PRD gaps: sample cap 200 vs 50/100, enum detection, rare-field flagging, `abstract_name` inference, field-level schema editor, onboarding browse-by-abstract_name).
+
 
 ### 2026-07-08 — Cross-cutting QA (improve-architecture index 276)
 

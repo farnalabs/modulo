@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
+from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -100,9 +101,9 @@ class AzureKeyVaultConnector(ConnectorBase):
             params["$skiptoken"] = q.cursor
         resp = await c.get("/secrets", params=params)
         resp.raise_for_status()
-        body: dict[str, Any] = resp.json()
-        records = body.get("value", [])
-        next_link = body.get("nextLink")
+        body: object = resp.json()
+        records = _safe_records(body, "value")
+        next_link = body.get("nextLink") if isinstance(body, dict) else None
         next_cursor = _safe_cursor(next_link)
         return ConnectorResult(records=records[: q.limit] if q.limit else records, total=None, next_cursor=next_cursor)
 
@@ -126,9 +127,9 @@ class AzureKeyVaultConnector(ConnectorBase):
             params["$skiptoken"] = q.cursor
         resp = await c.get(f"/secrets/{name}/versions", params=params)
         resp.raise_for_status()
-        body: dict[str, Any] = resp.json()
-        records = body.get("value", [])
-        next_link = body.get("nextLink")
+        body: object = resp.json()
+        records = _safe_records(body, "value")
+        next_link = body.get("nextLink") if isinstance(body, dict) else None
         next_cursor = _safe_cursor(next_link)
         return ConnectorResult(records=records[: q.limit] if q.limit else records, next_cursor=next_cursor)
 
@@ -152,9 +153,9 @@ class AzureKeyVaultConnector(ConnectorBase):
             params["$skiptoken"] = q.cursor
         resp = await c.get("/keys", params=params)
         resp.raise_for_status()
-        body: dict[str, Any] = resp.json()
-        records = body.get("value", [])
-        next_link = body.get("nextLink")
+        body: object = resp.json()
+        records = _safe_records(body, "value")
+        next_link = body.get("nextLink") if isinstance(body, dict) else None
         next_cursor = _safe_cursor(next_link)
         return ConnectorResult(records=records[: q.limit] if q.limit else records, next_cursor=next_cursor)
 
@@ -175,9 +176,9 @@ class AzureKeyVaultConnector(ConnectorBase):
             params["$skiptoken"] = q.cursor
         resp = await c.get("/certificates", params=params)
         resp.raise_for_status()
-        body: dict[str, Any] = resp.json()
-        records = body.get("value", [])
-        next_link = body.get("nextLink")
+        body: object = resp.json()
+        records = _safe_records(body, "value")
+        next_link = body.get("nextLink") if isinstance(body, dict) else None
         next_cursor = _safe_cursor(next_link)
         return ConnectorResult(records=records[: q.limit] if q.limit else records, next_cursor=next_cursor)
 

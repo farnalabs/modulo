@@ -60,7 +60,7 @@ Grouping eval definitions into suites with configurable pass thresholds, includi
 
 ### Edge Cases
 - [x] Suite mixing block and warn evals — block failures are still counted in aggregate
-- [ ] Suite with no evals matching a node — zero results for that node
+- [x] Suite with no evals matching a node — zero results for that node → evaluate_suite([]) returns aggregate 0.0, passed=True (covered by test_empty_suite_always_passes)
 - [ ] Cross-pipeline suites — suite_id isn't scoped to pipeline
 - [ ] Deletion of last eval in a suite — suite conceptually disappears
 - [ ] Reactor: suite_id on eval is just a string — no FK, no orphan protection
@@ -92,6 +92,17 @@ Grouping eval definitions into suites with configurable pass thresholds, includi
 - Deleting the last eval in a suite leaves suite_id orphaned with no cleanup
 - `GET /evals` has no `suite_id` query parameter — list-by-suite_id is only available via direct DB query, not REST API
 - No website docs page for eval-packaging (needs creation in Website repo)
+
+## QA History
+### 2026-08-15 — Coverage completion (FAR-232)
+
+**What was fixed:**
+- Marked [ ]→[x]: "Suite with no evals matching a node — zero results for that node" — `_check_eval_suites` runs `evaluate_suite([])` for a suite with no results, returning aggregate 0.0 / passed=True; covered by test_empty_suite_always_passes.
+- Remaining unchecked items are genuine, already-documented gaps (cross-pipeline suite semantics, orphaned suite_id on last-eval deletion, no suite FK entity).
+- Note: QA Findings section below (2026-07-06) corrected the migration number (0072_eval_suite_threshold) and empty-suite aggregate_score (0.0); both are accurate in the Behaviours section now.
+
+**Test results:** All eval suite unit tests pass (test_eval_suite.py).
+**Status:** partial (3 genuine gaps — all design/architecture, not code correctness).
 
 ## QA Findings (2026-07-06)
 - Product map claimed migration `0023` but actual file is `0072_eval_suite_threshold`

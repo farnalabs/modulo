@@ -56,6 +56,7 @@ work without acting as a pipeline execution engine.
 - [x] Map canvas renders provenance badges for journey runs
 - [x] Advancement service moves journeys between stages with compare-and-set semantics and stage resolution
 - [x] Self-report parse extracts stage identity from run outputs
+- [x] Workflow self-reports can name the completed stage via `stage_id` to advance journeys into EXTERNAL stages (GitHub Actions workflows with no `pipeline_id` — merge queue reports `stage_id: "merge"`, deploy agent `stage_id: "deploy"`); the route resolves the stage against the map's current `lifecycle_map_stages` projection and `advance_journeys` accepts it as an explicit stage, used when pipeline resolution yields no stage
 - [x] Reconciliation sweep detects and fixes journey/stage drift
 - [x] Journey reads are org-scoped and gated by run.list permission
 

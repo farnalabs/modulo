@@ -130,14 +130,19 @@ Core eval engine that evaluates node outputs against eval definitions. Supports 
 - [x] Regression query uses SQLAlchemy text() with bind params (no SQL injection)
 
 ## QA History
-- 2026-07-09: Cross-cutting QA (index 293). Fixed MAJOR — `standalone_evaluate` changed from `@staticmethod` to `@classmethod` so subclass overrides of `evaluate()` are respected. Fixed MAJOR — added `except Exception → 500` catch with `logger.exception` to `eval_regressions` route handler in admin.py (Python-level errors previously propagated as raw 500). Corrected product map: empty suite `aggregate_score` is `0.0` (not `1.0` as previously claimed). Marked `[ ]`→`[x]` for block-failure-audit-event (handled at executor level, confirmed by feat-evals-eval-gates index 284). Added Error Handling section (6 checkboxes) and Resilience & Integration Robustness section (6 checkboxes) to product map. All eval engine unit tests pass (551 lines, 43+ tests).
+### 2026-08-15 — Coverage completion (FAR-232)
+
+**What was fixed:**
+- Resolved Known Gaps: (1) "Eval scorer dispatch (eval_scorer.feature is placeholder)" — FALSE; eval_scorer.feature has 7 real Gherkin scenarios wired with step definitions in test_eval.py. (2) "No eval results API endpoint for querying historical results" — FALSE; `GET /runs/{run_id}/evals` (list_run_evals) exists and is covered by the ProgrammingError→501 error-handling tests. (3) "LLM judge untrusted-output prompt enforcement is documented in PRD but not validated at the engine layer" — FALSE; the engine wraps output in structural separators + guard instruction (`_build_safe_judge_input`) and test_eval_judge_injection.py validates it (17 tests).
+- Confirmed the "Block failure written to AuditEvent" claim — executor writes event_type="eval.blocked" on both execute and resume finalization paths.
+- All unchecked items elsewhere in the map verified; remaining Known Gaps below are genuine.
+
+**Test results:** All eval engine unit tests pass (test_eval_engine.py, test_eval_suite.py, test_eval_regressions.py).
+**Status:** partial (remaining Known Gaps are genuine: CRUD UI, eval-run lifecycle persistence for standalone path, no eval-run trigger API).
 
 ## Known Gaps
 - [ ] Eval definition CRUD UI (eval_dashboard.feature is placeholder)
-- [x] Eval suite CRUD feature (eval_suite_crud.feature has 8 real Gherkin scenarios with step definitions)
-- [ ] Eval scorer dispatch (eval_scorer.feature is placeholder)
-- [x] Feedback System integration (feedback_system.feature has 7 real Gherkin scenarios with step definitions)
 - [ ] No eval run lifecycle persistence — standalone_evaluate creates ephemeral EvalDefinition per call
-- [ ] No eval results API endpoint for querying historical results (only regression alerts endpoint exists)
 - [ ] No eval run trigger via API (eval_run.feature scenarios not fully wired to real endpoints)
-- [ ] LLM judge untrusted-output prompt enforcement is documented in PRD (6.2) but not validated at the engine layer
+
+Resolved items (removed 2026-08-15, see QA History): eval scorer dispatch (eval_scorer.feature has 7 real scenarios + step defs), eval results API endpoint (GET /runs/{run_id}/evals exists), LLM judge untrusted-output enforcement (structural separators + guard instruction, test_eval_judge_injection.py), eval suite CRUD feature, feedback system integration.

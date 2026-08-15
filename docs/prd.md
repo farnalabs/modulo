@@ -1700,6 +1700,10 @@ Behaviour:
 - **Observe/warn** never block; observe-mode results stamp `eval_results.observed` so the guardrail_summary observed bucket counts once.
 - **Remediation** is the dedicated guardrail-override endpoint (`POST /runs/{run_id}/guardrail-override`). The generic recover endpoint REFUSES guardrail-blocked runs (`error_code` `eval_blocked`) — the generic path does not re-run the guardrail pass on the supplied input and would resume execution on the blocked payload. `deliver_manual` is unavailable for terminal runs (no HITL gate → 404). The override re-runs the guardrail pass on the operator-supplied input (re-block safe default; a still-violating input is refused and the run stays terminal), persists the post-redaction payload, flips the run to `pending`, sets `is_replay=True` so lifecycle-map journeys increment exactly once, and re-dispatches from run start (the blocked run never executed, so there is no checkpoint to resume).
 
+The boundary philosophy: the agent definition is the driver's manual; boundary controls are the enforcement. An orchestrator CAN enforce deterministic, auditable, tamper-resistant controls at the orchestration boundary — validating what enters and leaves a run. It must DELEGATE agent-internal behaviour and unmediated external runtimes, which no boundary control can observe. Guardrails are therefore not agent-internal safety; they are the contract between the orchestrator and the agent it runs.
+
+What guardrails do NOT cover (known failure classes, follow-on work): free-text PII embedded in otherwise-valid field values, content-based detection (semantic, not structural), the interior of an agent loop (e.g. a long-running agent's intermediate steps), and output-side effects (already specified in the §8.17 output-side gates above).
+
 Planned (not shipped in T1): conformance enforcement wiring at dispatch time (three-state derivation is shipped as a pure helper; enforcement is planned), kill-switch rollout flag, guardrail_summary telemetry on run detail, canary guardrails, and the guardrail management UI.
 
 #### Guardrail config-as-code (shipped — T3, FAR-219)
@@ -1721,8 +1725,6 @@ The Eval System (§8.17) must ship before the Feedback System (§8.20). The Feed
 
 Guardrails are boundary enforcement for agent safety: the same eval primitives as §8.17 extended to the input side, with interception points, transform actions (redaction), and remediation wiring. T1 (the input-side engine, described above under "Guardrails — the input-side seam (FAR-208)") and T3 (snapshot-pinned, PR-gated config-as-code) are **shipped**. The original T1 planned-capability list is retained for traceability; every listed item is now shipped, with the caveats noted.
 
-The boundary philosophy: the agent definition is the driver's manual; boundary controls are the enforcement. An orchestrator CAN enforce deterministic, auditable, tamper-resistant controls at the orchestration boundary — validating what enters and leaves a run. It must DELEGATE agent-internal behaviour and unmediated external runtimes, which no boundary control can observe. Guardrails are therefore not agent-internal safety; they are the contract between the orchestrator and the agent it runs.
-
 T1 planned capability — all **shipped**:
 - **Input-side interception** at run creation — evaluated before the run's first node executes.
 - **Actions**: `observe` | `warn` | `block` | `redact` (masks-only; redaction replaces matched field values with a placeholder, never logs the raw value).
@@ -1730,7 +1732,7 @@ T1 planned capability — all **shipped**:
 - **Conformance** for the `block` action — the three-state derivation is shipped as a pure helper; enforcement wiring at dispatch time is planned.
 - **Audited override/recovery** — the guardrail-override endpoint re-runs the pass on operator-supplied input; any bypass is itself an auditable event.
 
-What guardrails do NOT cover (known failure classes, all planned follow-on work, none shipped): free-text PII embedded in otherwise-valid field values, content-based detection (semantic, not structural), the interior of an agent loop (e.g. a long-running agent's intermediate steps), and output-side effects (already specified in §8.17 output-side gates).
+The boundary philosophy and the guardrails' non-coverage (known failure classes) are described in the §8.17 "Guardrails — the input-side seam (FAR-208)" section above.
 
 ---
 
@@ -4240,7 +4242,7 @@ A **journey** is a unit of work — a task, a ticket, a PR, a deploy — tracked
 
 **Advancement (FAR-143):** on run finalise, an advancement service (`core/lifecycle_map/advancement.py`) advances the journey for every canonical ref the run carried. Latest evidence is compare-and-set: only a strictly-newer evidence timestamp overwrites the row's `updated_at` (equal timestamps keep existing evidence — deterministic first-writer-wins). `run_count` increments for terminal advancing statuses (`complete` / `failed` / `eval_failed`); `awaiting_human` updates evidence without counting; non-advancing runs (`cancelled` / `stalled`, replays, variants) are mint-only. Stage columns are set only when the run's pipeline is a lifecycle-map stage (resolved org-scoped via `lifecycle_map_stages`).
 
-**Self-report parse (FAR-143):** `core/lifecycle_map/self_report.py` extracts work-item refs from merged pipeline output under `work_item_refs` / `modulo.work_item_refs` / `touched_work_items` (recursive walk, node-keyed placement supported). Reported entries are advisory: provenance is forced to `reported`, so a reported claim can confirm or match an existing journey but never mints one.
+**Self-report parse (FAR-143):** `core/lifecycle_map/self_report.py` extracts work-item refs from merged pipeline output under `work_item_refs` / `modulo.work_item_refs` / `touched_work_items` (recursive walk, node-keyed placement supported). Reported entries are advisory: provenance is forced to `reported`, so a reported claim can confirm or match an existing journey but never mints one. Workflow self-reports may additionally name the completed stage via `stage_id` (the merge queue sends `stage_id: "merge"`, the deploy agent `stage_id: "deploy"`); when the named stage resolves to a stage of the reported map's current version, the journey advances into it even though the stage is external (a GitHub Actions workflow, not a Modulo pipeline) and has no `pipeline_id`. The explicit `stage_id` is used only when pipeline resolution yields no stage — a pipeline-resolved stage still takes precedence.
 
 **Reconciliation (FAR-143):** `core/lifecycle_map/reconcile.py` is a bounded, terminal-only safety net that re-derives journey evidence for runs whose journeys never advanced (post-deploy backlog, raw terminal writers skipping the hook, or a self-report confirm dropping a ref the create-time mint never saw). Drift is MISSING (no journey row) or STALE (row `updated_at` older than the run's evidence timestamp); only drifted refs are re-advanced, and the sweep is idempotent and fails open per run.
 

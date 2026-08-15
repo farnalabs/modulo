@@ -120,7 +120,7 @@ async def _job_exists(redis_url: str, job_key: str) -> bool:
 
 @pytest.mark.asyncio
 async def test_staled_running_run_with_evicted_job_is_redistpatched(
-    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
 ) -> None:
     # Reconcile re-dispatches through dispatch_run; the SAQ path is the one under
     # test (shadow routes execute_run to Celery, which creates no SAQ job).
@@ -153,7 +153,7 @@ async def test_staled_running_run_with_evicted_job_is_redistpatched(
 
 @pytest.mark.asyncio
 async def test_awaiting_human_evicted_job_is_not_auto_redistpatched(
-    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
 ) -> None:
     """F6a review: a waiting HITL run is NEVER auto-redispatched by reconcile.
 
@@ -204,7 +204,7 @@ async def test_awaiting_human_evicted_job_is_not_auto_redistpatched(
 
 @pytest.mark.asyncio
 async def test_capacity_deferred_run_redispatched_when_capacity_frees(
-    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
 ) -> None:
     """F4 review: a capacity-deferred run (pending, dispatched_at NULL,
     dispatcher NULL) must be re-dispatched when capacity frees. dispatch_run
@@ -253,7 +253,7 @@ async def test_capacity_deferred_run_redispatched_when_capacity_frees(
 
 @pytest.mark.asyncio
 async def test_live_job_not_repaired(
-    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
 ) -> None:
     from redis import asyncio as aioredis
     from saq.queue.redis import RedisQueue

@@ -133,7 +133,8 @@ def test_bridge_spans_inherit_run_root_trace_id(bridge: LangGraphOtelBridge, exp
     spans = exporter.get_finished_spans()
     chain = next(s for s in spans if "MyNode" in s.name)
     root = next(s for s in spans if "modulo.pipeline.run" in s.name)
-    assert chain.context.trace_id == expected_trace_id == root.context.trace_id
+    assert chain.context.trace_id == expected_trace_id
+    assert expected_trace_id == root.context.trace_id
     assert chain.parent is not None
     assert chain.parent.span_id == root.context.span_id
 

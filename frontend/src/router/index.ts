@@ -1,4 +1,5 @@
 ﻿import { formatApiError } from '../lib/api/formatError'
+import { decodeJwtPayload } from '../lib/jwt'
 
 import { createRouter, createWebHistory } from 'vue-router'
 import { getAccessToken } from '../lib/api/client'
@@ -41,16 +42,6 @@ for (const [path, entry] of Object.entries(manifestRoutes)) {
   if (entry?.name) {
     manifestByName.set(entry.name, { ...entry, path })
     manifestPathToName.set(path, entry.name)
-  }
-}
-
-function decodeJwtPayload(token: string | null): Record<string, unknown> | null {
-  if (!token) return null
-  try {
-    return JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))
-  } catch (e) {
-    console.warn('[router] failed to decode JWT payload:', e)
-    return null
   }
 }
 

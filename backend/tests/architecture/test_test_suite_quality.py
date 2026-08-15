@@ -149,6 +149,16 @@ regression that silently weakens the suite:
   N times, while a reader (and a mutation-testing run) believes N distinct
   inputs are covered. Drop the unused parameter (and the parametrize when
   that leaves no other varying argument)
+- an async decorator on a *synchronous* ``def`` — ``@pytest.mark.asyncio`` /
+  ``@pytest.mark.anyio`` on a plain ``def``, and ``@pytest_asyncio.fixture``
+  on a plain ``def`` fixture. With ``asyncio_mode = auto``, pytest-asyncio
+  already infers async behaviour from ``async def``, so an async marker on a
+  ``def`` is a needless coroutine boundary: at best a misleading no-op (the
+  body never suspends, but readers expect it to) and at worst a runtime
+  mismatch (a sync fixture whose value pytest-asyncio expects to await).
+  These are almost always the leftover twin of the needlessly-async
+  conversion — when an ``async def`` was flipped to a plain ``def``, its
+  async decorator should have gone too
 - split ``assert_called_once``/``assert_awaited_once`` + ``assert_called_with``/
   ``assert_awaited_with`` pairs on the *same* mock — the two-line form is the
   split twin of the single atomic ``assert_called_once_with(...)``/
@@ -157,6 +167,36 @@ regression that silently weakens the suite:
   and a mutation-testing run — cannot rely on the "exactly once with these
   args" guarantee the combined form enforces in one statement. Merge the pair
   into the ``_once_with`` form
+
+- function parameters that name a pytest *built-in fixture* (``monkeypatch``,
+  ``mocker``, ``caplog``, ``capsys``, ``capfd``, ``recwarn``, ``tmp_path``,
+  ``tmpdir``, ...) but are never referenced in the body — those fixtures have
+  no setup side effect, so requesting one and never touching the value is
+  pure dead weight that misleads readers into believing the test controls
+  (say) environment state. Drop the unused parameter. ``request`` is
+  deliberately not matched: pytest-bdd step functions conventionally carry it
+  even when the body only reaches state through fixture names, and
+  ``tmp_path_factory`` is session-scoped plumbing rather than a per-test
+  capability
+- ``assert a == b == c`` — an ``assert`` whose test is a *chained equality*
+  comparison (a ``==`` chain with two or more operators) asserts N independent
+  equalities as one expression. When the chain fails, pytest reports the whole
+  chain and cannot say which link broke, so a mutation-testing run that severs
+  the middle relationship (``b``) reports the same opaque failure every time.
+  Split each link into its own ``assert`` so each failure names the pair that
+  broke. Range checks (``assert lo <= x <= hi``) use ordering operators and
+  are deliberately exempt: a bounds assertion is a single fact that reads
+  naturally as a chain, so only ``==`` chains are flagged
+- ``@pytest.mark.parametrize`` whose ``argvalues`` holds a *duplicate* case —
+  the single-case and empty-case lenses guard the degenerate ends of the case
+  list, and this lens guards the copy-paste trap in the middle: two cases with
+  the *same value* run the test body twice with identical inputs, so the second
+  run adds no coverage while the parametrize advertises one more distinct case
+  than it exercises. A reader (and a mutation-testing run) believes N distinct
+  inputs are covered when only N-1 are. The lens compares each case by value
+  (after ``ast.literal_eval``), so ``1`` and ``True`` are deliberately treated
+  as distinct and only byte-identical values are flagged — an unambiguous
+  duplicate
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -1939,13 +1979,15 @@ def test_empty_container_membership_lens_flags_impossible_membership():
         assert not _empty_container_membership_tautologies(tree), f"lens should NOT flag:\n{source}"
 
 
-def _parametrize_argvalue_counts(tree: ast.AST) -> list[tuple[int, int]]:
-    """Return ``(lineno, n_cases)`` for every ``@...parametrize`` decorator
-    whose ``argvalues`` is a statically-known ``list``/``tuple`` literal. Only
-    decorator applications are considered — a bare ``parametrize(...)`` call
-    inside a body is not pytest parametrization and belongs to a different
-    lens. The parametrize-adjacent lenses filter on ``n_cases`` (``== 0``,
-    ``== 1``, ...) so a new lens never re-copies the decorator walk."""
+def _parametrize_argvalue_lists(tree: ast.AST) -> list[tuple[int, list[ast.expr]]]:
+    """Return ``(lineno, argvalues.elts)`` for every ``@...parametrize``
+    decorator whose ``argvalues`` is a statically-known ``list``/``tuple``
+    literal. Only decorator applications are considered — a bare
+    ``parametrize(...)`` call inside a body is not pytest parametrization and
+    belongs to a different lens. The parametrize-adjacent lenses derive their
+    signal from ``len(elts)`` (``== 0``, ``== 1``, ...) or from the elements
+    themselves (duplicate detection), so a new lens never re-copies the
+    decorator walk."""
     found = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -1961,7 +2003,7 @@ def _parametrize_argvalue_counts(tree: ast.AST) -> list[tuple[int, int]]:
                 argvalues = next((kw.value for kw in dec.keywords if kw.arg == "argvalues"), None)
             if not isinstance(argvalues, (ast.List, ast.Tuple)):
                 continue
-            found.append((dec.lineno, len(argvalues.elts)))
+            found.append((dec.lineno, argvalues.elts))
     return found
 
 
@@ -1972,8 +2014,8 @@ def _single_case_parametrize_violations(tree: ast.AST) -> list[tuple[int, str]]:
     body is not pytest parametrization and belongs to a different lens."""
     return [
         (lineno, "parametrize with a single case in argvalues — collapse to a plain test")
-        for lineno, n_cases in _parametrize_argvalue_counts(tree)
-        if n_cases == 1
+        for lineno, elts in _parametrize_argvalue_lists(tree)
+        if len(elts) == 1
     ]
 
 
@@ -2037,8 +2079,8 @@ def _empty_parametrize_violations(tree: ast.AST) -> list[tuple[int, str]]:
     pytest parametrization and belongs to a different lens."""
     return [
         (lineno, "parametrize with an empty argvalues — the test is collected as zero items and never runs")
-        for lineno, n_cases in _parametrize_argvalue_counts(tree)
-        if n_cases == 0
+        for lineno, elts in _parametrize_argvalue_lists(tree)
+        if len(elts) == 0
     ]
 
 
@@ -2976,6 +3018,121 @@ def test_unused_parametrize_arg_lens_flags_ignored_cases():
         assert not _unused_parametrize_arg_violations(tree), f"lens should NOT flag:\n{source}"
 
 
+_UNUSED_BUILTIN_FIXTURE_PARAMS = {
+    "mocker",
+    "monkeypatch",
+    "capsys",
+    "capsysbinary",
+    "capfd",
+    "capfdbinary",
+    "caplog",
+    "recwarn",
+    "tmp_path",
+    "tmpdir",
+}
+"""pytest built-in fixtures with *no setup side effect* that the
+unused-builtin-fixture lens scans for.
+
+``request`` and ``tmp_path_factory`` are deliberately excluded: pytest-bdd
+step functions conventionally carry ``request`` even when the body only
+reaches scenario state through fixture names, and ``tmp_path_factory`` is
+session-scoped plumbing rather than a per-test capability. Every fixture in
+this set, by contrast, is a value the body either uses or has no reason to
+request at all."""
+
+
+def _unused_builtin_fixture_param_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every function parameter that
+    names a pytest built-in fixture but is never referenced in the function
+    body.
+
+    Only ``Name`` references in the body (its full subtree, so closure use in
+    a nested helper counts) are considered usage. A parameter that names a
+    built-in fixture but is never read is dead weight: unlike a custom
+    fixture, which may exist purely for setup/teardown side effects, the
+    fixtures in ``_UNUSED_BUILTIN_FIXTURE_PARAMS`` have no side effect, so
+    requesting one without using the value can only mislead a reader into
+    believing the test controls that capability.
+    """
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        params = {a.arg for a in node.args.args if a.arg in _UNUSED_BUILTIN_FIXTURE_PARAMS}
+        if not params:
+            continue
+        body_names = {sub.id for sub in ast.walk(node) if isinstance(sub, ast.Name)}
+        for name in sorted(params - body_names):
+            found.append(
+                (
+                    node.lineno,
+                    f"{name}() built-in fixture parameter never referenced in {node.name}() body — "
+                    "the fixture has no setup side effect, so the request is dead weight",
+                )
+            )
+    return found
+
+
+def test_no_unused_builtin_fixture_params():
+    """A function parameter that names a pytest built-in fixture
+    (``monkeypatch``, ``mocker``, ``caplog``, ``capsys``, ...) but is never
+    referenced in the body requests dead state. Those fixtures have no setup
+    side effect — unlike a custom fixture, which a test may request purely to
+    run its setup/teardown — so an unreferenced one adds a parameter that
+    misleads a reader into believing the test controls (say) environment
+    state or captured output when it does neither. Drop the unused parameter.
+    ``request`` (pytest-bdd steps conventionally carry it) and
+    ``tmp_path_factory`` (session-scoped plumbing) are deliberately exempt."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _unused_builtin_fixture_param_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} parameter(s) naming a built-in fixture the body never uses.\n"
+        "The fixture has no setup side effect, so the request is dead weight — "
+        "drop the parameter.\n" + "\n".join(violations)
+    )
+
+
+def test_unused_builtin_fixture_lens_flags_dead_params():
+    """Synthetic positive/negative control for the unused-builtin-fixture
+    lens: must flag a built-in fixture parameter absent from the body (async
+    and method forms included) and ignore referenced params, ``request``/
+    ``tmp_path_factory`` parameters, custom-fixture parameters, and
+    ``**kwargs``/positional-only matching."""
+    positive_sources = [
+        "def test_foo(monkeypatch):\n    assert 1 == 1\n",
+        "async def test_foo(caplog):\n    await do_thing()\n",
+        "def test_foo():\n    def test_bar(tmp_path):\n        pass\n",
+        "class TestFoo:\n    def test_bar(self, capsys) -> None:\n        assert True\n",
+        "def _run_probe(monkeypatch, *, cooldown_ok):\n    return cooldown_ok\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _unused_builtin_fixture_param_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo(monkeypatch):\n    monkeypatch.setattr(x, 'a', 1)\n",
+        "async def test_foo(caplog):\n    await do_thing()\n    assert len(caplog.records) == 0\n",
+        "def test_foo():\n    def test_bar(tmp_path):\n        return tmp_path / 'x'\n",
+        "class TestFoo:\n    def test_bar(self, capsys) -> None:\n        assert 'x' in capsys.readouterr().out\n",
+        "def test_foo(request):\n    return request.getfixturevalue('client')\n",
+        "def test_foo(tmp_path_factory):\n    return tmp_path_factory.mktemp('x')\n",
+        "def test_foo(tmp_path_factory):\n    pass\n",
+        "def test_foo(connector):\n    return connector\n",
+        "def test_foo(**kwargs):\n    return kwargs\n",
+        "def test_foo(pos_only, /):\n    return pos_only\n",
+        "def test_foo(caplog):\n    def inner(caplog):\n        return caplog\n    return inner\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _unused_builtin_fixture_param_violations(tree), f"lens should NOT flag:\n{source}"
+
+
 _SPLIT_ONCE_WITH_METHODS = frozenset({"assert_called_once_with", "assert_awaited_once_with"})
 """The atomic ``_once_with`` assertion methods. Each verifies "called exactly
 once AND with these arguments" in a single statement."""
@@ -3106,3 +3263,313 @@ def test_split_once_with_lens_flags_redundant_pairs():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _split_once_with_call_assertions(tree), f"lens should NOT flag:\n{source}"
+
+
+def _async_decorator_on_sync_function_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every asynchronous decorator
+    applied to a *synchronous* ``def``: ``@pytest.mark.asyncio`` /
+    ``@pytest.mark.anyio`` on a plain ``def``, and ``@pytest_asyncio.fixture``
+    on a plain ``def`` fixture.
+
+    A plain ``def`` can never suspend — no ``await``, ``async with``, or
+    ``async for`` (they are syntax errors), and no ``yield`` that would make
+    the marker meaningful. With ``asyncio_mode = auto``, pytest-asyncio
+    already infers async behaviour from ``async def``, so an async marker on a
+    ``def`` is a needless coroutine boundary: at best a misleading no-op
+    (readers expect the body to suspend when it never does) and at worst a
+    runtime mismatch (a sync fixture whose value pytest-asyncio expects to
+    await). These are almost always the leftover twin of the needlessly-async
+    conversion — when an ``async def`` was flipped to a plain ``def``, its
+    async decorator should have gone too. ``async def`` functions are never
+    flagged.
+    """
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        for dec in node.decorator_list:
+            func = dec.func if isinstance(dec, ast.Call) else dec
+            name = _decorator_name(func)
+            qualname = ast.unparse(func)
+            if name in ("asyncio", "anyio"):
+                found.append(
+                    (
+                        dec.lineno,
+                        f"sync def {node.name}() marked @{qualname} — the async marker is a "
+                        "no-op on a non-coroutine function (asyncio_mode=auto already infers "
+                        "async behaviour from async def)",
+                    )
+                )
+            elif name == "fixture" and "asyncio" in qualname:
+                found.append(
+                    (
+                        dec.lineno,
+                        f"sync def fixture {node.name}() decorated with @{qualname} — use "
+                        "@pytest.fixture for a synchronous fixture body",
+                    )
+                )
+    return found
+
+
+def test_no_async_decorator_on_sync_function():
+    """``@pytest.mark.asyncio``/``@pytest.mark.anyio`` on a plain ``def``, and
+    ``@pytest_asyncio.fixture`` on a plain ``def`` fixture, are needless
+    coroutine boundaries. A synchronous function can never suspend, so under
+    ``asyncio_mode = auto`` the marker is at best a misleading no-op (readers
+    expect the body to run on the loop) and at worst a runtime mismatch (a
+    sync fixture whose value pytest-asyncio expects to await). These are the
+    leftover twin of the needlessly-async conversion: drop the async decorator
+    alongside the ``async`` keyword (or, for a sync fixture, switch to plain
+    ``@pytest.fixture``)."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _async_decorator_on_sync_function_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} async decorator(s) on synchronous function(s).\n"
+        "A plain 'def' can never suspend, so @pytest.mark.asyncio/@pytest.mark.anyio on one is a\n"
+        "needless coroutine boundary — and @pytest_asyncio.fixture on a sync fixture should be\n"
+        "@pytest.fixture. These are leftovers from flipping async def -> def; remove them.\n" + "\n".join(violations)
+    )
+
+
+def test_async_decorator_on_sync_lens_flags_leftover_markers():
+    """Synthetic positive/negative control for the async-decorator-on-sync-
+    function lens: it must flag ``@pytest.mark.asyncio``/``@pytest.mark.anyio``
+    on a plain ``def`` and ``@pytest_asyncio.fixture`` on a sync fixture, and
+    ignore ``async def`` functions with the same decorators, plain ``def``
+    without async decorators, and non-async decorators."""
+    positive_sources = [
+        "def test_foo():\n    @pytest.mark.asyncio\n    def test_bar():\n        assert x == 1\n",
+        "def test_foo():\n    @pytest.mark.anyio\n    def test_bar():\n        assert x == 1\n",
+        "def test_foo():\n    @pytest.mark.asyncio(loop_scope='session')\n    def test_bar():\n        assert x == 1\n",
+        ("def test_foo():\n    @pytest_asyncio.fixture\n    def settings_mock():\n        return MagicMock()\n"),
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _async_decorator_on_sync_function_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "async def test_foo():\n    @pytest.mark.asyncio\n    async def test_bar():\n        await work()\n",
+        "def test_foo():\n    def test_bar():\n        assert x == 1\n",
+        "def test_foo():\n    @pytest.mark.integration\n    def test_bar():\n        assert x == 1\n",
+        ("def test_foo():\n    @pytest_asyncio.fixture\n    async def seeded_db():\n        await work()\n"),
+        "def test_foo():\n    @pytest.fixture\n    def settings_mock():\n        return MagicMock()\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _async_decorator_on_sync_function_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _equality_chain_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert`` whose test is a
+    *chained equality* — an ``==`` comparison with two or more operators
+    (``assert a == b == c``). Range checks (``assert lo <= x <= hi``) use
+    ordering operators and are deliberately not matched: a bounds assertion is
+    a single fact that reads naturally as a chain, whereas an equality chain
+    asserts *N* independent equalities as one expression. When an equality
+    chain fails, pytest reports the whole chain and cannot say which link
+    broke — a mutation-testing run that severs the middle relationship gets
+    the same opaque failure every time. Split each link into its own assert so
+    each failure names the pair that broke.
+    """
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if not isinstance(test, ast.Compare) or len(test.ops) < 2:
+            continue
+        if not all(isinstance(op, ast.Eq) for op in test.ops):
+            continue
+        links = []
+        left = test.left
+        for right in test.comparators:
+            links.append(f"{ast.unparse(left)} == {ast.unparse(right)}")
+            left = right
+        found.append(
+            (
+                node.lineno,
+                "chained equality in an assert — pytest reports the whole chain and cannot say "
+                "which link broke; split into separate asserts:\n        " + "\n        ".join(links),
+            )
+        )
+    return found
+
+
+def test_no_equality_chain_asserts():
+    """An ``assert`` whose test is a chained equality comparison
+    (``assert a == b == c``) asserts *N* independent equalities as one
+    expression. When the chain fails, pytest rewrites and reports the whole
+    chain but cannot say which link broke — the failure message is identical
+    whether ``a != b`` or ``b != c``, so a mutation-testing run that severs
+    the middle relationship reports the same opaque failure every time. Range
+    checks (``assert lo <= x <= hi``) are a single bounds fact and are
+    deliberately exempt: only ``==`` chains are flagged. Split each link into
+    its own ``assert`` so each failure names the pair that broke."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _equality_chain_assert_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} chained equality assert(s).\n"
+        "An equality chain (a == b == c) asserts N independent facts as one expression; pytest\n"
+        "reports the whole chain and cannot say which link broke. Split each link into its own\n"
+        "assert (range checks like 'lo <= x <= hi' are exempt).\n" + "\n".join(violations)
+    )
+
+
+def test_equality_chain_lens_flags_opaque_chains():
+    """Synthetic positive/negative control for the equality-chain lens: it must
+    flag ``assert a == b == c`` (attribute, call, subscript, and longer chains
+    included) and ignore range checks (ordering operators), single ``==``
+    comparisons, and equality chains outside an ``assert``."""
+    positive_sources = [
+        "def test_foo():\n    assert a == b == c\n",
+        "def test_foo():\n    assert result.value == expected.value == 5\n",
+        "def test_foo():\n    assert chain.context.trace_id == expected == root.context.trace_id\n",
+        "def test_foo():\n    assert get_a() == get_b() == get_c() == get_d()\n",
+        "def test_foo():\n    assert keys[0] == keys[1] == 'run-1'\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _equality_chain_assert_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert a == b\n",
+        "def test_foo():\n    assert 0 <= a <= 1\n",
+        "def test_foo():\n    assert lo < a < hi\n",
+        "def test_foo():\n    assert a == b or a == c\n",
+        "def test_foo():\n    assert a == b and b == c\n",
+        "def test_foo():\n    x = a == b == c\n",
+        "def test_foo():\n    if a == b == c:\n        pass\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _equality_chain_assert_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _duplicate_parametrize_case_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``@...parametrize`` whose
+    ``argvalues`` holds a *duplicate* case.
+
+    Reuses the shared decorator walk from ``_parametrize_argvalue_lists``
+    rather than re-implementing it. ``argvalues`` must be a ``list``/``tuple``
+    literal whose elements are all statically evaluable; if any element is not
+    (a call, a variable, a ``pytest.param(...)`` wrapper), the whole list is
+    skipped because equality with a runtime value cannot be decided
+    statically. Cases are compared by value after ``ast.literal_eval`` and
+    ``repr``, so only byte-identical values (``1`` vs ``True`` are distinct)
+    are flagged.
+    """
+    found = []
+    for lineno, elts in _parametrize_argvalue_lists(tree):
+        keys: list[str] = []
+        for element in elts:
+            try:
+                keys.append(repr(ast.literal_eval(element)))
+            except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+                keys = []
+                break
+        if not keys:
+            continue
+        seen: dict[str, list[int]] = {}
+        for key, element in zip(keys, elts, strict=True):
+            seen.setdefault(key, []).append(element.lineno)
+        for key, lines in seen.items():
+            if len(lines) < 2:
+                continue
+            found.append(
+                (
+                    lineno,
+                    f"parametrize case {key} appears {len(lines)} times (lines {lines}) — "
+                    "duplicate cases run the same assertion with identical inputs, "
+                    "so the advertised matrix coverage is inflated",
+                )
+            )
+    return found
+
+
+def test_no_duplicate_parametrize_cases():
+    """``@pytest.mark.parametrize`` whose ``argvalues`` holds a duplicate case
+    runs the test body twice with *identical* inputs — the second run adds no
+    coverage while the parametrize advertises one more distinct case than it
+    exercises. It is almost always a copy-paste leftover: a case duplicated
+    while editing the list, or a list trimmed in place without removing the
+    now-redundant twin. A reader — and a mutation-testing run — believes N
+    distinct inputs are covered when only N-1 are, so a regression in the
+    behaviour the duplicate case was meant to pin is masked by the twin. Drop
+    the duplicate case (and its ``id`` when ``ids=`` is a parallel list). The
+    single-case and empty-case lenses guard the degenerate ends of the case
+    list; this lens guards the copy-paste trap in the middle."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _duplicate_parametrize_case_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} parametrize case(s) duplicated in argvalues.\n"
+        "A duplicate case runs the same assertion with identical inputs — the matrix coverage "
+        "is inflated, not extended. Remove the redundant twin (and its id when ids= is parallel).\n"
+        + "\n".join(violations)
+    )
+
+
+def test_duplicate_parametrize_lens_flags_repeated_cases():
+    """Synthetic positive/negative control for the duplicate-case parametrize
+    lens: it must flag a case that repeats in ``argvalues`` (list or tuple,
+    scalars, tuples, dicts, declared positionally or via ``argvalues=``) and
+    ignore unique case lists, parametrizes with a non-literal case list, and
+    parametrizes with a non-evaluable element anywhere in the list."""
+    positive_sources = [
+        "def test_foo():\n    @pytest.mark.parametrize('x', [1, 2, 2])\n    def test_bar(x):\n        assert x == 1\n",
+        "def test_foo():\n    @pytest.mark.parametrize('x', ('a', 'a', 'b'))\n    def test_bar(x):\n        assert x\n",
+        (
+            "def test_foo():\n"
+            "    @pytest.mark.parametrize('a,b', [(1, 2), (3, 4), (1, 2)])\n"
+            "    def test_bar(a, b):\n        assert a + b == 3\n"
+        ),
+        (
+            "def test_foo():\n"
+            "    @pytest.mark.parametrize('x', argvalues=[{'k': 1}, {'k': 1}])\n"
+            "    def test_bar(x):\n        assert x['k'] == 1\n"
+        ),
+        "def test_foo():\n    @pytest.mark.parametrize('x', [0.5, 0.5])\n"
+        "    def test_bar(x):\n        assert x == 0.5\n",
+        (
+            "def test_foo():\n"
+            "    @pytest.mark.parametrize('x', [1, 2, 1])\n"
+            "    @pytest.mark.parametrize('y', [3])\n"
+            "    def test_bar(x, y):\n        assert x + y == 4\n"
+        ),
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _duplicate_parametrize_case_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    @pytest.mark.parametrize('x', [1, 2, 3])\n    def test_bar(x):\n        assert x == 1\n",
+        "def test_foo():\n    @pytest.mark.parametrize('x', [1, True])\n    def test_bar(x):\n        assert x\n",
+        "def test_foo():\n    @pytest.mark.parametrize('x', CASES)\n    def test_bar(x):\n        assert x\n",
+        (
+            "def test_foo():\n"
+            "    @pytest.mark.parametrize('x', [1, make_case()])\n"
+            "    def test_bar(x):\n        assert x == 1\n"
+        ),
+        "def test_foo():\n    @pytest.mark.parametrize('x', [1])\n    def test_bar(x):\n        assert x == 1\n",
+        "def test_foo():\n    parametrize('x', [1, 1])\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _duplicate_parametrize_case_violations(tree), f"lens should NOT flag:\n{source}"
