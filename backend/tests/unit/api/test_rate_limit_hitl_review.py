@@ -58,8 +58,7 @@ class TestHitlReviewRateLimit:
         assert hitl_rule[1] == 20
         assert hitl_rule[2] == 60
 
-    @pytest.mark.parametrize("endpoint", HITL_ENDPOINTS)
-    def test_hitl_rule_is_more_restrictive_than_runs(self, endpoint: str) -> None:
+    def test_hitl_rule_is_more_restrictive_than_runs(self) -> None:
         """HITL review paths must be capped at 20/min, not the runs 60/min."""
         run_rule = next((r for r in RateLimitMiddleware.RULES if r[0] == "/api/v1/runs"), None)
         assert run_rule is not None

@@ -141,6 +141,14 @@ regression that silently weakens the suite:
   isinstance call so each failure names its own operand. A single isinstance,
   or an isinstance mixed with a truthiness/``is not None`` check (the
   deliberate "type and non-empty" idiom), is left alone
+- ``@pytest.mark.parametrize`` whose declared argname is never referenced in
+  the test body — the parametrize runs the body once per case but the body
+  ignores the parameter, so every case exercises the *same* assertion. The
+  matrix coverage is illusory: a regression in the behaviour that the
+  parameter was meant to vary is caught by case 1 and reported identically
+  N times, while a reader (and a mutation-testing run) believes N distinct
+  inputs are covered. Drop the unused parameter (and the parametrize when
+  that leaves no other varying argument)
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -2855,3 +2863,106 @@ def test_compound_isinstance_lens_flags_split_able_conjunctions():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _compound_isinstance_assert_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _unused_parametrize_arg_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``@...parametrize``
+    decorator whose declared argname is never referenced in the decorated
+    test's body.
+
+    Only decorator applications are considered — a bare ``parametrize(...)``
+    call inside a body is not pytest parametrization and belongs to a
+    different lens. ``indirect=True`` parametrizes are skipped: there the
+    argname names a *fixture*, which pytest resolves by name even when the
+    body never mentions it, so "unreferenced" does not mean "unused". For
+    the same reason, a name that appears in the body through a fixture
+    reference string (``request.getfixturevalue("x")``) is only skipped when
+    the parametrize is indirect — a direct parametrize value is bound to a
+    local of that exact name and nothing else, so a bare ``Name`` in the
+    body is the definitive use check.
+    """
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for dec in node.decorator_list:
+            if not isinstance(dec, ast.Call):
+                continue
+            if _decorator_name(dec) != "parametrize":
+                continue
+            if any(kw.arg == "indirect" for kw in dec.keywords):
+                continue
+            if len(dec.args) < 1 or not isinstance(dec.args[0], ast.Constant):
+                continue
+            argnames = str(dec.args[0].value)
+            body_names = {sub.id for sub in ast.walk(node) if isinstance(sub, ast.Name)}
+            for name in (n.strip() for n in argnames.split(",") if n.strip()):
+                if name in body_names:
+                    continue
+                found.append(
+                    (
+                        dec.lineno,
+                        f"parametrize arg {name!r} never referenced in {node.name}() body — "
+                        "every case runs the same assertion, so the matrix coverage is illusory",
+                    )
+                )
+    return found
+
+
+def test_no_unused_parametrize_args():
+    """``@pytest.mark.parametrize`` with an argname the test body never
+    references runs the same assertion once per case. The parametrize then
+    advertises N-way matrix coverage that does not exist: every case is
+    behaviourally identical, so a regression is caught by case 1 and reported
+    identically N times, and a reader or mutation-testing run believes N
+    distinct inputs are covered. Drop the unused parameter — and when that
+    leaves no other varying argument, drop the parametrize decorator entirely
+    and keep a plain test. ``indirect=True`` parametrizes are exempt: there
+    the argname names a fixture, resolved by name even when the body never
+    mentions it."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _unused_parametrize_arg_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} parametrize argname(s) never referenced in the test body.\n"
+        "A parameter the body ignores makes every case identical — the matrix coverage is illusory.\n"
+        "Reference the parameter in the assertion, or drop it (and the parametrize when it is\n"
+        "the only argument) and keep a plain test.\n" + "\n".join(violations)
+    )
+
+
+def test_unused_parametrize_arg_lens_flags_ignored_cases():
+    """Synthetic positive/negative control for the unused-parametrize-arg
+    lens: must flag an argname absent from the test body (multi-name
+    argnames included, where only the missing name is flagged) and ignore
+    referenced args, indirect parametrizes, non-parametrize calls, and
+    parametrizes without a string argname."""
+    positive_sources = [
+        "def test_foo():\n    @pytest.mark.parametrize('x', [1, 2])\n    def test_bar(x):\n        assert 1 == 1\n",
+        "def test_foo():\n    @pytest.mark.parametrize('endpoint', ENDPOINTS)\n"
+        "    def test_bar(endpoint):\n        do_thing()\n",
+        "def test_foo():\n    @pytest.mark.parametrize('a,b', [(1, 2)])\n"
+        "    def test_bar(a, b):\n        assert a == 1\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _unused_parametrize_arg_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    @pytest.mark.parametrize('x', [1, 2])\n    def test_bar(x):\n        assert x == 1\n",
+        (
+            "def test_foo():\n"
+            "    @pytest.mark.parametrize('x', [1, 2], indirect=True)\n"
+            "    def test_bar(x):\n        do_thing()\n"
+        ),
+        "def test_foo():\n    parametrize('x', [1])\n",
+        "def test_foo():\n    @pytest.mark.parametrize(CASES, [1, 2])\n    def test_bar(x):\n        assert x == 1\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _unused_parametrize_arg_violations(tree), f"lens should NOT flag:\n{source}"
