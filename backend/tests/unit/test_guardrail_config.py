@@ -8,6 +8,7 @@ serialization, and drift detection against engine definitions.
 """
 
 import uuid
+from typing import Any
 
 import pytest
 
@@ -19,9 +20,11 @@ from modulo.core.guardrails.config import (
     GuardrailPin,
     build_config_set_from_definitions,
     check_guardrail_drift,
+    config_item_from_engine_definition,
     diff_config_sets,
     dump_config_set,
     hash_config_set,
+    hash_guardrail_item,
     load_config_set,
     to_eval_config,
     validate_config_set,
@@ -406,3 +409,84 @@ def test_config_round_trip_to_eval_config():
     assert engine_config["field"] == "body"
     assert engine_config["redaction"] == [{"path": "body", "mode": "transform"}]
     assert not engine_config["required_capabilities"]
+
+
+# ---------------------------------------------------------------------------
+# Engine-definition rebuild — detection envelope round-trip (PRD §8.17)
+# ---------------------------------------------------------------------------
+
+
+def _envelope_definition(name: str, config: dict[str, Any]) -> EvalDefinition:
+    return EvalDefinition(
+        id=uuid.uuid4(),
+        org_id=_ORG_ID,
+        name=name,
+        eval_type=EvalType.GUARDRAIL,
+        config=config,
+        failure_behaviour="warn",
+    )
+
+
+def test_config_item_rebuilt_from_envelope_regex_is_complete():
+    """A row authored with the documented ``detection`` envelope must rebuild
+    with pattern + field intact — the envelope is authoritative and merges into
+    the effective config, so the rebuilt item is not a lossy representation."""
+    envelope_def = _envelope_definition(
+        "no-aws-keys",
+        {
+            "interception_point": "input",
+            "action": "block",
+            "redaction": [{"path": "body", "mode": "transform"}],
+            "detection": {"type": "regex", "pattern": "AKIA[0-9A-Z]{16}", "field": "body"},
+        },
+    )
+    rebuilt = config_item_from_engine_definition(envelope_def)
+    assert rebuilt.id == "no-aws-keys"
+    assert rebuilt.action.value == "block"
+    assert rebuilt.detection.type == "regex"
+    assert rebuilt.detection.pattern == "AKIA[0-9A-Z]{16}"
+    assert rebuilt.detection.field == "body"
+    assert rebuilt.redaction[0].path == "body"
+
+    # The rebuilt item hashes identically to the equivalent config-as-code
+    # item — a faithful round-trip, so drift stays clean.
+    applied_item = load_config_set(_REGEX_YAML).guardrails[0]
+    assert hash_guardrail_item(rebuilt) == hash_guardrail_item(applied_item)
+
+
+def test_config_item_rebuilt_from_envelope_json_schema_is_complete():
+    schema = {"type": "object", "properties": {"body": {"type": "string"}}}
+    envelope_def = _envelope_definition(
+        "valid-payload",
+        {
+            "interception_point": "input",
+            "action": "observe",
+            "detection": {"type": "json_schema", "schema": schema},
+        },
+    )
+    rebuilt = config_item_from_engine_definition(envelope_def)
+    assert rebuilt.detection.type == "json_schema"
+    assert rebuilt.detection.schema_data == schema
+
+    applied_item = load_config_set(_JSON_SCHEMA_YAML).guardrails[0]
+    assert hash_guardrail_item(rebuilt) == hash_guardrail_item(applied_item)
+
+
+def test_config_item_rebuilt_from_flattened_row_is_unchanged():
+    """The flattened form config-as-code writes must still round-trip
+    identically through the engine resolver (backwards compatibility)."""
+    applied_item = load_config_set(_REGEX_YAML).guardrails[0]
+    flattened_def = _envelope_definition("no-aws-keys", to_eval_config(applied_item))
+    rebuilt = config_item_from_engine_definition(flattened_def)
+    assert hash_guardrail_item(rebuilt) == hash_guardrail_item(applied_item)
+
+
+def test_config_item_rebuild_does_not_downgrade_unknown_type():
+    """An unknown declared detection type must surface loudly (fail closed),
+    never be silently downgraded to regex as the old duplicated resolver did."""
+    unknown_def = _envelope_definition(
+        "bad-type",
+        {"interception_point": "input", "action": "observe", "type": "llm_judge"},
+    )
+    with pytest.raises(GuardrailConfigError, match="regex or json_schema"):
+        config_item_from_engine_definition(unknown_def)

@@ -47,6 +47,7 @@ from modulo.core.guardrails import (
     FieldRedactionMode,
     GuardrailAction,
     GuardrailConfigError,
+    _resolve_detection,
 )
 
 GuardrailPinStatus = Literal["clean", "proposed", "drift"]
@@ -367,7 +368,7 @@ def _describe_item_delta(old_item: GuardrailConfigItem, new_item: GuardrailConfi
 
 
 # ---------------------------------------------------------------------------
-# DB row <-> config DTO (round-trip bijection for the engine's flattened shape)
+# DB row <-> config DTO (round-trip bijection via the engine's resolver)
 # ---------------------------------------------------------------------------
 
 
@@ -377,9 +378,10 @@ def to_eval_config(item: GuardrailConfigItem) -> dict[str, Any]:
     The engine reads detection from either a flattened ``type``/``pattern``/
     ``field``/``schema`` layout or a ``detection`` envelope. Config-as-code
     writes the FLATTENED form; ``config_item_from_engine_definition`` reads it
-    back, giving a deterministic round-trip for drift hashing. ``failure_
-    behaviour`` is deliberately never written here — guardrail rows always use
-    ``'warn'`` (block semantics are guardrail-owned via ``action``).
+    back (via the engine's own resolver) giving a deterministic round-trip for
+    drift hashing. ``failure_behaviour`` is deliberately never written here —
+    guardrail rows always use ``'warn'`` (block semantics are guardrail-owned
+    via ``action``).
     """
     config: dict[str, Any] = {
         "interception_point": "input",
@@ -397,29 +399,6 @@ def to_eval_config(item: GuardrailConfigItem) -> dict[str, Any]:
     return config
 
 
-def _resolve_db_detection_type(config: dict[str, Any]) -> str:
-    """Resolve the detection type from a stored engine ``config_json``.
-
-    Mirrors the engine's :func:`_resolve_detection` (envelope authoritative,
-    legacy top-level ``schema`` dict implies json_schema) so rows authored via
-    the pipeline graph-save and rows authored by config-as-code both rebuild
-    identically.
-    """
-    envelope = config.get("detection")
-    if isinstance(envelope, dict):
-        env_type = envelope.get("type")
-        if env_type in GUARDRAIL_DETECTION_TYPES:
-            return str(env_type)
-        if env_type is not None:
-            return str(env_type)
-    top_type = config.get("type")
-    if top_type in GUARDRAIL_DETECTION_TYPES:
-        return str(top_type)
-    if isinstance(config.get("schema"), dict):
-        return str(EvalType.JSON_SCHEMA)
-    return str(EvalType.REGEX)
-
-
 def _resolve_db_action(config: dict[str, Any]) -> GuardrailAction:
     raw = config.get("action")
     try:
@@ -431,18 +410,29 @@ def _resolve_db_action(config: dict[str, Any]) -> GuardrailAction:
 def config_item_from_engine_definition(engine_def: EvalDefinition) -> GuardrailConfigItem:
     """Rebuild a config-set guardrail from an engine ``EvalDefinition`` DTO.
 
-    The stable ``id`` is the row ``name`` (the config-as-code key), so a set
+    Detection resolution is delegated to the engine's :func:`_resolve_detection`
+    (envelope authoritative, merged effective config) rather than re-implemented
+    here — a row authored with the documented ``detection`` envelope (PRD §8.17)
+    rebuilds with its schema/pattern/field intact, and an unknown declared type
+    surfaces loudly (fail-closed) instead of being silently downgraded. The
+    stable ``id`` is the row ``name`` (the config-as-code key), so a set
     rebuilt from DB rows hashes identically to the set that produced them.
     """
     config = engine_def.config or {}
-    detection_type = _resolve_db_detection_type(config)
+    detection_type, effective_config = _resolve_detection(engine_def)
+    if detection_type not in GUARDRAIL_DETECTION_TYPES:
+        # Fail closed, mirroring the engine's own validation error — an unknown
+        # declared detection type must never be silently rebuilt as regex.
+        raise GuardrailConfigError(
+            f"Guardrail {engine_def.name!r} must use regex or json_schema detection (got config {config!r})"
+        )
     if detection_type == str(EvalType.JSON_SCHEMA):
-        detection = GuardrailDetection(type="json_schema", schema=config.get("schema"))
+        detection = GuardrailDetection(type="json_schema", schema=effective_config.get("schema"))
     else:
         detection = GuardrailDetection(
             type="regex",
-            pattern=config.get("pattern"),
-            field=config.get("field"),
+            pattern=effective_config.get("pattern"),
+            field=effective_config.get("field"),
         )
     redaction = []
     for raw in config.get("redaction") or []:

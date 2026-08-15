@@ -8,10 +8,11 @@ URLs (mounted under ``/api/v1/guardrails/config``):
     POST   /api/v1/guardrails/config/reject  — discard the pending proposal
     GET    /api/v1/guardrails/config/drift   — recompute drift vs the applied pin
 
-The workflow is git-style: **propose** → **diff** → **apply**. Apply is the
-operator-only "merge" step that reconciles the live ``eval_type='guardrail'``
-``EvalDefinition`` rows the shipped interception seam consumes; the
-config-as-code layer is an authoring/source-of-truth seam on top, never a
+The workflow is git-style: **propose** → **diff** → **apply**. Apply/reject
+are the admin-only "merge"/"discard" steps that reconcile the live
+``eval_type='guardrail'`` ``EvalDefinition`` rows the shipped interception seam
+consumes — gated by the same admin check as the direct eval-definition API;
+the config-as-code layer is an authoring/source-of-truth seam on top, never a
 change to the engine's semantics. Every state-changing step emits an audit
 event (summary payloads only — never raw config content).
 """
@@ -369,11 +370,20 @@ async def apply_guardrail_config(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("eval.definition.create"),
 ) -> GuardrailApplyResponse:
-    """Apply the pending proposal — the approve/merge step (operator only).
+    """Apply the pending proposal — the approve/merge step (admin only).
 
     Reconciles the live ``EvalDefinition`` rows to the proposed set and moves
     the pin to a clean applied state. 409 when there is no proposal to apply.
+    Guardrails are safety controls, so the reconcile is gated by the same
+    admin-only check the direct eval-definition API enforces (evals.py) — an
+    operator with ``eval.definition.create`` must not be able to mutate these
+    rows through the config seam when the direct API denies it.
     """
+    if principal.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can apply guardrail config",
+        )
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         pin = await _load_pin(session, principal.organisation_id)
@@ -423,7 +433,16 @@ async def reject_guardrail_config(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("eval.definition.create"),
 ) -> GuardrailRejectResponse:
-    """Discard the pending proposal (operator only). 409 when none exists."""
+    """Discard the pending proposal (admin only). 409 when none exists.
+
+    Rejecting discards a proposed safety-control change, so it is gated by the
+    same admin-only check as apply and the direct eval-definition API.
+    """
+    if principal.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can reject guardrail config",
+        )
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         pin = await _load_pin(session, principal.organisation_id)

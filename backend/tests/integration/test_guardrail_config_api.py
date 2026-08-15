@@ -215,6 +215,11 @@ async def viewer_a(db_engine: AsyncEngine, org_a: uuid.UUID) -> uuid.UUID:
 
 
 @pytest_asyncio.fixture
+async def operator_a(db_engine: AsyncEngine, org_a: uuid.UUID) -> uuid.UUID:
+    return await _seed_user(db_engine, org_a, "gr-operator-a@test.local", role="operator")
+
+
+@pytest_asyncio.fixture
 async def admin_b(db_engine: AsyncEngine, org_b: uuid.UUID) -> uuid.UUID:
     return await _seed_user(db_engine, org_b, "gr-admin-b@test.local")
 
@@ -705,3 +710,35 @@ async def test_viewer_cannot_propose_or_apply(
         headers=_auth_headers(org_a, viewer_a, role="viewer"),
     )
     assert resp.status_code == 403
+
+
+async def test_operator_cannot_apply_or_reject(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    org_a: uuid.UUID,
+    admin_a: uuid.UUID,
+    operator_a: uuid.UUID,
+):
+    """An operator holds ``eval.definition.create`` (the permission gate) but is
+    NOT an admin — the apply/reject reconcile mutates ``eval_definitions`` rows,
+    so it must be gated by the same admin check the direct evals API enforces
+    (which returns 403 for a non-admin operator). Without the admin gate the
+    operator would get 200 here, a side-channel past the stricter API."""
+    await _propose(integration_client, org_a, admin_a, _CONFIG_YAML)
+
+    apply_resp = await integration_client.post(
+        "/api/v1/guardrails/config/apply",
+        headers=_auth_headers(org_a, operator_a, role="operator"),
+    )
+    assert apply_resp.status_code == 403
+
+    # The proposal is still pending (apply was denied) — reject must also be
+    # denied for the operator, not 200 (or 409 from reaching the reconcile).
+    reject_resp = await integration_client.post(
+        "/api/v1/guardrails/config/reject",
+        headers=_auth_headers(org_a, operator_a, role="operator"),
+    )
+    assert reject_resp.status_code == 403
+
+    # The denied attempts left no guardrail rows behind.
+    assert await _count_guardrail_rows(db_engine, org_a) == 0
