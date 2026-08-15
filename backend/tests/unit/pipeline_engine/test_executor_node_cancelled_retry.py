@@ -808,3 +808,164 @@ async def test_execute_gate_node_id_none_disables_gate():
 
     assert any("status='pending'" in s for s in statements), "node_id None -> gate must not fire"
     mock_finalize.assert_not_awaited()
+
+
+async def test_execute_gate_marker_absent_preserves_retry_path():
+    """FAR-228 guard B gate_ok=False (marker ABSENT): a run whose markers dict
+    contains NO delivery_done marker for the failing node is NOT suppressed —
+    the exact pre-gate retry path (fenced pending-reset + re-raise) runs."""
+    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+
+    run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
+    run.raw_output_markers = {}  # dict, but no delivery_done marker for node-a
+    run.cancellation_requested = False
+    snapshot = _sandbox_snapshot()
+    statements: list[str] = []
+    session = _make_session(snapshot, statements=statements)
+    factory = _make_session_factory(session)
+    compiled = _mock_compiled_raising(SandboxNodeFailedError("stalled", node_id="node-a"))
+    registry = _mock_registry()
+    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True, modulo_idempotency_gate_enabled=True)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+        patch("modulo.settings.get_settings", return_value=settings),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        with pytest.raises(SandboxNodeFailedError):
+            await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
+
+    assert any("status='pending'" in s for s in statements), "no marker -> gate must not fire, reset + re-raise"
+    mock_finalize.assert_not_awaited()
+
+
+async def test_execute_gate_superseded_never_suppresses():
+    """FAR-228 guard B gate_ok=False (superseded): even with a delivery marker
+    present, a superseded executor (DB token rotated by a successor) must NOT
+    suppress the retry AND must NOT reset/terminal-fail — the successor owns the
+    run. The gate is explicitly disabled by the ``not superseded`` term."""
+    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+
+    run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-successor-xyz")
+    run.raw_output_markers = _delivery_markers(run.id)
+    run.cancellation_requested = False
+    snapshot = _sandbox_snapshot()
+    statements: list[str] = []
+    session = _make_session(snapshot, statements=statements)
+    factory = _make_session_factory(session)
+    compiled = _mock_compiled_raising(SandboxNodeFailedError("stalled", node_id="node-a"))
+    registry = _mock_registry()
+    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True, modulo_idempotency_gate_enabled=True)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+        patch("modulo.settings.get_settings", return_value=settings),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        with pytest.raises(SandboxNodeFailedError):
+            # Our executor holds "tok-claim-abc" but the DB row shows the
+            # successor's "tok-successor-xyz" -> superseded -> gate never fires.
+            await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
+
+    assert not any("status='pending'" in s for s in statements), "superseded -> never demote the successor's row"
+    mock_finalize.assert_not_awaited()
+
+
+async def test_execute_gate_multi_node_inert():
+    """FAR-228 guard B single-node scope: on a graph with TWO sandbox_agent nodes
+    the gate is INERT — a transient failure of node-b (with a delivery marker)
+    is NOT suppressed and retries exactly as before (pending-reset + re-raise)."""
+    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+
+    run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
+    key = f"run:{run.id}:node:node-b:1"
+    run.raw_output_markers = {key: {"_modulo_marker": True, "delivery_done": True, "attempt_key": key}}
+    run.cancellation_requested = False
+    snapshot = _make_snapshot(
+        {
+            "nodes": [
+                {"id": "node-a", "node_type": "sandbox_agent", "role": None},
+                {"id": "node-b", "node_type": "sandbox_agent", "role": None},
+            ],
+            "edges": [],
+        }
+    )
+    statements: list[str] = []
+    session = _make_session(snapshot, statements=statements)
+    factory = _make_session_factory(session)
+    compiled = _mock_compiled_raising(SandboxNodeFailedError("stalled", node_id="node-b"))
+    registry = _mock_registry()
+    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True, modulo_idempotency_gate_enabled=True)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+        patch("modulo.settings.get_settings", return_value=settings),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        with pytest.raises(SandboxNodeFailedError):
+            await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
+
+    assert any("status='pending'" in s for s in statements), "multi-node -> gate must not fire, reset + re-raise"
+    mock_finalize.assert_not_awaited()
+
+
+async def test_execute_gate_prove_the_fix_suppression_requires_decision():
+    """FAR-228 prove-the-fix RED witness: the gate suppression is DRIVEN by
+    _should_skip_retry. Patching the decision to False (with the marker present,
+    kill-switch on, single node, no supersede/stall/cancel) flips the outcome:
+    the transient retry proceeds (pending-reset + re-raise), NOT complete +
+    harness.idempotency_gate. The green twin is
+    test_execute_gate_suppresses_retry_when_delivery_marked — together they prove
+    the suppression is not an artifact of the surrounding patch set."""
+    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+
+    run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
+    run.raw_output_markers = _delivery_markers(run.id)
+    run.cancellation_requested = False
+    snapshot = _sandbox_snapshot()
+    statements: list[str] = []
+    session = _make_session(snapshot, statements=statements)
+    factory = _make_session_factory(session)
+    compiled = _mock_compiled_raising(SandboxNodeFailedError("stalled", node_id="node-a"))
+    registry = _mock_registry()
+    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True, modulo_idempotency_gate_enabled=True)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+        patch("modulo.settings.get_settings", return_value=settings),
+        patch("modulo.core.pipeline_engine.executor._should_skip_retry", return_value=False),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        with pytest.raises(SandboxNodeFailedError):
+            await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
+
+    assert any("status='pending'" in s for s in statements), "decision False -> gate must not fire, reset + re-raise"
+    mock_finalize.assert_not_awaited()

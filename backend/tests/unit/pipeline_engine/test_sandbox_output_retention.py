@@ -904,3 +904,105 @@ async def test_success_path_no_sentinel_no_stamp():
 
     assert result["output"].get("delivery_done") is None
     assert result["artifacts"][0]["output"].get("delivery_done") is None
+
+
+async def test_cancelled_node_persist_failure_fail_open_reraises():
+    """FAR-228 (THE INCIDENT FIX) fail-open: when the best-effort marker persist
+    FAILS inside the caught CancelledError (e.g. a DB error), the CancelledError
+    STILL propagates — the retention write is best-effort and must never mask or
+    delay the cancellation."""
+    log_content = f"email sent\n{_SENTINEL}\n"
+    sandbox = _make_sandbox_mock(output_json='{"summary": "done"}', log_content=log_content)
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.CancelledError())
+    handle.kill = AsyncMock()
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(
+        _base_node_def(timeout_seconds=30, delivery_sentinel=_SENTINEL),
+        session_factory=_factory,
+    )
+
+    persist_mock = AsyncMock(side_effect=RuntimeError("db gone"))
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch(
+            "modulo.core.pipeline_engine.node_runner._persist_raw_output_marker",
+            persist_mock,
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_run_state())
+
+    persist_mock.assert_awaited(), "the persist WAS attempted once the sentinel was in the drained tail"
+    assert row.raw_output_markers is None, "the failed persist never wrote a marker (fail-open, nothing fabricated)"
+
+
+async def test_cancelled_node_unreadable_log_fail_open_reraises():
+    """FAR-228 fail-open on the drain side: when the sandbox log is unreadable at
+    cancellation time (get_info raises), the guarded final drain fails silently
+    (log + return) and the CancelledError STILL propagates — an unreadable log
+    never blocks cancellation and never fabricates a delivery marker."""
+    sandbox = _make_sandbox_mock(output_json='{"summary": "done"}', log_content="ignored")
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.CancelledError())
+    handle.kill = AsyncMock()
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.files.get_info = AsyncMock(side_effect=RuntimeError("log file gone"))
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(
+        _base_node_def(timeout_seconds=30, delivery_sentinel=_SENTINEL),
+        session_factory=_factory,
+    )
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_run_state())
+
+    assert row.raw_output_markers is None, "unreadable log -> no sentinel observed -> no delivery marker"
+
+
+async def test_guard_a_inert_when_multi_node():
+    """FAR-228 guard A single-node scope: on a MULTI-node graph
+    (single_sandbox_node=False) guard A is INERT — even with a prior
+    delivery_done marker the node provisions a sandbox normally (the gate must
+    not skip a node in a pipeline with other sandbox nodes)."""
+    row = _FakeRunRow()
+    row.raw_output_markers = {
+        "run:run-1:node:n1:1": {
+            "_modulo_marker": True,
+            "delivery_done": True,
+            "attempt_key": "run:run-1:node:n1:1",
+        }
+    }
+    sandbox = _make_sandbox_mock()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(
+        _base_node_def(timeout_seconds=30, delivery_sentinel=_SENTINEL),
+        session_factory=_factory,
+        single_sandbox_node=False,
+    )
+    settings = MagicMock(modulo_idempotency_gate_enabled=True)
+    state = _run_state()
+    state["_claim_lease"] = "tok-claim"
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.settings.get_settings", return_value=settings),
+    ):
+        result = await fn(state)
+
+    sandbox.commands.run.assert_awaited_once(), "multi-node -> guard A must not skip, sandbox is provisioned"
+    assert result["output"]["status"] == "completed"
