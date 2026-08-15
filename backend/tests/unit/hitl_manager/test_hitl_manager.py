@@ -476,6 +476,162 @@ async def test_claim_team_member_can_claim():
     assert team_check_count == 2
 
 
+async def test_claim_team_membership_query_restricts_to_runner_or_operator_role():
+    """Both team-membership checks restrict claims to ``runner``/``operator`` team roles.
+
+    A team-scoped gate is a decision surface — a ``viewer`` membership grants
+    read-only visibility and must never satisfy the claim-time membership check.
+    The claim queries (pre-check AND the post-claim TOCTOU re-verification) must
+    carry ``role IN ('runner', 'operator')`` in the WHERE clause.
+    """
+    unclaimed = _gate(account_id=None, required_team_id=_TEAM)
+    claimed = _gate(
+        account_id=_USER,
+        claim_token="tok",
+        expires_at=datetime.now(UTC) + timedelta(minutes=15),
+        required_team_id=_TEAM,
+    )
+    membership = MagicMock(spec=TeamMembership)
+    membership.team_id = _TEAM
+    membership.account_id = _USER
+    membership.role = "operator"
+
+    session = AsyncMock()
+    membership_stmts: list[Any] = []
+    call_no = 0
+
+    async def _execute(stmt: Any) -> Any:
+        nonlocal call_no
+        call_no += 1
+        if call_no in (1, 2):
+            # Gate pre-check SELECT + FOR UPDATE row lock
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = unclaimed
+            return r
+        if call_no in (3, 5):
+            # Membership pre-check + post-claim TOCTOU re-verification
+            membership_stmts.append(stmt)
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = membership
+            return r
+        if call_no == 4:
+            # Claim UPDATE
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = uuid.uuid4()
+            return r
+        raise AssertionError(f"Unexpected execute call #{call_no}")
+
+    session.execute = _execute
+    session.get = AsyncMock(return_value=claimed)
+    mgr = HITLManager()
+    result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+    assert result is claimed
+    assert len(membership_stmts) == 2, "Both membership queries must be executed"
+    for stmt in membership_stmts:
+        sql = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+        assert "team_memberships.role IN ('runner', 'operator')" in sql
+
+
+async def test_claim_team_viewer_role_denied():
+    """A team member holding only the ``viewer`` role cannot claim a team gate.
+
+    The role filter is applied inside the membership query, so a viewer's
+    membership row simply never matches — the claim must fail with
+    NotTeamMemberError before any claim UPDATE.
+    """
+    gate = _gate(account_id=None, required_team_id=_TEAM)
+
+    session = AsyncMock()
+    call_no = 0
+    membership_check_hit = False
+
+    async def _execute(stmt: Any) -> Any:
+        nonlocal call_no, membership_check_hit
+        call_no += 1
+        if call_no in (1, 2):
+            # Gate pre-check SELECT + FOR UPDATE row lock
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = gate
+            return r
+        if call_no == 3:
+            # Membership pre-check — a viewer row is filtered out by the role
+            # predicate, so the query yields no matching membership.
+            membership_check_hit = True
+            sql = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+            assert "team_memberships.role IN ('runner', 'operator')" in sql
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = None
+            return r
+        raise AssertionError(f"Unexpected execute call #{call_no}")
+
+    session.execute = _execute
+    mgr = HITLManager()
+    with pytest.raises(NotTeamMemberError):
+        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+    assert membership_check_hit, "Team membership check was not performed"
+    assert call_no == 3, "Claim must fail before the claim UPDATE"
+
+
+async def test_claim_team_role_lost_between_check_and_update_undoes_claim():
+    """If the claimant's team role drops below runner/operator after the pre-check,
+    the claim is undone and NotTeamMemberError is raised.
+
+    The TOCTOU re-verification carries the same role predicate, so a member
+    demoted from ``operator`` to ``viewer`` between the pre-check and the claim
+    UPDATE has the claim reverted.
+    """
+    gate = _gate(account_id=None, required_team_id=_TEAM)
+    membership = MagicMock(spec=TeamMembership)
+    membership.team_id = _TEAM
+    membership.account_id = _USER
+    membership.role = "operator"
+
+    session = AsyncMock()
+    call_no = 0
+    undo_stmt: list[Any] = []
+
+    async def _execute(stmt: Any) -> Any:
+        nonlocal call_no
+        call_no += 1
+        if call_no in (1, 2):
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = gate
+            return r
+        if call_no == 3:
+            # Membership pre-check passes (member was operator at the time)
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = membership
+            return r
+        if call_no == 4:
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = uuid.uuid4()
+            return r
+        if call_no == 5:
+            # TOCTOU re-verification — role demoted to viewer, query yields none
+            sql = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+            assert "team_memberships.role IN ('runner', 'operator')" in sql
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = None
+            return r
+        if call_no == 6:
+            # Undo UPDATE — claim is released
+            undo_stmt.append(stmt)
+            return MagicMock()
+        raise AssertionError(f"Unexpected execute call #{call_no}")
+
+    session.execute = _execute
+    mgr = HITLManager()
+    with pytest.raises(NotTeamMemberError):
+        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+
+    assert len(undo_stmt) == 1, "Claim should be undone when team role drops below runner/operator"
+    undo_values = {col.name: expr.value for col, expr in undo_stmt[0]._values.items()}
+    assert undo_values["account_id"] is None
+    assert undo_values["claimed_at"] is None
+    assert undo_values["claim_token"] is None
+    assert undo_values["expires_at"] is not None, "Undo UPDATE should settle expires_at (non-null) to release the claim"
+
+
 async def test_claim_membership_lost_between_check_and_update_undoes_claim():
     """If the claimant loses team membership after the pre-check, claim() is undone.
 

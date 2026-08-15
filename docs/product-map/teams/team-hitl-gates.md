@@ -20,7 +20,7 @@ status: partial
 
 A HITL gate may specify `required_team_id` to restrict claim/approve to members of that team. Enforcement uses a DB-live membership check (not JWT claims). `human_only` and `required_team_id` are additive — both must hold independently.
 
-**Note:** Role filtering (`runner`/`operator`-only) is documented intent but NOT enforced in `claim()` — any team role (including `viewer`) can claim a team-scoped gate.
+**Note:** Role filtering (`runner`/`operator`-only) is enforced in `claim()` since 2026-08-15 — a `viewer` team membership cannot claim a team-scoped gate.
 
 ## Behaviours
 
@@ -38,7 +38,9 @@ A HITL gate may specify `required_team_id` to restrict claim/approve to members 
 ### Claim — team enforcement
 - [x] `HITLManager.claim()` performs a DB-live membership check when `gate.required_team_id` is set
 - [x] Membership check queries `TeamMembership` where `team_id == required_team_id` AND `user_id == claimant_id` AND `organisation_id == org_id`
-- [ ] Team member with `runner` or `operator` team role can claim a team-scoped gate — code checks TeamMembership existence only, not role (any role qualifies including `viewer`)
+- [x] Team member with `runner` or `operator` team role can claim a team-scoped gate — the claim-time membership query carries `role IN ('runner', 'operator')`
+- [x] Team member with only the `viewer` role cannot claim a team-scoped gate — the role predicate excludes `viewer` memberships from the membership check, so the claim raises `NotTeamMemberError` (403) before any claim UPDATE
+- [x] The role predicate is applied to BOTH membership queries — the pre-check AND the post-claim TOCTOU re-verification, so a member demoted from `operator`/`runner` to `viewer` between check and UPDATE has the claim undone
 - [x] Non-team member receives `NotTeamMemberError` (PermissionError)
 - [x] Gate without `required_team_id` does not query team membership at claim time
 - [x] Team membership check happens after gate-exists/not-decided/not-claimed pre-checks but before UPDATE
@@ -83,9 +85,17 @@ A HITL gate may specify `required_team_id` to restrict claim/approve to members 
 - No test for `human_only` + `required_team_id` additive enforcement at ViewModel layer
 - No test for team notification fallback chain (team endpoints → org endpoints)
 - No performance test for DB-live membership check on high-claim-contention gates
-- Team membership role enforcement: `claim()` checks TeamMembership existence only — any role (including `viewer`) can claim a team-scoped gate; no role filter applied
+- (Resolved) Team membership role enforcement: `claim()` checks TeamMembership existence only — any role (including `viewer`) could claim a team-scoped gate. Fixed 2026-08-15: both membership queries now carry `role IN ('runner', 'operator')` (`_TEAM_CLAIM_ROLES` in `core/hitl_manager/__init__.py`), so a `viewer` membership can never satisfy the claim. Propagates to REST (`hitl.claim_gate` → 403) and MCP (`review_hitl` → `not_team_member`) because both call `HITLManager.claim()`.
 - BDD scenarios for team HITL gates are implemented as mock-based step definitions, not full integration tests with real DB
 - Notifier layer is not yet wired to use `team_id` from `hitl_awaiting` payload for team-specific dispatch
+
+### 2026-08-15 — improve-architecture (product-map walk)
+
+- **Fixed (SECURITY):** team-scoped HITL gate claims enforced `TeamMembership` existence only — any team role (including read-only `viewer`) could claim (and therefore approve/reject) a team gate. `HITLManager.claim()` now filters both team-membership queries by `_TEAM_CLAIM_ROLES = ("runner", "operator")` (`core/hitl_manager/__init__.py`), mirroring the org-level `hitl.claim` permission (runner-scoped): a `viewer` membership never matches, so the claim raises `NotTeamMemberError` → 403 on the REST route and `not_team_member` on the MCP tool. The role predicate is applied to the pre-check AND the post-claim TOCTOU re-verification, so a member demoted to `viewer` between the check and the claim UPDATE has the claim undone. The REST and MCP paths need no change — both call `HITLManager.claim()`.
+- **Fixed (test wiring):** `tests/bdd/steps/test_team_hitl_gate.py` recorded responses on `ctx["_resp"]` while the shared `then` steps in `tests/bdd/conftest.py` read `request.node._resp` — all 4 `when` steps failed at runtime (`AttributeError: 'Function' object has no attribute '_resp'`), leaving the whole feature file broken on main. Each `when` step now records `request.node._resp` (matching `test_team_gates.py`/`test_hitl.py`), so the feature is executable again.
+- Added 3 unit tests in `tests/unit/hitl_manager/test_hitl_manager.py`: `test_claim_team_membership_query_restricts_to_runner_or_operator_role` (both queries carry `team_memberships.role IN ('runner', 'operator')` via literal-binds SQL), `test_claim_team_viewer_role_denied` (viewer row filtered out → `NotTeamMemberError`, claim UPDATE never reached), `test_claim_team_role_lost_between_check_and_update_undoes_claim` (demotion between check and UPDATE → claim released).
+- Added 1 BDD scenario (`Team viewer cannot claim team-required HITL gate` → 403) to `team_hitl_gate.feature` and updated the claim step to model the role filter (`runner`/`operator` only).
+- Verification: 77/77 `test_hitl_manager.py` unit tests, 254 focused HITL/team/MCP unit tests, and 6/6 `team_hitl_gate.feature` BDD scenarios pass; ruff check + format clean; mypy --strict clean on `core/hitl_manager/__init__.py`.
 
 ### 2026-07-31 — improve-architecture (product-map walk)
 

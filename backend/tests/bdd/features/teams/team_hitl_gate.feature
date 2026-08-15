@@ -19,6 +19,14 @@ Feature: Team-Scoped HITL Gates
     Then the response status is 403
     And the error indicates the gate requires team "engineering"
 
+  Scenario: Team viewer cannot claim team-required HITL gate
+    Given a team "engineering" exists
+    And user "alice" is a member of team "engineering" with role "viewer"
+    And a run "run-1" is awaiting human at gate "gate-1" with required_team_id "engineering"
+    When user "alice" claims the HITL gate "gate-1" on run "run-1"
+    Then the response status is 403
+    And the error indicates the gate requires team "engineering"
+
   Scenario: MCP client cannot approve human_only + required_team gate
     Given a team "engineering" exists
     And a run "run-1" is awaiting human at gate "gate-1" with required_team_id "engineering" and human_only true

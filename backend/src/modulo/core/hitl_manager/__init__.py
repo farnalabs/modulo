@@ -47,6 +47,13 @@ from modulo.db.models.team_membership import TeamMembership
 
 _log = logging.getLogger(__name__)
 
+# Team roles allowed to claim a team-scoped HITL gate. A ``viewer`` membership
+# grants read-only visibility — claiming (and therefore approving/rejecting) a
+# team gate is a decision action, so it is restricted to members whose team
+# role is ``runner`` or ``operator`` (mirroring the org-level ``hitl.claim``
+# permission, which is runner-scoped).
+_TEAM_CLAIM_ROLES: tuple[str, ...] = ("runner", "operator")
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -247,6 +254,7 @@ class HITLManager:
                     TeamMembership.team_id == gate_check.required_team_id,
                     TeamMembership.account_id == claimant_id,
                     TeamMembership.organisation_id == org_id,
+                    TeamMembership.role.in_(_TEAM_CLAIM_ROLES),
                 )
             )
             if tm_result.scalar_one_or_none() is None:
@@ -307,6 +315,7 @@ class HITLManager:
                     TeamMembership.team_id == gate_check.required_team_id,
                     TeamMembership.account_id == claimant_id,
                     TeamMembership.organisation_id == org_id,
+                    TeamMembership.role.in_(_TEAM_CLAIM_ROLES),
                 )
             )
             if tm_still.scalar_one_or_none() is None:
