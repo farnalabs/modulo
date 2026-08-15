@@ -112,13 +112,23 @@ class GuardrailDriftResponse(BaseModel):
 
 
 async def _load_guardrail_definitions(session: AsyncSession, org_id: uuid.UUID) -> list[EvalDefinition]:
-    """Load ALL the org's guardrail rows as engine DTOs (across pipelines)."""
+    """Load the org's LAYER-OWNED guardrail rows as engine DTOs.
+
+    Only ``node_id IS NULL`` rows are included — the org-level rows that apply
+    creates/updates/deletes. Node-bound rows authored via the graph-save flow
+    are deliberately excluded so the drift/export boundary matches the apply
+    ownership boundary: a freshly applied config with node-bound guardrails
+    present must read ``clean``, never permanent ``drift``. The interception
+    seam (``db/crud/run.py``) loads its own rows independently and is
+    unaffected — node-bound guardrails are still enforced at the edge.
+    """
     rows = (
         (
             await session.execute(
                 select(EvalDefinitionRow).where(
                     EvalDefinitionRow.organisation_id == org_id,
                     EvalDefinitionRow.eval_type == "guardrail",
+                    EvalDefinitionRow.node_id.is_(None),
                 )
             )
         )
@@ -227,7 +237,11 @@ async def _reconcile_guardrail_rows(
                         account_id=account_id,
                     )
                 )
-            else:
+            elif row.node_id is None:
+                # Only upsert rows the config-as-code layer owns. A node-bound
+                # row (graph-save flow) that collides on name must not be
+                # silently clobbered — mirror the deletion path's ownership
+                # check below.
                 row.config_json = config_json
         for name, row in rows_by_name.items():
             # Only delete rows the config-as-code layer owns. Node-bound

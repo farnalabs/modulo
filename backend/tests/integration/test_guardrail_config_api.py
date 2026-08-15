@@ -532,6 +532,83 @@ async def test_apply_preserves_node_bound_guardrails(
     assert by_name["graph-node-guard"] is not None
     assert set(by_name) == {"graph-node-guard", "no-aws-keys", "valid-payload"}
 
+    # Drift must read clean right after apply, even with the node-bound row
+    # present. The drift boundary must exclude node-bound rows (they are not
+    # config-as-code's to own) or this freshly applied, correct config would
+    # be reported as permanent drift with no remediation path.
+    drift = (
+        await integration_client.get(
+            "/api/v1/guardrails/config/drift",
+            headers=_auth_headers(org_a, admin_a),
+        )
+    ).json()
+    assert drift["status"] == "clean"
+    assert drift["current_hash"] == drift["applied_hash"]
+
+    # GET /config agrees with /drift — the export is also clean.
+    get_body = (
+        await integration_client.get(
+            "/api/v1/guardrails/config",
+            headers=_auth_headers(org_a, admin_a),
+        )
+    ).json()
+    assert get_body["status"] == "clean"
+
+
+async def test_apply_does_not_clobber_node_bound_row_on_name_collision(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    org_a: uuid.UUID,
+    admin_a: uuid.UUID,
+    pipeline_a: uuid.UUID,
+):
+    # A node-bound guardrail (graph-save flow) whose name collides with a
+    # config-as-code id must not be silently overwritten by apply's upsert —
+    # the upsert path is ownership-guarded exactly like the deletion path.
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO eval_definitions (id, organisation_id, pipeline_id, node_id, name, "
+                "eval_type, config_json, failure_behaviour, account_id) "
+                "VALUES (:id, :oid, :pid, :nid, 'no-aws-keys', 'guardrail', :cfg, 'warn', :aid)",
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "oid": str(org_a),
+                "pid": str(pipeline_a),
+                "nid": str(uuid.uuid4()),
+                "cfg": json.dumps(
+                    {
+                        "interception_point": "input",
+                        "action": "observe",
+                        "type": "regex",
+                        "pattern": "graph-save-pattern",
+                        "field": "body",
+                    }
+                ),
+                "aid": str(admin_a),
+            },
+        )
+
+    await _propose(integration_client, org_a, admin_a, _CONFIG_YAML)
+    await _apply(integration_client, org_a, admin_a)
+
+    async with db_engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT node_id, config_json FROM eval_definitions "
+                "WHERE organisation_id = :oid AND eval_type = 'guardrail' AND name = 'no-aws-keys'",
+            ),
+            {"oid": str(org_a)},
+        )
+        colliding = rows.all()
+    # The graph-save row survives apply untouched: still node-bound and still
+    # carrying the graph-save-authored config (not the config-as-code content).
+    assert len(colliding) == 1
+    assert colliding[0][0] is not None
+    assert colliding[0][1]["action"] == "observe"
+    assert colliding[0][1]["pattern"] == "graph-save-pattern"
+
 
 async def test_drift_clean_without_mutation(
     integration_client: AsyncClient,
