@@ -136,17 +136,19 @@ class GitHubTicketTracker(TicketTrackerBase):
             return self._to_ticket(resp.json())
 
     def _to_ticket(self, raw: dict[str, Any]) -> Ticket:
-        labels = [label.get("name", "") for label in (raw.get("labels") or []) if isinstance(label, dict)]
+        label_objects = [label for label in (raw.get("labels") or []) if isinstance(label, dict)]
+        labels = [label.get("name", "") for label in label_objects]
+        assignee = raw.get("assignee")
         return Ticket(
             id=str(raw.get("number", "")),
             title=raw.get("title", ""),
             description=raw.get("body"),
             status="open" if not raw.get("closed_at") else "closed",
             priority=None,
-            ticket_type="bug" if any(label.get("name") == "bug" for label in labels) else "task",
+            ticket_type="bug" if any(label.get("name") == "bug" for label in label_objects) else "task",
             labels=labels,
             url=raw.get("html_url"),
-            assignee=raw.get("assignee").get("login") if isinstance(raw.get("assignee"), dict) else None,
+            assignee=assignee.get("login") if isinstance(assignee, dict) else None,
             created_at=_safe_datetime(raw.get("created_at")),
             updated_at=_safe_datetime(raw.get("updated_at")),
             raw=raw,
