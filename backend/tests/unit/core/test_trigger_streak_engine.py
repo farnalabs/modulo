@@ -1515,7 +1515,7 @@ class TestGetTriggerStreakStatus:
             "deactivated_reason": None,
             "last_outcomes": [],
         }
-        assert session.executed == [], "non-ongoing must not query"
+        assert not session.executed, "non-ongoing must not query"
 
     @pytest.mark.asyncio
     async def test_computes_streak_and_threshold(self) -> None:
@@ -1587,7 +1587,7 @@ class TestGetTriggerStreakStatus:
         merged = dict(compiled.params)
         merged.update(params or {})
         unbound = [name for name, value in merged.items() if value is None]
-        assert unbound == [], f"all bind params must resolve, got unbound: {unbound}"
+        assert not unbound, f"all bind params must resolve, got unbound: {unbound}"
 
     @pytest.mark.asyncio
     async def test_deactivated_reason_no_delivery_streak(self) -> None:
@@ -1711,7 +1711,7 @@ class TestGetTriggerStreakStatus:
         status = await ts.get_trigger_streak_status(session, _ongoing_trigger())
         assert status["streak"] == 2
         assert status["threshold"] == 5
-        assert status["last_outcomes"] == []
+        assert not status["last_outcomes"]
         assert status["state"] == "ok"
 
     @pytest.mark.asyncio

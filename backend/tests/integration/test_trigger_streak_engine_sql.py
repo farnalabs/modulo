@@ -650,7 +650,7 @@ async def test_get_trigger_streak_status_is_tenant_isolated(
         status = await ts.get_trigger_streak_status(session, trigger_row)
 
     assert status["streak"] == 0, "org B's no-delivery run must not count toward org A's trigger"
-    assert status["last_outcomes"] == [], "org B's runs must not appear in org A's outcome panel"
+    assert not status["last_outcomes"], "org B's runs must not appear in org A's outcome panel"
     assert status["deactivated_reason"] is None, "org B's audit record must not mark org A's trigger deactivated"
     assert status["state"] == "ok", "org A's manually-paused trigger stays 'ok'"
 
