@@ -818,20 +818,24 @@ class TestGetPromptDiffs:
     async def test_returns_empty_when_prompt_pins_json_empty_list(self) -> None:
         """Empty ``prompt_pins_json`` yields no agent diffs (edge case coverage)."""
         session = AsyncMock()
-        snap = MagicMock()
-        snap.id = uuid.uuid4()
-        snap.prompt_pins_json = []
+        snap1 = MagicMock()
+        snap1.id = uuid.uuid4()
+        snap1.prompt_pins_json = [{"agent_id": "agent_a", "prompt_version_hash": "hash_v1"}]
+        snap2 = MagicMock()
+        snap2.id = uuid.uuid4()
+        snap2.prompt_pins_json = []
 
         group = MagicMock()
         group.variants = [
-            {"name": "base", "snapshot_id": str(snap.id)},
+            {"name": "base", "snapshot_id": str(snap1.id)},
+            {"name": "variant", "snapshot_id": str(snap2.id)},
         ]
 
         exec_result = MagicMock()
-        exec_result.scalars.return_value = [snap]
+        exec_result.scalars.return_value = [snap1, snap2]
         session.execute.return_value = exec_result
 
-        result = await get_prompt_diffs(session, group, base_snapshot_ids=[snap.id])
+        result = await get_prompt_diffs(session, group, base_snapshot_ids=[snap1.id])
 
         assert result == []
 
