@@ -8875,8 +8875,9 @@ export interface components {
             /**
              * Selection Strategy
              * @default weighted
+             * @enum {string}
              */
-            selection_strategy: string;
+            selection_strategy: "weighted" | "single";
             /**
              * Max Concurrent Runs
              * @default 5

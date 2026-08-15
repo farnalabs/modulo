@@ -238,6 +238,55 @@ class TestRunVariantBatch:
         assert results[1]["merged_payload"]["model_backend_id"] == "backend-experiment"
         mock_inc.assert_awaited_once_with(session, group.id, delta=2)
 
+    async def test_prompt_version_override_merged_into_payload(self) -> None:
+        """Prompt version comparison via run_context_overrides.prompt_version (PRD 8.19)."""
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+        group = self._make_group()
+        group.variants = [
+            {
+                "name": "v3",
+                "snapshot_id": str(uuid.uuid4()),
+                "weight": 1.0,
+                "run_context_overrides": {"prompt_version": "v3"},
+            },
+            {
+                "name": "v4",
+                "snapshot_id": str(uuid.uuid4()),
+                "weight": 1.0,
+                "run_context_overrides": {"prompt_version": "v4"},
+            },
+        ]
+
+        locked = self._make_locked(group)
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = locked
+        session.execute.return_value = exec_result
+
+        mock_run = MagicMock()
+        mock_run.id = uuid.uuid4()
+
+        with (
+            patch(
+                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
+            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
+        ):
+            results = await run_variant_batch(
+                session,
+                org_id=org_id,
+                group=group,
+                input_payload={"shared": "payload"},
+            )
+
+        assert results is not None
+        assert results[0]["merged_payload"]["prompt_version"] == "v3"
+        assert results[1]["merged_payload"]["prompt_version"] == "v4"
+        assert results[0]["merged_payload"]["shared"] == "payload"
+
     async def test_returns_none_when_quota_exceeded_for_batch(self) -> None:
         session = AsyncMock()
         org_id = uuid.uuid4()

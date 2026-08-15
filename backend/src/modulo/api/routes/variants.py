@@ -2,7 +2,7 @@
 
 import logging
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -45,7 +45,7 @@ class CreateVariantGroupRequest(BaseModel):
     name: str
     description: str | None = None
     variants: list[VariantDef] = Field(default_factory=list)
-    selection_strategy: str = "weighted"
+    selection_strategy: Literal["weighted", "single"] = "weighted"
     max_concurrent_runs: int = 5
     degraded_evals: bool = False
 

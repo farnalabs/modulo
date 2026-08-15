@@ -141,6 +141,22 @@ class TestEvalSuiteBlockedError:
         assert err.threshold == 1.0
 
 
+class TestEvalResultCascadeConfig:
+    """DB-level cascade from eval_definitions to eval_results is configured (PRD 8.17).
+
+    eval_results.eval_id carries ``ondelete="CASCADE"`` so deleting an eval
+    definition removes its stored results. Verified against the SQLAlchemy FK
+    metadata (the behaviour is DB-enforced at the constraint level).
+    """
+
+    def test_eval_result_fk_cascades_on_eval_delete(self) -> None:
+        from modulo.db.models.eval_result import EvalResult
+
+        fk = next(iter(EvalResult.__table__.c.eval_id.foreign_keys))
+        assert fk.ondelete == "CASCADE"
+        assert fk.column.table.name == "eval_definitions"
+
+
 # ---------------------------------------------------------------------------
 # Executor eval-definition loading — pipeline-level (no node_id) defs excluded
 # ---------------------------------------------------------------------------
