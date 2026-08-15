@@ -573,7 +573,7 @@ class TestAdminListTeamsOwnedResourceCount:
         assert by_name["Team A"]["member_count"] == 3
         assert by_name["Team A"]["owned_resource_count"] == 4
         assert by_name["Team B"]["owned_resource_count"] == 2
-        assert by_name["Team A"]["updated_at"] != ""
+        assert by_name["Team A"]["updated_at"]
 
     def test_operator_returns_403(self, operator_rls_client: TestClient) -> None:
         resp = operator_rls_client.get(self.URL)
