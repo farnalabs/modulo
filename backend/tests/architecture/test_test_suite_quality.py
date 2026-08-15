@@ -110,7 +110,13 @@ regression that silently weakens the suite:
   hazard: anyone who later calls an ``async`` function and forgets the
   ``await`` will find the assertion comparing against a coroutine object
   (always truthy) instead of failing. Declare such tests as a plain ``def``.
-
+- ``@pytest.mark.parametrize`` with an *empty* ``argvalues`` — the inverse
+  twin of the single-case lens. A parametrize with zero cases is collected as
+  zero test items, so the test body never runs at all: pytest emits a
+  collection warning and the suite still reports green, silently dropping
+  whatever regression coverage the test provided. Usually a leftover from
+  deleting the last case, or an ``argvalues`` list built by code that returned
+  nothing.
 - ``assert isinstance(a, X) and isinstance(b, Y)`` — an ``and`` conjunction
   whose operands are all ``isinstance()`` calls is a compound boolean
   assertion: when it fails, pytest reports the whole conjunction and cannot
@@ -1900,11 +1906,13 @@ def test_empty_container_membership_lens_flags_impossible_membership():
         assert not _empty_container_membership_tautologies(tree), f"lens should NOT flag:\n{source}"
 
 
-def _single_case_parametrize_violations(tree: ast.AST) -> list[tuple[int, str]]:
-    """Return ``(lineno, detail)`` pairs for every ``@...parametrize``
-    decorator whose ``argvalues`` holds exactly one case. Only decorator
-    applications are considered — a bare ``parametrize(...)`` call inside a
-    body is not pytest parametrization and belongs to a different lens."""
+def _parametrize_argvalue_counts(tree: ast.AST) -> list[tuple[int, int]]:
+    """Return ``(lineno, n_cases)`` for every ``@...parametrize`` decorator
+    whose ``argvalues`` is a statically-known ``list``/``tuple`` literal. Only
+    decorator applications are considered — a bare ``parametrize(...)`` call
+    inside a body is not pytest parametrization and belongs to a different
+    lens. The parametrize-adjacent lenses filter on ``n_cases`` (``== 0``,
+    ``== 1``, ...) so a new lens never re-copies the decorator walk."""
     found = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -1912,27 +1920,28 @@ def _single_case_parametrize_violations(tree: ast.AST) -> list[tuple[int, str]]:
         for dec in node.decorator_list:
             if not isinstance(dec, ast.Call):
                 continue
-            f = dec.func
-            name = f.attr if isinstance(f, ast.Attribute) else (f.id if isinstance(f, ast.Name) else None)
-            if name != "parametrize":
+            if _decorator_name(dec) != "parametrize":
                 continue
             if len(dec.args) >= 2:
                 argvalues = dec.args[1]
             else:
                 argvalues = next((kw.value for kw in dec.keywords if kw.arg == "argvalues"), None)
-            if argvalues is None:
-                continue
             if not isinstance(argvalues, (ast.List, ast.Tuple)):
                 continue
-            if len(argvalues.elts) != 1:
-                continue
-            found.append(
-                (
-                    dec.lineno,
-                    "parametrize with a single case in argvalues — collapse to a plain test",
-                )
-            )
+            found.append((dec.lineno, len(argvalues.elts)))
     return found
+
+
+def _single_case_parametrize_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``@...parametrize``
+    decorator whose ``argvalues`` holds exactly one case. Only decorator
+    applications are considered — a bare ``parametrize(...)`` call inside a
+    body is not pytest parametrization and belongs to a different lens."""
+    return [
+        (lineno, "parametrize with a single case in argvalues — collapse to a plain test")
+        for lineno, n_cases in _parametrize_argvalue_counts(tree)
+        if n_cases == 1
+    ]
 
 
 def test_no_single_value_parametrize():
@@ -1986,6 +1995,73 @@ def test_single_value_parametrize_lens_flags_redundant_cases():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _single_case_parametrize_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _empty_parametrize_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``@...parametrize``
+    decorator whose ``argvalues`` holds zero cases. Only decorator applications
+    are considered — a bare ``parametrize(...)`` call inside a body is not
+    pytest parametrization and belongs to a different lens."""
+    return [
+        (lineno, "parametrize with an empty argvalues — the test is collected as zero items and never runs")
+        for lineno, n_cases in _parametrize_argvalue_counts(tree)
+        if n_cases == 0
+    ]
+
+
+def test_no_empty_parametrize():
+    """``@pytest.mark.parametrize`` with zero cases in ``argvalues`` is the
+    inverse twin of the single-case lens above: the test is collected as zero
+    test items, so its body never executes. pytest emits a collection warning
+    (``PytestCollectionWarning: cannot parametrize ... with empty parameter
+    set``) but the suite still reports green — a regression the test was
+    written to catch slips through silently. It is almost always a leftover
+    from deleting the last case, or an ``argvalues`` list produced by code
+    that returned nothing. Delete the parametrize (and the test) or supply a
+    real case."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _empty_parametrize_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} parametrize decorator(s) with an empty case list.\n"
+        "A zero-case parametrize is collected as zero test items — the test never runs, "
+        "so its coverage silently disappears. Delete the dead parametrize or supply a real case.\n"
+        + "\n".join(violations)
+    )
+
+
+def test_empty_parametrize_lens_flags_never_run_cases():
+    """Synthetic positive/negative control for the empty-parametrize lens: must
+    flag a zero-element ``argvalues`` (list or tuple, declared positionally or
+    via ``argvalues=``) and ignore single/multi-case parametrizes, variable
+    case lists, non-parametrize calls, and parametrizes without a statically
+    known case list."""
+    positive_sources = [
+        "def test_foo():\n    @pytest.mark.parametrize('x', [])\n    def test_bar(x): pass\n",
+        "def test_foo():\n    @pytest.mark.parametrize('x', ())\n    def test_bar(x): pass\n",
+        "def test_foo():\n    @pytest.mark.parametrize('x', argvalues=[])\n    def test_bar(x): pass\n",
+        "def test_foo():\n    @pytest.mark.parametrize('x', [1, 2])\n"
+        "    @pytest.mark.parametrize('y', [])\n    def test_bar(x, y): pass\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _empty_parametrize_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    @pytest.mark.parametrize('x', [1])\n    def test_bar(x): pass\n",
+        "def test_foo():\n    @pytest.mark.parametrize('x', [1, 2])\n    def test_bar(x): pass\n",
+        "def test_foo():\n    @pytest.mark.parametrize('x', SOME_CASES)\n    def test_bar(x): pass\n",
+        "def test_foo():\n    @pytest.mark.skip(reason='x')\n    def test_bar(): pass\n",
+        "def test_foo():\n    parametrize('x', [])\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _empty_parametrize_violations(tree), f"lens should NOT flag:\n{source}"
 
 
 _SYNC_SUBPROCESS_CALLS = {"run", "Popen", "call", "check_call", "check_output"}
