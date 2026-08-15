@@ -96,3 +96,37 @@ async def delete_team(session: AsyncSession, team_id: uuid.UUID) -> bool:
     team.deleted_at = datetime.now(UTC)
     await session.flush()
     return True
+
+
+async def count_owned_resources(
+    session: AsyncSession,
+    *,
+    team_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, int]:
+    """Count owned resources (the 4-way delete-blocking set) per team.
+
+    Mirrors the resource check in the delete endpoints: a resource blocks
+    deletion when its ``owner_team_id`` points at the team. The set is the
+    same 4 types — pipeline, connector, model backend, library primitive —
+    so the count shown in the team list is always consistent with what would
+    block a delete.
+    """
+    if not team_ids:
+        return {}
+
+    from modulo.db.models.connector_instance import ConnectorInstance
+    from modulo.db.models.library_primitive import LibraryPrimitive
+    from modulo.db.models.model_backend import ModelBackend
+    from modulo.db.models.pipeline import Pipeline
+
+    counts: dict[uuid.UUID, int] = {}
+    for model_cls in (Pipeline, ConnectorInstance, ModelBackend, LibraryPrimitive):
+        owner_col = model_cls.__table__.c.owner_team_id
+        rows = (
+            await session.execute(select(owner_col, func.count()).where(owner_col.in_(team_ids)).group_by(owner_col))
+        ).all()
+        for team_id, cnt in rows:
+            if team_id is None:
+                continue
+            counts[team_id] = counts.get(team_id, 0) + int(cnt or 0)
+    return counts

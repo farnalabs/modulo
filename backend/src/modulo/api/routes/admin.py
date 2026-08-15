@@ -47,7 +47,7 @@ from modulo.db.crud.run import (
     get_sandbox_concurrency_limit,
     purge_runs,
 )
-from modulo.db.crud.team import create_team, delete_team, get_team_by_name, list_teams
+from modulo.db.crud.team import count_owned_resources, create_team, delete_team, get_team_by_name, list_teams
 from modulo.db.crud.team import update_team as crud_update_team
 from modulo.db.crud.team_membership import list_team_memberships_for_account, remove_team_member
 from modulo.db.crud.token_family import blacklist_family, list_families_for_account
@@ -67,6 +67,31 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
+
+
+async def _assert_team_not_stale(
+    session: AsyncSession,
+    team_id: uuid.UUID,
+    expected_updated_at: str,
+) -> None:
+    """Optimistic-concurrency guard: reject a team update if the client's
+    ``expected_updated_at`` no longer matches the row's current ``updated_at``.
+
+    Two concurrent renames by different admins: the second writer sends the
+    first writer's now-stale timestamp and is rejected with 409 instead of
+    silently overwriting the other rename.
+    """
+    from modulo.db.crud.team import get_team
+
+    team = await get_team(session, team_id)
+    if team is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+    current = team.updated_at.isoformat() if team.updated_at else ""
+    if current != expected_updated_at:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=("Team was modified by another request. Refresh and try again (optimistic lock mismatch)."),
+        )
 
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -450,6 +475,7 @@ class AdminCreateTeamRequest(BaseModel):
 class AdminUpdateTeamRequest(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
+    expected_updated_at: str | None = None
 
 
 class AdminCreateTeamResponse(BaseModel):
@@ -1328,7 +1354,9 @@ class AdminTeamItem(BaseModel):
     description: str | None = None
     account_id: str
     member_count: int = 0
+    owned_resource_count: int = 0
     created_at: str
+    updated_at: str = ""
 
 
 class AdminTeamListResponse(BaseModel):
@@ -1370,6 +1398,9 @@ async def admin_list_teams(
                     )
                 ).all()
                 member_counts.update({row.team_id: row.cnt for row in count_rows if row.team_id is not None})
+
+            # Enrich with owned resource counts (4-way delete-blocking set)
+            owned_resource_counts = await count_owned_resources(session, team_ids=team_ids)
     except IntegrityError:
         logger.exception("admin_list_teams IntegrityError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
@@ -1405,7 +1436,9 @@ async def admin_list_teams(
                 description=t.description,
                 account_id=str(t.account_id),
                 member_count=member_counts.get(t.id, 0),
+                owned_resource_count=owned_resource_counts.get(t.id, 0),
                 created_at=t.created_at.isoformat() if t.created_at else "",
+                updated_at=t.updated_at.isoformat() if t.updated_at else "",
             )
             for t in result.items
         ],
@@ -1429,6 +1462,7 @@ async def admin_update_team(
         )
 
     updates = req.model_dump(exclude_unset=True)
+    updates.pop("expected_updated_at", None)
 
     try:
         async with session.begin():
@@ -1442,6 +1476,9 @@ async def admin_update_team(
                         status_code=status.HTTP_409_CONFLICT,
                         detail="A team with this name already exists in your organisation",
                     )
+
+            if req.expected_updated_at is not None:
+                await _assert_team_not_stale(session, team_id, req.expected_updated_at)
 
             team = await crud_update_team(session, team_id, updates)
     except IntegrityError:
@@ -1520,6 +1557,7 @@ async def admin_update_team(
         description=team.description,
         account_id=str(team.account_id),
         created_at=team.created_at.isoformat(),
+        updated_at=team.updated_at.isoformat() if team.updated_at else "",
     )
 
 

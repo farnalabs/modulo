@@ -72,6 +72,9 @@
             </div>
             <div class="flex items-center gap-3">
               <span class="text-sm text-muted-foreground">{{ team.member_count }} member{{ team.member_count !== 1 ? 's' : '' }}</span>
+              <span class="text-sm text-muted-foreground" data-testid="settings-teams-owned-resource-count">
+                {{ $t('views.SettingsTeamsView.owned_resource_count', { count: team.owned_resource_count ?? 0 }) }}
+              </span>
               <TableActions :actions="teamActions(team)" />
             </div>
           </div>
@@ -381,9 +384,13 @@ async function saveRename() {
   if (!renameTeamId.value || !renameName.value.trim()) return
   renamingTeam.value = true
   try {
+    const team = teams.value.find(t => t.id === renameTeamId.value)
     const { error: err } = await api.PUT('/api/v1/admin/teams/{team_id}', {
       params: { path: { team_id: renameTeamId.value } },
-      body: { name: renameName.value.trim() },
+      body: {
+        name: renameName.value.trim(),
+        expected_updated_at: team?.updated_at || undefined,
+      },
     })
     if (err) {
       memberActionError.value[renameTeamId.value] = `Rename failed: ${formatApiError(err)}`

@@ -385,6 +385,8 @@ SESSION_CASES: list[tuple[str, str, str, type, int, dict | None, str | None]] = 
     # Teams
     ("teams_list_prog", "GET", "/api/v1/teams", ProgrammingError, 501, None, "database"),
     ("teams_create_prog", "POST", "/api/v1/teams", ProgrammingError, 501, {"name": "x"}, "database"),
+    ("teams_my_prog", "GET", "/api/v1/teams/my", ProgrammingError, 501, None, "database"),
+    ("teams_my_sqla", "GET", "/api/v1/teams/my", SQLAlchemyError, 503, None, "database"),
 ]
 
 

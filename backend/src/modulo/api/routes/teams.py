@@ -27,6 +27,7 @@ from modulo.db.crud.team_membership import (
     get_membership,
     get_membership_by_team_and_account,
     list_team_members,
+    list_team_memberships_for_account,
     remove_team_member,
     update_member_role,
 )
@@ -39,6 +40,54 @@ router = APIRouter(
     tags=["teams"],
     dependencies=[require_feature("team_rbac")],
 )
+
+
+async def _assert_not_last_operator(
+    session: AsyncSession,
+    team_id: uuid.UUID,
+    except_membership_id: uuid.UUID,
+) -> None:
+    """Block removing/demoting the last ``operator``-role member of a team.
+
+    Mirrors the org-level ``assert_not_last_admin`` guard: a team with members
+    must retain at least one operator so it stays self-manageable. Removing or
+    demoting the only operator while other members remain would strand the
+    team without anyone able to manage membership. Emptying the team entirely
+    (removing the sole member) is allowed.
+    """
+    from sqlalchemy import func, select
+
+    from modulo.db.models.team_membership import TeamMembership
+
+    other_members = (
+        await session.execute(
+            select(func.count())
+            .select_from(TeamMembership)
+            .where(
+                TeamMembership.team_id == team_id,
+                TeamMembership.id != except_membership_id,
+            )
+        )
+    ).scalar_one() or 0
+    if other_members == 0:
+        return
+
+    other_operators = (
+        await session.execute(
+            select(func.count())
+            .select_from(TeamMembership)
+            .where(
+                TeamMembership.team_id == team_id,
+                TeamMembership.id != except_membership_id,
+                TeamMembership.role == "operator",
+            )
+        )
+    ).scalar_one() or 0
+    if other_operators == 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot remove the last operator from the team. Promote another member to operator first.",
+        )
 
 
 class CreateTeamRequest(BaseModel):
@@ -57,6 +106,7 @@ class CreateTeamRequest(BaseModel):
 class UpdateTeamRequest(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
+    expected_updated_at: str | None = None
 
     @field_validator("name", mode="before")
     @classmethod
@@ -106,6 +156,72 @@ class MembershipListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class MyTeamResponse(BaseModel):
+    team_id: str
+    team_name: str
+    role: str
+
+
+@router.get("/my", response_model=list[MyTeamResponse])
+@handle_db_errors("teams.my_teams_endpoint")
+async def my_teams_endpoint(
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[MyTeamResponse]:
+    """List the current user's team memberships with team names (profile "My Teams")."""
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+            memberships = await list_team_memberships_for_account(session, current_user.account_id)
+            team_ids = [m.team_id for m in memberships]
+            names: dict[uuid.UUID, str] = {}
+            if team_ids:
+                from sqlalchemy import select
+
+                from modulo.db.models.team import Team
+
+                rows = (
+                    await session.execute(
+                        select(Team.id, Team.name).where(
+                            Team.id.in_(team_ids),
+                            Team.deleted_at.is_(None),
+                        )
+                    )
+                ).all()
+                names = {row[0]: row[1] for row in rows}
+    except ProgrammingError:
+        _log.exception("teams.my_teams_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("my_teams SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please try again.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("my_teams unexpected error", extra={"org_id": str(current_user.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while fetching your teams.",
+        ) from None
+
+    return [
+        MyTeamResponse(
+            team_id=str(m.team_id),
+            team_name=names.get(m.team_id, ""),
+            role=m.role,
+        )
+        for m in memberships
+        if m.team_id in names
+    ]
 
 
 @router.get("", response_model=TeamListResponse)
@@ -311,11 +427,25 @@ async def update_team_endpoint(
 ) -> TeamResponse:
 
     updates = req.model_dump(exclude_unset=True)
+    updates.pop("expected_updated_at", None)
 
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+
+            if req.expected_updated_at is not None:
+                team = await get_team(session, team_id)
+                if team is None:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+                current = team.updated_at.isoformat() if team.updated_at else ""
+                if current != req.expected_updated_at:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=(
+                            "Team was modified by another request. Refresh and try again (optimistic lock mismatch)."
+                        ),
+                    )
 
             if "name" in updates:
                 existing = await get_team_by_name(session, current_user.organisation_id, updates["name"])
@@ -711,6 +841,10 @@ async def remove_member_endpoint(
             membership = await get_membership(session, membership_id)
             if membership is None or membership.team_id != team_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+
+            if membership.role == "operator":
+                await _assert_not_last_operator(session, team_id, membership_id)
+
             await remove_team_member(session, membership_id)
     except IntegrityError as exc:
         _log.exception("teams.remove_member_endpoint")
@@ -819,6 +953,8 @@ async def change_member_role_endpoint(
             if existing is None or existing.team_id != team_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
             old_role = existing.role
+            if old_role == "operator" and req.role != "operator":
+                await _assert_not_last_operator(session, team_id, membership_id)
             membership = await update_member_role(session, membership_id, req.role)
             if membership is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
