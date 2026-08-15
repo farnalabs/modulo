@@ -97,7 +97,9 @@ class DropboxPaperConnector(ConnectorBase):
                     body = r.json()
                     records: list[dict[str, Any]] = [{"doc_id": did} for did in body.get("doc_ids", [])]
                     cursor_obj = body.get("cursor")
-                    next_cursor = _safe_cursor(cursor_obj.get("value")) if isinstance(cursor_obj, dict) else None
+                    next_cursor: str | None = (
+                        _safe_cursor(cursor_obj.get("value")) if isinstance(cursor_obj, dict) else None
+                    )
                     return ConnectorResult(
                         records=records,
                         total=len(records),
@@ -132,10 +134,9 @@ class DropboxPaperConnector(ConnectorBase):
                     body = r.json()
                     entries = body.get("entries", [])
                     cursor = body.get("cursor")
-                    if isinstance(cursor, dict):
-                        next_cursor = _safe_cursor(cursor.get("value"))
-                    else:
-                        next_cursor = _safe_cursor(cursor)
+                    next_cursor = (
+                        _safe_cursor(cursor.get("value")) if isinstance(cursor, dict) else _safe_cursor(cursor)
+                    )
                     return ConnectorResult(
                         records=entries,
                         total=len(entries),
