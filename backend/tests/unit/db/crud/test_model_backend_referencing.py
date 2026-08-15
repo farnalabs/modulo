@@ -62,7 +62,7 @@ async def _seed_backend(
 async def test_no_references_returns_empty(session: AsyncSession) -> None:
     target = await _seed_backend(session, name="fallback-target")
     await _seed_backend(session, name="standalone")
-    assert await list_backends_referencing_fallback(session, org_id=_ORG_A, backend_id=target.id) == []
+    assert not await list_backends_referencing_fallback(session, org_id=_ORG_A, backend_id=target.id)
 
 
 async def test_referencing_backend_is_reported(session: AsyncSession) -> None:
@@ -74,13 +74,13 @@ async def test_referencing_backend_is_reported(session: AsyncSession) -> None:
 
 async def test_self_reference_is_not_reported_for_other_backend(session: AsyncSession) -> None:
     backend = await _seed_backend(session, name="self-ref", fallback_ids=[str(uuid.uuid4())])
-    assert await list_backends_referencing_fallback(session, org_id=_ORG_A, backend_id=backend.id) == []
+    assert not await list_backends_referencing_fallback(session, org_id=_ORG_A, backend_id=backend.id)
 
 
 async def test_other_org_references_are_ignored(session: AsyncSession) -> None:
     target = await _seed_backend(session, name="target-org-a")
     await _seed_backend(session, name="primary-org-b", org_id=_ORG_B, fallback_ids=[str(target.id)])
-    assert await list_backends_referencing_fallback(session, org_id=_ORG_A, backend_id=target.id) == []
+    assert not await list_backends_referencing_fallback(session, org_id=_ORG_A, backend_id=target.id)
 
 
 async def test_multiple_referencers_all_reported(session: AsyncSession) -> None:
