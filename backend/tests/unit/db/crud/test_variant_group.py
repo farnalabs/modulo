@@ -321,6 +321,48 @@ class TestRunVariantBatch:
         assert result is None
         mock_create.assert_not_called()
 
+    async def test_merges_prompt_version_override_into_payload(self) -> None:
+        """PRD 8.19: prompt version comparison via run_context_overrides ``prompt_version`` key."""
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+        group = self._make_group()
+        group.variants = [
+            {
+                "name": "control",
+                "snapshot_id": str(uuid.uuid4()),
+                "weight": 1.0,
+                "run_context_overrides": {"prompt_version": "v3"},
+            },
+            {
+                "name": "experiment",
+                "snapshot_id": str(uuid.uuid4()),
+                "weight": 1.0,
+                "run_context_overrides": {"prompt_version": "v4"},
+            },
+        ]
+
+        locked = self._make_locked(group)
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = locked
+        session.execute.return_value = exec_result
+
+        mock_run = MagicMock()
+        mock_run.id = uuid.uuid4()
+
+        with (
+            patch(
+                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
+            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
+        ):
+            results = await run_variant_batch(session, org_id=org_id, group=group, input_payload={"topic": "x"})
+
+        assert results is not None
+        assert [r["merged_payload"].get("prompt_version") for r in results] == ["v3", "v4"]
+
     async def test_injects_degraded_evals_flag_into_each_run(self) -> None:
         session = AsyncMock()
         org_id = uuid.uuid4()
@@ -759,6 +801,26 @@ class TestGetPromptDiffs:
         snap = MagicMock()
         snap.id = uuid.uuid4()
         snap.prompt_pins_json = None
+
+        group = MagicMock()
+        group.variants = [
+            {"name": "base", "snapshot_id": str(snap.id)},
+        ]
+
+        exec_result = MagicMock()
+        exec_result.scalars.return_value = [snap]
+        session.execute.return_value = exec_result
+
+        result = await get_prompt_diffs(session, group, base_snapshot_ids=[snap.id])
+
+        assert result == []
+
+    async def test_returns_empty_when_prompt_pins_json_empty_list(self) -> None:
+        """Empty ``prompt_pins_json`` yields no agent diffs (edge case coverage)."""
+        session = AsyncMock()
+        snap = MagicMock()
+        snap.id = uuid.uuid4()
+        snap.prompt_pins_json = []
 
         group = MagicMock()
         group.variants = [
