@@ -93,7 +93,7 @@ async def upsert_error_group(
         await session.flush()
         group.count = 1
     else:
-        group.count = group.count + 1
+        group.count += 1
         group.last_seen = datetime.now(UTC)
         level_rank = {"warning": 0, "error": 1, "critical": 2}
         if level_rank.get(level, 0) > level_rank.get(group.level_peak, -1):

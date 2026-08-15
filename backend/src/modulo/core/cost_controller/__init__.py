@@ -290,7 +290,7 @@ def _add_spend(row: OrgDailyRunCount, cost_usd: Decimal) -> None:
         )
     else:
         row.total_spend_usd = new_total
-    row.run_count = row.run_count + 1
+    row.run_count += 1
 
 
 def _accumulate_refused(row: OrgDailyRunCount, amount: Decimal) -> None:
