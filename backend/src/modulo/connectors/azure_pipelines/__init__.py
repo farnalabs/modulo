@@ -104,7 +104,7 @@ class AzurePipelinesConnector(ConnectorBase):
         web = links.get("web") if isinstance(links, dict) else None
         return CIRun(
             id=str(raw.get("id", "")),
-            pipeline_id=str(pipeline.get("id", "")) if isinstance(pipeline, dict) else "",
+            pipeline_id=str(pipeline.get("id") or "") if isinstance(pipeline, dict) else "",
             status=status,
             url=web.get("href", "") if isinstance(web, dict) else "",
             branch=branch,

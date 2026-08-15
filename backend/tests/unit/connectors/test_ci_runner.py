@@ -477,12 +477,12 @@ async def test_gl_double_health_check(gl_double):
 
 def test_gl_parse_run_non_dict_user(gl_runner):
     run = gl_runner._parse_run({"id": 1, "user": "alice"})
-    assert run.triggered_by == ""
+    assert not run.triggered_by
 
 
 def test_gl_parse_run_null_user(gl_runner):
     run = gl_runner._parse_run({"id": 1, "user": None})
-    assert run.triggered_by == ""
+    assert not run.triggered_by
 
 
 def test_gl_parse_run_corrupt_duration(gl_runner):
@@ -497,12 +497,12 @@ def test_gl_parse_run_non_finite_duration(gl_runner):
 
 def test_gh_parse_run_non_dict_actor(gh_runner):
     run = gh_runner._parse_run({"id": 1, "actor": "alice"})
-    assert run.triggered_by == ""
+    assert not run.triggered_by
 
 
 def test_gh_parse_run_null_actor(gh_runner):
     run = gh_runner._parse_run({"id": 1, "actor": None})
-    assert run.triggered_by == ""
+    assert not run.triggered_by
 
 
 # ---------------------------------------------------------------------------

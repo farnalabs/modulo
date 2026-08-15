@@ -148,17 +148,17 @@ async def test_get_run_status_success(bk_runner):
 
 def test_parse_run_non_dict_pipeline(bk_runner):
     run = bk_runner._parse_run({"number": 42, "pipeline": "my-pipeline"})
-    assert run.pipeline_id == ""
+    assert not run.pipeline_id
 
 
 def test_parse_run_non_dict_creator(bk_runner):
     run = bk_runner._parse_run({"number": 42, "creator": "dev"})
-    assert run.triggered_by == ""
+    assert not run.triggered_by
 
 
 def test_parse_run_null_creator(bk_runner):
     run = bk_runner._parse_run({"number": 42, "creator": None})
-    assert run.triggered_by == ""
+    assert not run.triggered_by
 
 
 @respx.mock

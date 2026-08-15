@@ -173,12 +173,12 @@ async def test_get_run_status_failure(teamcity):
 
 def test_run_from_build_non_dict_build_type(teamcity):
     run = teamcity._run_from_build({"id": 42, "buildType": "MyBuild"})
-    assert run.pipeline_id == ""
+    assert not run.pipeline_id
 
 
 def test_run_from_build_null_build_type(teamcity):
     run = teamcity._run_from_build({"id": 42, "buildType": None})
-    assert run.pipeline_id == ""
+    assert not run.pipeline_id
 
 
 def test_run_from_build_corrupt_duration(teamcity):

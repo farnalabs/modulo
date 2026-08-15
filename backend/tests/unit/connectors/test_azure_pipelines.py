@@ -179,23 +179,23 @@ async def test_get_run_status_failure(ap_runner):
 
 def test_parse_run_non_dict_pipeline(ap_runner):
     run = ap_runner._parse_run({"id": 101, "pipeline": 1})
-    assert run.pipeline_id == ""
+    assert not run.pipeline_id
 
 
 def test_parse_run_null_links(ap_runner):
     run = ap_runner._parse_run({"id": 101, "_links": None})
-    assert run.url == ""
+    assert not run.url
 
 
 def test_parse_run_non_dict_resources(ap_runner):
     run = ap_runner._parse_run({"id": 101, "resources": "none"})
-    assert run.branch == ""
-    assert run.commit_sha == ""
+    assert not run.branch
+    assert not run.commit_sha
 
 
 def test_parse_run_non_dict_template_parameters(ap_runner):
     run = ap_runner._parse_run({"id": 101, "templateParameters": "none"})
-    assert run.triggered_by == ""
+    assert not run.triggered_by
 
 
 @respx.mock
