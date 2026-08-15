@@ -1,4 +1,14 @@
 app = 'staging-modulo'
+
+# ===== Machine budget (stay within the org limit) =====
+# Standing footprint: 1 x app + 1 x worker = 2 machines for this app.
+# Whole-org standing: app-modulo 3 + staging-modulo 2 + DBs 2 = 7.
+# Rolling deploys peak at N+1 per process group; keep the org total
+# (incl. prod + DBs) under the Fly machine limit (~10 on the
+# personal plan). There is no automated budget guard in CI: deploy.yml only
+# prunes group-less strays ("Clean up stray machines"), so the limit is
+# enforced by this standing footprint + manual review before scaling up.
+# Do NOT add process groups or machines without updating this block.
 primary_region = 'lhr'
 
 [deploy]
@@ -24,7 +34,7 @@ primary_region = 'lhr'
   force_https = true
   auto_stop_machines = false
   auto_start_machines = true
-  min_machines_running = 2
+  min_machines_running = 1  # budget: staging runs 1 app machine (scaled down 2026-08-15 to stay within the org machine limit)
   processes = ['app']
   # Graceful worker drain window (plan F8).
   kill_timeout = 120
