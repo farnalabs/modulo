@@ -429,9 +429,10 @@ def patch_feedback_status(request, new_status: str, client, ctx):
     from unittest.mock import AsyncMock, MagicMock, patch
 
     valid_transitions = {
-        "pending": {"routing", "correcting", "dismissed"},
-        "routing": {"escalated", "correcting", "resolved"},
-        "correcting": {"correcting", "resolved", "escalated"},
+        "pending": {"routing", "correcting", "resolved", "dismissed"},
+        "routing": {"escalated", "correcting", "resolved", "dismissed"},
+        "correcting": {"correcting", "resolved", "escalated", "dismissed"},
+        "escalated": {"resolved", "dismissed"},
         "resolved": set(),
         "dismissed": set(),
     }

@@ -93,9 +93,9 @@ Standalone schema inference page (`/schemas/infer`) and onboarding wizard steps 
 
 ### i18n compliance
 
-- [ ] All user-facing strings use `$t()` or `t()` — **remaining violations: ~8 hardcoded strings in SchemaInferenceView.vue (PageTabs tab labels use `$t`, Source/Connector labels, table headers, buttons use `$t`; remaining are step titles/steps data array not yet migrated), ~14 in OnboardingWizard.vue schema steps (step titles, nav buttons, connector placeholder not yet migrated)**
-- [ ] Template button text, labels, placeholders, table headers now use `$t()` in both views (fixed Jul 2026)
-- [ ] Error messages use `formatApiError()` instead of bare `${err}` in both views (fixed Jul 2026)
+- [ ] All user-facing strings use `$t()` or `t()` — **remaining hardcoded strings verified 2026-08-15**: the "raw JSON" toggle suffix in `SchemaInferenceView.vue` and ~5 script-side error/success strings in the same view ("Failed to load connectors: …", "Schema inference failed: …", "Publish failed: …", "Publish failed: no response", "Schema \"…\" published."). The OnboardingWizard step titles/subtitles and schema-step labels/buttons already use `t()`/`$t()`.
+- [x] Template button text, labels, placeholders, table headers use `$t()` in both views (verified 2026-08-15 — only the "raw JSON" toggle suffix remains hardcoded)
+- [x] Error messages use `formatApiError()` instead of bare `${err}` in both views (verified 2026-08-15)
 
 ### Missing — not yet implemented
 
@@ -105,16 +105,20 @@ Standalone schema inference page (`/schemas/infer`) and onboarding wizard steps 
 - [ ] No enum detection display for issue_type, status, priority fields
 - [ ] No sample count display (PRD default 200, code caps at 50)
 - [ ] No versioning display when publishing schema
-- [ ] No connector-type validation feedback for unsupported connector types
-- [ ] BDD step definitions not yet implemented (`backend/tests/bdd/features/` files have real Gherkin scenarios but no matching Python step definitions)
+- [x] Connector-type validation feedback: the backend rejects unsupported connector types with 400 + the supported-type list, surfaced through the view's `formatApiError` error display (verified 2026-08-15 — previously listed as missing)
+- [x] ~~**BDD step definitions not yet implemented**~~ **RESOLVED 2026-08-15**: `backend/tests/bdd/steps/test_schema_inference.py` (517 lines) provides step definitions for both `connectors/schema_inference.feature` and `schemas/schema_inference.feature` (all scenarios wired, run against mocked backends)
 
 ## Known Gaps
 - **FIXED: API contract mismatch** (Jul 2026) — Frontend now sends correct `SchemaInferRequest` format (`sample_query` as object with `resource`, `filters`, `limit`), reads `suggestion_name`/`suggestion_description`/`definition_json` from the response, and uses two-step publish (create envelope + create version with `definition_json`). Applied to both `SchemaInferenceView.vue` and `OnboardingWizard.vue`.
 - **No schema editor:** PRD 8.16 says "draft opens in the schema editor for the operator to review, rename fields, adjust types". Current UI shows fields as read-only tables in both views — no inline editing, no type picker, no required toggle.
-- **BDD step definitions missing:** Both `connectors/schema_inference.feature` and `schemas/schema_inference.feature` have real Gherkin scenarios (6 and 7 scenarios respectively), but no matching Python step definitions exist to make them runnable.
-- **Frontend test is minimal:** `SchemaInferenceView.spec.ts` exists but only tests render and string containment — no interaction tests, no API mock coverage for inference/publish flows, no OnboardingWizard tests.
+- **BDD step definitions (RESOLVED 2026-08-15):** both feature files have real Gherkin scenarios (6 and 7) and `backend/tests/bdd/steps/test_schema_inference.py` provides matching step definitions.
+- **Frontend test coverage improved (2026-08-15):** `SchemaInferenceView.spec.ts` now has 9 tests covering connector load (success/empty/error), infer-button gating, infer request body, draft rendering, inference errors, publish (envelope + version + navigate to library), and publish errors. OnboardingWizard schema steps (2–3) still have no spec.
 - **No `abstract_name` integration:** PRD 8.16 step 4 requires browsing the community library filtered by inferred `abstract_name`. The inference service doesn't return `abstract_name`, and the frontend library filter dropdown doesn't support it.
 - **Sample cap mismatch:** PRD says 200 default sample records; code caps at 50 in prompt builder and 100 in API limit — no sample count displayed in UI.
-- **i18n violations (partial fix Jul 2026):** ~22 hardcoded strings remain (step titles data array in OnboardingWizard.vue, PageTabs nav in SchemaInferenceView.vue step titles not migrated). All error messages now use `formatApiError()` instead of bare `${err}`. Template labels, table headers, buttons, and placeholders in both views now use `$t()`.
+- **i18n violations (partial fix, verified 2026-08-15):** remaining hardcoded strings are the "raw JSON" toggle suffix and ~5 script-side error/success strings in `SchemaInferenceView.vue` (locale keys not yet added). All template labels/headers/buttons/placeholders and all error paths use `$t()` / `formatApiError()`.
 - **formatApiError fix (Jul 2026):** All 8 bare `${err}` template literals in error messages across SchemaInferenceView.vue and OnboardingWizard.vue were replaced with `formatApiError(err)`. `openapi-fetch` returns error objects (not strings) on non-2xx — bare `${err}` renders `[object Object]` instead of the API's error detail.
 - **PRD gaps cascade:** Several PRD 8.16 requirements not yet implemented in the backend (rare-field flagging, enum detection, SandboxedEnvironment, data lifecycle enforcement) cascade to the UI — no UI can surface what the backend doesn't provide.
+
+## QA History
+
+- 2026-08-15: Coverage drive (FAR-234). Verified i18n state (template strings + error paths use `$t()`/`formatApiError()`; remaining hardcoded strings narrowed to the "raw JSON" toggle suffix + ~5 script-side strings in `SchemaInferenceView.vue`). Marked checked the connector-type-validation feedback behaviour (backend 400 + supported-type list surfaced via `formatApiError`). Resolved the "BDD step definitions not implemented" gap (`backend/tests/bdd/steps/test_schema_inference.py` wires both feature files). Expanded `SchemaInferenceView.spec.ts` from 1 render test to 9 interaction/API-mock tests (connector load, gating, infer body, draft render, publish envelope+version, navigation, error paths). Status: partial (schema editor, abstract_name display/filter, rare-field flagging, enum display, sample-count display, versioning display remain).

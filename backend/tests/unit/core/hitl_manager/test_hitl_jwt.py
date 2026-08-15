@@ -576,3 +576,29 @@ async def test_approve_rejects_jwt_with_wrong_key() -> None:
             org_id=_ORG,
             claim_token=token,
         )
+
+
+async def test_bad_jwt_fails_fast_before_sql_update() -> None:
+    """JWT validation runs BEFORE the SQL UPDATE — a bad/expired token never
+    reaches the DB, so the session must not be touched at all (fail fast)."""
+    token = create_claim_token(
+        str(_USER),
+        _KEY,
+        run_id=str(_RUN),
+        gate_id=_GATE,
+        client_id=str(_USER),
+        expiry_minutes=-1,  # expired
+    )
+    session = AsyncMock()
+    mgr = HITLManager(secret_key=_KEY)
+    with pytest.raises(ClaimTokenExpiredError):
+        await mgr.approve(
+            session,
+            run_id=_RUN,
+            gate_id=_GATE,
+            org_id=_ORG,
+            claim_token=token,
+        )
+    # The JWT was rejected before any DB statement was prepared/executed.
+    session.execute.assert_not_awaited()
+    session.get.assert_not_awaited()

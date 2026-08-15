@@ -962,6 +962,7 @@ async def infer_schema_endpoint(
                     resource_id=req.connector_instance_id,
                     payload_json={
                         "connector_name": ci.name,
+                        "connector_type": ci.connector_type_id,
                         "resource": req.sample_query.resource,
                         "sample_count": len(records),
                         "model_backend_id": str(first_backend_id),

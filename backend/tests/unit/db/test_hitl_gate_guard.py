@@ -447,7 +447,8 @@ def test_denial_payload_schema_matches_allowed_payload_schema() -> None:
     )
     p_denied = build_gate_diff_payload(denied, "rest")
     p_allowed = build_gate_diff_payload(allowed, "rest")
-    assert set(p_denied) == set(p_allowed) == {"caller_type", "reason_code", "denied", "affected_edges"}
+    assert set(p_denied) == set(p_allowed)
+    assert set(p_allowed) == {"caller_type", "reason_code", "denied", "affected_edges"}
     assert p_denied["affected_edges"][0] == p_allowed["affected_edges"][0]
     assert p_denied["caller_type"] == "rest"
     assert p_denied["denied"] is True

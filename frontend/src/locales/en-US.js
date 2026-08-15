@@ -2116,7 +2116,19 @@ export default {
       "daily_spend_limit_placeholder": "5.00",
       "daily_spend_limit_required": "A daily spend limit is required for ongoing triggers.",
       "snapshot_id": "Snapshot ID (optional)",
-      "snapshot_id_placeholder": "Pin a snapshot, or leave blank to use the latest"
+      "snapshot_id_placeholder": "Pin a snapshot, or leave blank to use the latest",
+      "streak_display": "No-delivery streak {streak}/{threshold}",
+      "deactivated_badge": "Deactivated — {reason}",
+      "deactivated_reason_no_delivery": "no-delivery streak",
+      "deactivated_reason_config_failure": "config failures",
+      "re_enable": "Re-enable",
+      "show_outcomes": "Show outcomes",
+      "hide_outcomes": "Hide outcomes",
+      "recent_outcomes": "Recent outcomes",
+      "outcome_delivered": "Delivered",
+      "outcome_no_delivery": "No delivery",
+      "outcome_excluded": "Excluded",
+      "outcome_unclassified": "Unclassified"
     },
     "SettingsTriggerEventLogView": {
       "no_trigger_events_found": "No trigger events found",

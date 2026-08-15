@@ -37,10 +37,10 @@ Discovered from 1 completed delivery task.
 
 ### Status Transitions
 
-- [x] Valid transitions: pending → routing/correcting/resolved
-- [x] Valid transitions: routing → escalated/correcting/resolved
-- [x] Valid transitions: correcting → correcting/resolved/escalated
-- [x] Valid transitions: escalated → resolved (terminal)
+- [x] Valid transitions: pending → routing/correcting/resolved/dismissed
+- [x] Valid transitions: routing → escalated/correcting/resolved/dismissed
+- [x] Valid transitions: correcting → correcting/resolved/escalated/dismissed
+- [x] Valid transitions: escalated → resolved/dismissed
 - [x] Valid transitions: resolved → (none — terminal)
 - [x] Invalid transitions raise ValueError with descriptive message listing allowed transitions
 - [x] Unknown record returns None on status update
@@ -61,7 +61,7 @@ Discovered from 1 completed delivery task.
 
 ### Correction Run Mechanics
 
-- [ ] Correction run creates new LangGraph thread pre-seeded from original checkpoint
+- [x] Correction run is a fresh run (new LangGraph thread) — PRD 8.20 specifies correction runs are fresh and do not inherit checkpoint state; spawn_correction_run creates a new run via create_run
 - [x] Correction run inherits original run's pipeline_id, snapshot_id, input_payload
 - [x] Correction run injects _feedback_correction block into input_payload
 - [x] _feedback_correction contains rejection_reason, rejected_output, producing_node_id, is_correction_run
@@ -139,7 +139,7 @@ Discovered from 1 completed delivery task.
 - [x] FeedbackManager methods raise typed exceptions: `FeedbackRecordNotFoundError`, `InvalidTransitionError`, `ConcurrentModificationError`, `ValidationError`
 - [x] Concurrent modification detected via atomic `UPDATE ... WHERE status = expected_status ... RETURNING` (optimistic locking)
 - [x] `_rls` decorator wraps every FeedbackManager method — RLS failure is caught, logged, and re-raised, not silently swallowed
-- [x] `list_eval_proposals` route runs snapshot/node-name resolution queries OUTSIDE the `try/except ProgrammingError` block (lines 227–240 of `feedback.py`) — if `runs` or `pipeline_snapshots` tables exist but their data is stale (edge case after partial migration rollback), these unprotected queries would produce a raw 500 instead of structured 501
+- [x] `list_eval_proposals` route runs snapshot/node-name resolution queries INSIDE the `try/except ProgrammingError` block — ProgrammingError → 501 / SQLAlchemyError → 503 guarded (fixed 2026-07-06; 18 error-handling cases added 2026-08-15 in test_error_handling.py)
 
 ### Resilience
 
@@ -175,6 +175,12 @@ Discovered from 1 completed delivery task.
 - Review route audits all three actions: `mark_reviewed`/`dismiss` → resolved, `create_correction_run` → correcting (payload includes the action and `correction_run_id`).
 - **Tests** — 7 new endpoint unit tests (create-emits + failure isolation; update-status emits full payload + failure isolation + 404-no-emit; review mark_reviewed-emits + create-correction-run-emits + failure isolation). 30/30 `test_feedback_endpoint.py`, 2633/2633 `tests/unit/api/` pass; ruff check + format clean; mypy --strict clean.
 
+### 2026-08-15 — Coverage-completion (FAR-233)
+- **Fixed (PRD compliance)**: the `dismiss` review action now sets status to `dismissed` (PRD 8.20 terminal state). `_VALID_STATUS_TRANSITIONS`, `PATCH /feedback/{id}/status` valid-status set, and review-endpoint action mapping updated to match the DB CHECK constraint (which always allowed `dismissed`). Covered by `test_dismisses_feedback`, `test_mark_reviewed_uses_resolved_status`, `test_accepts_dismissed_status`, and manager transition tests.
+- **Fixed (bug)**: `detect_eval_gap` treated real `EvalDefinition` objects as malformed and skipped the whole suite, always returning `True` (gap) when the pipeline had eval definitions. The guard now accepts `EvalDefinition`-shaped objects; covered by `test_uses_real_eval_engine_standalone_path`.
+- **Added**: 18 ProgrammingError→501 / SQLAlchemyError→503 cases for all 9 feedback routes in `test_error_handling.py` (the file previously claimed this coverage but had none). `list_eval_proposals` node-name resolution is confirmed inside the try/except block.
+- **Removed stale gaps**: checkpoint pre-seeding (not a PRD requirement — correction runs are fresh by design), eval-failure-does-not-escalate (escalation is implemented and tested), the failing `test_detects_eval_gap` note (the test passes with a `run_id=None` mock record that skips the eval-suite query).
+
 ### 2026-07-03 — Cross-cutting QA (index 87)
 - **Fixed**: Stale "No feedback inbox UI implemented" gap — the view exists.
 - **Fixed**: `feedback_system.feature` BDD has 7 real scenarios (was thought to be 5).
@@ -192,16 +198,11 @@ Discovered from 1 completed delivery task.
 ## Known Gaps
 
 - BDD feature file (backend/tests/bdd/features/eval/feedback_system.feature) has 7 real scenarios (not a placeholder) — covers create, status transitions, invalid transitions, eval gap detection, and correction run spawning. Step defs in test_eval.py and test_hitl.py provide real implementations using FeedbackManager. Other files (feedback-proposals.md, feedback-loop.md) have stale "placeholder" claims that should reference this status.
-- `list_eval_proposals` route (feedback.py:227–240) runs snapshot/node-name resolution queries outside the `try/except ProgrammingError` block — partial 501 catch gap.
-- No correction run checkpoint pre-seeding logic implemented (spawn_correction_run creates a new run but doesn't inherit LangGraph checkpoint state)
 - AI correction agent not implemented as a library primitive
 - Feedback inbox UI exists (FeedbackInboxView.vue) but save-annotation and mark-resolved buttons both call `action: 'mark_reviewed'` — no endpoint exists to save annotation without transitioning status
 - No eval proposals editor/curation UI
 - Correction run does not route back through eval suite automatically (no run_post_correction_eval integration in run completion lifecycle; the method exists but is not called by the run completion lifecycle)
 - Pipeline-level default_feedback_handler not implemented (default_human hardcoded)
 - No reject_routing_conflict validation in pipeline editor
-- Eval failure does NOT escalate to "escalated" status (record stays in "correcting" — partial gap per PRD §8.20)
 - Library contribution (v2) not started
-- Frontend FeedbackInboxView.vue hardcodes `'en-US'` in `formatDate()` instead of using current locale — existing pattern across 17+ views, not specific to this feature
 - Website docs: no page exists at Website/modulo-website/src/docs/ for PRD §8.20 Feedback Records — create stub
-- `test_detects_eval_gap` test in `test_feedback_endpoint.py` fails (500 vs 200) — the route handler now queries EvalDefinition from DB directly (line 339), but the test only mocks `FeedbackManager.get_feedback_record` and `FeedbackManager.detect_eval_gap`, not the intermediate `session.execute()` calls. The mock session's `AsyncMock` treats `scalar_one_or_none()` as an async method returning a coroutine instead of a sync method returning a mock Run. Fix: mock `session.execute` to return a proper Result-like object, or patch `session.execute` before the second transaction block.

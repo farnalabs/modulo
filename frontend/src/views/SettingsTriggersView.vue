@@ -79,33 +79,69 @@
             </tr>
           </thead>
           <tbody class="divide-y">
-            <tr
-              v-for="t in items"
-              :key="t.id"
-              class="transition-colors hover:bg-muted/30"
-            >
-              <td class="px-4 py-3 font-medium">
-                {{ pipelineName(t.pipeline_id) }}
-              </td>
+            <template v-for="t in items" :key="t.id">
+              <tr class="transition-colors hover:bg-muted/30">
+                <td class="px-4 py-3 font-medium">
+                  {{ pipelineName(t.pipeline_id) }}
+                </td>
               <td class="px-4 py-3">
                 <span :class="typeBadgeClass(t.trigger_type)" class="badge">
                   {{ typeLabel(t.trigger_type) }}
                 </span>
               </td>
               <td class="px-4 py-3">
-                <button
-                  class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors disabled:opacity-50"
-                  :class="t.active ? 'bg-success/10 text-success hover:bg-success/20' : 'bg-muted text-muted-foreground hover:bg-muted/80'"
-                  :disabled="triggerToggling[t.id]"
-                  data-testid="settings-triggers-toggle"
-                  @click="toggleActive(t)"
-                >
+                <div class="flex flex-col items-start gap-1">
                   <span
-                    class="h-1.5 w-1.5 rounded-full"
-                    :class="t.active ? 'bg-success' : 'bg-muted-foreground'"
-                  />
-                  {{ triggerToggling[t.id] ? '...' : (t.active ? $t('views.SettingsTriggersView.active') : $t('views.SettingsTriggersView.inactive')) }}
-                </button>
+                    v-if="t.trigger_type === 'ongoing' && t.streak_status?.enabled"
+                    data-testid="settings-triggers-streak"
+                    :class="streakBadgeClass(t)"
+                    class="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium"
+                  >
+                    {{ $t('views.SettingsTriggersView.streak_display', { streak: t.streak_status.streak ?? 0, threshold: t.streak_status.threshold ?? 0 }) }}
+                  </span>
+                  <span
+                    v-if="isDeactivatedOngoing(t)"
+                    data-testid="settings-triggers-deactivated-badge"
+                    role="status"
+                    aria-live="polite"
+                    class="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2.5 py-0.5 text-xs font-medium text-destructive"
+                  >
+                    {{ $t('views.SettingsTriggersView.deactivated_badge', { reason: deactivatedReasonLabel(t) }) }}
+                  </span>
+                  <div class="flex items-center gap-2">
+                    <button
+                      class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors disabled:opacity-50"
+                      :class="t.active ? 'bg-success/10 text-success hover:bg-success/20' : 'bg-muted text-muted-foreground hover:bg-muted/80'"
+                      :disabled="triggerToggling[t.id]"
+                      data-testid="settings-triggers-toggle"
+                      @click="toggleActive(t)"
+                    >
+                      <span
+                        class="h-1.5 w-1.5 rounded-full"
+                        :class="t.active ? 'bg-success' : 'bg-muted-foreground'"
+                      />
+                      {{ triggerToggling[t.id] ? '...' : (t.active ? $t('views.SettingsTriggersView.active') : $t('views.SettingsTriggersView.inactive')) }}
+                    </button>
+                    <Button
+                      v-if="isDeactivatedOngoing(t) && isOrgOperator"
+                      data-testid="settings-triggers-reenable"
+                      size="sm"
+                      variant="outline"
+                      :disabled="triggerToggling[t.id]"
+                      @click="toggleActive(t)"
+                    >
+                      {{ $t('views.SettingsTriggersView.re_enable') }}
+                    </Button>
+                  </div>
+                  <p
+                    v-if="actionErrors[t.id]"
+                    data-testid="settings-triggers-toggle-error"
+                    role="alert"
+                    class="text-xs font-medium text-destructive"
+                  >
+                    {{ actionErrors[t.id] }}
+                  </p>
+                </div>
               </td>
               <td class="px-4 py-3 text-muted-foreground">
                 {{ formatTimestamp(t.last_fired_at ?? null) }}
@@ -114,9 +150,42 @@
                 {{ formatTimestamp(t.next_fire_at ?? null) }}
               </td>
               <td class="px-4 py-3 text-right">
-                <TableActions :actions="triggerActions(t)" />
+                <div class="flex items-center justify-end gap-2">
+                  <TableActions :actions="triggerActions(t)" />
+                  <button
+                    v-if="hasOutcomes(t)"
+                    data-testid="settings-triggers-outcomes-toggle"
+                    class="text-xs text-muted-foreground hover:text-foreground"
+                    :aria-expanded="expandedOutcomes.has(t.id)"
+                    :aria-controls="`outcomes-${t.id}`"
+                    @click="toggleOutcomes(t.id)"
+                  >
+                    {{ expandedOutcomes.has(t.id) ? $t('views.SettingsTriggersView.hide_outcomes') : $t('views.SettingsTriggersView.show_outcomes') }}
+                  </button>
+                </div>
               </td>
-            </tr>
+              </tr>
+              <tr v-if="expandedOutcomes.has(t.id) && hasOutcomes(t)" :id="`outcomes-${t.id}`" class="bg-muted/20">
+                <td :colspan="6" class="px-4 py-3">
+                  <p class="text-xs font-medium uppercase text-muted-foreground">
+                    {{ $t('views.SettingsTriggersView.recent_outcomes') }}
+                  </p>
+                  <ul class="mt-2 space-y-1">
+                    <li
+                      v-for="(o, i) in t.streak_status?.last_outcomes ?? []"
+                      :key="o.run_id || i"
+                      class="flex items-center gap-2 text-xs"
+                    >
+                      <span :class="outcomeBadgeClass(o.classification)" class="rounded-full px-2 py-0.5 font-medium">
+                        {{ outcomeLabel(o.classification) }}
+                      </span>
+                      <span class="text-muted-foreground">{{ o.reason || '—' }}</span>
+                      <span class="ml-auto text-muted-foreground">{{ formatTimestamp(o.completed_at ?? null) }}</span>
+                    </li>
+                  </ul>
+                </td>
+              </tr>
+            </template>
           </tbody>
         </table>
       </div>
@@ -390,7 +459,16 @@
       :confirmText="$t('views.SettingsTriggersView.delete')"
       :loading="deleting"
       @confirm="deleteTrigger"
-    />
+    >
+      <p
+        v-if="deleteError"
+        data-testid="settings-triggers-delete-error"
+        role="alert"
+        class="text-sm font-medium text-destructive"
+      >
+        {{ deleteError }}
+      </p>
+    </FormDialog>
   </div>
   </FeatureGate>
 </template>
@@ -402,6 +480,7 @@ import { useDataFetch } from '../composables/useDataFetch'
 import { useApi } from '../composables/useApi'
 import { Button } from '@/components/ui/button'
 import { api, getAccessToken } from '../lib/api/client'
+import { decodeJwtPayload } from '../lib/jwt'
 import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
@@ -423,34 +502,29 @@ import {
 const planStore = usePlanStore()
 const { t } = useI18n()
 
-// Org-wide "pause all triggers" kill-switch (admin-managed). The org's paused
-// state is read from the triggers-list GET top-level fields; the toggle PUTs to
-// the admin endpoint and updates local state from the response.
-function decodeBase64Url(s: string): string {
-  s = s.replace(/-/g, '+').replace(/_/g, '/')
-  const pad = s.length % 4
-  if (pad) s += '='.repeat(4 - pad)
-  return atob(s)
-}
-
 interface JwtPayload {
   org_role?: string
   org_id?: string
 }
 
 function readJwtPayload(): JwtPayload | null {
-  const token = getAccessToken()
-  if (!token) return null
-  try {
-    return JSON.parse(decodeBase64Url(token.split('.')[1])) as JwtPayload
-  } catch {
-    return null
-  }
+  // FIX 6: the shared decoder (handles padded + unpadded base64url).
+  return decodeJwtPayload(getAccessToken()) as JwtPayload | null
 }
 
 const isOrgAdmin = computed(() => readJwtPayload()?.org_role === 'admin')
+// FAR-191: the re-enable action is operator-or-above (backend trigger.update
+// resolves to operator). Admins are operators too (viewer < runner < operator
+// < admin), so both are granted.
+const isOrgOperator = computed(() => {
+  const role = readJwtPayload()?.org_role
+  return role === 'operator' || role === 'admin'
+})
 const orgId = computed(() => readJwtPayload()?.org_id ?? '')
 
+// Org-wide "pause all triggers" kill-switch (admin-managed). The org's paused
+// state is read from the triggers-list GET top-level fields; the toggle PUTs to
+// the admin endpoint and updates local state from the response.
 const orgTriggersPaused = computed<boolean>(() => Boolean((triggersData.value as { triggers_paused?: boolean } | null)?.triggers_paused ?? false))
 const orgPausedAt = computed<string | null>(() => (triggersData.value as { paused_at?: string | null } | null)?.paused_at ?? null)
 
@@ -483,6 +557,25 @@ async function togglePauseAll() {
   }
 }
 
+interface StreakOutcome {
+  run_id?: string | null
+  classification?: string | null
+  reason?: string | null
+  completed_at?: string | null
+}
+
+interface StreakStatus {
+  enabled: boolean
+  // FIX 5: the backend now ALWAYS emits the uniform 6-key shape (streak/
+  // threshold default to 0 for non-ongoing), but they stay optional here so a
+  // cached/stale shape can never crash a consumer with an undefined hazard.
+  streak?: number
+  threshold?: number
+  state: 'ok' | 'deactivated' | 'unconfigured'
+  deactivated_reason?: 'no_delivery_streak' | 'config_failure' | null
+  last_outcomes?: StreakOutcome[]
+}
+
 interface TriggerItem {
   id: string
   pipeline_id: string
@@ -495,6 +588,7 @@ interface TriggerItem {
   cron_timezone?: string | null
   last_fired_at?: string | null
   next_fire_at?: string | null
+  streak_status?: StreakStatus
 }
 type PipelineItem = components['schemas']['PipelineResponse']
 
@@ -544,6 +638,12 @@ const saving = ref(false)
 const deleting = ref(false)
 const formError = ref<string | null>(null)
 const deleteTarget = ref<TriggerItem | null>(null)
+const expandedOutcomes = ref<Set<string>>(new Set())
+// FIX 4: per-row action error state — a failed toggle/re-enable/delete must
+// surface INLINE near the row, never clobber the whole list via the page-level
+// `error` ref (which is reserved for page-load failures).
+const actionErrors = ref<Record<string, string>>({})
+const deleteError = ref<string | null>(null)
 
 const defaultForm: TriggerForm = {
   pipeline_id: '',
@@ -607,6 +707,58 @@ function formatTimestamp(ts: string | null): string {
 function pipelineName(id: string): string {
   const p = pipelines.value.find(p => p.id === id)
   return p ? p.name : shortId(id)
+}
+
+function isDeactivatedOngoing(trigger: TriggerItem): boolean {
+  return trigger.trigger_type === 'ongoing' && trigger.streak_status?.state === 'deactivated'
+}
+
+function streakBadgeClass(trigger: TriggerItem): string {
+  const s = trigger.streak_status
+  if (!s) return 'bg-muted text-muted-foreground'
+  const streak = s.streak ?? 0
+  const threshold = s.threshold ?? 0
+  // Approaching deactivation. Guard with streak > 0 so a threshold=1 fresh
+  // trigger (0/1) is never permanently amber; a streak AT/OVER the threshold
+  // gets the red tier (a deactivation is eligible/imminent).
+  if (s.enabled && threshold > 0 && streak > 0 && streak >= threshold - 1) {
+    if (streak >= threshold) return 'bg-destructive/10 text-destructive'
+    return 'bg-amber-500/10 text-amber-600'
+  }
+  return 'bg-muted text-muted-foreground'
+}
+
+function deactivatedReasonLabel(trigger: TriggerItem): string {
+  const reason = trigger.streak_status?.deactivated_reason
+  if (reason === 'config_failure') return t('views.SettingsTriggersView.deactivated_reason_config_failure')
+  return t('views.SettingsTriggersView.deactivated_reason_no_delivery')
+}
+
+function hasOutcomes(trigger: TriggerItem): boolean {
+  return Boolean(trigger.streak_status?.last_outcomes?.length)
+}
+
+function toggleOutcomes(id: string): void {
+  const next = new Set(expandedOutcomes.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  expandedOutcomes.value = next
+}
+
+function outcomeBadgeClass(classification: string | null | undefined): string {
+  if (classification === 'delivered') return 'bg-success/10 text-success'
+  if (classification === 'no_delivery') return 'bg-amber-500/10 text-amber-600'
+  return 'bg-muted text-muted-foreground'
+}
+
+function outcomeLabel(classification: string | null | undefined): string {
+  const labels: Record<string, string> = {
+    delivered: t('views.SettingsTriggersView.outcome_delivered'),
+    no_delivery: t('views.SettingsTriggersView.outcome_no_delivery'),
+    excluded: t('views.SettingsTriggersView.outcome_excluded'),
+    unclassified: t('views.SettingsTriggersView.outcome_unclassified'),
+  }
+  return classification ? labels[classification] || classification : '\u2014'
 }
 
 function resetForm() {
@@ -798,19 +950,20 @@ async function saveTrigger() {
 async function deleteTrigger() {
   if (!deleteTarget.value) return
   deleting.value = true
+  deleteError.value = null
   try {
     const { error: err } = await api.DELETE('/api/v1/triggers/{trigger_id}', {
       params: { path: { trigger_id: deleteTarget.value.id } },
     })
     if (err) {
-      error.value = t('views.SettingsTriggersView.failed_to_delete_trigger', { detail: formatApiError(err) })
+      deleteError.value = t('views.SettingsTriggersView.failed_to_delete_trigger', { detail: formatApiError(err) })
       return
     }
     deleteDialogOpen.value = false
     deleteTarget.value = null
     await loadTriggers()
   } catch (e: unknown) {
-    error.value = t('views.SettingsTriggersView.error_deleting_trigger', { detail: formatApiError(e) })
+    deleteError.value = t('views.SettingsTriggersView.error_deleting_trigger', { detail: formatApiError(e) })
   } finally {
     deleting.value = false
   }
@@ -819,18 +972,21 @@ async function deleteTrigger() {
 const triggerToggling = ref<Record<string, boolean>>({})
 
 async function toggleActive(trigger: TriggerItem) {
+  // Re-entry guard: a double-click must not fire two toggles.
+  if (triggerToggling.value[trigger.id]) return
   triggerToggling.value[trigger.id] = true
+  delete actionErrors.value[trigger.id]
   try {
     const { error: err } = await api.POST('/api/v1/triggers/{trigger_id}/toggle', {
       params: { path: { trigger_id: trigger.id } },
     })
     if (err) {
-      error.value = t('views.SettingsTriggersView.failed_to_toggle_trigger', { detail: formatApiError(err) })
+      actionErrors.value[trigger.id] = t('views.SettingsTriggersView.failed_to_toggle_trigger', { detail: formatApiError(err) })
       return
     }
     await loadTriggers()
   } catch (e: unknown) {
-    error.value = t('views.SettingsTriggersView.error_toggling_trigger', { detail: formatApiError(e) })
+    actionErrors.value[trigger.id] = t('views.SettingsTriggersView.error_toggling_trigger', { detail: formatApiError(e) })
   } finally {
     triggerToggling.value[trigger.id] = false
   }
