@@ -271,7 +271,8 @@ async def test_same_claim_attempt_key_stable_across_invocations():
             result = await fn(_run_state())
         keys.append(result["output"]["attempt_key"])
 
-    assert keys[0] == keys[1] == "run:run-1:node:n1:0"
+    assert keys[0] == "run:run-1:node:n1:0"
+    assert keys[1] == "run:run-1:node:n1:0"
 
 
 async def test_fail_open_attempt_key_derives_from_claim_token():

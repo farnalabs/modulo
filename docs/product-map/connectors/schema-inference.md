@@ -37,15 +37,15 @@ LLM-assisted schema draft generation from connected tool data (issue trackers, g
 - [x] Reads respect the connector's ACL and credential scope — no escalation via inference path
 - [ ] Reads are limited to a configurable sample size (default: 200 per PRD; actual default is 10, max 100, prompt caps at 50)
 - [x] Sample data is sanitised before being sent to the inference LLM — credential-like values masked, control chars stripped, no plaintext tokens or credentials leak into the prompt
-- [ ] Read timeout is independent of pipeline-run read timeout (shorter: 10s default)
+- [x] Read timeout is independent of pipeline-run read timeout (30s `asyncio.timeout` around sampling in the infer endpoint, separate from the LLM call timeout; slower than the PRD's 10s default but independent). NOTE: the raised 504 currently surfaces as 500 via `problem_from_http_exception` (missing 504 mapping) — see Known Gaps
 
 ### Schema Generation — LLM-assisted draft from sample data
 
 - [x] Sample data is sent as context to a model backend for field extraction and typing
 - [x] The inference LLM returns a proposed JSON Schema draft with field names, types, optional descriptions
-- [ ] The draft schema is stored as a new unreleased schema version in the Schema Registry
-- [ ] The draft schema is marked `status: draft` — not usable in pipelines until reviewed and published
-- [x] The operator can edit the draft schema before publishing (same schema editor as manual creation)
+- [ ] The draft schema is stored as a new unreleased schema version in the Schema Registry — NOT implemented: the draft is returned in the API response and persisted only when the operator publishes (review-before-publish); there is no in-registry draft state (see Known Gaps)
+- [ ] The draft schema is marked `status: draft` — NOT implemented: no draft lifecycle status in the registry; drafts exist only in the client between infer and publish (see Known Gaps)
+- [ ] The operator can edit the draft schema before publishing — PARTIAL: schema name/description are editable in the onboarding wizard step 3, but there is no field-level schema editor (rename fields, adjust types, toggle required); the standalone view shows name/description read-only (see Known Gaps)
 - [x] The operator can reject the draft schema entirely (deletes the draft version)
 - [x] The inference run is recorded in the audit log with the tool source and model used
 
@@ -61,10 +61,10 @@ LLM-assisted schema draft generation from connected tool data (issue trackers, g
 
 - [x] Connected tool has no data (empty project, new workspace) — inference returns a minimal placeholder draft
 - [x] Connected tool returns insufficient permissions — inference is blocked with a named error (ACL enforcement in `ConnectorHub.sample()`)
-- [ ] Connected tool times out — inference fails gracefully with a timeout error
+- [x] Connected tool times out — inference fails gracefully with a named timeout error ("Connector sampling timed out after 30s", no hang). NOTE: the status surfaces as 500 (504→500 mapping gap in `problem_from_http_exception`) — see Known Gaps
 - [x] Inference LLM call fails — original error surfaced via 502, no partial draft created
 - [ ] Inferred schema contains unsupported field types (e.g. `anyOf`, `$ref`) — schema is edited before publishing
-- [ ] Draft schema naming — auto-generated name from tool type + project name, editable by operator
+- [ ] Draft schema naming — PARTIAL: auto-generated `"Inferred from {connector name}"` (not tool-type + project name) and editable only in wizard step 3 (standalone view read-only) — see Known Gaps
 - [ ] Concurrency: only one active inference per (org, connector_instance) — subsequent requests queued
 - [x] Empty sample data returns a minimal `{"type": "object", "properties": {}}` schema (valid fallback)
 
@@ -77,7 +77,7 @@ LLM-assisted schema draft generation from connected tool data (issue trackers, g
 - [x] Unauthenticated request → 401/403 (tested)
 - [x] Sampling failure → 502 with original error message (tested)
 - [x] Inference LLM failure → 502 with descriptive error (tested)
-- [x] ProgrammingError (missing DB table) → 501 Not Implemented (coded, untested)
+- [x] ProgrammingError (missing DB table) → 501 Not Implemented (coded, tested)
 - [x] Schema generation: no model backends → 400 (tested)
 - [x] Schema generation: ProgrammingError → 501 Not Implemented (coded, tested)
 - [x] Schema generation: GenerationError → 502 (tested)
@@ -87,17 +87,17 @@ LLM-assisted schema draft generation from connected tool data (issue trackers, g
 ### Security and Data Isolation
 
 - [x] Sample data never leaves the org's ModelBackend (inference uses the org's configured model backend)
-- [ ] Sample data is discarded after inference completes — not stored in the database
+- [x] Sample data is discarded after inference completes — not stored in the database (samples live in memory for the request only; the response carries only the inferred definition + metadata; regression test added 2026-08-15)
 - [x] Inferred schema is scoped to the org — not shared across orgs (RLS enforced)
 - [x] Connector ACL is enforced: operator must have read access to the connector instance
 - [ ] Schema inference is behind a team feature flag (v1 feature)
-- [ ] Schema inference runs emit audit events (connector_type, model_backend_id, sample_count)
+- [x] Schema inference runs emit audit events (payload: connector_name, connector_type, resource, sample_count, model_backend_id — `connector_type` added to the payload 2026-08-15; asserted by a unit test)
 
 ## Known Gaps
 
 - [ ] **Connector read interface for inference not defined**: ConnectorHub has `sample()` method but no `infer_schema()` or connector-type-aware sampling
 - [x] ~~**Data sanitisation rules not defined**: what fields are scrubbed from sample data before LLM inference is unspecified~~ **RESOLVED 2026-08-12**: `schema_registry/sanitize.py` defines the scrubbing rules — sensitive-keyed values are masked (segment/suffix matching incl. plural forms for token/secret/password/api_key/access_key/private_key/authorization/credential, masking strings, non-string scalars, and list/dict contents under a sensitive key), control characters stripped, strings capped at 2000 chars, arrays at 100, nesting at depth 8, deep defensive copy (caller data never mutated)
-- [ ] **No CLI or UI for triggering inference**: endpoint and SchemaInferenceView.vue exist, but no onboarding wizard step or CLI command for triggering per-connector inference
+- [x] ~~**No CLI or UI for triggering inference**~~ **RESOLVED 2026-08-15**: the onboarding wizard (OnboardingWizard.vue) implements the Run Inference → Review Schemas steps and the standalone `/schemas/infer` view exists; no CLI command for triggering per-connector inference is provided (endpoint + UI are the trigger paths)
 - [ ] **Sampled record default (200)**: PRD says default 200 records, code caps at 50 in prompt builder, API default limit is 10, max is 100
 - [ ] **Rare-field exclusion**: PRD says fields appearing in <10% of samples should be flagged and excluded from draft — not implemented
 - [ ] **No abstract_name inference**: PRD says inferred `abstract_name` suggestion per resource type — not implemented; only static string "Inferred from {name}"
@@ -108,7 +108,14 @@ LLM-assisted schema draft generation from connected tool data (issue trackers, g
 - [ ] **Connector-type-aware field extraction not implemented**: all connector types use the same generic prompt
 - [ ] **No dedicated BDD feature file for connector-type-aware inference (only generic schema_inference.feature exists)**
 
+- [ ] **504 status mapped to 500**: the sampling-timeout path raises `HTTPException(504)` but the shared `modulo/api/models/problem.py::problem_from_http_exception` lookup has no 504 mapping (no `GATEWAY_TIMEOUT` ProblemType), so the response surfaces as 500. Needs a `GATEWAY_TIMEOUT` problem type + lookup entry (cross-cutting, touches `problem.py` — outside this Worker's allowlist).
+- [ ] **No registry-level draft state**: the inferred draft is returned in the API response and persisted only on publish; there is no "unreleased draft schema version" or `status: draft` in the registry (PRD's review-then-publish flow is satisfied via the client-side draft, not registry draft versions).
+- [ ] **No field-level schema editor on drafts**: operator can rename name/description (wizard step 3) and discard, but cannot rename fields, adjust types, or toggle required before publishing — blocked on the schema-editor gap in `feat-core-schema-inference-ui`.
+
 ## QA History
+
+- 2026-08-15: improve-architecture coverage drive (FAR-234). Verified behaviours and added missing coverage: (1) added `connector_type` to the inference audit-event payload and a unit test asserting it (`test_infer_schema_emits_audit_event_with_tool_source_and_model`); (2) added a no-sample-persistence regression test (`test_infer_schema_response_does_not_contain_or_persist_sample_records`) — response carries only `definition_json`/`sample_count`/`suggestion_name`/`suggestion_description`, never raw records; (3) added ProgrammingError→501 + SQLAlchemyError→503 tests for both the infer and generate endpoints; (4) marked `[x]` the independent sampling-timeout behaviour (30s `asyncio.timeout`, named error, no hang); (5) resolved the stale "No CLI or UI for triggering inference" gap (onboarding wizard Run Inference / Review Schemas steps exist); (6) un-checked two over-stated behaviours (in-registry draft storage / `status: draft`, and the "same schema editor as manual creation" claim) and documented them in Known Gaps. New Known Gaps: 504→500 mapping in `problem.py`, no registry-level draft state, no field-level draft editor. Status: partial.
+
 
 - 2026-08-12: improve-architecture — RESOLVED the "CRITICAL: Sample data not sanitised before LLM prompt" and "Data sanitisation rules not defined" known gaps. Sample/example data flowing into the inference and generation prompts is now scrubbed by `schema_registry/sanitize.py` (credential-like values masked via segment/suffix key matching incl. plural/collection forms, container/scalar masking under sensitive keys, control chars stripped, string/array/depth bounds enforced, deep defensive copy) and rendered between `<<<SAMPLE_DATA>>>` / `<<<END_SAMPLE_DATA>>>` structural separators (with delimiter-marker escaping) plus an explicit "untrusted input" instruction in both system prompts. Added 48 unit-test cases in `test_schema_sanitize.py` asserting no secret ever reaches the prompt and separators render correctly. 91 targeted schema unit tests pass, ruff clean, mypy --strict clean, import-linter 7/7.
 - 2026-07-03: Cross-cutting QA (index 111). Fixed stale checkboxes (audit event [ ]→[x], connector-type validation confirmed). Added Error Handling section (11 behaviour checkboxes covering all error paths). Added 30s timeout on connector sampling step. Added ProgrammingError→501 unit tests (infer + generate endpoints). Updated Known Gaps: removed 2 stale gaps (connector-type validation, audit event dispatch), added 9 new gaps. Created website docs stub. Status: partial (17 known gaps remain).

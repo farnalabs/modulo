@@ -49,7 +49,8 @@ def test_parse_node_keyed_output() -> None:
 def test_parse_node_keyed_equals_top_level() -> None:
     top = parse_self_report_refs({"work_item_refs": [_ENTRY]})
     node = parse_self_report_refs({"node_1": {"output": {"work_item_refs": [_ENTRY]}}})
-    assert top == node == [_ENTRY]
+    assert top == [_ENTRY]
+    assert node == [_ENTRY]
 
 
 def test_parse_flattens_top_level_and_node_locations() -> None:

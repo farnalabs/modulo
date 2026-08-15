@@ -126,7 +126,7 @@ LLM-assisted JSON Schema draft from sampled connector data. Entry point for SDLC
 - [x] No model backends configured → 400
 - [x] Unsupported connector type → 400 with list of supported types
 - [x] Connector sampling failure → 502
-- [x] Connector sampling timeout → 504
+- [ ] Connector sampling timeout → 504 (endpoint raises 504, but the shared `problem_from_http_exception` lookup has no 504 mapping so it surfaces as 500 — see Known Gaps)
 - [x] Connector initialise failure → 502
 - [x] Model backend initialise failure → 502
 - [x] Model backend unavailable (get fails) → 502
@@ -198,17 +198,17 @@ LLM-assisted JSON Schema draft from sampled connector data. Entry point for SDLC
 - [x] Array-type detection in migration
 - [x] Union-type detection in migration
 - [x] Rename detection with matching types only
-- [ ] **Dry-run migration**: plan is correct but no integration test verifies dry_run=true path
-- [ ] **PATCH cannot clear nullable fields**: schema update cannot set a field to None/null
+- [x] **Dry-run migration**: `?dry_run=true` verified at endpoint level (`test_schemas_endpoint.py::test_migrate_data_dry_run_records_audit_event` asserts `plan["dry_run"] is True` and unmodified `migrated_data`); a full testcontainers integration test for the dry-run path is not present
+- [x] **PATCH can clear nullable fields**: `update_schema_endpoint` uses `model_dump(exclude_unset=True)`, so an explicit `null` is applied as a set value (NOT a no-op); regression test added 2026-08-15 (`test_update_schema_patch_can_clear_nullable_field` in `test_error_handling.py`)
 
 ## Resilience & Integration Robustness
 
 - [x] LLM call timeout: configurable via constructor arg, default 60s, caught as `SchemaInferenceError`
-- [x] Connector sampling timeout: separate 30s `asyncio.timeout` → 504 Gateway Timeout
+- [x] Connector sampling timeout: separate 30s `asyncio.timeout` → raises 504 (currently surfaces as 500 — `problem_from_http_exception` has no 504 mapping; see Known Gaps)
 - [x] DB connection failure: `ProgrammingError` → 501, `SQLAlchemyError` → 503 on all DB routes
 - [x] LLM invocation exception caught → `SchemaInferenceError("LLM call failed")`
 - [x] Audit event failure silently logged (non-critical path, does not fail the request)
-- [ ] **No retry/backoff on LLM call**: LLM invoke has timeout but no retry on transient errors
+- [x] **Retry/backoff on LLM call**: `_common.invoke_and_parse` retries up to 3 attempts with exponential backoff (`asyncio.sleep(2**attempt)` on transient errors; the timeout path retries without sleeping); proven by `test_infer_retries_transient_failures_then_succeeds`
 - [ ] **No retry/backoff on connector sample**: connector sampling has timeout but no retry
 - [ ] **No retry/backoff on ConnectorHub/MBHub initialise**: init failures are terminal
 - [ ] **No schema validation on stored definitions**: definition_json is stored as-is without structural validation on create/update
@@ -220,14 +220,19 @@ LLM-assisted JSON Schema draft from sampled connector data. Entry point for SDLC
 - [ ] **Rare-field exclusion**: PRD says fields appearing in <10% of samples should be flagged and excluded from draft — not implemented anywhere
 - [ ] **`abstract_name` inference**: PRD says inferred `abstract_name` suggestion per resource type — not implemented; only static string "Inferred from {name}"
 - [x] ~~**SandboxedEnvironment for LLM prompt**: PRD requires `SandboxedEnvironment` with structural separators for prompt safety — not used~~ **RESOLVED 2026-08-12**: sample/example data is now scrubbed by `schema_registry/sanitize.py` (credential masking, control-char stripping, length/cardinality/depth bounds) and wrapped in `<<<SAMPLE_DATA>>>` structural separators; the system prompt explicitly declares the block untrusted input
-- [ ] **Sampled data not stored**: PRD says sampled data must not be persisted after inference — not verified/audited post-inference
-- [ ] **Resource-type scope**: PRD says inference works on issue-tracker, git-host, and document-store connectors — no connector-type validation in endpoint (only connector_type_id membership test)
+- [x] ~~**Sampled data not stored**~~ **RESOLVED 2026-08-15**: regression test added (`test_infer_schema_response_does_not_contain_or_persist_sample_records`) asserting the infer response carries no raw sample records and only the documented response keys; samples live in memory for the request and are never written to the DB
+- [x] ~~**Resource-type scope / connector-type validation**~~ **RESOLVED 2026-08-15**: the endpoint validates `connector_type_id` against the `supported_inference_types` whitelist (github, gitlab, jira, linear, slack, notion, confluence — covering git-host, issue-tracker, document-store, and chat) and returns 400 with the supported-type list for anything else (BDD scenario "Schema inference rejects unsupported connector types")
 - [x] ~~**LLM prompt injection hardening**: PRD requires structural separators and no prompt interpolation of raw field values — current prompt interpolates samples directly via f-string~~ **RESOLVED 2026-08-12**: sample data is sanitised before serialisation and rendered between explicit structural separators; the model is told to treat the block as opaque data
-- [ ] **No E2E integration test**: No end-to-end test for the full sample→infer→review flow; BDD scenarios have step definitions but run against mocked backends
-- [ ] **No connector-type validation**: Endpoint does not validate that the connector instance belongs to a supported type (issue-tracker, git-host, document-store) — only checks connector_type_id membership
-- [ ] **No frontend unit tests**: Zero spec files for SchemaInferenceView or OnboardingWizard schema steps
+- [ ] **No DB-backed endpoint E2E**: `test_schema_inference_integration.py` covers the sample→infer service path end-to-end (realistic records → stub LLM → parsed schema) against testcontainers, and BDD covers the infer + publish flow against mocked backends; a single full-stack test from HTTP endpoint through real DB to schema version is still missing
+- [x] ~~**No connector-type validation**~~ **RESOLVED 2026-08-15**: duplicate of the resource-type-scope gap above — the endpoint does validate connector type against `supported_inference_types` and rejects unsupported types with 400 (see above)
+- [ ] **OnboardingWizard schema steps lack spec coverage**: `SchemaInferenceView.spec.ts` exists and gained 9 interaction/API-mock tests on 2026-08-15 (connector load, infer call body, draft render, publish envelope+version, navigation, errors); the OnboardingWizard schema steps (2–3) still have no spec
+
+- [ ] **504 status mapped to 500**: the sampling-timeout path raises `HTTPException(504)` but the shared `modulo/api/models/problem.py::problem_from_http_exception` lookup has no 504 mapping (no `GATEWAY_TIMEOUT` ProblemType), so the response surfaces as 500. Needs a `GATEWAY_TIMEOUT` problem type + lookup entry (cross-cutting, touches `problem.py`).
 
 ## QA History
+
+- 2026-08-15: improve-architecture coverage drive (FAR-234). Verified and checked off: dry-run migration (endpoint-level coverage in `test_schemas_endpoint.py`), PATCH-clears-nullable-fields (endpoint uses `exclude_unset=True`; new regression test in `test_error_handling.py`), LLM retry/backoff (`_common.invoke_and_parse` 3 attempts + exponential backoff, proven by `test_infer_retries_transient_failures_then_succeeds`). Resolved stale Known Gaps: sampled-data-not-stored (new no-sample-persistence endpoint test), resource-type scope + connector-type validation (endpoint validates `supported_inference_types` whitelist → 400, BDD-covered). Corrected the "Connector sampling timeout → 504" error-handling checkbox: the endpoint raises 504 but `problem_from_http_exception` has no 504 mapping, so it surfaces as 500 — logged as a new cross-cutting Known Gap in `problem.py`. Softened the E2E-integration and frontend-unit gaps to reflect actual coverage. Added ProgrammingError→501 + SQLAlchemyError→503 tests for the infer and generate endpoints. Status: partial.
+
 - 2026-08-12: improve-architecture — RESOLVED the "SandboxedEnvironment / LLM prompt injection hardening" known gaps (PRD §8.16: sampled records treated as untrusted input, structural separators, no prompt interpolation of raw field values). New `schema_registry/sanitize.py`: `is_sensitive_key` (segment/suffix matching incl. plural/collection forms — flags `access_token`, `api_key`, `client_secret`, `tokens`, `api_keys`, `passwords`, `secrets` but not `monkey`/`author`/`key_name`), `sanitise_sample_records` (deep defensive copy: sensitive-keyed values masked — strings, non-string scalars, and list/dict contents under a sensitive key regardless of nested key name; control chars stripped, strings capped at 2000 chars, arrays at 100, nesting at depth 8, non-list passthrough). `_build_infer_prompt` + `_build_generate_prompt` now sanitise before serialising and render sample data between `<<<SAMPLE_DATA>>>` / `<<<END_SAMPLE_DATA>>>` structural separators (replacing bare markdown code fences; injected delimiter markers in values are escaped so the block cannot be terminated early); both system prompts declare the block untrusted input and instruct the model never to follow instructions inside it. Added 48 unit-test cases in `test_schema_sanitize.py` (sensitive-key matrix 31, recursive masking, no input mutation, control-char stripping, length/cardinality/depth caps, structural-separator rendering + delimiter escaping, no-secret-leak assertions for both inference and generation prompts, serialisability). 91 targeted schema unit tests pass, ruff check + format clean, mypy --strict clean, import-linter 7/7 contracts kept. Status: partial.
 - 2026-07-01: Cross-cutting QA — fixed `_build_infer_prompt` to respect configurable `max_sample_records`, added `ProgrammingError` catch to infer endpoint (501 on missing DB table), added BDD step definitions for all 5 scenarios, added unit test for configurable max_sample_records. 23/23 tests pass.
 - 2026-07-04: Cross-cutting QA (index 167) — fixed `SchemaInferenceService.infer()` and `SchemaGenerationService.generate()` to catch `ValueError` from non-serializable samples → `SchemaInferenceError`/`SchemaGenerationError` (previously raw 500). Added `IntegrityError` → 409 to create_schema and create_schema_version endpoints (previously misleading 503). Added structured Error Handling, Edge Cases, and Resilience & Integration Robustness sections to product map. Created error-path unit tests.

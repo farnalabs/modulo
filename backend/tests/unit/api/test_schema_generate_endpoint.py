@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -300,3 +301,36 @@ def test_generate_schema_extra_fields_accepted(client: TestClient) -> None:
 
     assert resp.status_code == 200
     assert resp.json()["definition_json"] == expected_schema
+
+
+def test_generate_schema_programming_error_returns_501(client: TestClient) -> None:
+    """Missing DB table (migration not applied) must surface as 501."""
+    with (
+        patch(
+            "modulo.api.routes.schemas.list_model_backends",
+            side_effect=ProgrammingError("stmt", {}, Exception("table does not exist")),
+        ),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+    ):
+        resp = client.post(
+            "/api/v1/schemas/generate",
+            json={"description": "Issues tracker schema", "examples": []},
+        )
+    assert resp.status_code == 501
+    assert "migrations" in resp.json()["detail"].lower()
+
+
+def test_generate_schema_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    """Connection/deadlock failures must surface as 503, not 500."""
+    with (
+        patch(
+            "modulo.api.routes.schemas.list_model_backends",
+            side_effect=SQLAlchemyError("connection reset"),
+        ),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+    ):
+        resp = client.post(
+            "/api/v1/schemas/generate",
+            json={"description": "Issues tracker schema", "examples": []},
+        )
+    assert resp.status_code == 503
