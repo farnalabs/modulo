@@ -146,6 +146,21 @@ async def test_get_run_status_success(bk_runner):
     assert run.pipeline_id == "my-pipeline"
 
 
+def test_parse_run_non_dict_pipeline(bk_runner):
+    run = bk_runner._parse_run({"number": 42, "pipeline": "my-pipeline"})
+    assert not run.pipeline_id
+
+
+def test_parse_run_non_dict_creator(bk_runner):
+    run = bk_runner._parse_run({"number": 42, "creator": "dev"})
+    assert not run.triggered_by
+
+
+def test_parse_run_null_creator(bk_runner):
+    run = bk_runner._parse_run({"number": 42, "creator": None})
+    assert not run.triggered_by
+
+
 @respx.mock
 async def test_get_run_status_failure(bk_runner):
     respx.get(f"{_BUILDKITE_API}/organizations/my-org/pipelines/my-pipeline/builds/43").mock(

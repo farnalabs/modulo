@@ -93,23 +93,26 @@ class AzurePipelinesConnector(ConnectorBase):
             status = _STATUS_MAP.get(raw_result, CIRunStatus.UNKNOWN)
         else:
             status = _STATUS_MAP.get(raw_state, CIRunStatus.UNKNOWN)
-        resources = raw.get("resources", {})
-        repositories = resources.get("repositories", {})
-        self_repo = repositories.get("self", {})
-        ref_name = self_repo.get("refName", "")
+        resources = raw.get("resources")
+        repositories = resources.get("repositories") if isinstance(resources, dict) else None
+        self_repo = repositories.get("self") if isinstance(repositories, dict) else None
+        ref_name = self_repo.get("refName", "") if isinstance(self_repo, dict) else ""
         branch = ref_name.replace("refs/heads/", "") if ref_name else ""
-        template_parameters = raw.get("templateParameters", {})
+        template_parameters = raw.get("templateParameters")
+        pipeline = raw.get("pipeline")
+        links = raw.get("_links")
+        web = links.get("web") if isinstance(links, dict) else None
         return CIRun(
             id=str(raw.get("id", "")),
-            pipeline_id=str(raw.get("pipeline", {}).get("id", "")),
+            pipeline_id=str(pipeline.get("id") or "") if isinstance(pipeline, dict) else "",
             status=status,
-            url=raw.get("_links", {}).get("web", {}).get("href", ""),
+            url=web.get("href", "") if isinstance(web, dict) else "",
             branch=branch,
-            commit_sha=self_repo.get("version", ""),
+            commit_sha=self_repo.get("version", "") if isinstance(self_repo, dict) else "",
             created_at=raw.get("createdDate", ""),
             updated_at=raw.get("finishedDate", ""),
             duration_seconds=None,
-            triggered_by=template_parameters.get("triggeredBy", ""),
+            triggered_by=template_parameters.get("triggeredBy", "") if isinstance(template_parameters, dict) else "",
         )
 
     async def health_check(self) -> HealthResult:

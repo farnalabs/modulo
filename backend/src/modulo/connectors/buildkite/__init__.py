@@ -78,14 +78,13 @@ class BuildkiteConnector(ConnectorBase):
     def _parse_run(self, raw: dict[str, Any]) -> CIRun:
         raw_state = raw.get("state", "")
         status = _STATUS_MAP.get(raw_state, CIRunStatus.UNKNOWN)
-        pipeline = raw.get("pipeline", {})
-        pipeline_slug = pipeline.get("slug", "")
-        creator = raw.get("creator", {})
+        pipeline = raw.get("pipeline")
+        creator = raw.get("creator")
         number = raw.get("number", "")
         web_url = raw.get("web_url", "")
         return CIRun(
             id=str(number),
-            pipeline_id=pipeline_slug,
+            pipeline_id=pipeline.get("slug", "") if isinstance(pipeline, dict) else "",
             status=status,
             url=web_url,
             branch=raw.get("branch", ""),
@@ -93,7 +92,7 @@ class BuildkiteConnector(ConnectorBase):
             created_at=raw.get("created_at", ""),
             updated_at=raw.get("finished_at", ""),
             duration_seconds=_duration_seconds(raw),
-            triggered_by=creator.get("name", ""),
+            triggered_by=creator.get("name", "") if isinstance(creator, dict) else "",
         )
 
     async def health_check(self) -> HealthResult:

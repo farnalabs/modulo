@@ -84,7 +84,7 @@ class GitHubActionsCIRunner(CIRunnerBase):
         else:
             status = CIRunStatus.UNKNOWN
 
-        actor = raw.get("actor") or {}
+        actor = raw.get("actor")
         return CIRun(
             id=str(raw.get("id", "")),
             pipeline_id=raw.get("workflow_id", ""),
@@ -95,7 +95,7 @@ class GitHubActionsCIRunner(CIRunnerBase):
             created_at=raw.get("created_at", ""),
             updated_at=raw.get("updated_at", ""),
             duration_seconds=self._parse_duration_seconds(raw),
-            triggered_by=actor.get("login", ""),
+            triggered_by=actor.get("login", "") if isinstance(actor, dict) else "",
         )
 
     async def health_check(self) -> HealthResult:

@@ -471,6 +471,41 @@ async def test_gl_double_health_check(gl_double):
 
 
 # ---------------------------------------------------------------------------
+# Corrupt-payload guards — _parse_run must never raise on malformed responses
+# ---------------------------------------------------------------------------
+
+
+def test_gl_parse_run_non_dict_user(gl_runner):
+    run = gl_runner._parse_run({"id": 1, "user": "alice"})
+    assert not run.triggered_by
+
+
+def test_gl_parse_run_null_user(gl_runner):
+    run = gl_runner._parse_run({"id": 1, "user": None})
+    assert not run.triggered_by
+
+
+def test_gl_parse_run_corrupt_duration(gl_runner):
+    run = gl_runner._parse_run({"id": 1, "duration": "not-a-number"})
+    assert run.duration_seconds == 0
+
+
+def test_gl_parse_run_non_finite_duration(gl_runner):
+    run = gl_runner._parse_run({"id": 1, "duration": float("nan")})
+    assert run.duration_seconds == 0
+
+
+def test_gh_parse_run_non_dict_actor(gh_runner):
+    run = gh_runner._parse_run({"id": 1, "actor": "alice"})
+    assert not run.triggered_by
+
+
+def test_gh_parse_run_null_actor(gh_runner):
+    run = gh_runner._parse_run({"id": 1, "actor": None})
+    assert not run.triggered_by
+
+
+# ---------------------------------------------------------------------------
 # CIRunStatus StrEnum
 # ---------------------------------------------------------------------------
 

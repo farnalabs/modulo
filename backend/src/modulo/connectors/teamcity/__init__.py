@@ -1,9 +1,10 @@
 """TeamCity CI/CD connector — triggers and observes builds via the TeamCity REST API."""
 
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
+from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors.base import (
     CIRun,
     CIRunLog,
@@ -63,8 +64,9 @@ class TeamCityConnector(ConnectorBase):
         status = _parse_teamcity_status(state, raw_status)
         href = data.get("href", "")
         bt = data.get("buildType")
-        build_type_id = bt.get("buildTypeId", bt.get("id", "")) if bt else ""
+        build_type_id = cast("str", bt.get("buildTypeId", bt.get("id", ""))) if isinstance(bt, dict) else ""
         response_id = data.get("id")
+        duration = data.get("duration")
         return CIRun(
             id=str(response_id if response_id is not None else fallback_run_id),
             pipeline_id=build_type_id,
@@ -74,7 +76,7 @@ class TeamCityConnector(ConnectorBase):
             commit_sha=data.get("revision", ""),
             created_at=str(data.get("startDate", "")),
             updated_at=str(data.get("finishDate", "")),
-            duration_seconds=data.get("duration"),
+            duration_seconds=_safe_int(duration) if duration is not None else None,
             triggered_by="",
         )
 

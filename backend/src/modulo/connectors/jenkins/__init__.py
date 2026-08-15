@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors.base import (
     CIRun,
     CIRunLog,
@@ -80,6 +81,7 @@ class JenkinsConnector(ConnectorBase):
         raw_result = raw.get("result") or "BUILDING"
         status = _STATUS_MAP.get(raw_result, CIRunStatus.UNKNOWN)
         full_url = raw.get("url", "")
+        duration_ms = _safe_int(raw.get("duration")) if raw.get("duration") else None
         return CIRun(
             id=str(raw.get("id", "")),
             pipeline_id=raw.get("fullDisplayName", raw.get("jobName", "")),
@@ -89,7 +91,7 @@ class JenkinsConnector(ConnectorBase):
             commit_sha="",
             created_at=str(raw.get("timestamp", "")),
             updated_at="",
-            duration_seconds=raw.get("duration", 0) // 1000 if raw.get("duration") else None,
+            duration_seconds=duration_ms // 1000 if duration_ms else None,
             triggered_by="",
         )
 
