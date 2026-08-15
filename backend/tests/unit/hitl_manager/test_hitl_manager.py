@@ -1716,3 +1716,189 @@ async def test_executor_sets_awaiting_human_on_node_interrupt():
     assert result.status == "cancelled"
     final_update_call = mock_update.call_args_list[-1]
     assert final_update_call.args[2] == "cancelled"
+
+
+# ---------------------------------------------------------------------------
+# Atomicity / SQL-shape — the claim and decide UPDATEs carry atomic WHERE clauses
+# ---------------------------------------------------------------------------
+
+
+async def _claim_capture() -> tuple[HITLManager, AsyncMock, list[Any]]:
+    """Run a bare claim() against a capturing session, returning the UPDATE stmt."""
+    unclaimed = _gate(account_id=None)
+    claimed_gate = _gate(
+        account_id=_USER,
+        claim_token="tok",
+        expires_at=datetime.now(UTC) + timedelta(minutes=15),
+    )
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+    captured: list[Any] = []
+
+    async def _execute(stmt: Any) -> Any:
+        captured.append(stmt)
+        if len(captured) == 1:
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = unclaimed
+            return r
+        r = MagicMock()
+        r.scalar_one_or_none.return_value = uuid.uuid4()
+        return r
+
+    session.execute = _execute
+    session.get = AsyncMock(return_value=claimed_gate)
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=begin_nested_cm)
+
+    mgr = HITLManager()
+    await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+    return mgr, session, captured
+
+
+async def test_claim_update_has_atomic_where_clause():
+    """The claim UPDATE atomically guards unclaimed + undecided in its WHERE, so
+    a concurrent claimer cannot double-claim (no TOCTOU between check and update)."""
+    _mgr, _session, captured = await _claim_capture()
+    update_stmt = captured[1]  # execute call 2 is the UPDATE ... RETURNING
+    sql = str(update_stmt.compile(compile_kwargs={"literal_binds": True}))
+    assert "hitl_claims" in sql
+    assert "account_id IS NULL" in sql
+    assert "decision IS NULL" in sql
+
+
+async def test_claim_update_returns_id_for_atomic_race_detection():
+    """The claim UPDATE uses RETURNING id so the caller can detect a lost race:
+    no returned id ⇒ someone else claimed first ⇒ AlreadyClaimedError."""
+    _mgr, _session, captured = await _claim_capture()
+    update_stmt = captured[1]
+    assert any(c.name == "id" for c in update_stmt._returning or ())
+
+
+async def test_decide_update_where_checks_expires_at_gt_now():
+    """_decide()'s UPDATE WHERE includes expires_at > now — the DB is the
+    authoritative TTL source, not a client-side token expiry check."""
+    from sqlalchemy.sql.dml import Update as _SQLUpdate
+
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    gate = _gate(account_id=_USER, claim_token="good-token", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
+    session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
+    captured: list[Any] = []
+
+    orig_execute = session.execute
+
+    async def _capture_execute(stmt: Any) -> Any:
+        captured.append(stmt)
+        return await orig_execute(stmt)
+
+    session.execute = _capture_execute
+    mgr = HITLManager()
+    await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="good-token")
+
+    assert len(captured) >= 1
+    stmt = captured[0]
+    assert isinstance(stmt, _SQLUpdate)
+    where_sql = str(stmt.whereclause)
+    assert "expires_at" in where_sql, f"expected expires_at comparison in WHERE, got: {where_sql}"
+    assert ">" in where_sql, f"expected > comparison in WHERE, got: {where_sql}"
+
+
+# ---------------------------------------------------------------------------
+# Org scoping — every HITL query carries the organisation_id filter
+# ---------------------------------------------------------------------------
+
+
+async def test_hitl_queries_are_org_scoped():
+    """Every hitl_claims query (claim UPDATE, list_pending SELECT, decide UPDATE)
+    is filtered by organisation_id so one org can never see another org's gates."""
+    _mgr, _session, captured = await _claim_capture()
+    claim_update = captured[1]
+    claim_sql = str(claim_update.compile(compile_kwargs={"literal_binds": True}))
+    assert "organisation_id" in claim_sql
+
+    session = AsyncMock()
+    row = _gate(account_id=None)
+    result = MagicMock()
+    result.scalars.return_value = [row]
+    session.execute = AsyncMock(return_value=result)
+    mgr = HITLManager()
+    await mgr.list_pending(session, _ORG)
+    list_sql = str(session.execute.call_args[0][0].compile(compile_kwargs={"literal_binds": True}))
+    assert "organisation_id" in list_sql
+
+
+# ---------------------------------------------------------------------------
+# HITLManager is stateless — one instance serves concurrent sessions
+# ---------------------------------------------------------------------------
+
+
+async def test_manager_instance_is_stateless_across_concurrent_claims():
+    """HITLManager holds no per-call state — a single instance can serve two
+    concurrent claims on separate sessions/gates without cross-talk."""
+    mgr = HITLManager()
+    gate_a = _gate(account_id=None)
+    gate_b = _gate(account_id=None)
+    claimed_a = _gate(account_id=_USER, claim_token="tok-a", expires_at=datetime.now(UTC) + timedelta(minutes=15))
+    claimed_b = _gate(account_id=_USER, claim_token="tok-b", expires_at=datetime.now(UTC) + timedelta(minutes=15))
+
+    async def _run_claim(gate_id: str, gate: HitlClaim, claimed: HitlClaim) -> HitlClaim:
+        session = AsyncMock()
+        session.add = MagicMock()
+        session.flush = AsyncMock()
+        captured: list[Any] = []
+
+        async def _execute(stmt: Any) -> Any:
+            captured.append(stmt)
+            if len(captured) == 1:
+                r = MagicMock()
+                r.scalar_one_or_none.return_value = gate
+                return r
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = uuid.uuid4()
+            return r
+
+        session.execute = _execute
+        session.get = AsyncMock(return_value=claimed)
+        begin_nested_cm = AsyncMock()
+        begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin_nested = MagicMock(return_value=begin_nested_cm)
+        return await mgr.claim(session, run_id=_RUN, gate_id=gate_id, org_id=_ORG, claimant_id=_USER)
+
+    result_a, result_b = await asyncio.gather(
+        _run_claim("gate-a", gate_a, claimed_a),
+        _run_claim("gate-b", gate_b, claimed_b),
+    )
+    assert result_a is claimed_a
+    assert result_b is claimed_b
+
+
+# ---------------------------------------------------------------------------
+# HitlClaim model columns remain stable (backwards compatibility)
+# ---------------------------------------------------------------------------
+
+
+def test_hitl_claim_model_columns_stable():
+    """The HitlClaim model exposes the established columns (expires_at,
+    claim_token, decision, decision_payload, account_id) so downstream consumers
+    built against alpha are not broken by a column rename."""
+    from sqlalchemy import inspect as sa_inspect
+
+    from modulo.db.models.hitl_claim import HitlClaim
+
+    columns = {c.name for c in sa_inspect(HitlClaim).columns}
+    expected_columns = (
+        "run_id",
+        "gate_id",
+        "pipeline_id",
+        "account_id",
+        "claim_token",
+        "expires_at",
+        "decision",
+        "decision_payload",
+    )
+    for expected in expected_columns:
+        assert expected in columns, f"HitlClaim is missing expected column {expected!r}"

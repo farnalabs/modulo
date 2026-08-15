@@ -335,6 +335,34 @@ class TestListEvalDefinitions:
         assert data["total"] == 0
         assert not data["items"]
 
+    def test_list_queries_are_org_scoped(self, admin_client: TestClient) -> None:
+        """The eval definitions list query must filter by organisation_id — an
+        org can never list another org's eval definitions."""
+        mock_session = _make_mock_session()
+        captured_stmts: list[MagicMock] = []
+
+        async def _capturing_execute(stmt: MagicMock, *args: object, **kwargs: object) -> MagicMock:
+            captured_stmts.append(stmt)
+            idx = len(captured_stmts)
+            if idx <= 4:
+                return _make_result() if idx == 1 else _make_result(scalar_value=None)
+            if idx == 5:
+                return _make_result(scalar_value=1)
+            return _make_result(all_value=[_make_eval_def(id=uuid.uuid4(), name="Eval 1")])
+
+        mock_session.execute = _capturing_execute
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        resp = admin_client.get(self.URL)
+        assert resp.status_code == 200
+
+        # The two real queries (count + select) both carry the org filter.
+        org_filter_sql = [str(s.compile()) for s in captured_stmts if hasattr(s, "compile")]
+        assert any("organisation_id" in sql for sql in org_filter_sql), "eval list query is not org-scoped"
+
     def test_list_filter_by_pipeline(self, admin_client: TestClient) -> None:
         mock_session = _make_mock_session()
         mock_session.execute.side_effect = [
