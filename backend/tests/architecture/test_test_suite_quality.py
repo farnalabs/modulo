@@ -178,6 +178,15 @@ regression that silently weakens the suite:
   even when the body only reaches state through fixture names, and
   ``tmp_path_factory`` is session-scoped plumbing rather than a per-test
   capability
+- ``assert a == b == c`` — an ``assert`` whose test is a *chained equality*
+  comparison (a ``==`` chain with two or more operators) asserts N independent
+  equalities as one expression. When the chain fails, pytest reports the whole
+  chain and cannot say which link broke, so a mutation-testing run that severs
+  the middle relationship (``b``) reports the same opaque failure every time.
+  Split each link into its own ``assert`` so each failure names the pair that
+  broke. Range checks (``assert lo <= x <= hi``) use ordering operators and
+  are deliberately exempt: a bounds assertion is a single fact that reads
+  naturally as a chain, so only ``==`` chains are flagged
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -3342,3 +3351,95 @@ def test_async_decorator_on_sync_lens_flags_leftover_markers():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _async_decorator_on_sync_function_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _equality_chain_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert`` whose test is a
+    *chained equality* — an ``==`` comparison with two or more operators
+    (``assert a == b == c``). Range checks (``assert lo <= x <= hi``) use
+    ordering operators and are deliberately not matched: a bounds assertion is
+    a single fact that reads naturally as a chain, whereas an equality chain
+    asserts *N* independent equalities as one expression. When an equality
+    chain fails, pytest reports the whole chain and cannot say which link
+    broke — a mutation-testing run that severs the middle relationship gets
+    the same opaque failure every time. Split each link into its own assert so
+    each failure names the pair that broke.
+    """
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if not isinstance(test, ast.Compare) or len(test.ops) < 2:
+            continue
+        if not all(isinstance(op, ast.Eq) for op in test.ops):
+            continue
+        links = []
+        left = test.left
+        for right in test.comparators:
+            links.append(f"{ast.unparse(left)} == {ast.unparse(right)}")
+            left = right
+        found.append(
+            (
+                node.lineno,
+                "chained equality in an assert — pytest reports the whole chain and cannot say "
+                "which link broke; split into separate asserts:\n        " + "\n        ".join(links),
+            )
+        )
+    return found
+
+
+def test_no_equality_chain_asserts():
+    """An ``assert`` whose test is a chained equality comparison
+    (``assert a == b == c``) asserts *N* independent equalities as one
+    expression. When the chain fails, pytest rewrites and reports the whole
+    chain but cannot say which link broke — the failure message is identical
+    whether ``a != b`` or ``b != c``, so a mutation-testing run that severs
+    the middle relationship reports the same opaque failure every time. Range
+    checks (``assert lo <= x <= hi``) are a single bounds fact and are
+    deliberately exempt: only ``==`` chains are flagged. Split each link into
+    its own ``assert`` so each failure names the pair that broke."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _equality_chain_assert_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} chained equality assert(s).\n"
+        "An equality chain (a == b == c) asserts N independent facts as one expression; pytest\n"
+        "reports the whole chain and cannot say which link broke. Split each link into its own\n"
+        "assert (range checks like 'lo <= x <= hi' are exempt).\n" + "\n".join(violations)
+    )
+
+
+def test_equality_chain_lens_flags_opaque_chains():
+    """Synthetic positive/negative control for the equality-chain lens: it must
+    flag ``assert a == b == c`` (attribute, call, subscript, and longer chains
+    included) and ignore range checks (ordering operators), single ``==``
+    comparisons, and equality chains outside an ``assert``."""
+    positive_sources = [
+        "def test_foo():\n    assert a == b == c\n",
+        "def test_foo():\n    assert result.value == expected.value == 5\n",
+        "def test_foo():\n    assert chain.context.trace_id == expected == root.context.trace_id\n",
+        "def test_foo():\n    assert get_a() == get_b() == get_c() == get_d()\n",
+        "def test_foo():\n    assert keys[0] == keys[1] == 'run-1'\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _equality_chain_assert_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert a == b\n",
+        "def test_foo():\n    assert 0 <= a <= 1\n",
+        "def test_foo():\n    assert lo < a < hi\n",
+        "def test_foo():\n    assert a == b or a == c\n",
+        "def test_foo():\n    assert a == b and b == c\n",
+        "def test_foo():\n    x = a == b == c\n",
+        "def test_foo():\n    if a == b == c:\n        pass\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _equality_chain_assert_violations(tree), f"lens should NOT flag:\n{source}"
