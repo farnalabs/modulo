@@ -37,7 +37,7 @@
               </div>
               <div>
                 <div class="mb-1 flex items-center justify-between text-xs text-muted-foreground">
-                  <span>{{ percentUsed.toFixed(1) }}% used</span>
+                  <span>{{ $t('views.AdminCostControlsView.percent_used', { percent: percentUsed.toFixed(1) }) }}</span>
                   <span>{{ formatMoney(totalSpend, settings.currency) }} / {{ formatMoney(settings.budget, settings.currency) }}</span>
                 </div>
                 <div class="h-2.5 w-full overflow-hidden rounded-full bg-muted">
@@ -59,9 +59,7 @@
             <CardDescription>{{ $t('views.AdminCostControlsView.set_per_team_budget_caps') }}</CardDescription>
           </CardHeader>
           <CardContent>
-            <div v-if="teams.length === 0" class="py-4 text-center text-sm text-muted-foreground">
-              {{ $t('views.AdminCostControlsView.no_teams_found') }}
-            </div>
+            <EmptyState v-if="teams.length === 0" :title="$t('views.AdminCostControlsView.no_teams_found')" />
             <DataTable
               v-else
               :columns="[
@@ -73,7 +71,7 @@
               :rows="tableRows"
             >
               <template #cell-budget="{ row }">
-                <Input aria-label="Form control"
+                <Input :aria-label="$t('views.AdminCostControlsView.budget')"
                   :model-value="(row as any).editingBudget ?? undefined" @update:model-value="(v: any) => (row as any).editingBudget = v === '' ? null : Number(v)"
                   type="number"
                   min="0"
@@ -169,14 +167,14 @@
             <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
               <div>
                 <label for="admincostcontrolsview-field-2" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.currency') }}</label>
-                <Select aria-label="Currency" :model-value="settings.currency" @update:model-value="onCurrencyChange">
-                  <SelectTrigger data-testid="cc-currency" aria-label="Currency" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
-                    <SelectValue placeholder="USD ($)" />
+                <Select :aria-label="$t('views.AdminCostControlsView.currency')" :model-value="settings.currency" @update:model-value="onCurrencyChange">
+                  <SelectTrigger data-testid="cc-currency" :aria-label="$t('views.AdminCostControlsView.currency')" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
+                    <SelectValue :placeholder="$t('views.AdminCostControlsView.currency_usd')" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="USD">USD ($)</SelectItem>
-                    <SelectItem value="EUR">EUR (€)</SelectItem>
-                    <SelectItem value="GBP">GBP (£)</SelectItem>
+                    <SelectItem value="USD">{{ $t('views.AdminCostControlsView.currency_usd') }}</SelectItem>
+                    <SelectItem value="EUR">{{ $t('views.AdminCostControlsView.currency_eur') }}</SelectItem>
+                    <SelectItem value="GBP">{{ $t('views.AdminCostControlsView.currency_gbp') }}</SelectItem>
                   </SelectContent>
                 </Select>
                 <p v-if="currencySaveError" class="mt-1 text-xs text-destructive">{{ currencySaveError }}</p>
@@ -200,7 +198,7 @@
               <span class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.monthly_budget', { currency: settings.currency }) }}</span>
               <div class="flex items-end gap-3">
                 <div class="flex-1">
-                  <Input aria-label="Form control"
+                  <Input :aria-label="$t('views.AdminCostControlsView.monthly_budget', { currency: settings.currency })"
                     :model-value="settings.budget"
                     @update:model-value="(v: any) => settings.budget = v === '' ? 0 : Number(v)"
                     type="number"
@@ -227,7 +225,9 @@
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import { ref, computed, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
@@ -243,6 +243,7 @@ import PageTabs from "../components/PageTabs.vue"
 import { formatMoney } from '../lib/money'
 
 const planStore = usePlanStore()
+const { t } = useI18n()
 
 interface CostReportComponent {
   name: string
@@ -279,17 +280,6 @@ function parseDecimalString(value: string | null | undefined): number | null {
   return Number.isFinite(n) ? n : null
 }
 
-interface TeamLimitData {
-  id: string
-  name: string
-  daily_limit_usd: number | null
-}
-
-interface SpendLimitResponse {
-  org_daily_spend_limit: number | null
-  team_limits: TeamLimitData[]
-}
-
 interface ControlsSettings {
   budget: number
   currency: 'USD' | 'EUR' | 'GBP'
@@ -307,8 +297,8 @@ interface TeamBudgetRow {
 }
 
 const { data: costsData, loading: costsLoading, error: costsError, load: loadCosts } = useDataFetch(
-  () => (api as any).GET('/api/v1/admin/costs'),
-  { initialValue: { period: 'month', group_by: 'team', items: [], org_total: '0', legacy_total: '0', org_unassigned_components: '0' } }
+  () => api.GET('/api/v1/admin/costs'),
+  { initialValue: { period: 'month', group_by: 'team', items: [], org_total: '0', legacy_total: '0', org_unassigned_components: '0', has_more: false } }
 )
 
 const totalSpend = ref(0)
@@ -327,7 +317,7 @@ watch(() => costsData.value, (data) => {
 })
 
 const { data: limitsData, loading: limitsLoading, load: loadLimits } = useDataFetch(
-  () => (api as any).GET('/api/v1/admin/costs/limits'),
+  () => api.GET('/api/v1/admin/costs/limits'),
   { immediate: false }
 )
 
@@ -337,11 +327,10 @@ const tableRows = computed(() => teams.value)
 
 watch(() => limitsData.value, (data) => {
   if (data) {
-    const resp = data as SpendLimitResponse
-    teams.value = (resp.team_limits ?? []).map((t: any) => ({
+    teams.value = (data.team_limits ?? []).map((t: Record<string, unknown>) => ({
       id: t.team_id as string,
       name: t.team_name as string,
-      editingBudget: t.daily_spend_limit,
+      editingBudget: t.daily_spend_limit as number | null,
       saving: false,
       saveError: null,
     }))
@@ -398,7 +387,7 @@ const progressBarClass = computed(() => {
 async function loadSettings() {
   settingsLoading.value = true
   try {
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/costs/controls')
+    const { data, error: err } = await api.GET('/api/v1/admin/costs/controls')
     if (err) {
       return
     } else if (data) {
@@ -429,17 +418,18 @@ async function saveTeamBudget(team: TeamBudgetRow) {
   team.saving = true
   team.saveError = null
   try {
-    const { error: err } = await (api as any).PUT(`/api/v1/admin/costs/limits/teams/${team.id}`, {
+    const { error: err } = await api.PUT('/api/v1/admin/costs/limits/teams/{team_id}', {
+      params: { path: { team_id: team.id } },
       body: { daily_spend_limit: team.editingBudget },
     })
     if (err) {
-      team.saveError = `Failed to save: ${formatApiError(err)}`
+      team.saveError = t('views.AdminCostControlsView.failed_to_save_team_budget', { detail: formatApiError(err) })
     } else {
       budgetSaveSuccess.value = true
       setTimeout(() => { budgetSaveSuccess.value = false }, 3000)
     }
   } catch (e: unknown) {
-    team.saveError = `Failed to save: ${formatApiError(e)}`
+    team.saveError = t('views.AdminCostControlsView.failed_to_save_team_budget', { detail: formatApiError(e) })
   } finally {
     team.saving = false
   }
@@ -450,16 +440,16 @@ async function saveBudget() {
   budgetSaveError.value = null
   budgetSaveSuccess.value = false
   try {
-    const { error: err } = await (api as any).PUT('/api/v1/admin/costs/controls', {
+    const { error: err } = await api.PUT('/api/v1/admin/costs/controls', {
       body: { budget: settings.value.budget },
     })
     if (err) {
-      budgetSaveError.value = `Failed to save: ${formatApiError(err)}`
+      budgetSaveError.value = t('views.AdminCostControlsView.failed_to_save_budget', { detail: formatApiError(err) })
     } else {
       budgetSaveSuccess.value = true
     }
   } catch (e: unknown) {
-    budgetSaveError.value = `Failed to save: ${formatApiError(e)}`
+    budgetSaveError.value = t('views.AdminCostControlsView.failed_to_save_budget', { detail: formatApiError(e) })
   } finally {
     savingBudget.value = false
   }
@@ -476,15 +466,15 @@ async function toggleThreshold(threshold: number) {
     next.sort((a, b) => a - b)
   }
   if (next.length === 0) {
-    thresholdSaveError.value = 'At least one alert threshold must remain enabled'
+    thresholdSaveError.value = t('views.AdminCostControlsView.at_least_one_threshold')
     return
   }
   settings.value.alertThresholds = next
   thresholdSaveError.value = null
-  const { error: err } = await (api as any).PUT('/api/v1/admin/costs/controls', { body: { alert_thresholds: next } })
+  const { error: err } = await api.PUT('/api/v1/admin/costs/controls', { body: { alert_thresholds: next } })
   if (err) {
     settings.value.alertThresholds = prev
-    thresholdSaveError.value = `Failed to save thresholds: ${formatApiError(err)}`
+    thresholdSaveError.value = t('views.AdminCostControlsView.failed_to_save_thresholds', { detail: formatApiError(err) })
   }
 }
 
@@ -493,10 +483,10 @@ async function toggleCircuitBreaker() {
   const next = !prev
   settings.value.circuitBreakerEnabled = next
   circuitBreakerSaveError.value = null
-  const { error: err } = await (api as any).PUT('/api/v1/admin/costs/controls', { body: { circuit_breaker_enabled: next } })
+  const { error: err } = await api.PUT('/api/v1/admin/costs/controls', { body: { circuit_breaker_enabled: next } })
   if (err) {
     settings.value.circuitBreakerEnabled = prev
-    circuitBreakerSaveError.value = `Failed to save circuit breaker: ${formatApiError(err)}`
+    circuitBreakerSaveError.value = t('views.AdminCostControlsView.failed_to_save_circuit_breaker', { detail: formatApiError(err) })
   }
 }
 
@@ -505,10 +495,10 @@ async function onCurrencyChange(value: unknown) {
   settings.value.currency = String(value) as 'USD' | 'EUR' | 'GBP'
   currencySaveError.value = null
   try {
-    await (api as any).PUT('/api/v1/admin/costs/controls', { body: { currency: settings.value.currency } })
+    await api.PUT('/api/v1/admin/costs/controls', { body: { currency: settings.value.currency } })
   } catch {
     settings.value.currency = prev
-    currencySaveError.value = 'Failed to save currency'
+    currencySaveError.value = t('views.AdminCostControlsView.failed_to_save_currency')
   }
 }
 
@@ -517,10 +507,10 @@ async function onBillingPeriodChange(value: unknown) {
   const next = String(value) as 'monthly' | 'quarterly' | 'annual'
   settings.value.billingPeriod = next
   periodSaveError.value = null
-  const { error: err } = await (api as any).PUT('/api/v1/admin/costs/controls', { body: { billing_period: next } })
+  const { error: err } = await api.PUT('/api/v1/admin/costs/controls', { body: { billing_period: next } })
   if (err) {
     settings.value.billingPeriod = prev
-    periodSaveError.value = `Failed to save billing period: ${formatApiError(err)}`
+    periodSaveError.value = t('views.AdminCostControlsView.failed_to_save_billing_period', { detail: formatApiError(err) })
   }
 }
 
