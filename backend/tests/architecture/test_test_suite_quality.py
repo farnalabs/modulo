@@ -1979,13 +1979,15 @@ def test_empty_container_membership_lens_flags_impossible_membership():
         assert not _empty_container_membership_tautologies(tree), f"lens should NOT flag:\n{source}"
 
 
-def _parametrize_argvalue_counts(tree: ast.AST) -> list[tuple[int, int]]:
-    """Return ``(lineno, n_cases)`` for every ``@...parametrize`` decorator
-    whose ``argvalues`` is a statically-known ``list``/``tuple`` literal. Only
-    decorator applications are considered — a bare ``parametrize(...)`` call
-    inside a body is not pytest parametrization and belongs to a different
-    lens. The parametrize-adjacent lenses filter on ``n_cases`` (``== 0``,
-    ``== 1``, ...) so a new lens never re-copies the decorator walk."""
+def _parametrize_argvalue_lists(tree: ast.AST) -> list[tuple[int, list[ast.expr]]]:
+    """Return ``(lineno, argvalues.elts)`` for every ``@...parametrize``
+    decorator whose ``argvalues`` is a statically-known ``list``/``tuple``
+    literal. Only decorator applications are considered — a bare
+    ``parametrize(...)`` call inside a body is not pytest parametrization and
+    belongs to a different lens. The parametrize-adjacent lenses derive their
+    signal from ``len(elts)`` (``== 0``, ``== 1``, ...) or from the elements
+    themselves (duplicate detection), so a new lens never re-copies the
+    decorator walk."""
     found = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -2001,7 +2003,7 @@ def _parametrize_argvalue_counts(tree: ast.AST) -> list[tuple[int, int]]:
                 argvalues = next((kw.value for kw in dec.keywords if kw.arg == "argvalues"), None)
             if not isinstance(argvalues, (ast.List, ast.Tuple)):
                 continue
-            found.append((dec.lineno, len(argvalues.elts)))
+            found.append((dec.lineno, argvalues.elts))
     return found
 
 
@@ -2012,8 +2014,8 @@ def _single_case_parametrize_violations(tree: ast.AST) -> list[tuple[int, str]]:
     body is not pytest parametrization and belongs to a different lens."""
     return [
         (lineno, "parametrize with a single case in argvalues — collapse to a plain test")
-        for lineno, n_cases in _parametrize_argvalue_counts(tree)
-        if n_cases == 1
+        for lineno, elts in _parametrize_argvalue_lists(tree)
+        if len(elts) == 1
     ]
 
 
@@ -2077,8 +2079,8 @@ def _empty_parametrize_violations(tree: ast.AST) -> list[tuple[int, str]]:
     pytest parametrization and belongs to a different lens."""
     return [
         (lineno, "parametrize with an empty argvalues — the test is collected as zero items and never runs")
-        for lineno, n_cases in _parametrize_argvalue_counts(tree)
-        if n_cases == 0
+        for lineno, elts in _parametrize_argvalue_lists(tree)
+        if len(elts) == 0
     ]
 
 
@@ -3459,53 +3461,40 @@ def _duplicate_parametrize_case_violations(tree: ast.AST) -> list[tuple[int, str
     """Return ``(lineno, detail)`` pairs for every ``@...parametrize`` whose
     ``argvalues`` holds a *duplicate* case.
 
-    Only decorator applications are considered — a bare ``parametrize(...)``
-    call inside a body is not pytest parametrization and belongs to a
-    different lens. ``argvalues`` must be a ``list``/``tuple`` literal whose
-    elements are all statically evaluable; if any element is not (a call, a
-    variable, a ``pytest.param(...)`` wrapper), the whole list is skipped
-    because equality with a runtime value cannot be decided statically. Cases
-    are compared by value after ``ast.literal_eval`` and ``repr``, so only
-    byte-identical values (``1`` vs ``True`` are distinct) are flagged.
+    Reuses the shared decorator walk from ``_parametrize_argvalue_lists``
+    rather than re-implementing it. ``argvalues`` must be a ``list``/``tuple``
+    literal whose elements are all statically evaluable; if any element is not
+    (a call, a variable, a ``pytest.param(...)`` wrapper), the whole list is
+    skipped because equality with a runtime value cannot be decided
+    statically. Cases are compared by value after ``ast.literal_eval`` and
+    ``repr``, so only byte-identical values (``1`` vs ``True`` are distinct)
+    are flagged.
     """
     found = []
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+    for lineno, elts in _parametrize_argvalue_lists(tree):
+        keys: list[str] = []
+        for element in elts:
+            try:
+                keys.append(repr(ast.literal_eval(element)))
+            except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+                keys = []
+                break
+        if not keys:
             continue
-        for dec in node.decorator_list:
-            if not isinstance(dec, ast.Call):
+        seen: dict[str, list[int]] = {}
+        for key, element in zip(keys, elts, strict=True):
+            seen.setdefault(key, []).append(element.lineno)
+        for key, lines in seen.items():
+            if len(lines) < 2:
                 continue
-            if _decorator_name(dec) != "parametrize":
-                continue
-            if len(dec.args) >= 2:
-                argvalues = dec.args[1]
-            else:
-                argvalues = next((kw.value for kw in dec.keywords if kw.arg == "argvalues"), None)
-            if not isinstance(argvalues, (ast.List, ast.Tuple)):
-                continue
-            keys: list[str] = []
-            for element in argvalues.elts:
-                try:
-                    keys.append(repr(ast.literal_eval(element)))
-                except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
-                    keys = []
-                    break
-            if not keys:
-                continue
-            seen: dict[str, list[int]] = {}
-            for key, element in zip(keys, argvalues.elts, strict=True):
-                seen.setdefault(key, []).append(element.lineno)
-            for key, lines in seen.items():
-                if len(lines) < 2:
-                    continue
-                found.append(
-                    (
-                        dec.lineno,
-                        f"parametrize case {key} appears {len(lines)} times (lines {lines}) — "
-                        "duplicate cases run the same assertion with identical inputs, "
-                        "so the advertised matrix coverage is inflated",
-                    )
+            found.append(
+                (
+                    lineno,
+                    f"parametrize case {key} appears {len(lines)} times (lines {lines}) — "
+                    "duplicate cases run the same assertion with identical inputs, "
+                    "so the advertised matrix coverage is inflated",
                 )
+            )
     return found
 
 
