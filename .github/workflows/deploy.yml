@@ -310,6 +310,74 @@ jobs:
     needs: [pre-deploy-tests]
     runs-on: ubicloud-standard-2
     steps:
+      - name: Check Fly machine budget
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_MACHINE_LIMIT: ${{ vars.FLY_MACHINE_LIMIT }}
+        run: |
+          curl -fsSL https://fly.io/install.sh | sh
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          # Fail fast before an expensive deploy when the org is at/near the Fly
+          # machine limit (2026-08-13: a rolling deploy exceeded the
+          # personal-plan limit and was rejected mid-cutover, stranding stale
+          # machines). Rolling deploys peak at N+1 per process group, so reserve
+          # HEADROOM machines of slack - declining to start a deploy is cheaper
+          # than destroying a half-finished cutover.
+          LIMIT="${FLY_MACHINE_LIMIT:-10}"
+          HEADROOM=2
+          for APP in app-modulo staging-modulo modulo-app-db modulo-staging-db; do
+            if fly machine list --app "$APP" --json > "/tmp/budget-${APP}.json" 2>/dev/null; then
+              echo "  ${APP}: machine list captured"
+            else
+              # A transient `fly machine list` failure must never fail the
+              # deploy - warn and continue counting the remaining apps.
+              echo "::warning::Could not query machine count for ${APP} - skipping (transient API failure)"
+            fi
+          done
+          python3 - "$LIMIT" "$HEADROOM" <<'PYEOF'
+          import json
+          import sys
+
+          APPS = ["app-modulo", "staging-modulo", "modulo-app-db", "modulo-staging-db"]
+
+          def _is_destroyed(m):
+              # Destroyed machines no longer consume org capacity: exclude both
+              # the top-level state and any "destroyed" entry in state history.
+              if str(m.get("state") or "").lower() == "destroyed":
+                  return True
+              for ev in m.get("events") or []:
+                  if str(ev.get("status") or ev.get("type") or "").lower() == "destroyed":
+                      return True
+              return False
+
+          limit = int(sys.argv[1])
+          headroom = int(sys.argv[2])
+          total = 0
+          unknown = False
+          for app in APPS:
+              try:
+                  with open(f"/tmp/budget-{app}.json") as f:
+                      machines = json.load(f)
+              except Exception:
+                  print(f"  {app}: <unknown> (query failed)")
+                  unknown = True
+                  continue
+              count = len([m for m in machines if not _is_destroyed(m)])
+              total += count
+              print(f"  {app}: {count} machine(s)")
+          print(f"Total live machines: {total}")
+          projected = total + headroom
+          print(f"Rolling-deploy projection: {total} + {headroom} headroom = {projected}")
+          if unknown:
+              print("NOTE: some app counts are unknown - projection may be optimistic")
+          if projected > limit:
+              print(f"::error::Fly machine budget check FAILED: current {total} machines (org limit {limit}), no headroom for rolling deploy (+{headroom} = {projected} > {limit}). Scale down or remove stale machines before deploying.")
+              sys.exit(1)
+          print(f"Fly machine budget OK: {total} live machines, rolling projection {projected} within org limit {limit}")
+          PYEOF
+
       - uses: actions/checkout@v4
         with:
           ref: main
@@ -568,25 +636,45 @@ jobs:
           fly machine list --app staging-modulo --json > /tmp/cleanup-machines.json 2>/dev/null || true
           python3 - <<'PYEOF' || true
           import json
+          import subprocess
           app = "staging-modulo"
           try:
               with open("/tmp/cleanup-machines.json") as f:
                   machines = json.load(f)
           except Exception:
               machines = []
-          # Only destroy strays that existed BEFORE this deploy run. The ensure
-          # step above may have just created/cloned a group-less machine via
-          # `fly machine run` (flyctl v0.4.x creates group-less machines even
-          # with the config); destroying it would leave the app with zero
-          # workers. Skip any machine id not in the predeploy snapshot.
+          # Only destroy machines that existed BEFORE this deploy run. The
+          # ensure step above may have just created/cloned machines via
+          # `fly machine run` / `fly machine clone` (flyctl v0.4.x can create
+          # group-less machines even with the config); destroying them would
+          # leave the app with zero workers. Skip any machine id not in the
+          # predeploy snapshot.
           try:
               with open("/tmp/predeploy-machine-ids.txt") as f:
                   pre = {line.strip() for line in f if line.strip()}
           except Exception:
               pre = set()
+
+          def _image(m):
+              return (m.get("config") or {}).get("image") or m.get("image") or ""
+
+          def _destroy(mid, name, label):
+              try:
+                  r = subprocess.run(["fly", "machines", "destroy", mid, "--app", app, "--force"],
+                                     capture_output=True, text=True, timeout=60)
+              except subprocess.TimeoutExpired:
+                  print(f"  WARN destroy timed out for {label} {mid}")
+                  return False
+              if r.returncode == 0:
+                  print(f"  destroyed {label} {mid} ({name})")
+                  return True
+              print(f"  WARN could not destroy {label} {mid}: {r.stderr.strip()[:120]}")
+              return False
+
           if not pre:
-              print("WARN: predeploy machine id snapshot unavailable - skipping stray cleanup")
+              print("WARN: predeploy machine id snapshot unavailable - skipping stray and stale-version cleanup")
           else:
+              # Part 1 (unchanged): strays with no process group.
               removed = 0
               for m in machines:
                   cfg = m.get("config") or {}
@@ -596,19 +684,40 @@ jobs:
                   mid = m.get("id")
                   if not mid or pg != "" or mid not in pre:
                       continue
-                  import subprocess
-                  try:
-                      r = subprocess.run(["fly", "machines", "destroy", mid, "--app", app, "--force"],
-                                         capture_output=True, text=True, timeout=60)
-                  except subprocess.TimeoutExpired:
-                      print(f"  WARN destroy timed out for stray {mid}")
-                      continue
-                  if r.returncode == 0:
+                  if _destroy(mid, m.get("name", ""), "stray"):
                       removed += 1
-                      print(f"  destroyed stray {mid} ({m.get('name','')})")
-                  else:
-                      print(f"  WARN could not destroy stray {mid}: {r.stderr.strip()[:120]}")
               print(f"stray machines destroyed: {removed}")
+
+              # Part 2 (new): stale-version machines left behind by failed
+              # cutovers. A rolling deploy replaces old machines with fresh
+              # ones; if a cutover fails, the old machines linger as stopped
+              # leftovers that creep the footprint toward the Fly machine
+              # limit. A machine is a stale leftover when (1) it existed before
+              # this deploy (in the predeploy snapshot), (2) its image differs
+              # from the image this deploy just deployed, and (3) it has been
+              # left "stopped". Images are compared rather than the machine
+              # `version` field: versions increment per-machine on update and
+              # are not comparable across different machine IDs, whereas the
+              # image tag embeds the deploy SHA and cleanly distinguishes
+              # generations. Only "stopped" machines are ever destroyed - a
+              # "started" machine may still be serving and is never touched.
+              new_images = {_image(m) for m in machines if (m.get("id") or "") not in pre and _image(m)}
+              removed_stale = 0
+              if not new_images:
+                  print("WARN: could not resolve the freshly deployed image - skipping stale-version cleanup")
+              else:
+                  for m in machines:
+                      mid = m.get("id")
+                      if not mid or mid not in pre:
+                          continue
+                      if str(m.get("state") or "").lower() != "stopped":
+                          continue
+                      img = _image(m)
+                      if not img or img in new_images:
+                          continue
+                      if _destroy(mid, m.get("name", ""), "stale-version machine"):
+                          removed_stale += 1
+              print(f"stale-version machines destroyed: {removed_stale}")
           PYEOF
 
   staging-e2e:
@@ -687,6 +796,74 @@ jobs:
     if: always() && (needs.staging-e2e.result == 'success' || github.event.inputs.skip_staging_e2e == 'true')
     runs-on: ubicloud-standard-2
     steps:
+      - name: Check Fly machine budget
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_MACHINE_LIMIT: ${{ vars.FLY_MACHINE_LIMIT }}
+        run: |
+          curl -fsSL https://fly.io/install.sh | sh
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          # Fail fast before an expensive deploy when the org is at/near the Fly
+          # machine limit (2026-08-13: a rolling deploy exceeded the
+          # personal-plan limit and was rejected mid-cutover, stranding stale
+          # machines). Rolling deploys peak at N+1 per process group, so reserve
+          # HEADROOM machines of slack - declining to start a deploy is cheaper
+          # than destroying a half-finished cutover.
+          LIMIT="${FLY_MACHINE_LIMIT:-10}"
+          HEADROOM=2
+          for APP in app-modulo staging-modulo modulo-app-db modulo-staging-db; do
+            if fly machine list --app "$APP" --json > "/tmp/budget-${APP}.json" 2>/dev/null; then
+              echo "  ${APP}: machine list captured"
+            else
+              # A transient `fly machine list` failure must never fail the
+              # deploy - warn and continue counting the remaining apps.
+              echo "::warning::Could not query machine count for ${APP} - skipping (transient API failure)"
+            fi
+          done
+          python3 - "$LIMIT" "$HEADROOM" <<'PYEOF'
+          import json
+          import sys
+
+          APPS = ["app-modulo", "staging-modulo", "modulo-app-db", "modulo-staging-db"]
+
+          def _is_destroyed(m):
+              # Destroyed machines no longer consume org capacity: exclude both
+              # the top-level state and any "destroyed" entry in state history.
+              if str(m.get("state") or "").lower() == "destroyed":
+                  return True
+              for ev in m.get("events") or []:
+                  if str(ev.get("status") or ev.get("type") or "").lower() == "destroyed":
+                      return True
+              return False
+
+          limit = int(sys.argv[1])
+          headroom = int(sys.argv[2])
+          total = 0
+          unknown = False
+          for app in APPS:
+              try:
+                  with open(f"/tmp/budget-{app}.json") as f:
+                      machines = json.load(f)
+              except Exception:
+                  print(f"  {app}: <unknown> (query failed)")
+                  unknown = True
+                  continue
+              count = len([m for m in machines if not _is_destroyed(m)])
+              total += count
+              print(f"  {app}: {count} machine(s)")
+          print(f"Total live machines: {total}")
+          projected = total + headroom
+          print(f"Rolling-deploy projection: {total} + {headroom} headroom = {projected}")
+          if unknown:
+              print("NOTE: some app counts are unknown - projection may be optimistic")
+          if projected > limit:
+              print(f"::error::Fly machine budget check FAILED: current {total} machines (org limit {limit}), no headroom for rolling deploy (+{headroom} = {projected} > {limit}). Scale down or remove stale machines before deploying.")
+              sys.exit(1)
+          print(f"Fly machine budget OK: {total} live machines, rolling projection {projected} within org limit {limit}")
+          PYEOF
+
       - uses: actions/checkout@v4
         with:
           ref: main
@@ -897,25 +1074,45 @@ jobs:
           fly machine list --app app-modulo --json > /tmp/cleanup-machines.json 2>/dev/null || true
           python3 - <<'PYEOF' || true
           import json
+          import subprocess
           app = "app-modulo"
           try:
               with open("/tmp/cleanup-machines.json") as f:
                   machines = json.load(f)
           except Exception:
               machines = []
-          # Only destroy strays that existed BEFORE this deploy run. The ensure
-          # step above may have just created/cloned a group-less machine via
-          # `fly machine run` (flyctl v0.4.x creates group-less machines even
-          # with the config); destroying it would leave the app with zero
-          # workers. Skip any machine id not in the predeploy snapshot.
+          # Only destroy machines that existed BEFORE this deploy run. The
+          # ensure step above may have just created/cloned machines via
+          # `fly machine run` / `fly machine clone` (flyctl v0.4.x can create
+          # group-less machines even with the config); destroying them would
+          # leave the app with zero workers. Skip any machine id not in the
+          # predeploy snapshot.
           try:
               with open("/tmp/predeploy-machine-ids.txt") as f:
                   pre = {line.strip() for line in f if line.strip()}
           except Exception:
               pre = set()
+
+          def _image(m):
+              return (m.get("config") or {}).get("image") or m.get("image") or ""
+
+          def _destroy(mid, name, label):
+              try:
+                  r = subprocess.run(["fly", "machines", "destroy", mid, "--app", app, "--force"],
+                                     capture_output=True, text=True, timeout=60)
+              except subprocess.TimeoutExpired:
+                  print(f"  WARN destroy timed out for {label} {mid}")
+                  return False
+              if r.returncode == 0:
+                  print(f"  destroyed {label} {mid} ({name})")
+                  return True
+              print(f"  WARN could not destroy {label} {mid}: {r.stderr.strip()[:120]}")
+              return False
+
           if not pre:
-              print("WARN: predeploy machine id snapshot unavailable - skipping stray cleanup")
+              print("WARN: predeploy machine id snapshot unavailable - skipping stray and stale-version cleanup")
           else:
+              # Part 1 (unchanged): strays with no process group.
               removed = 0
               for m in machines:
                   cfg = m.get("config") or {}
@@ -925,19 +1122,40 @@ jobs:
                   mid = m.get("id")
                   if not mid or pg != "" or mid not in pre:
                       continue
-                  import subprocess
-                  try:
-                      r = subprocess.run(["fly", "machines", "destroy", mid, "--app", app, "--force"],
-                                         capture_output=True, text=True, timeout=60)
-                  except subprocess.TimeoutExpired:
-                      print(f"  WARN destroy timed out for stray {mid}")
-                      continue
-                  if r.returncode == 0:
+                  if _destroy(mid, m.get("name", ""), "stray"):
                       removed += 1
-                      print(f"  destroyed stray {mid} ({m.get('name','')})")
-                  else:
-                      print(f"  WARN could not destroy stray {mid}: {r.stderr.strip()[:120]}")
               print(f"stray machines destroyed: {removed}")
+
+              # Part 2 (new): stale-version machines left behind by failed
+              # cutovers. A rolling deploy replaces old machines with fresh
+              # ones; if a cutover fails, the old machines linger as stopped
+              # leftovers that creep the footprint toward the Fly machine
+              # limit. A machine is a stale leftover when (1) it existed before
+              # this deploy (in the predeploy snapshot), (2) its image differs
+              # from the image this deploy just deployed, and (3) it has been
+              # left "stopped". Images are compared rather than the machine
+              # `version` field: versions increment per-machine on update and
+              # are not comparable across different machine IDs, whereas the
+              # image tag embeds the deploy SHA and cleanly distinguishes
+              # generations. Only "stopped" machines are ever destroyed - a
+              # "started" machine may still be serving and is never touched.
+              new_images = {_image(m) for m in machines if (m.get("id") or "") not in pre and _image(m)}
+              removed_stale = 0
+              if not new_images:
+                  print("WARN: could not resolve the freshly deployed image - skipping stale-version cleanup")
+              else:
+                  for m in machines:
+                      mid = m.get("id")
+                      if not mid or mid not in pre:
+                          continue
+                      if str(m.get("state") or "").lower() != "stopped":
+                          continue
+                      img = _image(m)
+                      if not img or img in new_images:
+                          continue
+                      if _destroy(mid, m.get("name", ""), "stale-version machine"):
+                          removed_stale += 1
+              print(f"stale-version machines destroyed: {removed_stale}")
           PYEOF
 
   prod-smoke:
