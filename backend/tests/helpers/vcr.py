@@ -78,7 +78,7 @@ def vcr_config(**overrides: Any) -> dict[str, Any]:
                 stacklevel=2,
             )
         if isinstance(value, list) and isinstance(config.get(key), list):
-            config[key] = config[key] + value
+            config[key] += value
         else:
             config[key] = value
 

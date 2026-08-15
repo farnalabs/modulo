@@ -133,7 +133,7 @@ def validate_ref_entry(entry: Any) -> dict[str, Any]:
         raise ValueError(f"work-item ref entry must be a dict, got {type(entry).__name__}")
     kind = canonicalise_kind(entry.get("kind"))
     ref = entry.get("ref")
-    if ref is None or str(ref).strip() == "":
+    if ref is None or not str(ref).strip():
         raise ValueError("work-item ref entry 'ref' is required")
     source = entry.get("source", "derived")
     if source not in _VALID_SOURCES:

@@ -181,7 +181,7 @@ async def update_observability_settings(
     if req.langsmith_enabled is not None:
         updates["langsmith_enabled"] = req.langsmith_enabled
     if req.langsmith_api_key is not None:
-        if req.langsmith_api_key == "":
+        if not req.langsmith_api_key:
             updates["langsmith_api_key_ciphertext"] = None
         else:
             fernet = Fernet(settings.fernet_key.encode())

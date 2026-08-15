@@ -598,7 +598,7 @@ async def validate_current_auth() -> bool:
                 )
                 return False
             clamped = _clamp_role(key.role, live_role)
-            if clamped == "":
+            if not clamped:
                 _record_api_key_role_cap(
                     minted_role=key.role,
                     effective_role="",
@@ -768,7 +768,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                         str(key.organisation_id),
                     )
                     clamped = _clamp_role(key.role, live_role)
-                    if clamped == "":
+                    if not clamped:
                         _record_api_key_role_cap(
                             minted_role=key.role,
                             effective_role="",

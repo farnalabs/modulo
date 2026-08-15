@@ -284,7 +284,7 @@ def _extract_work_item_refs(payload: dict[str, Any], ref_paths: Any) -> list[dic
         if not kind or not path:
             continue
         value = _extract_field(payload, path)
-        if value is None or str(value).strip() == "":
+        if value is None or not str(value).strip():
             continue
         entries.append({"kind": str(kind), "ref": str(value), "source": "derived"})
     return entries or None

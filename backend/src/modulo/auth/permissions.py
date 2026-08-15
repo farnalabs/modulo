@@ -323,7 +323,7 @@ def assert_org_role(
     """
     if required not in ORG_ROLE_HIERARCHY:
         raise PermissionConfigurationError(f"Required role '{required}' is not in the org-role hierarchy")
-    if role is None or role == "":
+    if role is None or not role:
         raise PermissionDenied(
             permission=subject,
             required_role=required,

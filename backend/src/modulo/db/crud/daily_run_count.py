@@ -54,8 +54,8 @@ async def upsert_daily_run_count(
         )
         session.add(row)
 
-    row.run_count = row.run_count + increment_count
-    row.total_spend_usd = row.total_spend_usd + increment_spend
+    row.run_count += increment_count
+    row.total_spend_usd += increment_spend
     await session.flush()
     return row
 
