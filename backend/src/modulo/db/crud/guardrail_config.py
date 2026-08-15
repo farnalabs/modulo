@@ -13,9 +13,11 @@ transaction (``set_rls_org``) before calling these.
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
+from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.organisation import Organisation
@@ -33,12 +35,13 @@ async def set_guardrail_pin(session: AsyncSession, org_id: uuid.UUID, pin_json: 
     Raises ``NoResultFound`` when the org row does not exist (a caller with a
     valid principal always has an org, so this is a defensive signal).
     """
-    result = await session.execute(
-        update(Organisation).where(Organisation.id == org_id).values(guardrail_pins_json=pin_json)
+    result = cast(
+        "CursorResult[Any]",
+        await session.execute(
+            update(Organisation).where(Organisation.id == org_id).values(guardrail_pins_json=pin_json)
+        ),
     )
     if result.rowcount != 1:
-        from sqlalchemy.orm.exc import NoResultFound
-
         raise NoResultFound(f"Organisation {org_id} not found for guardrail pin update")
 
 
