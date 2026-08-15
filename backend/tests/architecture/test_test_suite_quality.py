@@ -81,6 +81,16 @@ regression that silently weakens the suite:
   can hang CI indefinitely, and the failure is opaque (the runner just stops)
   instead of surfacing a bound violation the way ``requests_without_timeout``
   already does for HTTP in ``src/modulo``.
+- unbounded worker-thread joins — ``thread.join()``/``Thread.join()`` without
+  a ``timeout=`` bound, the in-process sibling of the unbounded-subprocess
+  hazard. A worker that deadlocks (e.g. waits on a ``Barrier`` a sibling never
+  reaches, or blocks on an I/O operation that never completes) takes the whole
+  test — and every test after it in the same process — down with it, and the
+  failure is opaque (the runner just stops) instead of surfacing a bound
+  violation. ``join(timeout=None)`` is as unbounded as an omitted keyword and
+  is flagged too. ``str.join``/``os.path.join``/``Path.joinpath`` are
+  deliberately not matched: those always carry the iterable/path argument, so
+  an argument-less ``.join()`` call is unambiguously a thread join.
 - ``assert A and B`` where every operand is a comparison — a compound boolean
   assertion that should be one ``assert`` per condition; when the conjunction
   fails, pytest reports the whole expression and cannot say which operand broke
@@ -2247,6 +2257,94 @@ def test_unbounded_subprocess_lens_flags_hang_risks():
         tree = ast.parse(source)
         assert not _unbounded_sync_subprocess_violations(tree), f"lens should NOT flag:\n{source}"
         assert not _unbounded_async_subprocess_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _unbounded_thread_join_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every argument-less ``.join()``
+    call made without a ``timeout=`` bound.
+
+    An argument-less ``.join()`` is unambiguously a worker-thread join:
+    ``str.join``/``os.path.join``/``Path.joinpath`` always carry the iterable
+    or path argument, so the only ``.join()`` that takes nothing is
+    ``Thread.join()`` (or its multiprocessing twin). Without a ``timeout=`` the
+    call waits forever, so a deadlocked worker blocks the test — and the whole
+    process — indefinitely. ``join(timeout=None)`` is just as unbounded as an
+    omitted keyword (``None`` is the default meaning "wait forever"), so an
+    explicit ``None`` literal is still flagged."""
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr != "join":
+            continue
+        if node.args:
+            continue
+        bounded = any(
+            kw.arg == "timeout" and not (isinstance(kw.value, ast.Constant) and kw.value.value is None)
+            for kw in node.keywords
+            if kw.arg
+        )
+        if bounded:
+            continue
+        found.append((node.lineno, "thread .join() without a timeout bound — a hung worker blocks the test forever"))
+    return found
+
+
+def test_no_unbounded_thread_join():
+    """A worker thread joined without a ``timeout=`` bound can hang the whole
+    test process: if the worker deadlocks (a ``Barrier`` a sibling never
+    reaches, an I/O wait that never completes) the ``.join()`` waits forever,
+    the runner simply stops, and every test after it in the process is lost
+    without a trace. This is the in-process twin of the unbounded-subprocess
+    lens, which guards the child-process version of the same hazard. Bound the
+    join with ``thread.join(timeout=<secs>)`` — and, when the thread must have
+    finished, assert ``not thread.is_alive()`` so a hung worker fails loudly
+    with a named bound instead of stalling the suite."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _unbounded_thread_join_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} unbounded thread .join() call(s).\n"
+        "Give every worker-thread join an explicit timeout bound: thread.join(timeout=<secs>), "
+        "then assert not thread.is_alive() when the thread must have finished.\n" + "\n".join(violations)
+    )
+
+
+def test_unbounded_thread_join_lens_flags_hang_risks():
+    """Synthetic positive/negative control for the unbounded-thread-join lens,
+    mirroring the unbounded-subprocess lens pattern: it must flag argument-less
+    ``.join()`` calls without a timeout (or with an explicit ``None``), in any
+    receiver shape and nesting, and ignore bounded joins, ``str.join``/
+    ``os.path.join``/``Path.joinpath`` (which always carry an argument), and
+    non-``join`` calls."""
+    positive_sources = [
+        "def test_foo():\n    t = Thread(target=work)\n    t.start()\n    t.join()\n",
+        "def test_foo():\n    thread.join()\n",
+        "def test_foo():\n    t.join(timeout=None)\n",
+        "def test_foo():\n    for t in threads:\n        t.join()\n",
+        "def test_foo():\n    self._worker.join()\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _unbounded_thread_join_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    t.join(timeout=5)\n",
+        "def test_foo():\n    t.join(timeout=TIMEOUT)\n",
+        "def test_foo():\n    ', '.join(items)\n",
+        "def test_foo():\n    ''.join(map(str, xs))\n",
+        "def test_foo():\n    os.path.join(a, b)\n",
+        "def test_foo():\n    Path(a).joinpath(b)\n",
+        "def test_foo():\n    t.wait()\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _unbounded_thread_join_violations(tree), f"lens should NOT flag:\n{source}"
 
 
 def test_no_compound_boolean_assertions():
