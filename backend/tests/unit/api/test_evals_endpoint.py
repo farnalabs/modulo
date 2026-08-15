@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import Select
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -334,6 +335,43 @@ class TestListEvalDefinitions:
         data = resp.json()
         assert data["total"] == 0
         assert not data["items"]
+
+    def test_list_queries_are_org_scoped(self, admin_client: TestClient) -> None:
+        """The eval definitions list query must filter by organisation_id — an
+        org can never list another org's eval definitions."""
+        mock_session = _make_mock_session()
+        captured_stmts: list[MagicMock] = []
+
+        async def _capturing_execute(stmt: MagicMock, *args: object, **kwargs: object) -> MagicMock:
+            captured_stmts.append(stmt)
+            idx = len(captured_stmts)
+            if idx <= 4:
+                return _make_result() if idx == 1 else _make_result(scalar_value=None)
+            if idx == 5:
+                return _make_result(scalar_value=1)
+            return _make_result(all_value=[_make_eval_def(id=uuid.uuid4(), name="Eval 1")])
+
+        mock_session.execute = _capturing_execute
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        resp = admin_client.get(self.URL)
+        assert resp.status_code == 200
+
+        # The two real queries (count + select) both carry the org filter. We
+        # restrict the scan to the count/list Selects on EvalDefinition: the RLS
+        # setup (`set_config('app.organisation_id', ...)`) is also executed on
+        # this session and always contains the literal "organisation_id", so a
+        # blanket substring scan could never fail even if the filter regressed.
+        eval_selects = [
+            stmt for stmt in captured_stmts if isinstance(stmt, Select) and "eval_definitions" in str(stmt.compile())
+        ]
+        assert len(eval_selects) == 2, f"expected count + list queries, got {len(eval_selects)}"
+        for stmt in eval_selects:
+            where_sql = str(stmt.whereclause) if stmt.whereclause is not None else ""
+            assert "organisation_id" in where_sql, "eval list query is not org-scoped"
 
     def test_list_filter_by_pipeline(self, admin_client: TestClient) -> None:
         mock_session = _make_mock_session()
