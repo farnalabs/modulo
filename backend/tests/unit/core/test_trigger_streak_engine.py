@@ -1383,3 +1383,385 @@ class TestDispatcherWiring:
         ):
             summary = await ch.dispatcher_reconcile()
         assert summary["streak_deactivated"] == 0
+
+
+# ---------------------------------------------------------------------------
+# FAR-191 — read-only on-demand streak status (get_trigger_streak_status)
+# ---------------------------------------------------------------------------
+
+
+class TestStatusSQLBindParams:
+    def test_status_read_sql_carries_org_and_trigger_bind_params(self) -> None:
+        """FIX 7 — the on-demand streak read's SQL constants scope every walk by
+        BIND PARAMETERS, never interpolation: ``text()`` raw SQL bypasses the
+        tenant-filter listener, so the ``:oid``/``:tid`` predicates are the
+        ONLY cross-tenant guard on strict-RLS Postgres. The count walk and the
+        boundary subqueries must all carry them."""
+        assert "r.organisation_id = :oid" in ts._STREAK_STATUS_COUNT_SQL
+        assert "r.trigger_id = :tid" in ts._STREAK_STATUS_COUNT_SQL
+        assert "r2.organisation_id = :oid" in ts._STREAK_BOUNDARY_SQL
+        assert "r2.trigger_id = :tid" in ts._STREAK_BOUNDARY_SQL
+        assert "tr.organisation_id = :oid" in ts._STREAK_BOUNDARY_SQL
+        assert "tr.id = :tid" in ts._STREAK_BOUNDARY_SQL
+
+
+class _StatusSession:
+    """Async session double routing the FAR-191 read-only status queries.
+
+    Routes by statement substring: the streak-count walk (``AS streak``), the
+    audit_events deactivation-reason lookup, and the runs outcome summary
+    (everything else). Records executed statements for the never-writes check.
+
+    ``audit_created_at`` models the FIX 1 audit aging: the reader constrains
+    the deactivation-reason query to ``created_at >= streak_epoch`` (the
+    append-only audit log keeps every auto-deactivation forever; only
+    deactivations SINCE the last activation count). When the canned audit
+    record predates the epoch cutoff baked into the query, the mock returns no
+    row — a re-enabled -> manually-paused trigger must not surface the
+    pre-re-enable deactivation record.
+    """
+
+    def __init__(
+        self,
+        *,
+        streak: int = 0,
+        outcome_rows: list[Any] | None = None,
+        audit_row: Any = None,
+        audit_created_at: datetime | None = None,
+    ) -> None:
+        self._streak = streak
+        self._outcome_rows = outcome_rows or []
+        self._audit_row = audit_row
+        self._audit_created_at = audit_created_at
+        self.executed: list[tuple[Any, Any]] = []
+
+    async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
+        self.executed.append((stmt, params))
+        s = str(stmt).lower()
+        if "as streak" in s:
+            r = MagicMock()
+            r.scalar_one.return_value = self._streak
+            return r
+        if "audit_events" in s:
+            # Extract the ``created_at >= :epoch`` cutoff baked into the
+            # statement (the reader binds the trigger's streak_epoch here).
+            cutoff: datetime | None = None
+            try:
+                compiled = stmt.compile()
+                for value in compiled.params.values():
+                    if isinstance(value, datetime):
+                        cutoff = value
+                        break
+            except Exception:
+                cutoff = None
+            if cutoff is not None and self._audit_created_at is not None and self._audit_created_at < cutoff:
+                r = MagicMock()
+                r.first.return_value = None
+                return r
+            r = MagicMock()
+            r.first.return_value = self._audit_row
+            return r
+        # Outcomes summary (the fallback branch). Genuinely assert the raw
+        # boundary fragment's ``:oid`` / ``:tid`` bind params flow through: a
+        # query that never binds them raises ``InvalidRequestError`` at real
+        # execution, is swallowed by the per-sub-read except, and degrades
+        # ``last_outcomes`` to [] — the "passes for the wrong reason" trap
+        # (FAR-191 qa round 2). Mirror that behaviour here so a regression
+        # fails the seeded-outcomes test instead of hiding.
+        compiled = stmt.compile(compile_kwargs={"render_postcompile": True})
+        bound = dict(compiled.params)
+        if params:
+            bound.update(params)
+        unbound = [name for name, value in bound.items() if value is None]
+        if unbound:
+            from sqlalchemy.exc import InvalidRequestError
+
+            raise InvalidRequestError(f"A value is required for bind parameter '{unbound[0]}'")
+        r = MagicMock()
+        r.all.return_value = self._outcome_rows
+        return r
+
+
+def _ongoing_trigger(**overrides: Any) -> SimpleNamespace:
+    values: dict[str, Any] = {
+        "id": TRIGGER_ID,
+        "organisation_id": ORG,
+        "trigger_type": "ongoing",
+        "active": True,
+        "config_json": {"max_no_delivery_streak": 5},
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def _outcome(
+    run_id: uuid.UUID, classification: str, reason: str, completed_at: datetime
+) -> tuple[uuid.UUID, dict[str, Any], datetime]:
+    return (run_id, {"value": classification, "reason": reason}, completed_at)
+
+
+class TestGetTriggerStreakStatus:
+    @pytest.mark.asyncio
+    async def test_non_ongoing_returns_cheap_shape(self) -> None:
+        """A non-ongoing trigger gets the cheap unconfigured shape with NO
+        queries issued (the N+1 guard)."""
+        session = _StatusSession()
+        status = await ts.get_trigger_streak_status(session, SimpleNamespace(trigger_type="cron"))
+        assert status == {
+            "enabled": False,
+            "streak": 0,
+            "threshold": 0,
+            "state": "unconfigured",
+            "deactivated_reason": None,
+            "last_outcomes": [],
+        }
+        assert not session.executed, "non-ongoing must not query"
+
+    @pytest.mark.asyncio
+    async def test_computes_streak_and_threshold(self) -> None:
+        """Ongoing trigger with a configured threshold returns the current
+        streak, the resolved threshold, state 'ok' and no deactivation reason."""
+        session = _StatusSession(streak=3)
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger())
+        assert status["enabled"] is True
+        assert status["streak"] == 3
+        assert status["threshold"] == 5
+        assert status["state"] == "ok"
+        assert status["deactivated_reason"] is None
+
+    @pytest.mark.asyncio
+    async def test_config_threshold_override_wins(self) -> None:
+        """The caller-supplied config_threshold overrides the per-trigger config
+        resolution (used when the serializer already resolved it)."""
+        session = _StatusSession(streak=1)
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger(), config_threshold=7)
+        assert status["threshold"] == 7
+
+    @pytest.mark.asyncio
+    async def test_last_outcomes_newest_first_shape(self) -> None:
+        """The last-N outcome summary maps classification value + reason +
+        completed_at, newest first, and only classified rows appear."""
+        now = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+        older = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
+        session = _StatusSession(
+            outcome_rows=[
+                _outcome(uuid.uuid4(), "no_delivery", "no_work", now),
+                _outcome(uuid.uuid4(), "delivered", "pr_merged", older),
+            ]
+        )
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger())
+        assert [o["classification"] for o in status["last_outcomes"]] == ["no_delivery", "delivered"]
+        assert status["last_outcomes"][0]["reason"] == "no_work"
+        assert status["last_outcomes"][0]["completed_at"] == now.isoformat()
+        assert status["last_outcomes"][0]["run_id"]
+
+    @pytest.mark.asyncio
+    async def test_outcomes_query_binds_oid_and_tid(self) -> None:
+        """FIX 2 — the outcomes sub-read must execute with the raw boundary
+        fragment's ``:oid`` / ``:tid`` bind params supplied. The ORM auto-binds
+        ``organisation_id_1`` / ``trigger_id_1`` from the column predicates, but
+        the ``text(_STREAK_BOUNDARY_SQL)`` fragment carries its OWN named
+        params; without them real execution raises ``InvalidRequestError`` and
+        ``last_outcomes`` silently degrades to [] (the FAR-191 outcomes panel
+        dead on arrival). The mock enforces the same contract, so a regression
+        fails here instead of hiding behind the empty-case."""
+        session = _StatusSession(
+            outcome_rows=[_outcome(uuid.uuid4(), "no_delivery", "no_work", datetime(2026, 8, 10, 12, 0, tzinfo=UTC))]
+        )
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger())
+        assert len(status["last_outcomes"]) == 1, "seeded outcome must surface"
+        outcomes_executes = [
+            (stmt, params)
+            for stmt, params in session.executed
+            if "as streak" not in str(stmt).lower() and "audit_events" not in str(stmt).lower()
+        ]
+        assert outcomes_executes, "an outcomes query must have been executed"
+        _stmt, params = outcomes_executes[0]
+        assert params is not None, "outcomes query must be executed with a params dict"
+        assert params["oid"] == str(ORG), "raw boundary fragment :oid must be bound"
+        assert params["tid"] == str(TRIGGER_ID), "raw boundary fragment :tid must be bound"
+        # The ORM column predicates are bound by SQLAlchemy itself; the raw
+        # fragment's params are the ONLY ones the caller must supply — verify
+        # the merged bind set is fully resolved.
+        compiled = _stmt.compile(compile_kwargs={"render_postcompile": True})
+        merged = dict(compiled.params)
+        merged.update(params or {})
+        unbound = [name for name, value in merged.items() if value is None]
+        assert not unbound, f"all bind params must resolve, got unbound: {unbound}"
+
+    @pytest.mark.asyncio
+    async def test_deactivated_reason_no_delivery_streak(self) -> None:
+        """An inactive ongoing trigger with a no-delivery-streak deactivation
+        audit record reports state 'deactivated' + reason 'no_delivery_streak'."""
+        session = _StatusSession(
+            streak=5,
+            audit_row=({"deactivated_by": "no_delivery_streak", "streak": 5},),
+        )
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger(active=False))
+        assert status["state"] == "deactivated"
+        assert status["deactivated_reason"] == "no_delivery_streak"
+
+    @pytest.mark.asyncio
+    async def test_deactivated_reason_config_failure(self) -> None:
+        """A config-failure deactivation (FAR-158 ``_bump_ongoing_failure``)
+        surfaces as reason 'config_failure', distinct from the streak path."""
+        session = _StatusSession(streak=3, audit_row=({"deactivated_by": "config_failure"},))
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger(active=False))
+        assert status["state"] == "deactivated"
+        assert status["deactivated_reason"] == "config_failure"
+
+    @pytest.mark.asyncio
+    async def test_manually_paused_has_no_reason(self) -> None:
+        """A trigger toggled off by the operator (no auto-deactivation audit
+        record) reports state 'ok' with no deactivation reason — the UI's
+        regular inactive state, not a deactivation banner."""
+        session = _StatusSession(streak=0, audit_row=None)
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger(active=False))
+        assert status["state"] == "ok"
+        assert status["deactivated_reason"] is None
+
+    @pytest.mark.asyncio
+    async def test_reenabled_then_manually_paused_ignores_pre_reenable_deactivation(self) -> None:
+        """FIX 1 (audit aging) — auto-deactivated -> re-enabled -> manually
+        paused: the append-only audit log keeps the old auto-deactivation
+        record forever, and re-enable only re-anchors ``streak_epoch``. The
+        reader constrains the deactivation-reason query to ``created_at >=
+        streak_epoch``, so the PRE-re-enable record is ignored and the trigger
+        reports state 'ok' with no reason (no false deactivated badge /
+        Re-enable button for a manually-paused trigger)."""
+        pre_reenable_deactivation = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
+        session = _StatusSession(
+            streak=0,
+            audit_row=({"deactivated_by": ts.STREAK_DEACTIVATED_BY_STREAK, "streak": 5},),
+            audit_created_at=pre_reenable_deactivation,
+        )
+        trigger = _ongoing_trigger(active=False, streak_epoch=datetime.now(UTC))
+        status = await ts.get_trigger_streak_status(session, trigger)
+        assert status["state"] == "ok"
+        assert status["deactivated_reason"] is None
+
+    @pytest.mark.asyncio
+    async def test_deactivation_after_reenable_still_surfaces(self) -> None:
+        """FIX 1 (audit aging) — the epoch filter must NOT over-prune: a
+        deactivation that happened AFTER the re-anchor still surfaces. The
+        epoch re-anchors at re-enable (2h ago) and the deactivation record is
+        newer (1h ago), so it is inside the ``created_at >= streak_epoch``
+        window and reports state 'deactivated'."""
+        reenabled_at = datetime.now(UTC) - timedelta(hours=2)
+        deactivated_at = datetime.now(UTC) - timedelta(hours=1)
+        session = _StatusSession(
+            streak=5,
+            audit_row=({"deactivated_by": ts.STREAK_DEACTIVATED_BY_STREAK},),
+            audit_created_at=deactivated_at,
+        )
+        trigger = _ongoing_trigger(active=False, streak_epoch=reenabled_at)
+        status = await ts.get_trigger_streak_status(session, trigger)
+        assert status["state"] == "deactivated"
+        assert status["deactivated_reason"] == "no_delivery_streak"
+
+    @pytest.mark.asyncio
+    async def test_reason_read_failure_preserves_streak_and_outcomes(self) -> None:
+        """FIX 3 (per-sub-read degradation) — a reason-read failure must NOT
+        discard the already-computed streak + last_outcomes (the old single-try
+        reader returned the bare base, hiding a deactivated trigger's streak).
+        The trigger is inactive, so the state degrades to 'deactivated' (never
+        'unconfigured') with the reason unknown."""
+        now = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+        session = _StatusSession(
+            streak=3,
+            outcome_rows=[_outcome(uuid.uuid4(), "no_delivery", "no_work", now)],
+        )
+
+        async def _route(stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
+            s = str(stmt).lower()
+            if "as streak" in s:
+                r = MagicMock()
+                r.scalar_one.return_value = 3
+                return r
+            if "audit_events" in s:
+                raise RuntimeError("audit read down")
+            r = MagicMock()
+            r.all.return_value = session._outcome_rows
+            return r
+
+        session.execute = _route  # type: ignore[method-assign]
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger(active=False))
+        assert status["streak"] == 3
+        assert len(status["last_outcomes"]) == 1
+        assert status["last_outcomes"][0]["classification"] == "no_delivery"
+        assert status["state"] == "deactivated"
+        assert status["deactivated_reason"] is None
+
+    @pytest.mark.asyncio
+    async def test_outcomes_read_failure_keeps_streak_and_threshold(self) -> None:
+        """FIX 3 (per-sub-read degradation) — an outcomes-read failure keeps the
+        computed streak + threshold and degrades last_outcomes to [] — the
+        reader never collapses a partially-computed read to unconfigured."""
+        session = _StatusSession(streak=2)
+
+        async def _route(stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
+            s = str(stmt).lower()
+            if "as streak" in s:
+                r = MagicMock()
+                r.scalar_one.return_value = 2
+                return r
+            raise RuntimeError("outcomes read down")
+
+        session.execute = _route  # type: ignore[method-assign]
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger())
+        assert status["streak"] == 2
+        assert status["threshold"] == 5
+        assert not status["last_outcomes"]
+        assert status["state"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_count_read_failure_degrades_to_base(self) -> None:
+        """FIX 3 (per-sub-read degradation) — a count-read failure degrades to
+        the bare unconfigured base (nothing computable); the never-raises
+        contract holds."""
+        session = _StatusSession()
+
+        async def _boom(stmt: Any, params: dict[str, Any] | None = None) -> None:
+            raise RuntimeError("db down")
+
+        session.execute = _boom  # type: ignore[method-assign]
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger())
+        assert status["state"] == "unconfigured"
+        assert status["enabled"] is False
+        assert status["streak"] == 0
+
+    @pytest.mark.asyncio
+    async def test_kill_switch_off_reports_enabled_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The deactivate+notify kill switch gates the ``enabled`` flag (the
+        streak is still computed and shown; nothing will auto-deactivate)."""
+        monkeypatch.setenv("MODULO_STREAK_DEACTIVATE_KILL_SWITCH", "0")
+        session = _StatusSession(streak=2)
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger())
+        assert status["enabled"] is False
+        assert status["streak"] == 2
+        assert status["state"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_never_raises_on_error(self) -> None:
+        """Any read failure is swallowed and degrades to the base shape — the
+        API list/detail serializers must never 500 on a status read."""
+        session = _StatusSession()
+
+        async def _boom(*args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("db down")
+
+        session.execute = _boom  # type: ignore[method-assign]
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger())
+        assert status["enabled"] is False
+        assert status["state"] == "unconfigured"
+
+    @pytest.mark.asyncio
+    async def test_never_writes(self) -> None:
+        """The read-only contract: only SELECT-shaped statements are issued —
+        no UPDATE/INSERT/DELETE from the status read."""
+        session = _StatusSession(streak=4, outcome_rows=[], audit_row=None)
+        await ts.get_trigger_streak_status(session, _ongoing_trigger(active=False))
+        for stmt, _params in session.executed:
+            assert "update" not in str(stmt).lower()
+            assert "insert" not in str(stmt).lower()
+            assert "delete" not in str(stmt).lower()
