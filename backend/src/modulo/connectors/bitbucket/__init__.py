@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from modulo.connectors._safe_int import safe_int as _safe_int
+from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -16,20 +17,6 @@ from modulo.connectors.base import (
 )
 
 _BITBUCKET_API = "https://api.bitbucket.org/2.0"
-
-
-def _list_records(body: object) -> list[dict[str, Any]]:
-    """Safely extract the Bitbucket ``values`` page from a list response body.
-
-    A corrupt or hostile response may return a non-dict body (list, string,
-    number, ...) or a non-list ``values``. Both must fall back to an empty page
-    instead of crashing the connector with ``AttributeError`` on the bare
-    ``body.get("values", [])`` chain.
-    """
-    if not isinstance(body, dict):
-        return []
-    values = body.get("values", [])
-    return values if isinstance(values, list) else []
 
 
 def _paging_total(body: object) -> int | None:
@@ -108,11 +95,9 @@ class BitbucketConnector(ConnectorBase):
                 return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
 
             user_info = r.json()
-            username = (
-                user_info.get("username", "") or user_info.get("display_name", "")
-                if isinstance(user_info, dict)
-                else ""
-            )
+            if not isinstance(user_info, dict):
+                return HealthResult(ok=True, detail="")
+            username = user_info.get("username", "") or user_info.get("display_name", "")
             return HealthResult(ok=True, detail=username)
         except httpx.HTTPStatusError as exc:
             return HealthResult(
@@ -138,7 +123,7 @@ class BitbucketConnector(ConnectorBase):
                     r.raise_for_status()
                     body = r.json()
                     return ConnectorResult(
-                        records=_list_records(body),
+                        records=_safe_records(body, "values"),
                         total=_paging_total(body),
                     )
                 case "file":
@@ -174,7 +159,7 @@ class BitbucketConnector(ConnectorBase):
                     r.raise_for_status()
                     body = r.json()
                     return ConnectorResult(
-                        records=_list_records(body),
+                        records=_safe_records(body, "values"),
                         total=_paging_total(body),
                     )
                 case "issues":
@@ -194,7 +179,7 @@ class BitbucketConnector(ConnectorBase):
                     r.raise_for_status()
                     body = r.json()
                     return ConnectorResult(
-                        records=_list_records(body),
+                        records=_safe_records(body, "values"),
                         total=_paging_total(body),
                     )
                 case _:

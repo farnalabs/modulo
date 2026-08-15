@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from modulo.connectors._safe_int import safe_int as _safe_int
+from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -14,20 +15,6 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
-
-
-def _list_records(body: object) -> list[dict[str, Any]]:
-    """Safely extract the Azure Repos ``value`` page from a list response body.
-
-    A corrupt or hostile response may return a non-dict body (list, string,
-    number, ...) or a non-list ``value``. Both must fall back to an empty page
-    instead of crashing the connector with ``AttributeError`` on the bare
-    ``body.get("value", [])`` chain.
-    """
-    if not isinstance(body, dict):
-        return []
-    value = body.get("value", [])
-    return value if isinstance(value, list) else []
 
 
 def _paging_total(body: object) -> int | None:
@@ -108,7 +95,9 @@ class AzureReposConnector(ConnectorBase):
                 return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
 
             profile = r.json()
-            display_name = profile.get("displayName", "") if isinstance(profile, dict) else ""
+            if not isinstance(profile, dict):
+                return HealthResult(ok=True, detail="")
+            display_name = profile.get("displayName", "")
             return HealthResult(ok=True, detail=display_name)
         except httpx.HTTPStatusError as exc:
             return HealthResult(
@@ -134,7 +123,7 @@ class AzureReposConnector(ConnectorBase):
                     r.raise_for_status()
                     body = r.json()
                     return ConnectorResult(
-                        records=_list_records(body),
+                        records=_safe_records(body, "value"),
                         total=_paging_total(body),
                     )
                 case "file":
@@ -167,7 +156,7 @@ class AzureReposConnector(ConnectorBase):
                     r.raise_for_status()
                     body = r.json()
                     return ConnectorResult(
-                        records=_list_records(body),
+                        records=_safe_records(body, "value"),
                         total=_paging_total(body),
                     )
                 case "commits":
@@ -185,7 +174,7 @@ class AzureReposConnector(ConnectorBase):
                     r.raise_for_status()
                     body = r.json()
                     return ConnectorResult(
-                        records=_list_records(body),
+                        records=_safe_records(body, "value"),
                         total=_paging_total(body),
                     )
                 case _:
@@ -209,7 +198,7 @@ class AzureReposConnector(ConnectorBase):
                     )
                     refs_r.raise_for_status()
                     refs_body = refs_r.json()
-                    refs = _list_records(refs_body)
+                    refs = _safe_records(refs_body, "value")
                     if not refs:
                         raise ValueError(f"Branch {branch!r} not found in repo {repo!r}")
                     old_object_id = refs[0].get("objectId", "0000000000000000000000000000000000000000")

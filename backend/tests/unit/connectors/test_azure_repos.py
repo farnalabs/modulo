@@ -6,7 +6,7 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.azure_repos import AzureReposConnector, _list_records, _paging_total
+from modulo.connectors.azure_repos import AzureReposConnector, _paging_total
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
 
 TOKEN = "azure_test_token"
@@ -299,16 +299,6 @@ def test_paging_total() -> None:
     assert _paging_total({"count": "garbage"}) == 0
     assert _paging_total({}) is None
     assert _paging_total(["garbage"]) is None
-
-
-def test_list_records() -> None:
-    assert _list_records({"value": [{"id": "r1"}]}) == [{"id": "r1"}]
-    assert not _list_records({"value": "not-a-list"})
-    assert not _list_records({"value": 5})
-    assert not _list_records(["garbage"])
-    assert not _list_records("garbage")
-    assert not _list_records(None)
-    assert not _list_records({})
 
 
 def test_auth_header_format():

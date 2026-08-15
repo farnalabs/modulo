@@ -5,7 +5,7 @@ import pytest
 import respx
 
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.bitbucket import BitbucketConnector, _list_records, _paging_total
+from modulo.connectors.bitbucket import BitbucketConnector, _paging_total
 
 TOKEN = "bitbucket_test_token"
 _API = "https://api.bitbucket.org/2.0"
@@ -223,16 +223,6 @@ def test_paging_total() -> None:
     assert _paging_total({"size": "garbage"}) == 0
     assert _paging_total({}) is None
     assert _paging_total(["garbage"]) is None
-
-
-def test_list_records() -> None:
-    assert _list_records({"values": [{"uuid": "{1}"}]}) == [{"uuid": "{1}"}]
-    assert not _list_records({"values": "not-a-list"})
-    assert not _list_records({"values": 5})
-    assert not _list_records(["garbage"])
-    assert not _list_records("garbage")
-    assert not _list_records(None)
-    assert not _list_records({})
 
 
 def test_app_password_auth():
