@@ -101,7 +101,7 @@ class GuardrailRejectResponse(BaseModel):
 
 
 class GuardrailDriftResponse(BaseModel):
-    status: str  # clean | drift
+    status: str  # clean | proposed | drift
     current_hash: str | None = None
     applied_hash: str | None = None
 
@@ -230,7 +230,11 @@ async def _reconcile_guardrail_rows(
             else:
                 row.config_json = config_json
         for name, row in rows_by_name.items():
-            if name not in proposed_by_id:
+            # Only delete rows the config-as-code layer owns. Node-bound
+            # guardrails authored via the graph-save flow (node_id set) are
+            # NOT config-as-code's to reconcile — deleting them would silently
+            # strip guardrails the evals API bound to pipeline nodes.
+            if name not in proposed_by_id and row.node_id is None:
                 await session.delete(row)
     await session.flush()
 
@@ -273,7 +277,10 @@ async def get_guardrail_config(
                 config_yaml=dump_config_set(GuardrailConfigSet()),
                 hash=None,
                 applied_at=None,
-                status="clean",
+                # Live guardrail rows without a pin (e.g. authored via the
+                # graph-save flow) mean the layer is out of sync — report
+                # drift so this endpoint agrees with GET /drift.
+                status="drift" if drifted else "clean",
             )
         return GuardrailConfigResponse(
             config_yaml=pin.serialized_snapshot or dump_config_set(GuardrailConfigSet()),
@@ -443,12 +450,17 @@ async def get_guardrail_drift(
         drifted = check_guardrail_drift(definitions, pin)
         current_hash = hash_config_set(build_config_set_from_definitions(definitions))
         applied_hash = pin.applied_hash if pin else None
-        status = "drift" if drifted else "clean"
+        # The response reflects the pin's OWNED state: a pending "proposed" pin
+        # stays "proposed" even while the live rows drift, so /drift and
+        # /config agree.
+        status = _current_status(pin, drifted)
 
         # Persist status transitions on the pin and audit the drift entry so
-        # the audit trail records WHEN drift began, not every poll.
+        # the audit trail records WHEN drift began, not every poll. Only the
+        # "clean" <-> "drift" transition is owned by drift polling — a pending
+        # proposal ("proposed") is preserved so apply/reject still work.
         if pin is not None:
-            if drifted and pin.status != "drift":
+            if drifted and pin.status == "clean":
                 pin.status = "drift"
                 await _store_pin(session, principal.organisation_id, pin)
                 await _audit(

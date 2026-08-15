@@ -429,6 +429,107 @@ async def test_drift_reported_after_row_mutation(
     assert body["current_hash"] != applied_hash
 
 
+async def test_drift_poll_preserves_pending_proposal(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    org_a: uuid.UUID,
+    admin_a: uuid.UUID,
+    pipeline_a: uuid.UUID,
+):
+    # Apply V1, then mutate a live row so the pin drifts.
+    await _propose(integration_client, org_a, admin_a, _CONFIG_YAML)
+    await _apply(integration_client, org_a, admin_a)
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "UPDATE eval_definitions SET config_json = jsonb_set(config_json::jsonb, "
+                "'{pattern}', '\"SK-[0-9A-Za-z]{32}\"'::jsonb) "
+                "WHERE organisation_id = :oid AND name = 'no-aws-keys'",
+            ),
+            {"oid": str(org_a)},
+        )
+
+    drift = (
+        await integration_client.get(
+            "/api/v1/guardrails/config/drift",
+            headers=_auth_headers(org_a, admin_a),
+        )
+    ).json()
+    assert drift["status"] == "drift"
+
+    # Operator proposes a fix while rows are drifting. A drift poll must not
+    # orphan the proposal — the pin stays "proposed" and apply/reject keep
+    # working.
+    await _propose(integration_client, org_a, admin_a, _CONFIG_YAML_V2)
+    drift_again = (
+        await integration_client.get(
+            "/api/v1/guardrails/config/drift",
+            headers=_auth_headers(org_a, admin_a),
+        )
+    ).json()
+    assert drift_again["status"] == "proposed"
+
+    apply_body = await _apply(integration_client, org_a, admin_a)
+    assert apply_body["applied"] is True
+
+    post_apply_drift = (
+        await integration_client.get(
+            "/api/v1/guardrails/config/drift",
+            headers=_auth_headers(org_a, admin_a),
+        )
+    ).json()
+    assert post_apply_drift["status"] == "clean"
+
+
+async def test_apply_preserves_node_bound_guardrails(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    org_a: uuid.UUID,
+    admin_a: uuid.UUID,
+    pipeline_a: uuid.UUID,
+):
+    # A guardrail authored via the graph-save flow is bound to a node — it is
+    # NOT config-as-code's row, and apply must not delete it.
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO eval_definitions (id, organisation_id, pipeline_id, node_id, name, "
+                "eval_type, config_json, failure_behaviour, account_id) "
+                "VALUES (:id, :oid, :pid, :nid, 'graph-node-guard', 'guardrail', :cfg, 'warn', :aid)",
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "oid": str(org_a),
+                "pid": str(pipeline_a),
+                "nid": str(uuid.uuid4()),
+                "cfg": {
+                    "interception_point": "input",
+                    "action": "observe",
+                    "type": "regex",
+                    "pattern": "graph",
+                    "field": "body",
+                },
+                "aid": str(admin_a),
+            },
+        )
+
+    await _propose(integration_client, org_a, admin_a, _CONFIG_YAML)
+    await _apply(integration_client, org_a, admin_a)
+
+    async with db_engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT name, node_id FROM eval_definitions "
+                "WHERE organisation_id = :oid AND eval_type = 'guardrail' ORDER BY name",
+            ),
+            {"oid": str(org_a)},
+        )
+        by_name = {str(r[0]): r[1] for r in rows.all()}
+    assert "graph-node-guard" in by_name
+    assert by_name["graph-node-guard"] is not None
+    assert set(by_name) == {"graph-node-guard", "no-aws-keys", "valid-payload"}
+
+
 async def test_drift_clean_without_mutation(
     integration_client: AsyncClient,
     db_engine: AsyncEngine,
