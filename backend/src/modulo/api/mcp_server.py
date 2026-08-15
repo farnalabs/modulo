@@ -88,7 +88,10 @@ from modulo.core.analytics.service import (
 )
 from modulo.core.cost_controller.breakdown.constants import RAW_REPORTED_DISPLAY_CLAMP
 from modulo.core.cost_controller.finalize import finalize_cancelled_run
-from modulo.core.cron_helpers import compute_next_fire, validate_cron_expression
+from modulo.core.cron_helpers import (
+    compute_next_fire,
+    validate_cron_expression,
+)
 
 # ContextVars populated by McpAuthMiddleware before each request.
 # Propagation: this server runs FastMCP in stateless HTTP mode, where each request
@@ -123,6 +126,10 @@ from modulo.core.library_service import (
 from modulo.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope
 from modulo.core.pipeline_engine.error_codes import present_error
 from modulo.core.rate_limiter import TokenBucketRegistry
+from modulo.core.trigger_streak import (
+    anchor_trigger_streak_epoch,
+    clear_trigger_streak_after_reenable,
+)
 from modulo.db.crud.hitl_gate_guard import HitlGateWeakeningDenied
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
 from modulo.db.crud.pipeline import get_pipeline
@@ -2789,6 +2796,8 @@ async def create_trigger(
     max_concurrent_runs: int = 1,
     daily_spend_limit: float | None = None,
 ) -> dict[str, Any]:
+    from datetime import UTC
+
     try:
         if not await validate_current_auth():
             return _tool_auth_error("Token revoked or expired - re-authenticate")
@@ -2844,6 +2853,9 @@ async def create_trigger(
                 config_json=config_json or {},
                 account_id=account_id,
                 next_fire_at=next_fire_at,
+                # FAR-190: creation anchors the no-delivery streak epoch (the
+                # streak boundary) so pre-existing history can never count.
+                streak_epoch=datetime.now(UTC),
             )
             if cron_expression:
                 trigger.cron_expression = cron_expression
@@ -3041,6 +3053,10 @@ async def update_trigger(
 
             if active is not None:
                 trigger.active = active
+                # FAR-190: re-anchor the no-delivery streak epoch on any
+                # active=True transition (no un-epoch'd re-enable path).
+                if trigger.active and not prev_active:
+                    await anchor_trigger_streak_epoch(s, trigger_id=trigger.id)
             if max_concurrent_runs is not None:
                 trigger.max_concurrent_runs = max_concurrent_runs
             if clear_daily_spend_limit:
@@ -3082,6 +3098,11 @@ async def update_trigger(
             from modulo.core.cron_helpers import _count_ongoing_runs
 
             in_flight = await _count_ongoing_runs(s, trigger.id) if trigger.trigger_type == "ongoing" else 0
+
+        # FAR-190: clear the config-failure Redis counter only AFTER the commit
+        # (the _session context commits on exit); best-effort.
+        if active is True and not prev_active:
+            await clear_trigger_streak_after_reenable(trigger.id)
 
         return {
             "id": str(trigger.id),

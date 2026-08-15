@@ -26,9 +26,17 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
 from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK, mask_config_json
 from modulo.auth.jwt import TenantPrincipal
-from modulo.core.cron_helpers import _count_ongoing_runs, compute_next_fire, validate_cron_expression
+from modulo.core.cron_helpers import (
+    _count_ongoing_runs,
+    compute_next_fire,
+    validate_cron_expression,
+)
 from modulo.core.exceptions import OrgDeletedError
 from modulo.core.trigger_engine import TriggerEngine
+from modulo.core.trigger_streak import (
+    anchor_trigger_streak_epoch,
+    clear_trigger_streak_after_reenable,
+)
 from modulo.core.trigger_validation import validate_ongoing_config
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
@@ -215,6 +223,7 @@ async def update_cron_config(
     Validates the cron expression before saving. Computes ``next_fire_at``
     when the expression or timezone changes.
     """
+    prev_active = False
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -243,7 +252,12 @@ async def update_cron_config(
                 )
 
             if req.active is not None:
+                prev_active = trigger.active
                 trigger.active = req.active
+                # FAR-190: re-anchor the no-delivery streak epoch on any
+                # active=True transition (no un-epoch'd re-enable path).
+                if trigger.active and not prev_active:
+                    await anchor_trigger_streak_epoch(session, trigger_id=trigger.id)
             if req.cron_expression is not None:
                 trigger.cron_expression = req.cron_expression
             if req.cron_timezone is not None:
@@ -278,6 +292,11 @@ async def update_cron_config(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error",
         ) from None
+
+    # FAR-190: clear the config-failure Redis counter only AFTER the commit
+    # (over-clearing safe, under-clearing not); best-effort.
+    if req.active is True and not prev_active:
+        await clear_trigger_streak_after_reenable(trigger.id)
 
     return {
         "id": str(trigger.id),
@@ -390,6 +409,7 @@ async def update_polling_config(
     Validates that the trigger is of type ``polling`` before applying changes.
     Recomputes ``next_fire_at`` when the interval or config changes.
     """
+    prev_active = False
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -411,7 +431,12 @@ async def update_polling_config(
                 )
 
             if req.active is not None:
+                prev_active = trigger.active
                 trigger.active = req.active
+                # FAR-190: re-anchor the no-delivery streak epoch on any
+                # active=True transition (no un-epoch'd re-enable path).
+                if trigger.active and not prev_active:
+                    await anchor_trigger_streak_epoch(session, trigger_id=trigger.id)
             if "daily_spend_limit" in req.model_fields_set:
                 trigger.daily_spend_limit = req.daily_spend_limit
 
@@ -466,6 +491,10 @@ async def update_polling_config(
             detail="Internal server error",
         ) from None
 
+    # FAR-190: clear the config-failure Redis counter only AFTER the commit.
+    if req.active is True and not prev_active:
+        await clear_trigger_streak_after_reenable(trigger.id)
+
     return {
         "id": str(trigger.id),
         "active": trigger.active,
@@ -506,6 +535,7 @@ async def update_ongoing_config(
     ``next_fire_at = now`` when the scan cadence changes or the trigger is
     turned on so the new configuration is picked up on the next tick.
     """
+    prev_active = False
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -542,7 +572,12 @@ async def update_ongoing_config(
             if req.target_runs is not None:
                 trigger.max_concurrent_runs = req.target_runs
             if req.active is not None:
+                prev_active = trigger.active
                 trigger.active = req.active
+                # FAR-190: re-anchor the no-delivery streak epoch on any
+                # active=True transition (no un-epoch'd re-enable path).
+                if trigger.active and not prev_active:
+                    await anchor_trigger_streak_epoch(session, trigger_id=trigger.id)
 
             if trigger.trigger_type == "ongoing":
                 activated = req.active is not None and trigger.active
@@ -572,6 +607,10 @@ async def update_ongoing_config(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error",
         ) from None
+
+    # FAR-190: clear the config-failure Redis counter only AFTER the commit.
+    if req.active is True and not prev_active:
+        await clear_trigger_streak_after_reenable(trigger.id)
 
     return {
         "id": str(trigger.id),
@@ -723,6 +762,9 @@ async def create_trigger(
                 cron_timezone=req.cron_timezone,
                 account_id=principal.account_id,
                 next_fire_at=next_fire_at,
+                # FAR-190: creation anchors the no-delivery streak epoch (the
+                # streak boundary) so pre-existing history can never count.
+                streak_epoch=datetime.datetime.now(datetime.UTC),
             )
             session.add(trigger)
             await session.flush()
@@ -858,6 +900,10 @@ async def update_trigger(
 
             if req.active is not None:
                 trigger.active = req.active
+                # FAR-190: re-anchor the no-delivery streak epoch on any
+                # active=True transition (no un-epoch'd re-enable path).
+                if trigger.active and not prev_active:
+                    await anchor_trigger_streak_epoch(session, trigger_id=trigger.id)
             if req.max_concurrent_runs is not None:
                 trigger.max_concurrent_runs = req.max_concurrent_runs
             if "daily_spend_limit" in req.model_fields_set:
@@ -917,6 +963,10 @@ async def update_trigger(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error",
         ) from None
+
+    # FAR-190: clear the config-failure Redis counter only AFTER the commit.
+    if req.active is True and not prev_active:
+        await clear_trigger_streak_after_reenable(trigger.id)
 
     return {
         "id": str(trigger.id),
@@ -1000,6 +1050,10 @@ async def restore_trigger(
             # next tick (its next_fire_at was advanced while it was deleted).
             if trigger.trigger_type == "ongoing":
                 trigger.next_fire_at = datetime.datetime.now(datetime.UTC)
+            # FAR-190: a restored trigger back in service re-anchors its
+            # no-delivery streak epoch (no un-epoch'd re-enable path).
+            if trigger.active:
+                await anchor_trigger_streak_epoch(session, trigger_id=trigger.id)
             restored_in_flight = await _ongoing_in_flight(session, trigger)
     except ProgrammingError:
         _log.exception("triggers.restore_trigger")
@@ -1021,6 +1075,10 @@ async def restore_trigger(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error",
         ) from None
+
+    # FAR-190: clear the config-failure Redis counter only AFTER the commit.
+    if trigger.active:
+        await clear_trigger_streak_after_reenable(trigger.id)
 
     return {
         "id": str(trigger.id),
@@ -1069,6 +1127,10 @@ async def toggle_trigger(
             # tick (its next_fire_at was advanced while it was inactive).
             if trigger.trigger_type == "ongoing" and trigger.active:
                 trigger.next_fire_at = datetime.datetime.now(datetime.UTC)
+            # FAR-190: re-anchor the no-delivery streak epoch on any active=True
+            # transition (no un-epoch'd re-enable path).
+            if trigger.active:
+                await anchor_trigger_streak_epoch(session, trigger_id=trigger.id)
             await session.flush()
     except ProgrammingError:
         _log.exception("triggers.toggle_trigger")
@@ -1090,6 +1152,10 @@ async def toggle_trigger(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error",
         ) from None
+
+    # FAR-190: clear the config-failure Redis counter only AFTER the commit.
+    if trigger.active:
+        await clear_trigger_streak_after_reenable(trigger.id)
 
     return {"id": str(trigger.id), "active": trigger.active}
 

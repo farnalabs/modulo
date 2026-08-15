@@ -13,6 +13,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Uuid,
+    func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -61,3 +62,17 @@ class Trigger(SoftDeleteMixin, OrgScoped):
     cron_timezone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     last_fired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     next_fire_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    # FAR-190 no-delivery streak engine — the lower boundary of an ongoing
+    # trigger's no-delivery streak. The streak is bounded by
+    # GREATEST(last_delivery_at, streak_epoch): the epoch is anchored at
+    # migration backfill, at creation, and on EVERY active=True transition (via
+    # the shared cron_helpers.anchor_trigger_streak_epoch helper) so pre-existing
+    # no-delivery history can never mass-deactivate on tick 1 and a re-enabled
+    # trigger's streak restarts from its re-enable moment. NULL (rolling-deploy
+    # skew) fails SAFE: the engine's boundary COALESCEs it to now(), so a NULL
+    # epoch can never be deactivated until the row is re-anchored. server_default
+    # mirrors the migration backfill so no insert path can leave an unanchored
+    # row.
+    streak_epoch: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.current_timestamp(), nullable=True
+    )

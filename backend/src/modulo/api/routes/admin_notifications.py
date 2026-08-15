@@ -27,6 +27,7 @@ from modulo.core.notifier import (
     EVENT_BUDGET_EXCEEDED,
     EVENT_CIRCUIT_BREAKER_TRIPPED,
     EVENT_RUN_STALLED,
+    EVENT_TRIGGER_DEACTIVATED,
 )
 from modulo.db.models.notification_delivery import NotificationDeliveryLog
 from modulo.db.models.notification_endpoint import NotificationEndpoint
@@ -45,6 +46,7 @@ AVAILABLE_EVENTS = [
     "hitl_overdue",
     EVENT_BUDGET_EXCEEDED,
     EVENT_CIRCUIT_BREAKER_TRIPPED,
+    EVENT_TRIGGER_DEACTIVATED,
 ]
 
 

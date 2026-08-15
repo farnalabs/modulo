@@ -478,16 +478,39 @@ async def reset_pipeline_circuit_breaker(
         return False
     pipeline.circuit_breaker_tripped = False
     pipeline.circuit_breaker_tripped_at = None
-    await session.execute(
+    # FAR-190: every re-activated trigger's no-delivery streak epoch is
+    # re-anchored IN THE SAME atomic statement as the active=True flip (the
+    # shared anchor semantics — no un-epoch'd active=True transition). Inlined
+    # here (rather than a second UPDATE) so the whole re-enable is one statement.
+    # RETURNING carries the re-enabled ids so the FAR-158 counter clear below
+    # needs no extra query.
+    result = await session.execute(
         update(Trigger)
         .where(
             Trigger.organisation_id == org_id,
             Trigger.pipeline_id == pipeline_id,
             Trigger.deleted_at.is_(None),
         )
-        .values(active=True)
+        .values(active=True, streak_epoch=datetime.now(UTC))
+        .returning(Trigger.id)
     )
+    re_enabled_ids = list(result.scalars().all())
     await session.flush()
+    # FAR-190 (qa FIX 12): a trigger re-activated via the circuit-breaker reset
+    # must not keep its stale FAR-158 config-failure counter — a leftover
+    # counter would re-deactivate the freshly re-enabled trigger on its next
+    # top-up. Best-effort (never raises): over-clearing is safe, under-clearing
+    # is not, so calling the shared clear helper post-flush is correct even if
+    # the outer transaction later rolls back.
+    try:
+        from modulo.core.trigger_streak import clear_trigger_streak_after_reenable
+
+        for re_enabled_id in re_enabled_ids:
+            await clear_trigger_streak_after_reenable(re_enabled_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("circuit_breaker.reset_streak_clear_failed pipeline=%s", pipeline_id)
     return True
 
 
