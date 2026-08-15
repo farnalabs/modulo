@@ -18,6 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 _log = logging.getLogger(__name__)
 
 
+_VALID_TRENDS = frozenset({"declining", "stable", "improving"})
+
+
 @dataclass
 class RegressionAlert:
     """Alert for a single eval whose pass rate dropped significantly."""
@@ -37,6 +40,8 @@ async def detect_regressions(
     days: int = 7,
     threshold: float = 0.15,
     recent_window_ratio: float = 0.25,
+    pipeline_id: UUID | None = None,
+    trend: str | None = None,
 ) -> list[RegressionAlert]:
     """Detect pass-rate regressions by comparing recent vs baseline windows.
 
@@ -54,6 +59,11 @@ async def detect_regressions(
         recent_window_ratio: Fraction of the lookback period used as the
             "recent" window (must be ``> 0`` and ``<= 1.0``).  Defaults to
             ``0.25`` (i.e. the legacy ``max(days // 4, 1)`` behaviour).
+        pipeline_id: Optional pipeline to scope results to. When given, only
+            eval results from runs of that pipeline are considered.
+        trend: Optional trend filter — one of ``declining``, ``stable`` or
+            ``improving``. When given, only alerts with that trend are
+            returned (e.g. ``declining`` reduces noise to true regressions).
 
     Returns:
         List of ``RegressionAlert`` for evals with significant drops.
@@ -65,6 +75,8 @@ async def detect_regressions(
         raise ValueError(f"threshold must be >= 0, got {threshold}")
     if not 0 < recent_window_ratio <= 1.0:
         raise ValueError(f"recent_window_ratio must be > 0 and <= 1.0, got {recent_window_ratio}")
+    if trend is not None and trend not in _VALID_TRENDS:
+        raise ValueError(f"trend must be one of {sorted(_VALID_TRENDS)}, got {trend!r}")
 
     now = datetime.now(UTC)
     recent_window_days = max(int(days * recent_window_ratio), 1)
@@ -91,9 +103,11 @@ async def detect_regressions(
                 )                      AS affected_run_ids
             FROM eval_results er
             JOIN eval_definitions ed ON ed.id = er.eval_id
+            JOIN runs r ON r.id = er.run_id
             WHERE er.organisation_id = :org_id
               AND ed.organisation_id = :org_id
               AND er.evaluated_at >= :baseline_start
+              AND (:pipeline_id IS NULL OR r.pipeline_id = :pipeline_id)
             GROUP BY er.eval_id
         """)
 
@@ -104,6 +118,7 @@ async def detect_regressions(
                     "org_id": org_id,
                     "baseline_start": baseline_start,
                     "recent_start": recent_start,
+                    "pipeline_id": pipeline_id,
                 },
             )
         ).all()
@@ -136,11 +151,13 @@ async def detect_regressions(
         drop = prev_pass_rate - current_pass_rate
 
         if drop > threshold:
-            trend = "declining"
+            trend_label = "declining"
         elif drop < -threshold:
-            trend = "improving"
+            trend_label = "improving"
         else:
-            trend = "stable"
+            trend_label = "stable"
+        if trend is not None and trend_label != trend:
+            continue
         alerts.append(
             RegressionAlert(
                 eval_id=row.eval_id,
@@ -148,7 +165,7 @@ async def detect_regressions(
                 prev_pass_rate=round(prev_pass_rate, 4),
                 current_pass_rate=round(current_pass_rate, 4),
                 drop_pct=round(drop, 4),
-                trend=trend,
+                trend=trend_label,
                 affected_run_ids=list(row.affected_run_ids or []),
             ),
         )

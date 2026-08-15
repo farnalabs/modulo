@@ -68,6 +68,8 @@ from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
+_VALID_REGRESSION_TRENDS = frozenset({"declining", "stable", "improving"})
+
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
@@ -2355,6 +2357,8 @@ class RegressionAlertsResponse(BaseModel):
     threshold: float
     recent_window_ratio: float
     lookback_days: int
+    pipeline_id: str | None = None
+    trend: str | None = None
 
 
 @router.get("/evals/regressions", response_model=RegressionAlertsResponse)
@@ -2368,6 +2372,17 @@ async def eval_regressions(
         le=1.0,
         description="Fraction of the lookback period used as the recent window (e.g. 0.5 = last half)",
     ),
+    pipeline_id: uuid.UUID | None = Query(
+        default=None,
+        description="Scope alerts to eval results from runs of a single pipeline",
+    ),
+    trend: str | None = Query(
+        default=None,
+        description=(
+            "Filter alerts by trend direction: 'declining', 'stable' or 'improving'. "
+            "Use 'declining' to surface true regressions only."
+        ),
+    ),
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> RegressionAlertsResponse:
@@ -2375,6 +2390,12 @@ async def eval_regressions(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admin users can access eval regressions",
+        )
+
+    if trend is not None and trend not in _VALID_REGRESSION_TRENDS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"trend must be one of {sorted(_VALID_REGRESSION_TRENDS)}, got {trend!r}",
         )
 
     try:
@@ -2386,6 +2407,8 @@ async def eval_regressions(
                 days=days,
                 threshold=threshold,
                 recent_window_ratio=recent_window_ratio,
+                pipeline_id=pipeline_id,
+                trend=trend,
             )
     except IntegrityError:
         logger.exception("admin.eval_regressions")
@@ -2436,6 +2459,8 @@ async def eval_regressions(
         threshold=threshold,
         recent_window_ratio=recent_window_ratio,
         lookback_days=days,
+        pipeline_id=str(pipeline_id) if pipeline_id is not None else None,
+        trend=trend,
     )
 
 
