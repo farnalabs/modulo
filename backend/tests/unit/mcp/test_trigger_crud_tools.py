@@ -12,6 +12,48 @@ _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _API_KEY = "mk_testprefix_testsecretkey1234567890abc"
 
 
+def _full_streak_status(**overrides: object) -> dict[str, object]:
+    """FAR-251 — the SAME uniform 6-key shape the REST serializers surface."""
+    status: dict[str, object] = {
+        "enabled": True,
+        "streak": 4,
+        "threshold": 5,
+        "state": "ok",
+        "deactivated_reason": None,
+        "last_outcomes": [
+            {
+                "run_id": "run-1",
+                "classification": "no_delivery",
+                "reason": "no_work",
+                "completed_at": "2026-08-01T00:00:00Z",
+            }
+        ],
+    }
+    status.update(overrides)
+    return status
+
+
+_BASE_STREAK_STATUS = {
+    "enabled": False,
+    "streak": 0,
+    "threshold": 0,
+    "state": "unconfigured",
+    "deactivated_reason": None,
+    "last_outcomes": [],
+}
+
+
+def test_mcp_reuses_the_rest_streak_builder() -> None:
+    """FAR-251 — the MCP trigger tools and the REST serializers MUST share ONE
+    streak-status builder (no divergence). The MCP tools import the routes'
+    ``_streak_status_for`` directly, so the two surfaces are the same function
+    object by construction."""
+    import modulo.api.mcp_server as mcp
+    import modulo.api.routes.triggers as routes
+
+    assert mcp._streak_status_for is routes._streak_status_for
+
+
 def _make_mock_trigger(
     *,
     trigger_id: uuid.UUID | None = None,
@@ -51,6 +93,16 @@ def _make_execute_result(trigger: MagicMock | None) -> MagicMock:
     result = MagicMock()
     result.scalar_one_or_none.return_value = trigger
     return result
+
+
+def _make_add_session(trigger_id: uuid.UUID | None = None) -> AsyncMock:
+    """Return a session whose ``add`` assigns the model's PK, like a real flush
+    (``Trigger.id`` has a Python-side ``default=uuid.uuid4`` SQLAlchemy only
+    applies at flush time)."""
+    session = AsyncMock()
+    generated_id = trigger_id or uuid.uuid4()
+    session.add = MagicMock(side_effect=lambda obj: setattr(obj, "id", generated_id))
+    return session
 
 
 class _AuthContext:
@@ -176,6 +228,165 @@ class TestGetTriggerSuccess(_AuthContext):
         assert result["last_fired_at"] == fired.isoformat()
         assert result["next_fire_at"] == next_fire.isoformat()
         assert result["input_template"] == {"foo": "bar"}
+
+
+class _TrackingSessionCtx:
+    """A session context that tracks whether the ``async with _session`` scope
+    is active — proves the MCP streak reads run INSIDE the RLS session block
+    (mirrors the REST ``_TrackingBegin`` test for the FAR-191 list fix)."""
+
+    active = False
+
+    def __init__(self, session: AsyncMock) -> None:
+        self.session = session
+
+    async def __aenter__(self) -> AsyncMock:
+        _TrackingSessionCtx.active = True
+        return self.session
+
+    async def __aexit__(self, *args: object) -> bool:
+        _TrackingSessionCtx.active = False
+        return False
+
+
+# ---------------------------------------------------------------------------
+# get_trigger — streak_status surfacing (FAR-251)
+# ---------------------------------------------------------------------------
+
+
+class TestGetTriggerStreakStatus(_AuthContext):
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_get_trigger_includes_streak_status_for_ongoing(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """The MCP get_trigger surfaces the SAME streak_status shape the REST
+        detail serializer returns for an ongoing trigger."""
+        trigger = _make_mock_trigger(trigger_type="ongoing", active=False)
+        streak_status = _full_streak_status(streak=5, state="deactivated", deactivated_reason="no_delivery_streak")
+        mock_sesh = AsyncMock()
+        trigger_result = _make_execute_result(trigger)
+        owner_team_result = _make_execute_result(None)
+        count_result = MagicMock()
+        count_result.scalar_one.return_value = 2
+        mock_sesh.execute = AsyncMock(side_effect=[trigger_result, owner_team_result, count_result])
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        with patch(
+            "modulo.api.routes.triggers.get_trigger_streak_status",
+            new_callable=AsyncMock,
+            return_value=streak_status,
+        ) as get_status:
+            result = await get_trigger(trigger_id=str(trigger.id))
+
+        assert result.get("error") is None
+        assert result["trigger_type"] == "ongoing"
+        assert result["in_flight"] == 2
+        assert result["streak_status"] == streak_status
+        get_status.assert_awaited_once()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_get_trigger_streak_status_uniform_base_for_non_ongoing(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """A non-ongoing trigger still gets the uniform 6-key streak_status shape
+        ({enabled: false, state: 'unconfigured'}, zero queries) — the reader
+        short-circuits before issuing any streak-engine query."""
+        trigger = _make_mock_trigger(trigger_type="cron")
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        result = await get_trigger(trigger_id=str(trigger.id))
+
+        assert result.get("error") is None
+        assert result["streak_status"] == _BASE_STREAK_STATUS
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_get_trigger_deactivated_trigger_surfaces_state_and_reason(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """An auto-deactivated trigger surfaces state='deactivated' plus the
+        deactivation reason (here 'no_delivery_streak') so MCP operators can see
+        the deactivated badge + reason without hitting the REST API."""
+        trigger = _make_mock_trigger(trigger_type="ongoing", active=False)
+        streak_status = _full_streak_status(
+            streak=5,
+            threshold=5,
+            state="deactivated",
+            deactivated_reason="no_delivery_streak",
+            last_outcomes=[
+                {
+                    "run_id": "run-9",
+                    "classification": "no_delivery",
+                    "reason": "no_work",
+                    "completed_at": "2026-08-02T00:00:00Z",
+                }
+            ],
+        )
+        mock_sesh = AsyncMock()
+        trigger_result = _make_execute_result(trigger)
+        owner_team_result = _make_execute_result(None)
+        count_result = MagicMock()
+        count_result.scalar_one.return_value = 5
+        mock_sesh.execute = AsyncMock(side_effect=[trigger_result, owner_team_result, count_result])
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        with patch(
+            "modulo.api.routes.triggers.get_trigger_streak_status",
+            new_callable=AsyncMock,
+            return_value=streak_status,
+        ):
+            result = await get_trigger(trigger_id=str(trigger.id))
+
+        assert result.get("error") is None
+        assert result["active"] is False
+        assert result["streak_status"]["state"] == "deactivated"
+        assert result["streak_status"]["deactivated_reason"] == "no_delivery_streak"
+        assert result["streak_status"] == streak_status
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_get_trigger_streak_read_runs_inside_rls_session_scope(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """The streak read must happen INSIDE the _session block (RLS scope) —
+        SET LOCAL app.organisation_id is transaction-scoped, so a post-commit
+        read would see zero rows and silently report state 'ok'."""
+        trigger = _make_mock_trigger(trigger_type="ongoing", active=False)
+        streak_status = _full_streak_status(streak=5, state="deactivated", deactivated_reason="no_delivery_streak")
+        mock_sesh = AsyncMock()
+        trigger_result = _make_execute_result(trigger)
+        owner_team_result = _make_execute_result(None)
+        count_result = MagicMock()
+        count_result.scalar_one.return_value = 5
+        mock_sesh.execute = AsyncMock(side_effect=[trigger_result, owner_team_result, count_result])
+        mock_session.return_value = _TrackingSessionCtx(mock_sesh)
+
+        async def _streak_status(*args: object, **kwargs: object) -> dict[str, object]:
+            assert _TrackingSessionCtx.active, "streak read must happen inside the RLS session scope"
+            return streak_status
+
+        with patch(
+            "modulo.api.routes.triggers.get_trigger_streak_status",
+            new_callable=AsyncMock,
+            side_effect=_streak_status,
+        ):
+            result = await get_trigger(trigger_id=str(trigger.id))
+
+        assert result.get("error") is None
+        assert result["streak_status"] == streak_status
+        assert _TrackingSessionCtx.active is False, "the session scope must have closed after the response"
 
 
 # ---------------------------------------------------------------------------
@@ -477,6 +688,46 @@ class TestUpdateTriggerSuccess(_AuthContext):
 
 
 # ---------------------------------------------------------------------------
+# update_trigger — streak_status surfacing (FAR-251)
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateTriggerStreakStatus(_AuthContext):
+    def setup_method(self) -> None:
+        super().setup_method()
+        from modulo.api.mcp_server import _ctx_role
+
+        _ctx_role.set("operator")
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_update_trigger_includes_streak_status(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """The MCP update_trigger response surfaces the refreshed streak_status
+        exactly as the REST update serializer does."""
+        trigger = _make_mock_trigger(trigger_type="ongoing", daily_spend_limit=Decimal("25.00"))
+        streak_status = _full_streak_status(streak=0, state="ok", deactivated_reason=None, last_outcomes=[])
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
+        mock_sesh.get = AsyncMock(return_value=_pipeline_cap(10))
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        with patch(
+            "modulo.api.routes.triggers.get_trigger_streak_status",
+            new_callable=AsyncMock,
+            return_value=streak_status,
+        ) as get_status:
+            result = await update_trigger(trigger_id=str(trigger.id), max_concurrent_runs=4)
+
+        assert result.get("error") is None
+        assert result["streak_status"] == streak_status
+        get_status.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
 # delete_trigger
 # ---------------------------------------------------------------------------
 
@@ -657,6 +908,53 @@ class TestCreateTriggerOngoing(_AuthContext):
 
         assert result["error"] == "validation"
         assert "cannot exceed" in result["detail"]
+
+
+class TestCreateTriggerStreakStatus(_AuthContext):
+    def setup_method(self) -> None:
+        super().setup_method()
+        from modulo.api.mcp_server import _ctx_role, _ctx_user_id
+
+        _ctx_role.set("operator")
+        _ctx_user_id.set(uuid.uuid4())
+
+    def teardown_method(self) -> None:
+        from modulo.api.mcp_server import _ctx_user_id
+
+        _ctx_user_id.set(None)
+        super().teardown_method()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_create_trigger_includes_streak_status(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """The MCP create_trigger response surfaces the created trigger's
+        streak_status (the anchored streak=0 / state=ok baseline for a fresh
+        ongoing trigger) exactly as the REST create serializer does."""
+        streak_status = _full_streak_status(streak=0, state="ok", deactivated_reason=None, last_outcomes=[])
+        mock_sesh = _make_add_session()
+        mock_sesh.get = AsyncMock(return_value=_pipeline_cap(10))
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        with patch(
+            "modulo.api.routes.triggers.get_trigger_streak_status",
+            new_callable=AsyncMock,
+            return_value=streak_status,
+        ) as get_status:
+            result = await create_trigger(
+                pipeline_id=str(uuid.uuid4()),
+                trigger_type="ongoing",
+                max_concurrent_runs=3,
+                daily_spend_limit=25.0,
+            )
+
+        assert result.get("error") is None
+        assert result["trigger_type"] == "ongoing"
+        assert result["streak_status"] == streak_status
+        get_status.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
