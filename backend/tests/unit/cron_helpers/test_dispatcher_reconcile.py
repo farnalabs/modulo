@@ -556,7 +556,6 @@ class TestEnqueueFailedRecovery:
         )
         assert summary["repaired"] == 2
         assert summary["enqueue_failed_capped"] == 1
-        reenqueue.assert_awaited()
         assert reenqueue.await_count == 2
         ingest.assert_not_awaited()
 
