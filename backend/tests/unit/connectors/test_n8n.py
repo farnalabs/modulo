@@ -142,6 +142,38 @@ async def test_query_workflows_dict_cursor_not_emitted(connector: N8NConnector) 
     assert result.next_cursor is None
 
 
+# -- corrupt list payload hardening -- #
+
+
+@respx.mock
+async def test_query_workflows_corrupt_body_no_crash(connector: N8NConnector) -> None:
+    """A non-dict body from the workflows list endpoint must degrade to an
+    empty page instead of crashing with AttributeError on ``.get()``."""
+    respx.get(f"{BASE_URL}/rest/workflows").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await connector.query(ConnectorQuery(resource="workflows"))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_workflows_non_list_data_no_crash(connector: N8NConnector) -> None:
+    """A corrupt body placing a non-list in ``data`` must fall back to an
+    empty page instead of returning a bare string as the records list."""
+    respx.get(f"{BASE_URL}/rest/workflows").mock(return_value=httpx.Response(200, json={"data": "not-a-list"}))
+    result = await connector.query(ConnectorQuery(resource="workflows"))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_executions_corrupt_body_no_crash(connector: N8NConnector) -> None:
+    """A non-dict executions body must degrade to an empty page, not crash."""
+    respx.get(f"{BASE_URL}/rest/executions").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await connector.query(ConnectorQuery(resource="executions"))
+    assert not result.records
+    assert result.total == 0
+
+
 # -- query: single workflow -- #
 
 

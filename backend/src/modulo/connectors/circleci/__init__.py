@@ -5,6 +5,7 @@ from typing import Any, cast
 import httpx
 
 from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
+from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     CIRun,
     CIRunLog,
@@ -185,7 +186,7 @@ class CircleCIConnector(CIRunnerBase):
         async with self._client() as client:
             r = await client.get(f"/project/{project_slug}/pipeline", params=params)
             r.raise_for_status()
-            data: list[dict[str, Any]] = r.json().get("items", [])
+            data: list[dict[str, Any]] = _safe_records(r.json(), "items")
             return [self._parse_run(item) for item in data[:limit]]
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
@@ -197,10 +198,10 @@ class CircleCIConnector(CIRunnerBase):
                     r = await client.get(f"/project/{slug}/pipeline", params=params)
                     r.raise_for_status()
                     data = r.json()
-                    records = data.get("items", [])
+                    records = _safe_records(data, "items")
                     return ConnectorResult(
                         records=records,
-                        next_cursor=_safe_cursor(data.get("next_page_token")),
+                        next_cursor=_safe_cursor(data.get("next_page_token") if isinstance(data, dict) else None),
                         total=len(records),
                     )
             case "workflows":
@@ -209,10 +210,10 @@ class CircleCIConnector(CIRunnerBase):
                     r = await client.get(f"/pipeline/{pipeline_uuid}/workflow")
                     r.raise_for_status()
                     data = r.json()
-                    records = data.get("items", [])
+                    records = _safe_records(data, "items")
                     return ConnectorResult(
                         records=records,
-                        next_cursor=_safe_cursor(data.get("next_page_token")),
+                        next_cursor=_safe_cursor(data.get("next_page_token") if isinstance(data, dict) else None),
                         total=len(records),
                     )
             case "jobs":
@@ -221,10 +222,10 @@ class CircleCIConnector(CIRunnerBase):
                     r = await client.get(f"/workflow/{workflow_id}/job")
                     r.raise_for_status()
                     data = r.json()
-                    records = data.get("items", [])
+                    records = _safe_records(data, "items")
                     return ConnectorResult(
                         records=records,
-                        next_cursor=_safe_cursor(data.get("next_page_token")),
+                        next_cursor=_safe_cursor(data.get("next_page_token") if isinstance(data, dict) else None),
                         total=len(records),
                     )
             case "runs":
@@ -233,10 +234,10 @@ class CircleCIConnector(CIRunnerBase):
                     r = await client.get(f"/project/{slug}/pipeline")
                     r.raise_for_status()
                     data = r.json()
-                    records = data.get("items", [])
+                    records = _safe_records(data, "items")
                     return ConnectorResult(
                         records=records,
-                        next_cursor=_safe_cursor(data.get("next_page_token")),
+                        next_cursor=_safe_cursor(data.get("next_page_token") if isinstance(data, dict) else None),
                         total=len(records),
                     )
             case _:

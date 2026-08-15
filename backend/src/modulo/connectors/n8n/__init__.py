@@ -6,6 +6,7 @@ from typing import Any, cast
 import httpx
 
 from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
+from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -109,11 +110,11 @@ class N8NConnector(ConnectorBase):
         resp = await c.get("/rest/workflows", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = body.get("data", [])
+        records = _safe_records(body, "data")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
-            next_cursor=_safe_cursor(body.get("nextCursor")),
+            next_cursor=_safe_cursor(body.get("nextCursor") if isinstance(body, dict) else None),
         )
 
     async def _get_workflow(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -123,7 +124,7 @@ class N8NConnector(ConnectorBase):
         resp = await c.get(f"/rest/workflows/{workflow_id}")
         resp.raise_for_status()
         body = resp.json()
-        record = body.get("data", {})
+        record = body.get("data", {}) if isinstance(body, dict) else {}
         return ConnectorResult(records=[record])
 
     async def _list_executions(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -138,11 +139,11 @@ class N8NConnector(ConnectorBase):
         resp = await c.get("/rest/executions", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = body.get("data", [])
+        records = _safe_records(body, "data")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
-            next_cursor=_safe_cursor(body.get("nextCursor")),
+            next_cursor=_safe_cursor(body.get("nextCursor") if isinstance(body, dict) else None),
         )
 
     async def _get_execution(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -152,7 +153,7 @@ class N8NConnector(ConnectorBase):
         resp = await c.get(f"/rest/executions/{execution_id}")
         resp.raise_for_status()
         body = resp.json()
-        record = body.get("data", {})
+        record = body.get("data", {}) if isinstance(body, dict) else {}
         return ConnectorResult(records=[record])
 
     async def _list_webhooks(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -164,11 +165,11 @@ class N8NConnector(ConnectorBase):
         resp = await c.get("/rest/webhooks", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = body.get("data", [])
+        records = _safe_records(body, "data")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
-            next_cursor=_safe_cursor(body.get("nextCursor")),
+            next_cursor=_safe_cursor(body.get("nextCursor") if isinstance(body, dict) else None),
         )
 
     async def _list_credentials(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -180,11 +181,11 @@ class N8NConnector(ConnectorBase):
         resp = await c.get("/rest/credentials", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = body.get("data", [])
+        records = _safe_records(body, "data")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
-            next_cursor=_safe_cursor(body.get("nextCursor")),
+            next_cursor=_safe_cursor(body.get("nextCursor") if isinstance(body, dict) else None),
         )
 
     async def _get_credential(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -194,7 +195,7 @@ class N8NConnector(ConnectorBase):
         resp = await c.get(f"/rest/credentials/{credential_id}")
         resp.raise_for_status()
         body = resp.json()
-        record = body.get("data", {})
+        record = body.get("data", {}) if isinstance(body, dict) else {}
         return ConnectorResult(records=[record])
 
     async def _list_tags(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -206,11 +207,11 @@ class N8NConnector(ConnectorBase):
         resp = await c.get("/rest/tags", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = body.get("data", [])
+        records = _safe_records(body, "data")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
-            next_cursor=_safe_cursor(body.get("nextCursor")),
+            next_cursor=_safe_cursor(body.get("nextCursor") if isinstance(body, dict) else None),
         )
 
     async def _list_nodes(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -222,11 +223,11 @@ class N8NConnector(ConnectorBase):
         resp = await c.get("/rest/node-types", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = body.get("data", [])
+        records = _safe_records(body, "data")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
-            next_cursor=_safe_cursor(body.get("nextCursor")),
+            next_cursor=_safe_cursor(body.get("nextCursor") if isinstance(body, dict) else None),
         )
 
     async def _create_workflow(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
