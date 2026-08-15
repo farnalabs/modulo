@@ -7,6 +7,7 @@ proposal, drift detection after a live row is mutated, RLS cross-org
 isolation, and the permission gate (viewer cannot propose/apply).
 """
 
+import json
 import uuid
 from collections.abc import AsyncGenerator
 
@@ -502,13 +503,15 @@ async def test_apply_preserves_node_bound_guardrails(
                 "oid": str(org_a),
                 "pid": str(pipeline_a),
                 "nid": str(uuid.uuid4()),
-                "cfg": {
-                    "interception_point": "input",
-                    "action": "observe",
-                    "type": "regex",
-                    "pattern": "graph",
-                    "field": "body",
-                },
+                "cfg": json.dumps(
+                    {
+                        "interception_point": "input",
+                        "action": "observe",
+                        "type": "regex",
+                        "pattern": "graph",
+                        "field": "body",
+                    }
+                ),
                 "aid": str(admin_a),
             },
         )
