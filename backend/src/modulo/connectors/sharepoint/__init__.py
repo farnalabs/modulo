@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 
 from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
+from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -35,19 +36,6 @@ class SharePointConnector(ConnectorBase):
 
     _BASE_URL = "https://graph.microsoft.com/v1.0"
 
-    def _list_records(self, body: object) -> list[dict[str, Any]]:
-        """Safely extract the Graph ``value`` page from a list response body.
-
-        A corrupt or hostile response may return a non-dict body (list, string,
-        number, ...) or a non-list ``value``. Both must fall back to an empty
-        page instead of crashing the connector with ``AttributeError`` on the
-        bare ``body.get("value", [])`` chain.
-        """
-        if not isinstance(body, dict):
-            return []
-        value = body.get("value", [])
-        return value if isinstance(value, list) else []
-
     def _page(
         self,
         body: object,
@@ -59,7 +47,7 @@ class SharePointConnector(ConnectorBase):
         is a non-empty string carrying a non-empty ``$skiptoken``, mirroring
         the microsoft_teams / Snyk cursor-hardening programme.
         """
-        records = self._list_records(body)
+        records = _safe_records(body, "value")
         next_cursor: str | None = None
         if isinstance(body, dict):
             next_link = body.get("@odata.nextLink", "")

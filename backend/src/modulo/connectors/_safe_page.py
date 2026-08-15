@@ -1,14 +1,13 @@
 """Shared safe-page extraction helper for connector clients.
 
-The Azure Repos (``value``) and Bitbucket (``values``) connectors each guarded
-their list pagination against corrupt or hostile response bodies with a
-private ``_list_records`` copy; the Microsoft Teams and SharePoint connectors
-carry the same logic. A corrupt or hostile response may return a non-dict body
-(list, string, number, ...) or a non-list page field — either crashes the
-connector with ``AttributeError`` on the bare ``body.get(key, [])`` chain or
-returns a bare string as the records list. Keeping a single implementation in
-one place avoids drift between the copies (mirrors ``_safe_int`` /
-``_safe_cursor`` / ``_safe_datetime``).
+The Azure Repos (``value``), Bitbucket (``values``), Microsoft Teams
+(``value``), and SharePoint (``value``) connectors each guard their list
+pagination against corrupt or hostile response bodies. A corrupt or hostile
+response may return a non-dict body (list, string, number, ...) or a non-list
+page field — either crashes the connector with ``AttributeError`` on the bare
+``body.get(key, [])`` chain or returns a bare string as the records list.
+Keeping a single implementation in one place avoids drift between the copies
+(mirrors ``_safe_int`` / ``_safe_cursor`` / ``_safe_datetime``).
 """
 
 from __future__ import annotations
