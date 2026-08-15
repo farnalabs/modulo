@@ -176,7 +176,6 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-teams-org-dashboard-full](teams/org-dashboard-full.md) => PRD 8
 - [feat-teams-org-entity](teams/org-entity.md) => PRD 9.1, 6.2
 - [feat-teams-sso-team-mapping](teams/sso-team-mapping.md) => PRD 9.4, 6.2, 9.2
-- [feat-teams-team-comparison](teams/team-comparison.md) => PRD 8.26
 - [feat-teams-team-crud](teams/team-crud.md) => PRD 9.3
 - [feat-teams-team-hitl-gates](teams/team-hitl-gates.md) => PRD 8.8, 9.3
 - [feat-teams-team-isolation](teams/team-isolation.md) => PRD 9.3

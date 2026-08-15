@@ -11,14 +11,6 @@ Feature: Elena — VP / Director of Engineering
     And I see a breakdown by team
     And I see a trend chart over the last 30 days
 
-  @goal-elena-team-comparison @awaiting-implementation
-  Scenario: Elena compares eval pass rates across teams
-    Given team "alpha" has 92% eval pass rate
-    And team "beta" has 74% eval pass rate
-    When I open the team comparison view
-    Then I can see pass rates side by side
-    And I can drill into team "beta" to see which pipelines are dragging the average
-
   @goal-elena-cost-by-team @awaiting-implementation
   Scenario: Elena sees token spend by team and pipeline
     Given team "alpha" has token spend of $240 this month
