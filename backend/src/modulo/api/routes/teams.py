@@ -6,6 +6,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,6 +32,8 @@ from modulo.db.crud.team_membership import (
     remove_team_member,
     update_member_role,
 )
+from modulo.db.models.team import Team
+from modulo.db.models.team_membership import TeamMembership
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _log = logging.getLogger(__name__)
@@ -55,10 +58,6 @@ async def _assert_not_last_operator(
     team without anyone able to manage membership. Emptying the team entirely
     (removing the sole member) is allowed.
     """
-    from sqlalchemy import func, select
-
-    from modulo.db.models.team_membership import TeamMembership
-
     other_members = (
         await session.execute(
             select(func.count())
@@ -179,10 +178,6 @@ async def my_teams_endpoint(
             team_ids = [m.team_id for m in memberships]
             names: dict[uuid.UUID, str] = {}
             if team_ids:
-                from sqlalchemy import select
-
-                from modulo.db.models.team import Team
-
                 rows = (
                     await session.execute(
                         select(Team.id, Team.name).where(

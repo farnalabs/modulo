@@ -47,7 +47,7 @@ from modulo.db.crud.run import (
     get_sandbox_concurrency_limit,
     purge_runs,
 )
-from modulo.db.crud.team import count_owned_resources, create_team, delete_team, get_team_by_name, list_teams
+from modulo.db.crud.team import count_owned_resources, create_team, delete_team, get_team, get_team_by_name, list_teams
 from modulo.db.crud.team import update_team as crud_update_team
 from modulo.db.crud.team_membership import list_team_memberships_for_account, remove_team_member
 from modulo.db.crud.token_family import blacklist_family, list_families_for_account
@@ -81,8 +81,6 @@ async def _assert_team_not_stale(
     first writer's now-stale timestamp and is rejected with 409 instead of
     silently overwriting the other rename.
     """
-    from modulo.db.crud.team import get_team
-
     team = await get_team(session, team_id)
     if team is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
@@ -1438,7 +1436,7 @@ async def admin_list_teams(
                 member_count=member_counts.get(t.id, 0),
                 owned_resource_count=owned_resource_counts.get(t.id, 0),
                 created_at=t.created_at.isoformat() if t.created_at else "",
-                updated_at=t.updated_at.isoformat() if t.updated_at else "",
+                updated_at=t.updated_at.isoformat() if isinstance(t.updated_at, datetime) else "",
             )
             for t in result.items
         ],
@@ -1557,7 +1555,7 @@ async def admin_update_team(
         description=team.description,
         account_id=str(team.account_id),
         created_at=team.created_at.isoformat(),
-        updated_at=team.updated_at.isoformat() if team.updated_at else "",
+        updated_at=team.updated_at.isoformat() if isinstance(team.updated_at, datetime) else "",
     )
 
 
