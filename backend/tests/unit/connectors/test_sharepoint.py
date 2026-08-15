@@ -44,7 +44,7 @@ async def test_health_check_corrupt_body_no_crash(connector):
     respx.get(f"{_API}/sites/root").mock(return_value=httpx.Response(200, json=["not-a-site"]))
     result = await connector.health_check()
     assert result.ok is True
-    assert result.detail == ""
+    assert not result.detail
 
 
 @respx.mock
