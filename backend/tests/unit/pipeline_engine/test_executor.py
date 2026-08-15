@@ -2013,6 +2013,106 @@ async def test_check_capacity_fail_open_when_graph_scan_raises():
 
 
 # ---------------------------------------------------------------------------
+# _check_capacity — run_started audit event (PRD §8.12)
+# ---------------------------------------------------------------------------
+
+
+async def test_check_capacity_admission_emits_run_started_audit():
+    """A run admitted to ``running`` fires the ``run_started`` audit event once.
+
+    PRD §8.12: pipeline runs must start with an audit event. The event is
+    emitted at the pending→running claim transition — the single point where a
+    run genuinely starts (the resume() path sets ``running`` directly and is
+    NOT counted, so the event fires once per run, not once per resume).
+    """
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run()
+    org_id = uuid.uuid4()
+    pipeline_id = uuid.uuid4()
+    audit = AsyncMock(return_value=MagicMock())
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", side_effect=_make_update_status(run, [])),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.append_audit_event", new=audit),
+    ):
+        result = await executor._check_capacity(
+            run_id=run.id,
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            max_concurrent=5,
+            graph_json={"nodes": [{"id": "a", "node_type": "agent"}]},
+        )
+
+    assert result.status == "running"
+    audit.assert_awaited_once()
+    kwargs = audit.await_args.kwargs
+    assert kwargs["event_type"] == "run_started"
+    assert kwargs["org_id"] == org_id
+    assert kwargs["resource_type"] == "run"
+    assert kwargs["resource_id"] == run.id
+    assert kwargs["payload_json"] == {"pipeline_id": str(pipeline_id)}
+
+
+async def test_check_capacity_blocked_emits_no_run_started_audit():
+    """A capacity-blocked run (demoted back to pending) must NOT fire run_started."""
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run()
+    calls: list[tuple[str, dict[str, Any]]] = []
+    audit = AsyncMock(return_value=MagicMock())
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", side_effect=_make_update_status(run, calls)),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=5),
+        patch("modulo.core.pipeline_engine.executor.append_audit_event", new=audit),
+    ):
+        result = await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=5,
+            graph_json={"nodes": [{"id": "a", "node_type": "agent"}]},
+        )
+
+    assert result.status == "pending"
+    assert result.error_code == "pipeline_capacity"
+    audit.assert_not_awaited()
+
+
+async def test_check_capacity_run_started_audit_failure_does_not_block_admission():
+    """A broken audit append never blocks run admission (failure isolation)."""
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run()
+
+    async def _raise_audit(*_a: Any, **_k: Any) -> Any:
+        raise RuntimeError("audit boom")
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", side_effect=_make_update_status(run, [])),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.append_audit_event", side_effect=_raise_audit),
+    ):
+        result = await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=5,
+            graph_json={"nodes": [{"id": "a", "node_type": "agent"}]},
+        )
+
+    assert result.status == "running"
+
+
+# ---------------------------------------------------------------------------
 # PipelineExecutor.execute — capacity-deferred (plan F3b, no _retry_pending)
 # ---------------------------------------------------------------------------
 

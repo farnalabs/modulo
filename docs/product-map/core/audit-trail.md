@@ -10,16 +10,21 @@ code:
   - backend/src/modulo/core/audit_logger/append_only.py
   - backend/src/modulo/db/models/audit_event.py
   - backend/src/modulo/api/routes/audit.py
+  - backend/src/modulo/api/routes/api_keys.py
   - backend/src/modulo/api/routes/admin_rotation.py
   - backend/src/modulo/api/routes/admin.py
   - backend/src/modulo/api/routes/pipelines.py
   - backend/src/modulo/core/hitl_manager/__init__.py
   - backend/src/modulo/core/hitl_manager/expiry_job.py
+  - backend/src/modulo/core/pipeline_engine/executor.py
   - backend/src/modulo/core/pipeline_engine/recovery.py
 unit-tests:
   - backend/tests/unit/audit_logger/test_audit_logger.py
   - backend/tests/unit/audit_logger/test_append_only.py
   - backend/tests/integration/test_audit_append_only.py
+  - backend/tests/unit/pipeline_engine/test_executor.py
+  - backend/tests/unit/hitl_manager/test_hitl_manager.py
+  - backend/tests/unit/api/test_api_keys_endpoint.py
 
 depends-on: [feat-core-db-abstraction-core]
 status: partial
@@ -90,8 +95,8 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 
 ### Event Types (PRD 8.12 table — 18 documented event types)
 
-- [ ] `run_started` — pipeline_id, snapshot_id, trigger_type, user_id, input hash
-- [ ] `hitl_claimed` — run_id, gate_id, user_id
+- [x] `run_started` — pipeline_id, snapshot_id, trigger_type, user_id, input hash
+- [x] `hitl_claimed` — run_id, gate_id, user_id
 - [ ] `hitl_approved` — run_id, gate_id, user_id
 - [ ] `hitl_rejected` — run_id, gate_id, user_id, reason, reject_target
 - [ ] `pipeline_changed` — pipeline_id, user_id, change summary
@@ -100,8 +105,8 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 - [ ] `connector_credentials_updated` — connector_id, user_id
 - [ ] `model_backend_credentials_updated` — backend_id, user_id
 - [ ] `schema_version_deprecated` — schema_id, version, user_id
-- [ ] `api_key_created` — key_id (not raw key), user_id
-- [ ] `api_key_revoked` — key_id, revoked_by
+- [x] `api_key_created` — key_id (not raw key), user_id
+- [x] `api_key_revoked` — key_id, revoked_by
 - [ ] `auth_event` — type (login/logout/failed), user_id, ip
 - [ ] `team_created` / `team_renamed` / `team_deleted` — team id/name, user
 - [ ] `team_member_added` / `team_member_removed` / `team_member_role_changed` — team_id, user_id, role
@@ -133,6 +138,10 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 - [x] `sso_provider.toggled` — provider_name
 - [x] `sso_provider.updated` — provider_name
 - [x] `team_deleted` — team_id
+- [x] `run_started` — pipeline_id (dispatched from `PipelineExecutor._check_capacity` at the pending→running claim transition; fires once per run — the resume() path is excluded)
+- [x] `hitl_claimed` — run_id, gate_id, user_id, team_id, expiry_minutes (dispatched from `HITLManager.claim`)
+- [x] `api_key_created` — name, role, team_id (dispatched from the api-keys create route, key id as `resource_id`)
+- [x] `api_key_revoked` — revoked_by (dispatched from the api-keys revoke route, key id as `resource_id`)
 
 ### Edge Cases
 
@@ -185,21 +194,30 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 - verify_chain limited to 10000 events by default — large orgs may need higher limit or batched verification
 - No event retention policy (events accumulate indefinitely)
 - No event schema versioning (payload structure could change between event types)
-- **PRD-vs-implementation divergence**: all 18 PRD-specified event types (`run_started`, `hitl_approved`, `team_created`, etc.) are NOT dispatched. Production code uses 19 different dot-notation event types (`pipeline.autonomy_level_changed`, `hitl.output_delivered`, etc.) with no overlap to the PRD table. The naming convention, granularity, and payload structure differ entirely.
-- **No `run_started` event**: pipeline runs start without an audit event. The `run_started` PRD event is not dispatched anywhere.
-- **No `hitl_claimed` audit event**: Claim acquisition is not recorded in the audit trail (`hitl.claim_expired` is dispatched, but the initial claim itself is not).
+- **PRD-vs-implementation divergence**: 14 of the 18 PRD-specified event types (`hitl_approved`, `hitl_rejected`, `team_created`, etc.) are NOT dispatched. Production code uses 19 different dot-notation event types (`pipeline.autonomy_level_changed`, `hitl.output_delivered`, etc.) with no overlap to the PRD table. The naming convention, granularity, and payload structure differ entirely. **[RESOLVED 2026-08-15]** — 4 PRD event types are now dispatched under their PRD names: `run_started`, `hitl_claimed`, `api_key_created`, `api_key_revoked`.
+- ~~**No `run_started` event**: pipeline runs start without an audit event. The `run_started` PRD event is not dispatched anywhere.~~ **[RESOLVED 2026-08-15]** — dispatched from `PipelineExecutor._check_capacity` at the pending→running claim transition (fires once per run; resumes excluded).
+- ~~**No `hitl_claimed` audit event**: Claim acquisition is not recorded in the audit trail (`hitl.claim_expired` is dispatched, but the initial claim itself is not).~~ **[RESOLVED 2026-08-15]** — dispatched from `HITLManager.claim()` with run_id/gate_id/user_id/team_id/expiry_minutes.
 - **No team CRUD audit events**: team creation, rename, deletion, membership changes, and role changes are not audited.
 - **No permission change audit**: `user_permission_changed` event not dispatched.
-- **No API key audit**: `api_key_created`/`api_key_revoked` not dispatched.
+- ~~**No API key audit**: `api_key_created`/`api_key_revoked` not dispatched.~~ **[RESOLVED 2026-08-15]** — dispatched from the api-keys create/revoke routes (key id as `resource_id`, raw key never logged).
 - **No auth event audit**: login, logout, and failed auth attempts not recorded.
 - **BDD placeholder steps**: Scenarios 'Audit events have cryptographic chaining', 'Claim expiry is audited', 'HITL output delivery is audited', 'Org deletion request is audited' have @then step implementations at `backend/tests/bdd/steps/test_alpha_audit.py` that were placeholders (pass). Not a functional bug (the scenarios verify existence at code level) but serve as regression safety net. **[Now fixed: assertions added for event_type matching and gate metadata.]**
 - **BDD feature file uses wrong event types** (resolved): `event_recording.feature` previously referenced `pipeline.created`, `pipeline.deleted`, `run.created`, `hitl.approved` — none of which match either the PRD table or the actual dispatched event types. **[RESOLVED]** — Feature file now uses correct event types matching actual dispatched events (`pipeline.autonomy_level_changed`, `hitl.output_delivered`, `hitl.claim_expired`, `org_deletion_requested`).
 - **`hitl.output_rejected` was already dispatched** (product map was stale — claimed no audit event). However, `reject_gate` route was missing `actor_id=principal.account_id`, so the audit event had `actor_id=None`. Fixed in index 246 cross-cutting QA.
-- **No API key audit events**: `api_keys.py` has zero audit dispatches — PRD specifies `api_key_created` and `api_key_revoked`
-- **No `run_started` audit event**: Pipeline runs start without an audit event
+- **No API key audit events**: `api_keys.py` has zero audit dispatches — PRD specifies `api_key_created` and `api_key_revoked` **[RESOLVED 2026-08-15]** — both now dispatched (see QA History).
+- ~~**No `run_started` audit event**: Pipeline runs start without an audit event~~ **[RESOLVED 2026-08-15]** — dispatched from `PipelineExecutor._check_capacity`.
 - **8 unguarded audit dispatch calls fixed**: All previously uncovered dispatch calls now have error handling protection (expiry_job, recovery, sso_provider, admin team deletion, run_purge transaction scoping, rotation deadlock)
 
 ## QA History
+
+### 2026-08-15 — improve-architecture (audit event gaps)
+
+**RESOLVED 3 known gaps / 4 new dispatched event types** (PRD §8.12 vocabulary):
+- **`run_started`** — `PipelineExecutor._check_capacity` now appends a `run_started` audit event (resource_type `run`, resource_id = run id, payload `pipeline_id`) at the pending→running claim transition in the execute() path. The resume() path sets `running` directly and never calls `_check_capacity`, so the event fires exactly once per run. Failure-isolated (broken append logs a warning and never blocks run admission). 3 unit tests in `test_executor.py`: admitted-run emits event with correct payload, capacity-blocked run emits nothing, audit failure does not block admission.
+- **`hitl_claimed`** — `HITLManager.claim()` now appends a `hitl_claimed` audit event (actor = claimant, resource_type `hitl_claim`, resource_id = claim id, payload `pipeline_run_id`/`node_id`/`team_id`/`expiry_minutes`) after the atomic claim UPDATE + TOCTOU re-verification pass. Failure-isolated. 2 unit tests in `test_hitl_manager.py`: success emits event with full payload, audit failure does not fail the claim.
+- **`api_key_created`** / **`api_key_revoked`** — the api-keys create and revoke routes now append the PRD-specified audit events (key id as `resource_id`, raw key never logged; payload `name`/`role`/`team_id` for create, `revoked_by` for revoke). Written in a fresh transaction after the primary operation commits and failure-isolated (a broken append never fails a completed create/revoke; a 404 revoke emits nothing). 5 unit tests in `test_api_keys_endpoint.py`: create emits, create audit failure isolated, revoke emits, 404 revoke emits nothing, revoke audit failure isolated.
+
+Verification: 1081 unit tests across `tests/unit/pipeline_engine` + `tests/unit/hitl_manager` + `tests/unit/api/test_api_keys_endpoint.py` + `tests/unit/audit_logger` pass; `tests/unit/auth` + route-introspection + audit endpoint tests (542 + 73) pass; ruff check + format clean; mypy --strict clean on all 3 modified source modules. Status: partial (14 PRD event types still undispatched).
 
 ### Cross-cutting QA (index 246)
 **Findings discovered and fixed:**

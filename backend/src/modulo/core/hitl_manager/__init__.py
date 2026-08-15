@@ -331,6 +331,33 @@ class HITLManager:
                     user_id=claimant_id,
                 )
 
+        # PRD §8.12 ``hitl_claimed``: the claim acquisition itself was never
+        # audited — only the later ``hitl.claim_expired``/decision events were.
+        # Failure-isolated: a broken audit append must never fail the claim
+        # (the savepoint rollback undoes only the audit write).
+        try:
+            await append_audit_event(
+                session,
+                org_id=org_id,
+                event_type="hitl_claimed",
+                actor_user_id=claimant_id,
+                resource_type="hitl_claim",
+                resource_id=claimed_id,
+                payload_json={
+                    "pipeline_run_id": str(run_id),
+                    "node_id": gate_id,
+                    "team_id": str(gate_check.required_team_id) if gate_check.required_team_id else None,
+                    "expiry_minutes": expiry_minutes,
+                },
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "hitl_manager.claim_audit_failed",
+                extra={"run_id": str(run_id), "gate_id": gate_id, "org_id": str(org_id)},
+            )
+
         return gate
 
     # ------------------------------------------------------------------

@@ -277,6 +277,57 @@ async def test_claim_success_sets_token_and_expiry():
     assert result is claimed_gate
 
 
+async def test_claim_success_emits_hitl_claimed_audit():
+    """A successful claim fires the PRD §8.12 ``hitl_claimed`` audit event.
+
+    The audit event records the actor, the claim resource, and the run/gate the
+    claim targets — the acquisition side of the lifecycle that previously only
+    had the ``hitl.claim_expired`` event (the claim itself was never audited).
+    """
+    pre_check = _gate(account_id=None)
+    claimed_gate = _gate(
+        account_id=_USER,
+        claim_token="tok",
+        expires_at=datetime.now(UTC) + timedelta(minutes=15),
+    )
+    session = _session_update(rows_returned=1, gate=claimed_gate, pre_check_gate=pre_check)
+    mgr = HITLManager()
+    audit = AsyncMock(return_value=MagicMock())
+    with patch("modulo.core.hitl_manager.append_audit_event", new=audit):
+        result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+
+    assert result is claimed_gate
+    audit.assert_awaited_once()
+    kwargs = audit.await_args.kwargs
+    assert kwargs["event_type"] == "hitl_claimed"
+    assert kwargs["org_id"] == _ORG
+    assert kwargs["actor_user_id"] == _USER
+    assert kwargs["resource_type"] == "hitl_claim"
+    assert kwargs["payload_json"]["pipeline_run_id"] == str(_RUN)
+    assert kwargs["payload_json"]["node_id"] == _GATE
+    assert kwargs["payload_json"]["team_id"] is None
+    assert kwargs["payload_json"]["expiry_minutes"] == 15
+
+
+async def test_claim_audit_failure_does_not_block_claim():
+    """A broken audit append must not fail the claim (failure isolation)."""
+    pre_check = _gate(account_id=None)
+    claimed_gate = _gate(
+        account_id=_USER,
+        claim_token="tok",
+        expires_at=datetime.now(UTC) + timedelta(minutes=15),
+    )
+    session = _session_update(rows_returned=1, gate=claimed_gate, pre_check_gate=pre_check)
+    mgr = HITLManager()
+
+    async def _raise_audit(*_a: Any, **_k: Any) -> Any:
+        raise RuntimeError("audit boom")
+
+    with patch("modulo.core.hitl_manager.append_audit_event", side_effect=_raise_audit):
+        result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+    assert result is claimed_gate
+
+
 async def test_claim_with_secret_key_uses_jwt_token():
     """claim() with a configured secret_key mints a signed JWT claim token."""
     pre_check = _gate(account_id=None)

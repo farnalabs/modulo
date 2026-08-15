@@ -3,6 +3,7 @@
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
@@ -132,6 +133,46 @@ def test_create_api_key_returns_201(client: TestClient) -> None:
     assert "hashed_secret" not in body
 
 
+def test_create_api_key_emits_api_key_created_audit(client: TestClient) -> None:
+    """Key minting fires the PRD §8.12 ``api_key_created`` audit event."""
+    key = _make_key()
+    audit = AsyncMock(return_value=MagicMock())
+    with (
+        patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_test_key")),
+        patch("modulo.api.routes.api_keys.set_rls_org"),
+        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("modulo.api.routes.api_keys.append_audit_event", new=audit),
+    ):
+        resp = client.post("/api/v1/api-keys", json={"name": "Test Key", "role": "operator"})
+    assert resp.status_code == 201
+    audit.assert_awaited_once()
+    kwargs = audit.await_args.kwargs
+    assert kwargs["event_type"] == "api_key_created"
+    assert kwargs["org_id"] == _ORG_ID
+    assert kwargs["actor_user_id"] == _USER_ID
+    assert kwargs["resource_type"] == "api_key"
+    assert kwargs["resource_id"] == key.id
+    assert kwargs["payload_json"] == {"name": "Test Key", "role": "operator", "team_id": None}
+
+
+def test_create_api_key_audit_failure_does_not_block_creation(client: TestClient) -> None:
+    """A broken audit append must not fail a successful key creation."""
+    key = _make_key()
+
+    async def _raise_audit(*_a: Any, **_k: Any) -> Any:
+        raise RuntimeError("audit boom")
+
+    with (
+        patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_test_key")),
+        patch("modulo.api.routes.api_keys.set_rls_org"),
+        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("modulo.api.routes.api_keys.append_audit_event", side_effect=_raise_audit),
+    ):
+        resp = client.post("/api/v1/api-keys", json={"name": "Test Key", "role": "operator"})
+    assert resp.status_code == 201
+    assert resp.json()["key_value"] == "mk_test_key"
+
+
 def test_create_api_key_returns_full_key_once(client: TestClient) -> None:
     key = _make_key()
     with (
@@ -190,6 +231,58 @@ def test_revoke_api_key_returns_200(client: TestClient) -> None:
         patch("modulo.api.routes.api_keys.revoke_api_key", return_value=True),
         patch("modulo.api.routes.api_keys.set_rls_org"),
         patch("modulo.api.routes.api_keys.set_rls_user_context"),
+    ):
+        resp = client.delete(f"/api/v1/api-keys/{_KEY_ID}")
+    assert resp.status_code == 200
+    assert resp.json()["revoked"] is True
+
+
+def test_revoke_api_key_emits_api_key_revoked_audit(client: TestClient) -> None:
+    """Key revocation fires the PRD §8.12 ``api_key_revoked`` audit event."""
+    audit = AsyncMock(return_value=MagicMock())
+    with (
+        patch("modulo.api.routes.api_keys.revoke_api_key", return_value=True),
+        patch("modulo.api.routes.api_keys.set_rls_org"),
+        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("modulo.api.routes.api_keys.append_audit_event", new=audit),
+    ):
+        resp = client.delete(f"/api/v1/api-keys/{_KEY_ID}")
+    assert resp.status_code == 200
+    audit.assert_awaited_once()
+    kwargs = audit.await_args.kwargs
+    assert kwargs["event_type"] == "api_key_revoked"
+    assert kwargs["org_id"] == _ORG_ID
+    assert kwargs["actor_user_id"] == _USER_ID
+    assert kwargs["resource_type"] == "api_key"
+    assert kwargs["resource_id"] == _KEY_ID
+    assert kwargs["payload_json"] == {"revoked_by": str(_USER_ID)}
+
+
+def test_revoke_api_key_not_found_does_not_emit_audit(client: TestClient) -> None:
+    """A 404 revoke (unknown key) must not fire the revoke audit event."""
+    audit = AsyncMock(return_value=MagicMock())
+    with (
+        patch("modulo.api.routes.api_keys.revoke_api_key", return_value=False),
+        patch("modulo.api.routes.api_keys.set_rls_org"),
+        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("modulo.api.routes.api_keys.append_audit_event", new=audit),
+    ):
+        resp = client.delete(f"/api/v1/api-keys/{uuid.uuid4()}")
+    assert resp.status_code == 404
+    audit.assert_not_awaited()
+
+
+def test_revoke_api_key_audit_failure_does_not_fail_revocation(client: TestClient) -> None:
+    """A broken audit append must not fail a completed revocation."""
+
+    async def _raise_audit(*_a: Any, **_k: Any) -> Any:
+        raise RuntimeError("audit boom")
+
+    with (
+        patch("modulo.api.routes.api_keys.revoke_api_key", return_value=True),
+        patch("modulo.api.routes.api_keys.set_rls_org"),
+        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("modulo.api.routes.api_keys.append_audit_event", side_effect=_raise_audit),
     ):
         resp = client.delete(f"/api/v1/api-keys/{_KEY_ID}")
     assert resp.status_code == 200
@@ -326,8 +419,12 @@ def test_create_api_key_calls_set_rls_user_context(client: TestClient) -> None:
         patch("modulo.api.routes.api_keys.set_rls_user_context") as mock_ctx,
     ):
         client.post("/api/v1/api-keys", json={"name": "k", "role": "operator"})
-    mock_org.assert_awaited_once()
-    mock_ctx.assert_awaited_once_with(ANY, _USER_ID, "admin")
+    # set_rls_* is re-established in the fresh audit transaction (SET LOCAL
+    # reverts on COMMIT), so each helper is awaited twice: the main create tx
+    # and the api_key_created audit tx.
+    assert mock_org.await_count == 2
+    assert mock_ctx.await_count == 2
+    mock_ctx.assert_awaited_with(ANY, _USER_ID, "admin")
 
 
 def test_list_api_keys_calls_set_rls_user_context(client: TestClient) -> None:
