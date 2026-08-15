@@ -228,7 +228,7 @@ def test_awaiting_implementation_set_is_pinned():
     for feature in sorted(FEATURES.rglob("*.feature")):
         for _lineno, name, tags in _feature_scenario_tags(feature):
             if "@awaiting-implementation" in tags:
-                actual.setdefault(str(feature.relative_to(BACKEND)), set()).add(name)
+                actual.setdefault(feature.relative_to(BACKEND).as_posix(), set()).add(name)
 
     if actual == PINNED_AWAITING_IMPLEMENTATION:
         return
