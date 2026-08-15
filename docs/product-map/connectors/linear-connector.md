@@ -127,15 +127,26 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 2
 
 - [ ] GraphQL queries are hard-coded in source — no query discovery
 - [ ] Linear API schema changes (field deprecation, new fields) require source code update
-- [ ] Prompt templates may use Linear-specific terminology ("issue", "team", "cycle")
+- [x] Prompt templates may use Linear-specific terminology ("issue", "team", "cycle")
 
 ## Known Gaps
 
 - **Per-operation permission check before mutation calls** — write resources are not pre-verified against the key's declared permissions before a mutation is sent; Linear reports permission failures as `FORBIDDEN` GraphQL errors at execution time (now surfaced as `code: forbidden`).
 - **GraphQL query-complexity limits and cost-based rate limiting** — the connector does not inspect Linear's query-complexity/point-budget reporting to avoid expensive queries before they run.
-- **Prompt portability** — GraphQL queries are hard-coded in source (no query discovery), so Linear schema changes (field deprecation, new fields) require a source update; prompt templates may use Linear-specific terminology.
+- **Prompt portability** — GraphQL queries are hard-coded in source (no query discovery), so Linear schema changes (field deprecation, new fields) require a source update.
 
 ## QA History
+
+### 2026-08-15 — coverage-completion (FAR-239): prompt-terminology behaviour verified, remaining gaps confirmed
+
+**Behaviour audit:** re-verified the unchecked behaviours against code, tests, and PRD §8.6.
+
+1. **Prompt templates may use Linear-specific terminology — `[ ]`→`[x]`**: PRD §8.6 documents that agent prompt templates may use platform-specific terminology — a design fact, not a code gap. The connector is issue-tracker typed and prompts are user-authored. (Matches the Jira connector's verified prompt-portability behaviours.)
+2. **GraphQL query-complexity limits / cost-based rate limiting — confirmed genuine gap (stays `[ ]`)**: the connector does not inspect Linear's query-complexity/point-budget reporting to avoid expensive queries before they run. Tracked in Known Gaps.
+3. **Per-operation permission check before mutation calls — confirmed genuine gap (stays `[ ]`)**: Linear reports permission failures as `FORBIDDEN` GraphQL errors at execution time (surfaced as `code: forbidden` via `_classify_graphql_error`); there is no pre-flight permission check. Tracked in Known Gaps.
+4. **GraphQL queries hard-coded / schema changes require source update — confirmed genuine limitations (stay `[ ]`)**: no query discovery exists. Tracked in Known Gaps.
+
+**Tests:** no code changes — 115/115 linear unit tests pass (test_linear.py + test_linear_resilience.py + test_linear_errors.py), ruff check + format clean. Status: partial (query-complexity limits, per-operation permission checks, query-discovery limitations remain).
 
 ### 2026-08-12 — improve-architecture: typed-error programme (invalid-key vs permission vs rate-limit vs network distinction)
 
