@@ -124,7 +124,7 @@ def test_main_bumps_patch_by_default(monkeypatch, tmp_path, capsys):
     assert "Bumping patch version: 1.2.3 -> 1.2.4" in out
 
 
-def test_main_bumps_requested_part(monkeypatch, tmp_path, capsys):
+def test_main_bumps_requested_part(monkeypatch, tmp_path):
     pyproject, package = _setup_main(tmp_path)
     monkeypatch.setattr(sys, "argv", ["bump-version.py", "minor"])
     with (
@@ -136,7 +136,7 @@ def test_main_bumps_requested_part(monkeypatch, tmp_path, capsys):
     assert '"version": "1.3.0"' in package.read_text()
 
 
-def test_main_bumps_major(monkeypatch, tmp_path, capsys):
+def test_main_bumps_major(monkeypatch, tmp_path):
     pyproject, package = _setup_main(tmp_path)
     monkeypatch.setattr(sys, "argv", ["bump-version.py", "major"])
     with (

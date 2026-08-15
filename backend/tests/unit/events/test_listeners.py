@@ -62,7 +62,7 @@ def test_safe_str_attr_returns_string() -> None:
     assert _safe_str_attr(run, "organisation_id", "run", "created") == "org-1"
 
 
-def test_safe_str_attr_non_string_value_is_stringified(caplog: pytest.LogCaptureFixture) -> None:
+def test_safe_str_attr_non_string_value_is_stringified() -> None:
     run = Run(organisation_id=12345, id="run-1")
     assert _safe_str_attr(run, "organisation_id", "run", "created") == "12345"
 

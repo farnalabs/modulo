@@ -1082,7 +1082,6 @@ async def test_claim_cap_terminalizes_stale_capped_run_under_rls(
     app_engine: AsyncEngine,
     db_engine: AsyncEngine,
     migrated_db_url: str,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A running SAQ run at claim_count >= cap with a STALE heartbeat is
     terminal-failed ``claim_cap_exhausted`` (B5) — selected INDEPENDENTLY of
@@ -1120,7 +1119,6 @@ async def test_claim_cap_spares_live_capped_run_with_fresh_heartbeat(
     app_engine: AsyncEngine,
     db_engine: AsyncEngine,
     migrated_db_url: str,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A capped run with a FRESH heartbeat is a LIVE run on its final claim —
     it must NOT be terminalised (the stale-heartbeat gate is the live-run
@@ -1158,7 +1156,6 @@ async def test_mid_graph_wedge_terminalizes_age_bound_run_under_rls(
     app_engine: AsyncEngine,
     db_engine: AsyncEngine,
     migrated_db_url: str,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A running SAQ run whose started_at is older than the age-bound window is
     terminal-failed ``executor_superseded`` (B4) — a mid-graph stall can keep
@@ -1189,7 +1186,6 @@ async def test_mid_graph_wedge_spares_recently_started_run(
     app_engine: AsyncEngine,
     db_engine: AsyncEngine,
     migrated_db_url: str,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A run started within the age-bound window (a genuinely executing run)
     is left untouched by the mid-graph wedge terminalizer."""

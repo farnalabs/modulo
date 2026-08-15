@@ -534,7 +534,7 @@ async def test_initialise_cancelled_error_propagates():
             await hub.initialise([ci])
 
 
-async def test_initialise_programming_bug_logs_error(caplog):
+async def test_initialise_programming_bug_logs_error():
     """Unexpected exceptions during initialise are logged as programming bugs and skipped."""
     ci = _FakeCI(
         id=uuid.uuid4(),

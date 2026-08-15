@@ -207,7 +207,7 @@ class TestActivate:
             result = _invoke(["activate", "acme", "--reason", "TKT-1", "--yes"], settings)
         assert result.exit_code == EXIT_ACTIVATION_TXN_FAILURE
 
-    def test_never_prints_credential_on_rollback(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_never_prints_credential_on_rollback(self) -> None:
         settings = _make_settings()
         with (
             patch("modulo.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),

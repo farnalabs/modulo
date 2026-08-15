@@ -11,7 +11,7 @@ def connector(tmp_path):
     return FilesystemConnector(base_path=str(tmp_path))
 
 
-async def test_health_check_ok(connector, tmp_path):
+async def test_health_check_ok(connector):
     result = await connector.health_check()
     assert result.ok is True
 

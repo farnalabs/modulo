@@ -168,6 +168,17 @@ regression that silently weakens the suite:
   args" guarantee the combined form enforces in one statement. Merge the pair
   into the ``_once_with`` form
 
+- function parameters that name a pytest *built-in fixture* (``monkeypatch``,
+  ``mocker``, ``caplog``, ``capsys``, ``capfd``, ``recwarn``, ``tmp_path``,
+  ``tmpdir``, ...) but are never referenced in the body — those fixtures have
+  no setup side effect, so requesting one and never touching the value is
+  pure dead weight that misleads readers into believing the test controls
+  (say) environment state. Drop the unused parameter. ``request`` is
+  deliberately not matched: pytest-bdd step functions conventionally carry it
+  even when the body only reaches state through fixture names, and
+  ``tmp_path_factory`` is session-scoped plumbing rather than a per-test
+  capability
+
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
 """
@@ -2984,6 +2995,121 @@ def test_unused_parametrize_arg_lens_flags_ignored_cases():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _unused_parametrize_arg_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+_UNUSED_BUILTIN_FIXTURE_PARAMS = {
+    "mocker",
+    "monkeypatch",
+    "capsys",
+    "capsysbinary",
+    "capfd",
+    "capfdbinary",
+    "caplog",
+    "recwarn",
+    "tmp_path",
+    "tmpdir",
+}
+"""pytest built-in fixtures with *no setup side effect* that the
+unused-builtin-fixture lens scans for.
+
+``request`` and ``tmp_path_factory`` are deliberately excluded: pytest-bdd
+step functions conventionally carry ``request`` even when the body only
+reaches scenario state through fixture names, and ``tmp_path_factory`` is
+session-scoped plumbing rather than a per-test capability. Every fixture in
+this set, by contrast, is a value the body either uses or has no reason to
+request at all."""
+
+
+def _unused_builtin_fixture_param_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every function parameter that
+    names a pytest built-in fixture but is never referenced in the function
+    body.
+
+    Only ``Name`` references in the body (its full subtree, so closure use in
+    a nested helper counts) are considered usage. A parameter that names a
+    built-in fixture but is never read is dead weight: unlike a custom
+    fixture, which may exist purely for setup/teardown side effects, the
+    fixtures in ``_UNUSED_BUILTIN_FIXTURE_PARAMS`` have no side effect, so
+    requesting one without using the value can only mislead a reader into
+    believing the test controls that capability.
+    """
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        params = {a.arg for a in node.args.args if a.arg in _UNUSED_BUILTIN_FIXTURE_PARAMS}
+        if not params:
+            continue
+        body_names = {sub.id for sub in ast.walk(node) if isinstance(sub, ast.Name)}
+        for name in sorted(params - body_names):
+            found.append(
+                (
+                    node.lineno,
+                    f"{name}() built-in fixture parameter never referenced in {node.name}() body — "
+                    "the fixture has no setup side effect, so the request is dead weight",
+                )
+            )
+    return found
+
+
+def test_no_unused_builtin_fixture_params():
+    """A function parameter that names a pytest built-in fixture
+    (``monkeypatch``, ``mocker``, ``caplog``, ``capsys``, ...) but is never
+    referenced in the body requests dead state. Those fixtures have no setup
+    side effect — unlike a custom fixture, which a test may request purely to
+    run its setup/teardown — so an unreferenced one adds a parameter that
+    misleads a reader into believing the test controls (say) environment
+    state or captured output when it does neither. Drop the unused parameter.
+    ``request`` (pytest-bdd steps conventionally carry it) and
+    ``tmp_path_factory`` (session-scoped plumbing) are deliberately exempt."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _unused_builtin_fixture_param_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} parameter(s) naming a built-in fixture the body never uses.\n"
+        "The fixture has no setup side effect, so the request is dead weight — "
+        "drop the parameter.\n" + "\n".join(violations)
+    )
+
+
+def test_unused_builtin_fixture_lens_flags_dead_params():
+    """Synthetic positive/negative control for the unused-builtin-fixture
+    lens: must flag a built-in fixture parameter absent from the body (async
+    and method forms included) and ignore referenced params, ``request``/
+    ``tmp_path_factory`` parameters, custom-fixture parameters, and
+    ``**kwargs``/positional-only matching."""
+    positive_sources = [
+        "def test_foo(monkeypatch):\n    assert 1 == 1\n",
+        "async def test_foo(caplog):\n    await do_thing()\n",
+        "def test_foo():\n    def test_bar(tmp_path):\n        pass\n",
+        "class TestFoo:\n    def test_bar(self, capsys) -> None:\n        assert True\n",
+        "def _run_probe(monkeypatch, *, cooldown_ok):\n    return cooldown_ok\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _unused_builtin_fixture_param_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo(monkeypatch):\n    monkeypatch.setattr(x, 'a', 1)\n",
+        "async def test_foo(caplog):\n    await do_thing()\n    assert len(caplog.records) == 0\n",
+        "def test_foo():\n    def test_bar(tmp_path):\n        return tmp_path / 'x'\n",
+        "class TestFoo:\n    def test_bar(self, capsys) -> None:\n        assert 'x' in capsys.readouterr().out\n",
+        "def test_foo(request):\n    return request.getfixturevalue('client')\n",
+        "def test_foo(tmp_path_factory):\n    return tmp_path_factory.mktemp('x')\n",
+        "def test_foo(tmp_path_factory):\n    pass\n",
+        "def test_foo(connector):\n    return connector\n",
+        "def test_foo(**kwargs):\n    return kwargs\n",
+        "def test_foo(pos_only, /):\n    return pos_only\n",
+        "def test_foo(caplog):\n    def inner(caplog):\n        return caplog\n    return inner\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _unused_builtin_fixture_param_violations(tree), f"lens should NOT flag:\n{source}"
 
 
 _SPLIT_ONCE_WITH_METHODS = frozenset({"assert_called_once_with", "assert_awaited_once_with"})
