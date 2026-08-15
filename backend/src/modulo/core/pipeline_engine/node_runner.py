@@ -81,6 +81,32 @@ from modulo.db.rls import set_rls_org
 _log = logging.getLogger(__name__)
 
 
+def _normalize_required_team_id(gate_id: str, raw: Any) -> str | None:
+    """Validate a HITL gate's ``required_team_id`` and return a canonical UUID
+    string, or None when absent/invalid.
+
+    The executor parses the interrupt payload's ``required_team_id`` with
+    ``uuid.UUID(...)``; an unparseable value would raise there and fail the
+    run. The config normally arrives UUID-typed via ``HitlGateConfig``
+    validation, but a corrupted snapshot / raw-DB gate config can carry an
+    arbitrary string — normalise here so the executor never sees an invalid
+    value. An invalid value is logged and treated as "no team restriction"
+    (the gate degrades to org-wide) rather than raising.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, uuid.UUID):
+        return str(raw)
+    try:
+        return str(uuid.UUID(str(raw)))
+    except (ValueError, TypeError, AttributeError):
+        _log.warning(
+            "hitl_gate.invalid_required_team_id",
+            extra={"gate_id": gate_id, "required_team_id_raw": str(raw)},
+        )
+        return None
+
+
 class SandboxNodeFailedError(Exception):
     """A sandbox-agent node failed due to sandbox infrastructure (retryable).
 
@@ -881,7 +907,7 @@ def make_hitl_gate_fn(
     human_only: bool = hitl_gate_config.get("human_only", False)
     condition_expr: str | None = hitl_gate_config.get("condition")
     eval_condition_raw: dict[str, Any] | None = hitl_gate_config.get("eval_condition")
-    required_team_id: str | None = hitl_gate_config.get("required_team_id")
+    required_team_id: str | None = _normalize_required_team_id(gate_id, hitl_gate_config.get("required_team_id"))
 
     async def _hitl_gate(state: dict[str, Any]) -> dict[str, Any]:
         # --- Resume check —  always first so condition/evals aren't re-evaluated. ---
