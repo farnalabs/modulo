@@ -47,6 +47,7 @@ def _make_lifecycle_map(**kwargs: Any) -> MagicMock:
     m.content_json = kwargs.get("content_json", {})
     m.archived_at = kwargs.get("archived_at")
     m.account_id = kwargs.get("account_id", USER_ID)
+    m.updated_by = kwargs.get("updated_by")
     m.created_at = kwargs.get("created_at", datetime.now(UTC))
     m.updated_at = kwargs.get("updated_at", datetime.now(UTC))
     return m
@@ -589,6 +590,36 @@ def save_version_capture_audit(ctx: dict[str, Any], request: Any, client: Any, m
     _store_response(request, ctx, resp)
     ctx["audit_mock"] = mock_audit
     ctx["lifecycle_map"] = updated
+
+
+@when("I save a version of the lifecycle map as the current user")
+def save_version_as_current_user(ctx: dict[str, Any], request: Any, client: Any) -> None:
+    """POST /versions with the returned map stamped with the authenticated
+    account as its version actor (updated_by) — pins that the version entry's
+    created_by reflects the saving account, not a static null."""
+    current = ctx.get("lifecycle_map", _make_lifecycle_map())
+    stages = [{"id": "stage-0", "name": "Stage 0", "type": "modulo"}]
+    with patch("modulo.api.routes.lifecycle_maps.save_map_version", new=AsyncMock()) as mock_save:
+        updated = _make_lifecycle_map(
+            name=current.name,
+            version=current.version + 1,
+            content_json={"stages": stages},
+            updated_by=USER_ID,
+        )
+        mock_save.return_value = updated
+        resp = client.post(
+            f"/api/v1/lifecycle-maps/{current.id}/versions",
+            json={"stages": stages, "edges": [], "notes": ""},
+        )
+    _store_response(request, ctx, resp)
+    ctx["lifecycle_map"] = updated
+
+
+@then("the saved version reports the current user as created_by")
+def saved_version_reports_current_user(request: Any) -> None:
+    resp = request.node._resp
+    data = resp.json()
+    assert data.get("created_by") == str(USER_ID), f"Expected created_by {USER_ID}, got {data.get('created_by')}"
 
 
 @when("I restore the lifecycle map")

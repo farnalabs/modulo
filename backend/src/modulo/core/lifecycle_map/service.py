@@ -41,6 +41,7 @@ async def create_lifecycle_map(
         organisation_id=org_id,
         name=name,
         account_id=account_id,
+        updated_by=account_id,
         description=description,
         owner_team_id=owner_team_id,
         visibility=visibility,
@@ -125,6 +126,7 @@ async def update_lifecycle_map(
     session: AsyncSession,
     lifecycle_map_id: uuid.UUID,
     updates: dict[str, Any],
+    updated_by: uuid.UUID | None = None,
 ) -> LifecycleMap | None:
     content_changing = "content_json" in updates
     lifecycle_map = (
@@ -141,6 +143,8 @@ async def update_lifecycle_map(
         # content saves of the same map can never produce duplicate numbers.
         updates.pop("version", None)
         updates["version"] = lifecycle_map.version + 1
+    if updated_by is not None:
+        lifecycle_map.updated_by = updated_by
     apply_updates(lifecycle_map, updates)
     if content_changing:
         await _check_pipeline_uniqueness(session, lifecycle_map)
@@ -161,7 +165,11 @@ async def delete_lifecycle_map(session: AsyncSession, lifecycle_map_id: uuid.UUI
     return True
 
 
-async def restore_lifecycle_map(session: AsyncSession, lifecycle_map_id: uuid.UUID) -> LifecycleMap | None:
+async def restore_lifecycle_map(
+    session: AsyncSession,
+    lifecycle_map_id: uuid.UUID,
+    updated_by: uuid.UUID | None = None,
+) -> LifecycleMap | None:
     result = await session.execute(
         select(LifecycleMap).where(
             LifecycleMap.id == lifecycle_map_id,
@@ -172,6 +180,8 @@ async def restore_lifecycle_map(session: AsyncSession, lifecycle_map_id: uuid.UU
     if lifecycle_map is None:
         return None
     lifecycle_map.deleted_at = None
+    if updated_by is not None:
+        lifecycle_map.updated_by = updated_by
     await derive_lifecycle_map_stages(session, lifecycle_map)
     await session.flush()
     return lifecycle_map
@@ -184,6 +194,7 @@ async def save_map_version(
     stages: list[dict[str, Any]],
     edges: list[dict[str, Any]],
     notes: str = "",
+    updated_by: uuid.UUID | None = None,
 ) -> LifecycleMap | None:
     """Save + publish a new active version of the map.
 
@@ -197,6 +208,8 @@ async def save_map_version(
         return None
     lifecycle_map.content_json = normalize_content({"stages": stages, "edges": edges, "notes": notes})
     lifecycle_map.version += 1
+    if updated_by is not None:
+        lifecycle_map.updated_by = updated_by
     await _check_pipeline_uniqueness(session, lifecycle_map)
     await derive_lifecycle_map_stages(session, lifecycle_map)
     await session.flush()
@@ -210,6 +223,7 @@ async def graduate_stage(
     *,
     stage_id: str,
     pipeline_id: str | None,
+    updated_by: uuid.UUID | None = None,
 ) -> LifecycleMap | None:
     """Mark a journey/map-stage as graduated and link it to a Modulo pipeline.
 
@@ -233,6 +247,8 @@ async def graduate_stage(
     target["pipeline_id"] = pipeline_id or None
     lifecycle_map.content_json = normalize_content(content)
     lifecycle_map.version += 1
+    if updated_by is not None:
+        lifecycle_map.updated_by = updated_by
     await _check_pipeline_uniqueness(session, lifecycle_map)
     await derive_lifecycle_map_stages(session, lifecycle_map)
     await session.flush()

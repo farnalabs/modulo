@@ -281,6 +281,21 @@ def _content_dict(lm: Any) -> dict[str, Any]:
     return content if isinstance(content, dict) else {}
 
 
+def _version_actor(lm: Any) -> str | None:
+    """Account that produced the current version state.
+
+    v1 has no immutable version history: the map row IS the active version, so
+    the version entry's ``created_by`` reflects the account that last saved it
+    (``updated_by``), falling back to the original creator (``account_id``) so
+    rows created before the actor stamping still read back readable.
+    """
+    updated_by = getattr(lm, "updated_by", None)
+    if updated_by is not None:
+        return str(updated_by)
+    account_id = getattr(lm, "account_id", None)
+    return str(account_id) if account_id is not None else None
+
+
 async def _record_audit(
     session: AsyncSession,
     *,
@@ -362,7 +377,7 @@ def _build_version_entry(lm: Any) -> LifecycleMapVersionResponse:
         version_number=lm.version,
         stages=stages,
         edges=edges,
-        created_by=None,
+        created_by=_version_actor(lm),
         created_at=lm.updated_at,
         notes=notes if isinstance(notes, str) else "",
     )
@@ -408,7 +423,7 @@ def _build_detail(lm: Any) -> LifecycleMapDetailResponse:
         current_version=lm.version,
         stages=stages,
         transitions=transitions,
-        versions=[LifecycleMapVersionMeta(version=lm.version, created_at=lm.updated_at, created_by=None)],
+        versions=[LifecycleMapVersionMeta(version=lm.version, created_at=lm.updated_at, created_by=_version_actor(lm))],
         content_json=content,
         archived_at=lm.archived_at,
         created_at=lm.created_at,
@@ -682,7 +697,12 @@ async def update_lifecycle_map_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            lifecycle_map = await update_lifecycle_map(session, lifecycle_map_id, updates)
+            lifecycle_map = await update_lifecycle_map(
+                session,
+                lifecycle_map_id,
+                updates,
+                updated_by=principal.account_id,
+            )
             if lifecycle_map is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map not found")
             await session.refresh(lifecycle_map)
@@ -783,7 +803,11 @@ async def restore_lifecycle_map_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            lifecycle_map = await restore_lifecycle_map(session, lifecycle_map_id)
+            lifecycle_map = await restore_lifecycle_map(
+                session,
+                lifecycle_map_id,
+                updated_by=principal.account_id,
+            )
             if lifecycle_map is not None:
                 await session.refresh(lifecycle_map)
                 await _record_audit(
@@ -884,6 +908,7 @@ async def save_lifecycle_map_version_endpoint(
                 stages=req.stages,
                 edges=req.edges,
                 notes=req.notes,
+                updated_by=principal.account_id,
             )
             if lifecycle_map is not None:
                 await session.refresh(lifecycle_map)
@@ -957,6 +982,7 @@ async def update_lifecycle_map_version_endpoint(
                 stages=req.stages,
                 edges=req.edges,
                 notes=req.notes,
+                updated_by=principal.account_id,
             )
             if lifecycle_map is not None:
                 await session.refresh(lifecycle_map)
@@ -1067,6 +1093,7 @@ async def graduate_lifecycle_map_stage_endpoint(
                 lifecycle_map_id,
                 stage_id=stage_id,
                 pipeline_id=req.pipeline_id,
+                updated_by=principal.account_id,
             )
             if lifecycle_map is not None:
                 await session.refresh(lifecycle_map)

@@ -65,6 +65,12 @@ Feature: Lifecycle Map Versioning
     Then the response status is 201
     And a "lifecycle_map.version_saved" audit event was recorded for the map
 
+  Scenario: A saved version reports the saving account as created_by
+    Given a lifecycle map named "Release Workflow" exists
+    When I save a version of the lifecycle map as the current user
+    Then the response status is 201
+    And the saved version reports the current user as created_by
+
   Scenario: A legacy map with dangling edges is unblocked by the legacy-content backfill
     Given a lifecycle map with dangling legacy content exists
     When the legacy content backfill cleans the map
