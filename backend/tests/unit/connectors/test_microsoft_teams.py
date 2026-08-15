@@ -129,6 +129,72 @@ async def test_query_teams_with_cursor(connector: MicrosoftTeamsConnector) -> No
 
 
 @respx.mock
+async def test_query_teams_corrupt_body_no_crash(connector: MicrosoftTeamsConnector) -> None:
+    """A corrupt/hostile response returning a non-dict body must not crash
+    pagination — it falls back to an empty page with no cursor."""
+    respx.get(f"{_BASE}/teams").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await connector.query(ConnectorQuery(resource="teams"))
+    assert not result.records
+    assert result.next_cursor is None
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_teams_non_string_next_link(connector: MicrosoftTeamsConnector) -> None:
+    """A corrupt response placing a non-string in ``@odata.nextLink`` must not
+    crash urlparse or leak a non-string cursor into the next request."""
+    respx.get(f"{_BASE}/teams").mock(
+        return_value=httpx.Response(200, json={"value": [{"id": "T1"}], "@odata.nextLink": {"$skiptoken": "x"}}),
+    )
+    result = await connector.query(ConnectorQuery(resource="teams"))
+    assert len(result.records) == 1
+    assert result.next_cursor is None
+
+    respx.get(f"{_BASE}/teams").mock(
+        return_value=httpx.Response(200, json={"value": [{"id": "T1"}], "@odata.nextLink": 123}),
+    )
+    result = await connector.query(ConnectorQuery(resource="teams"))
+    assert len(result.records) == 1
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_teams_empty_skiptoken_no_cursor(connector: MicrosoftTeamsConnector) -> None:
+    """A nextLink whose ``$skiptoken`` is empty must emit no cursor — an empty
+    string is not a meaningful pagination cursor."""
+    respx.get(f"{_BASE}/teams").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "value": [{"id": "T1", "displayName": "Team 1"}],
+                "@odata.nextLink": "https://graph.microsoft.com/v1.0/teams?$skiptoken=&$top=5",
+            },
+        ),
+    )
+    result = await connector.query(ConnectorQuery(resource="teams", limit=5))
+    assert len(result.records) == 1
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_users_corrupt_body_no_crash(connector: MicrosoftTeamsConnector) -> None:
+    """A corrupt non-dict body (or non-list ``value``) on a list endpoint must
+    fall back to an empty page instead of raising AttributeError."""
+    respx.get(f"{_BASE}/users").mock(return_value=httpx.Response(200, json={"value": "not-a-list"}))
+    result = await connector.query(ConnectorQuery(resource="users"))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_channels_corrupt_body_no_crash(connector: MicrosoftTeamsConnector) -> None:
+    respx.get(f"{_BASE}/teams/T1/channels").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await connector.query(ConnectorQuery(resource="channels", filters={"team_id": "T1"}))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
 async def test_query_team_by_id(connector: MicrosoftTeamsConnector) -> None:
     team_data = {"id": "T1", "displayName": "Engineering", "description": "Build stuff"}
     respx.get(f"{_BASE}/teams/T1").mock(return_value=httpx.Response(200, json=team_data))
