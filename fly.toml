@@ -8,7 +8,9 @@ app = 'app-modulo'
 # Whole-org standing: app-modulo 3 + staging-modulo 2 + DBs 2 = 7.
 # Rolling deploys peak at N+1 per process group; keep the org total
 # (incl. staging + DBs) under the Fly machine limit (~10 on the
-# personal plan). See deploy.yml "Check Fly machine budget" guard.
+# personal plan). There is no automated budget guard in CI: deploy.yml only
+# prunes group-less strays ("Clean up stray machines"), so the limit is
+# enforced by this standing footprint + manual review before scaling up.
 # Do NOT add process groups or machines without updating this block.
 primary_region = 'lhr'
 
