@@ -7,8 +7,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 from modulo.db.models.base import OrgScoped
 
 # Full validation_result vocabulary. Generated into the ORM CheckConstraint SQL
-# below and HARDCODED (separately) in migration 0069 — migrations never import
-# app constants. Keep both in sync when extending the vocabulary.
+# below and HARDCODED (separately) in migrations 0069 and 0103 — migrations
+# never import app constants. Keep both in sync when extending the vocabulary.
 VALIDATION_RESULT_VALUES: tuple[str, ...] = (
     "accepted",
     "passed",
@@ -29,6 +29,7 @@ VALIDATION_RESULT_VALUES: tuple[str, ...] = (
     "no_pipeline",
     "test",
     "paused",
+    "auto_deactivated",
 )
 
 _TRIGGER_EVENT_VALIDATION_SQL = f"validation_result IN {tuple(VALIDATION_RESULT_VALUES)}"
