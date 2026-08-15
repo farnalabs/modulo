@@ -1997,15 +1997,15 @@ def make_sandbox_agent_fn(
                 # a long LLM turn), (2) it streams newly-appended content to the run
                 # event broker (live output), and (3) it accumulates the content for
                 # the node artifact.
-                _drained_chunks: list[str] = []
                 _drain_offset = 0
                 _drained_len = 0
-                # FAR-228: the drain closure is captured so the CancelledError
-                # retention path below can do a guarded final drain even though
-                # the normal post-command drain at ~1915 is unreachable on
-                # cancellation. None until the drain closure is defined.
-                _drain_fn: Any = None
 
+                # FAR-228: the drain closure is captured (assigned to _drain_fn
+                # below) so the CancelledError retention path can do a guarded
+                # final drain even though the normal post-command drain at ~1915
+                # is unreachable on cancellation. _drain_fn is pre-bound to None
+                # at function scope so the handler's guard short-circuits safely
+                # during provisioning, before the closure is ever defined.
                 async def _drain_sandbox_log() -> None:
                     nonlocal _drain_offset, _drained_len
                     # Probe failed (log file not created yet, sandbox connection
