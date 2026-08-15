@@ -386,6 +386,62 @@ async def test_query_agents(teamcity):
 
 
 @respx.mock
+async def test_list_runs_corrupt_body_no_crash(teamcity):
+    """A non-dict body from the builds list endpoint must degrade to an empty
+    page instead of crashing with AttributeError on ``.get()``."""
+    respx.get(f"{_TC_BASE}/app/rest/builds").mock(return_value=httpx.Response(200, json=["garbage"]))
+    runs = await teamcity.list_runs()
+    assert runs == []
+
+
+@respx.mock
+async def test_list_runs_non_list_build_value_no_crash(teamcity):
+    """A corrupt body placing a non-list in ``build`` must fall back to an
+    empty page instead of returning a bare string as the records list."""
+    respx.get(f"{_TC_BASE}/app/rest/builds").mock(
+        return_value=httpx.Response(200, json={"build": "not-a-list"})
+    )
+    runs = await teamcity.list_runs()
+    assert runs == []
+
+
+@respx.mock
+async def test_query_projects_corrupt_body_no_crash(teamcity):
+    """A non-dict projects body must degrade to an empty page, not crash."""
+    respx.get(f"{_TC_BASE}/app/rest/projects").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await teamcity.query(ConnectorQuery(resource="projects"))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_build_types_corrupt_body_no_crash(teamcity):
+    """A non-dict buildTypes body must degrade to an empty page, not crash."""
+    respx.get(f"{_TC_BASE}/app/rest/buildTypes").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await teamcity.query(ConnectorQuery(resource="buildTypes"))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_builds_corrupt_body_no_crash(teamcity):
+    """A non-dict builds body must degrade to an empty page, not crash."""
+    respx.get(f"{_TC_BASE}/app/rest/builds").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await teamcity.query(ConnectorQuery(resource="builds"))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_agents_corrupt_body_no_crash(teamcity):
+    """A non-dict agents body must degrade to an empty page, not crash."""
+    respx.get(f"{_TC_BASE}/app/rest/agents").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await teamcity.query(ConnectorQuery(resource="agents"))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
 async def test_query_unsupported_resource(teamcity):
     q = ConnectorQuery(resource="invalid", filters={})
     with pytest.raises(ValueError, match="Unsupported query resource"):
