@@ -310,22 +310,24 @@ jobs:
     needs: [pre-deploy-tests]
     runs-on: ubicloud-standard-2
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
       # Pre-deploy guard: destroys stale-version machines from failed cutovers
       # (and group-less strays), snapshots the pre-deploy machine IDs for the
       # post-deploy cleanup step, then fails fast when the org is at/near the Fly
       # machine limit. The cleanup runs BEFORE the budget check so a budget-blocked
-      # org can self-heal instead of deadlocking.
+      # org can self-heal instead of deadlocking. Checkout runs first because
+      # GitHub Actions resolves local `./.github/actions/...` references against
+      # the runner workspace, which is empty until checkout populates it.
       - name: Pre-deploy Fly guard (clean stale machines + budget check)
         uses: ./.github/actions/predeploy-fly-guard
         with:
           fly-api-token: ${{ secrets.FLY_API_TOKEN }}
           app: staging-modulo
           machine-limit: ${{ vars.FLY_MACHINE_LIMIT || 10 }}
-
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 1
 
       - name: Capture git metadata
         id: git
@@ -695,22 +697,24 @@ jobs:
     if: always() && (needs.staging-e2e.result == 'success' || github.event.inputs.skip_staging_e2e == 'true')
     runs-on: ubicloud-standard-2
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
       # Pre-deploy guard: destroys stale-version machines from failed cutovers
       # (and group-less strays), snapshots the pre-deploy machine IDs for the
       # post-deploy cleanup step, then fails fast when the org is at/near the Fly
       # machine limit. The cleanup runs BEFORE the budget check so a budget-blocked
-      # org can self-heal instead of deadlocking.
+      # org can self-heal instead of deadlocking. Checkout runs first because
+      # GitHub Actions resolves local `./.github/actions/...` references against
+      # the runner workspace, which is empty until checkout populates it.
       - name: Pre-deploy Fly guard (clean stale machines + budget check)
         uses: ./.github/actions/predeploy-fly-guard
         with:
           fly-api-token: ${{ secrets.FLY_API_TOKEN }}
           app: app-modulo
           machine-limit: ${{ vars.FLY_MACHINE_LIMIT || 10 }}
-
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 1
 
       - name: Capture git metadata
         id: git
