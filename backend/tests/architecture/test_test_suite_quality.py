@@ -3883,3 +3883,136 @@ def test_broad_exception_raises_lens_flags_catch_alls():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _broad_exception_raises_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+_MOCK_CONSTRUCTOR_NAMES = frozenset(
+    {"Mock", "MagicMock", "AsyncMock", "NonCallableMock", "NonCallableMagicMock", "PropertyMock"}
+)
+
+
+def _is_mock_constructor_call(node: ast.AST) -> bool:
+    """True when ``node`` is a direct call to a ``unittest.mock`` / pytest-mock
+    Mock constructor — ``Mock()``, ``MagicMock()``, ``AsyncMock()``, ... — in
+    any of its spellings (bare ``Mock``, ``mock.Mock``, ``mocker.MagicMock``,
+    ``unittest.mock.AsyncMock``). ``PropertyMock`` is included even though it
+    is only valid as a ``return_value``/``side_effect`` spec: it is still a
+    Mock instance and has no business appearing in an ``assert`` expression."""
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id in _MOCK_CONSTRUCTOR_NAMES
+    if isinstance(func, ast.Attribute):
+        return func.attr in _MOCK_CONSTRUCTOR_NAMES
+    return False
+
+
+def _mock_constructor_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert`` whose test
+    expression — or a direct operand of it — *is* a freshly-constructed Mock.
+
+    Only direct constructor-call positions are checked: the assertion whose
+    test *is* the call, a ``not``-wrapped call, and the operands of a
+    single-operator comparison. No name resolution is involved, so a mock
+    bound to a variable elsewhere in the file is never implicated and the
+    lens has no false positives from mocking assignments or ``patch``
+    bindings."""
+    found: list[tuple[int, str]] = []
+
+    def _report(lineno: int, detail: str) -> None:
+        found.append(
+            (
+                lineno,
+                f"assert {detail} — a fresh Mock instance is always truthy and compares by "
+                "identity, so the outcome is fixed at source time",
+            )
+        )
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if _is_mock_constructor_call(test):
+            _report(node.lineno, ast.unparse(test))
+            continue
+        if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not) and _is_mock_constructor_call(test.operand):
+            _report(node.lineno, ast.unparse(test))
+            continue
+        if isinstance(test, ast.Compare) and len(test.ops) == 1:
+            for operand in (test.left, test.comparators[0]):
+                if _is_mock_constructor_call(operand):
+                    _report(node.lineno, ast.unparse(test))
+                    break
+    return found
+
+
+def test_no_mock_constructor_in_asserts():
+    """An ``assert`` that constructs a Mock object directly in its test
+    expression is dead code with a fixed outcome, so it reports green — or
+    red — regardless of the behaviour under test. Mock instances are always
+    truthy, so ``assert Mock()`` is a silent-false-green and ``assert not
+    Mock()`` can never pass; two fresh Mock instances also compare by
+    identity (``__eq__`` defaults to ``is``), so ``assert x == Mock()``
+    always fails and ``assert x != Mock()`` always passes no matter what ``x``
+    evaluates to. These are almost always a leftover from inlining a double
+    while debugging, where the intended comparison target was accidentally
+    replaced by the constructor call. The double should be *configured*
+    (``return_value``/``side_effect``) and asserted through
+    ``assert_called*``/attribute checks, never compared to directly. The
+    identity-with-container-literal and literal-constant lenses own the
+    neighbouring shapes; this lens owns the Mock-constructor position."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _mock_constructor_assert_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} assertion(s) against a freshly-constructed Mock.\n"
+        "A Mock instance is always truthy and compares by identity, so the outcome is "
+        "fixed at source time. Configure the double (return_value/side_effect) and assert "
+        "through assert_called* instead of comparing to a constructor call.\n" + "\n".join(violations)
+    )
+
+
+def test_mock_constructor_lens_flags_dead_asserts():
+    """Synthetic positive/negative control for the Mock-constructor lens: it
+    must flag an ``assert`` that constructs a Mock directly in the test
+    expression (bare, ``not``-wrapped, or as a comparison operand, in any
+    constructor spelling) and ignore asserts over already-bound names, mocks
+    assigned earlier in the same test, ``assert_called*`` double-verification
+    calls, and ``patch``/``with ... as mock`` bindings."""
+    positive_sources = [
+        "def test_foo():\n    assert Mock()\n",
+        "def test_foo():\n    assert MagicMock()\n",
+        "def test_foo():\n    assert AsyncMock()\n",
+        "def test_foo():\n    assert not MagicMock()\n",
+        "def test_foo():\n    assert result == Mock()\n",
+        "def test_foo():\n    assert result != MagicMock()\n",
+        "def test_foo():\n    assert Mock(spec=int)\n",
+        "def test_foo():\n    assert mock.Mock()\n",
+        "def test_foo():\n    assert mocker.MagicMock()\n",
+        "def test_foo():\n    assert unittest.mock.AsyncMock()\n",
+        "def test_foo():\n    assert result == mock.Mock(return_value=3)\n",
+        "def test_foo():\n    assert Mock() == Mock()\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _mock_constructor_assert_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    mock = Mock()\n    assert mock\n",
+        "def test_foo():\n    m = MagicMock()\n    assert not m\n",
+        "def test_foo():\n    assert x == mock\n",
+        "def test_foo():\n    assert x != mock_var\n",
+        "def test_foo():\n    assert result == expected\n",
+        "def test_foo():\n    with patch('x') as m:\n        m.assert_called_once()\n",
+        "def test_foo():\n    m.assert_called_with(1)\n",
+        "def test_foo():\n    assert result is not None\n",
+        "def test_foo():\n    assert len(items) == 0\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _mock_constructor_assert_violations(tree), f"lens should NOT flag:\n{source}"
