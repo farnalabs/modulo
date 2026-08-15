@@ -3674,9 +3674,7 @@ def _constant_condition_skip_violations(tree: ast.AST) -> list[tuple[int, str]]:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             for dec in node.decorator_list:
                 _report(dec, "@", node.lineno)
-        if isinstance(node, ast.Assign) and any(
-            isinstance(t, ast.Name) and t.id == "pytestmark" for t in node.targets
-        ):
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "pytestmark" for t in node.targets):
             _report(node.value, "pytestmark = ", node.lineno)
     return found
 
