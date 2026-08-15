@@ -1461,6 +1461,22 @@ class _StatusSession:
             r = MagicMock()
             r.first.return_value = self._audit_row
             return r
+        # Outcomes summary (the fallback branch). Genuinely assert the raw
+        # boundary fragment's ``:oid`` / ``:tid`` bind params flow through: a
+        # query that never binds them raises ``InvalidRequestError`` at real
+        # execution, is swallowed by the per-sub-read except, and degrades
+        # ``last_outcomes`` to [] — the "passes for the wrong reason" trap
+        # (FAR-191 qa round 2). Mirror that behaviour here so a regression
+        # fails the seeded-outcomes test instead of hiding.
+        compiled = stmt.compile(compile_kwargs={"render_postcompile": True})
+        bound = dict(compiled.params)
+        if params:
+            bound.update(params)
+        unbound = [name for name, value in bound.items() if value is None]
+        if unbound:
+            from sqlalchemy.exc import InvalidRequestError
+
+            raise InvalidRequestError(f"A value is required for bind parameter '{unbound[0]}'")
         r = MagicMock()
         r.all.return_value = self._outcome_rows
         return r
@@ -1538,6 +1554,40 @@ class TestGetTriggerStreakStatus:
         assert status["last_outcomes"][0]["reason"] == "no_work"
         assert status["last_outcomes"][0]["completed_at"] == now.isoformat()
         assert status["last_outcomes"][0]["run_id"]
+
+    @pytest.mark.asyncio
+    async def test_outcomes_query_binds_oid_and_tid(self) -> None:
+        """FIX 2 — the outcomes sub-read must execute with the raw boundary
+        fragment's ``:oid`` / ``:tid`` bind params supplied. The ORM auto-binds
+        ``organisation_id_1`` / ``trigger_id_1`` from the column predicates, but
+        the ``text(_STREAK_BOUNDARY_SQL)`` fragment carries its OWN named
+        params; without them real execution raises ``InvalidRequestError`` and
+        ``last_outcomes`` silently degrades to [] (the FAR-191 outcomes panel
+        dead on arrival). The mock enforces the same contract, so a regression
+        fails here instead of hiding behind the empty-case."""
+        session = _StatusSession(
+            outcome_rows=[_outcome(uuid.uuid4(), "no_delivery", "no_work", datetime(2026, 8, 10, 12, 0, tzinfo=UTC))]
+        )
+        status = await ts.get_trigger_streak_status(session, _ongoing_trigger())
+        assert len(status["last_outcomes"]) == 1, "seeded outcome must surface"
+        outcomes_executes = [
+            (stmt, params)
+            for stmt, params in session.executed
+            if "as streak" not in str(stmt).lower() and "audit_events" not in str(stmt).lower()
+        ]
+        assert outcomes_executes, "an outcomes query must have been executed"
+        _stmt, params = outcomes_executes[0]
+        assert params is not None, "outcomes query must be executed with a params dict"
+        assert params["oid"] == str(ORG), "raw boundary fragment :oid must be bound"
+        assert params["tid"] == str(TRIGGER_ID), "raw boundary fragment :tid must be bound"
+        # The ORM column predicates are bound by SQLAlchemy itself; the raw
+        # fragment's params are the ONLY ones the caller must supply — verify
+        # the merged bind set is fully resolved.
+        compiled = _stmt.compile(compile_kwargs={"render_postcompile": True})
+        merged = dict(compiled.params)
+        merged.update(params or {})
+        unbound = [name for name, value in merged.items() if value is None]
+        assert unbound == [], f"all bind params must resolve, got unbound: {unbound}"
 
     @pytest.mark.asyncio
     async def test_deactivated_reason_no_delivery_streak(self) -> None:

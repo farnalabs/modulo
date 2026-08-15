@@ -656,6 +656,62 @@ async def test_get_trigger_streak_status_is_tenant_isolated(
 
 
 @pytest.mark.asyncio
+async def test_get_trigger_streak_status_surfaces_own_no_delivery_run(
+    db_engine: AsyncEngine,
+    app_factory: async_sessionmaker[AsyncSession],
+    org: uuid.UUID,
+    pipeline: uuid.UUID,
+    snapshot: uuid.UUID,
+    user: uuid.UUID,
+) -> None:
+    """FIX 2 (round 2) — the on-demand reader's outcomes sub-read genuinely
+    executes against real SQL: a trigger's OWN no-delivery run (at/after the
+    streak boundary) appears in ``last_outcomes``. Guards the bind-parameter
+    regression where the raw boundary fragment's ``:oid``/``:tid`` were never
+    supplied, raising ``InvalidRequestError`` on every call and silently
+    degrading ``last_outcomes`` to [] — the empty-case-only tests (org B's
+    runs hidden) passed for the wrong reason. This test asserts the DATA path
+    that was dead."""
+    from sqlalchemy import select
+
+    from modulo.core import cron_helpers as ch
+    from modulo.db.models.trigger import Trigger
+
+    # Org A's own ongoing trigger with a real past streak_epoch, and its OWN
+    # no-delivery run inside the boundary (now - 2h vs epoch now - 1 day).
+    trigger_a = await _seed_ongoing_trigger(
+        db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=1)
+    )
+    own_completed = _now() - timedelta(hours=2)
+    run_id = await _insert_run(
+        db_engine,
+        org_id=org,
+        pipeline_id=pipeline,
+        snapshot_id=snapshot,
+        trigger_id=trigger_a,
+        status="failed",
+        completed_at=own_completed,
+        classification_value="no_delivery",
+        reason="no_work",
+    )
+
+    async with app_factory() as session, session.begin():
+        await ch._set_rls_org(session, org)
+        trigger_row = (
+            await session.execute(select(Trigger).where(Trigger.id == trigger_a, Trigger.organisation_id == org))
+        ).scalar_one()
+        status = await ts.get_trigger_streak_status(session, trigger_row)
+
+    assert status["streak"] == 1, "org A's own no-delivery run must count toward the streak"
+    assert len(status["last_outcomes"]) == 1, "org A's own run must appear in the outcome panel"
+    outcome = status["last_outcomes"][0]
+    assert outcome["run_id"] == str(run_id)
+    assert outcome["classification"] == "no_delivery"
+    assert outcome["reason"] == "no_work"
+    assert outcome["completed_at"] == own_completed.isoformat()
+
+
+@pytest.mark.asyncio
 async def test_streak_sql_uses_the_reshaped_index(
     db_engine: AsyncEngine,
     org: uuid.UUID,

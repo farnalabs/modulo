@@ -1465,6 +1465,47 @@ def test_list_pipeline_triggers_includes_streak_status(client: TestClient) -> No
     client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
 
 
+def test_list_pipeline_triggers_streak_reads_run_inside_rls_transaction(client: TestClient) -> None:
+    """FIX 2 (round 2) — the pipeline-scoped trigger list must compute
+    streak_status + in_flight INSIDE the RLS transaction, exactly like the
+    fixed ``/triggers`` list. ``SET LOCAL app.organisation_id`` is
+    transaction-scoped; on strict-RLS Postgres a streak read AFTER commit sees
+    zero rows and a deactivated trigger silently reports state 'ok' with no
+    deactivated badge / Re-enable button. The read must be observed while
+    ``begin()`` is active."""
+    trigger = _make_mock_trigger(trigger_type="ongoing", active=False, daily_spend_limit=Decimal(25))
+    streak_status = _full_streak_status(streak=5, state="deactivated", deactivated_reason="no_delivery_streak")
+
+    async def _streak_status(*args: object, **kwargs: object) -> dict[str, object]:
+        assert _TrackingBegin.active, "streak read must happen inside the RLS transaction"
+        return streak_status
+
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch(
+            "modulo.api.routes.triggers.get_trigger_streak_status",
+            new_callable=AsyncMock,
+            side_effect=_streak_status,
+        ),
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+        session.begin = MagicMock(return_value=_TrackingBegin())
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/triggers")
+
+    assert resp.status_code == 200
+    item = resp.json()["items"][0]
+    assert item["streak_status"] == streak_status
+    assert item["active"] is False, "a deactivated trigger must keep its active=False in the response"
+    assert _TrackingBegin.active is False, "the transaction must have closed after the response"
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
 def test_toggle_deactivated_trigger_viewer_returns_403(client: TestClient) -> None:
     """Re-enabling a deactivated trigger is an operator action: a viewer (or any
     non-operator) is denied 403 at the permission gate — re-enable must never be

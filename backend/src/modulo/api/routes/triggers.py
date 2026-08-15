@@ -1422,6 +1422,7 @@ async def list_pipeline_triggers(
     principal: TenantPrincipal = require_permission("trigger.list"),
 ) -> dict[str, Any]:
     """List triggers for a specific pipeline."""
+    pipeline_items: list[dict[str, Any]] = []
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -1434,6 +1435,33 @@ async def list_pipeline_triggers(
                 q = q.where(Trigger.trigger_type == trigger_type)
             q = q.order_by(Trigger.created_at.desc())
             rows = (await session.execute(q)).scalars().all()
+
+            # Serialize the items INSIDE the RLS transaction (FIX 2, sibling of
+            # list_triggers): the in-flight + streak-status reads rely on the
+            # ``SET LOCAL app.organisation_id`` context, which is
+            # transaction-scoped — a read after commit sees zero rows on
+            # strict-RLS Postgres, silently showing a deactivated trigger as
+            # state 'ok' with no Re-enable button.
+            for r in rows:
+                pipeline_items.append(
+                    {
+                        "id": str(r.id),
+                        "pipeline_id": str(r.pipeline_id),
+                        "trigger_type": r.trigger_type,
+                        "active": r.active,
+                        "max_concurrent_runs": r.max_concurrent_runs,
+                        "daily_spend_limit": _serialize_spend_limit(r.daily_spend_limit),
+                        "config_json": mask_config_json(r.config_json),
+                        "cron_expression": r.cron_expression,
+                        "cron_timezone": r.cron_timezone,
+                        "last_fired_at": r.last_fired_at.isoformat() if r.last_fired_at else None,
+                        "next_fire_at": r.next_fire_at.isoformat() if r.next_fire_at else None,
+                        "created_by": str(r.account_id),
+                        "created_at": r.created_at.isoformat() if r.created_at else None,
+                        "in_flight": await _ongoing_in_flight(session, r),
+                        "streak_status": await _streak_status_for(session, r),
+                    }
+                )
     except ProgrammingError:
         _log.exception("triggers.list_pipeline_triggers")
         raise HTTPException(
@@ -1454,28 +1482,6 @@ async def list_pipeline_triggers(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error",
         ) from None
-
-    pipeline_items: list[dict[str, Any]] = []
-    for r in rows:
-        pipeline_items.append(
-            {
-                "id": str(r.id),
-                "pipeline_id": str(r.pipeline_id),
-                "trigger_type": r.trigger_type,
-                "active": r.active,
-                "max_concurrent_runs": r.max_concurrent_runs,
-                "daily_spend_limit": _serialize_spend_limit(r.daily_spend_limit),
-                "config_json": mask_config_json(r.config_json),
-                "cron_expression": r.cron_expression,
-                "cron_timezone": r.cron_timezone,
-                "last_fired_at": r.last_fired_at.isoformat() if r.last_fired_at else None,
-                "next_fire_at": r.next_fire_at.isoformat() if r.next_fire_at else None,
-                "created_by": str(r.account_id),
-                "created_at": r.created_at.isoformat() if r.created_at else None,
-                "in_flight": await _ongoing_in_flight(session, r),
-                "streak_status": await _streak_status_for(session, r),
-            }
-        )
 
     return {
         "items": pipeline_items,

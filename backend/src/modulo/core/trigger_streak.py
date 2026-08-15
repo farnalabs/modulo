@@ -502,7 +502,15 @@ async def get_trigger_streak_status(
                     Run.completed_at >= text(_STREAK_BOUNDARY_SQL),
                 )
                 .order_by(Run.completed_at.desc(), Run.id.desc())
-                .limit(5)
+                .limit(5),
+                # FIX 2 — bind the raw boundary fragment's :oid/:tid. The ORM
+                # auto-binds organisation_id_1/trigger_id_1 from the column
+                # predicates, but the text() fragment carries its OWN named
+                # params; without this dict execution raises
+                # ``InvalidRequestError: A value is required for bind
+                # parameter 'oid'``, which the per-sub-read except swallows —
+                # last_outcomes silently degraded to [] on every call.
+                {"oid": str(org_id), "tid": str(trigger_id)},
             )
         ).all()
         for run_id, classification, completed_at in outcome_rows:
