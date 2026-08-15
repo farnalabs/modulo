@@ -140,6 +140,40 @@ async def test_query_docs_with_cursor(connector):
 
 
 @respx.mock
+async def test_query_docs_non_dict_cursor_does_not_crash(connector):
+    """A non-dict cursor must not crash cursor parsing on docs list."""
+    route = respx.post(f"{_BASE}/paper/docs/list").mock(
+        return_value=_mock_response(json={"doc_ids": ["doc1"], "cursor": "corrupt"})
+    )
+    result = await connector.query(ConnectorQuery(resource="docs", filters={"filter_by": "docs_created"}, limit=10))
+    assert len(result.records) == 1
+    assert result.next_cursor is None
+    assert route.called
+
+
+@respx.mock
+async def test_query_docs_non_string_cursor_value_not_emitted(connector):
+    """A corrupt numeric cursor value must not be emitted as a pagination cursor."""
+    respx.post(f"{_BASE}/paper/docs/list").mock(
+        return_value=_mock_response(json={"doc_ids": ["doc1"], "cursor": {"value": 123}})
+    )
+    result = await connector.query(ConnectorQuery(resource="docs", filters={"filter_by": "docs_created"}, limit=10))
+    assert len(result.records) == 1
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_folders_non_string_cursor_not_emitted(connector):
+    """A corrupt list cursor must not leak into the pagination cursor."""
+    respx.post(f"{_BASE}/files/list_folder").mock(
+        return_value=_mock_response(json={"entries": [{"name": "x"}], "cursor": ["corrupt"]})
+    )
+    result = await connector.query(ConnectorQuery(resource="folders", filters={"path": "/Paper", "recursive": True}))
+    assert len(result.records) == 1
+    assert result.next_cursor is None
+
+
+@respx.mock
 async def test_query_docs_corrupt_cursor(connector):
     """A corrupt/hostile response placing a non-dict in ``cursor`` (or a
     non-string in ``cursor.value``) must not crash pagination — the cursor

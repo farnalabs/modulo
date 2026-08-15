@@ -17,6 +17,7 @@ code:
 unit-tests:
   - backend/tests/unit/core/model_backend_hub/test_failover.py
   - backend/tests/unit/api/test_model_backends_endpoint.py
+  - backend/tests/unit/db/crud/test_model_backend_referencing.py
   - backend/tests/integration/crud/test_model_backend.py
 depends-on: [feat-core-run-context]
 status: partial
@@ -86,6 +87,11 @@ audit event. API creates/updates/reads `fallback_backend_ids` on the entity.
 - [x] Credentials encrypted with Fernet before storage
 - [x] 404 on get/update/delete of unknown backend
 - [x] 401/403 on unauthenticated list
+- [x] Create/update reject fallback IDs that reference no existing org backend (422, `fallback_backend_ids` loc)
+- [x] Create/update allow fallback IDs that reference existing org backends (passed through to storage)
+- [x] Update with explicit `fallback_backend_ids: null` clears the chain (no reference validation)
+- [x] Delete of a backend referenced as a fallback by another org backend returns 409 naming the referencer(s)
+- [x] Delete of a backend referenced by no other backend succeeds (204)
 
 ### Error Handling
 
@@ -104,8 +110,8 @@ audit event. API creates/updates/reads `fallback_backend_ids` on the entity.
 - [x] Column is nullable (backends without fallbacks)
 - [x] Downgrade drops the column
 - [x] Empty fallback_backend_ids list round-trips as `[]` not `None` in API response
-- [ ] Constraint or FK to validate fallback IDs reference existing ModelBackend rows
-- [ ] Deletion protection: deleting a backend referenced as a fallback elsewhere
+- [x] App-level enforcement: fallback IDs must reference an existing org backend (JSON column has no FK) — 422 on create/update
+- [x] Deletion protection: deleting a backend referenced as a fallback elsewhere returns 409 (org-scoped JSON scan via `list_backends_referencing_fallback`)
 
 ### BDD
 
@@ -135,6 +141,8 @@ BDD step definitions exist in `steps/test_model_backends.py` — all 5 feature f
 - [x] Scenario: Create backend with duplicate name returns error → 409 via `with_for_update()` name check in create route (test_create_model_backend_duplicate_name_returns_409; BDD step exists)
 - [x] Scenario: Create backend with invalid provider returns error → 422 via `_validate_provider()` (test_create_model_backend_invalid_provider_returns_422; BDD step exists)
 - [x] Scenario: Create backend with missing required fields returns error
+- [x] Scenario: Create backend with an unknown fallback ID returns error → 422 via `_validate_fallback_ids()` (unknown id cannot reference a nonexistent org backend; unit + BDD coverage)
+- [x] Scenario: Delete a backend referenced as a fallback is rejected → 409 via `list_backends_referencing_fallback` (unit + BDD coverage)
 
 #### backend_error_handling.feature
 - [x] Scenario: Invalid API key on invoke returns auth error
@@ -173,8 +181,8 @@ BDD step definitions exist in `steps/test_model_backends.py` — all 5 feature f
 - ~~No duplicate name check~~ **RESOLVED** — create route has duplicate name check returning 409 with unit test
 - ~~No provider validation at API level~~ **RESOLVED** — create route has `_validate_provider()` returning 422 with unit tests
 - No unique constraint on `(organisation_id, name)` in DB schema — duplicates silently allowed
-- Fallback ID validation at create time not implemented — API accepts any UUID without verifying it references an existing backend
-- No deletion protection for backends referenced as fallbacks by other backends
+- ~~Fallback ID validation at create time not implemented — API accepts any UUID without verifying it references an existing backend~~ **RESOLVED (2026-08-15)**: `_validate_fallback_ids()` in `api/routes/model_backends.py` rejects fallback IDs that reference no existing org backend on both create and update with 422 (`Unknown model backend id(s) referenced as fallbacks: <ids>`), before any DB write; explicit `null` clears the chain without validation. Covered by 6 endpoint unit tests + 2 BDD scenarios.
+- ~~No deletion protection for backends referenced as fallbacks by other backends~~ **RESOLVED (2026-08-15)**: `list_backends_referencing_fallback()` in `db/crud/model_backend.py` (org-scoped scan of the JSON column, string-normalised comparison) + the delete route now return 409 naming the referencers. Covered by 5 CRUD unit tests (in-memory SQLite) + 1 BDD scenario + 2 endpoint unit tests.
 - No audit events on CRUD operations (create/update/delete)
 - 6 DB columns not exposed via API: owner_team_id, status, cost_tracking, currency, last_health_check_at, last_health_check_error
 - `get_with_rotation()` has `audit_logger` parameter but scan-all-fallbacks path does not emit audit events (only configured-fallback path does)
@@ -184,6 +192,7 @@ BDD step definitions exist in `steps/test_model_backends.py` — all 5 feature f
 - ~~3 edge cases lack unit tests: self-referencing fallback ID, empty hub rotation, plugin build failure~~ **RESOLVED** — all 3 now tested
 
 ## QA History
+- 2026-08-15: improve-architecture (index 183) — **RESOLVED 2 known gaps**: (1) fallback-backend reference validation — `_validate_fallback_ids()` (routes) rejects unknown org backend IDs on create+update with 422 before any DB write (dedupes ids, reports only missing ones); (2) delete protection — `list_backends_referencing_fallback()` (CRUD, org-scoped JSON scan) + 409 on delete naming the referencers. Added 6 endpoint unit tests + 5 CRUD unit tests (`test_model_backend_referencing.py`, in-memory SQLite) + 2 BDD scenarios in `backend_crud.feature` (unknown-fallback create → 422, referenced-fallback delete → 409) with 3 new step definitions. Updated product map (5 API/Database behaviours `[ ]`→`[x]`, both Known Gaps → RESOLVED, BDD section, QA History). 99 focused unit + BDD tests pass (49 endpoint + 5 CRUD + 27 BDD + 18 hub failover), ruff check + format clean, mypy --strict clean.
 - 2026-08-06: improve-architecture (product-map walk) — Marked 2 stale BDD-scenario checkboxes `[x]`: duplicate-name create → 409 and invalid-provider create → 422 are implemented in the create route (`with_for_update()` name check + `_validate_provider()`) with both unit tests (`test_create_model_backend_duplicate_name_returns_409`, `test_create_model_backend_invalid_provider_returns_422`) and real Gherkin scenarios + step definitions in `backend_crud.feature`. No code change required — product map was out of date with the code.
 - 2026-07-08: Cross-cutting QA (index 267) — Fixed CRITICAL — added `except Exception → 500` catches with `except HTTPException: raise` guard to all 5 CRUD routes in model_backends.py (previously missing generic exception guard — Python-level errors like TypeError, KeyError, ValueError from `_to_response` processing propagated as raw 500 to CatchAllMiddleware). Fixed MAJOR — `_validate_provider` bare `except Exception: pass` replaced with `logger.warning` so plugin registry failures are visible in logs (previously silently swallowed). Fixed MAJOR — `_to_response` changed `if raw_fallback_ids:` to `if raw_fallback_ids is not None:` so empty `[]` list round-trips correctly (previously returned `None` for empty lists). Added 6 new unit tests in `test_model_backends_endpoint.py` (5× Exception→500 for all routes + 1× empty fallback_ids round-trip). Updated product map Error Handling section (3 new [x] checkboxes) and Database section (1 new [x] checkbox). All 33 model backend endpoint tests + 13 hub failover tests pass. Merged to main at v0.3.218. Status: partial.
 - 2026-07-05: Cross-cutting QA (index 146) — Fixed 5 stale ProgrammingError→501 checkboxes [ ]→[x]; removed stale Known Gap #1; added 3 missing BDD feature files to frontmatter; documented BDD scenarios from all 5 feature files with coverage status; added duplicate name check (409) and provider validation (422) to create route; added 4 unit tests for duplicate name + provider validation; marked stale Edge Case boxes [x] where unit tests exist; added QA History section.

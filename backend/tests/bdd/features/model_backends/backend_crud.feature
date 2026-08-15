@@ -65,3 +65,14 @@ Feature: Model Backend CRUD
     Given a model backend payload with missing name
     When I POST /api/v1/model-backends
     Then the model backend response status is 422
+
+  Scenario: Create backend with an unknown fallback ID returns error
+    Given a model backend payload with an unknown fallback backend id
+    When I POST /api/v1/model-backends
+    Then the model backend response status is 422
+
+  Scenario: Delete a backend referenced as a fallback is rejected
+    Given a model backend exists for provider "openai"
+    And another model backend references it as a fallback
+    When I DELETE /api/v1/model-backends/{backend_id}
+    Then the model backend response status is 409

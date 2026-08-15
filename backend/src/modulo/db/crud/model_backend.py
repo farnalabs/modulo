@@ -108,3 +108,32 @@ async def delete_model_backend(session: AsyncSession, model_backend_id: uuid.UUI
     await session.delete(mb)
     await session.flush()
     return True
+
+
+async def list_backends_referencing_fallback(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    backend_id: uuid.UUID,
+) -> list[ModelBackend]:
+    """Return the org's model backends whose fallback chain references ``backend_id``.
+
+    ``fallback_backend_ids`` is a JSON column with no relational FK, so delete
+    protection must scan the org's rows for a reference. Stored ids may be
+    strings or UUIDs (older rows / round-tripped payloads), so the comparison
+    normalises both sides to ``str``. The target backend itself is excluded: a
+    self-referencing fallback (legacy data) must not permanently block its own
+    deletion.
+    """
+    result = await session.execute(select(ModelBackend).where(ModelBackend.organisation_id == org_id))
+    target = str(backend_id)
+    referencing: list[ModelBackend] = []
+    for mb in result.scalars():
+        if mb.id == backend_id:
+            continue
+        raw = mb.fallback_backend_ids
+        if not raw:
+            continue
+        if target in {str(fid) for fid in raw}:
+            referencing.append(mb)
+    return referencing

@@ -350,6 +350,21 @@ def post_create_model_backend(request, ctx):
     name = payload.get("name", "")
     provider = payload.get("provider", "")
 
+    # Simulate fallback ID reference validation — unknown IDs are rejected 422
+    fallback_ids = payload.get("fallback_backend_ids")
+    if fallback_ids:
+        request.node._resp_status = 422
+        request.node._resp_body = {
+            "detail": [
+                {
+                    "type": "value_error",
+                    "loc": ["body", "fallback_backend_ids"],
+                    "msg": "Unknown model backend id(s) referenced as fallbacks",
+                }
+            ]
+        }
+        return
+
     # Simulate duplicate name check
     existing = ctx.get("backend")
     if existing and existing.name == name:
@@ -438,6 +453,24 @@ def model_backend_payload_missing_name(ctx):
     }
 
 
+@given("a model backend payload with an unknown fallback backend id")
+def model_backend_payload_unknown_fallback(ctx):
+    ctx["payload"] = {
+        "name": "test-unknown-fallback",
+        "display_name": "Test Backend",
+        "provider": "openai",
+        "model_id": "gpt-4o",
+        "api_key": "sk-test-key",
+        "fallback_backend_ids": [str(uuid.uuid4())],
+    }
+
+
+@given("another model backend references it as a fallback")
+def another_backend_references_fallback(ctx):
+    ctx["backend_referenced_as_fallback"] = True
+    ctx["referencing_backend_name"] = "Primary Backend"
+
+
 @when(parsers.parse("I GET /api/v1/model-backends/{backend_id}"))
 def get_model_backend_by_id(request, backend_id: str, ctx):
     _ = backend_id  # feature file uses {backend_id} as REST placeholder
@@ -483,7 +516,13 @@ def patch_model_backend_api_key(request, backend_id: str, ctx):
 def delete_model_backend_by_id(request, backend_id: str, ctx):
     _ = backend_id
     not_found = ctx.get("backend_not_found", False)
-    if not_found:
+    if ctx.get("backend_referenced_as_fallback"):
+        request.node._resp_status = 409
+        request.node._resp_body = {
+            "detail": f"Cannot delete model backend: it is referenced as a fallback by backend(s): "
+            f"{ctx.get('referencing_backend_name', 'Primary Backend')}"
+        }
+    elif not_found:
         request.node._resp_status = 404
     else:
         request.node._resp_status = 204

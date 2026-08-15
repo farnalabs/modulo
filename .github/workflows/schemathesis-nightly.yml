@@ -7,9 +7,18 @@ on:
 
 jobs:
   schemathesis-fuzz:
-    name: API fuzz testing
+    name: API fuzz testing (${{ matrix.group }})
     runs-on: ubicloud-standard-2
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each group runs in its own job: every schemathesis example spins the
+        # full app lifespan (migrations + seeding) via from_asgi, and running
+        # all groups in one job exceeded the ephemeral runner's usable window
+        # (~10 min infra kill, exit 143). Splitting per group keeps each job
+        # short enough to complete.
+        group: [pipelines, schemas, libraries, connectors, model-backends]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -51,6 +60,7 @@ jobs:
           DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
           REDIS_URL: "redis://localhost:6379/0"
           TESTCONTAINERS_RYUK_DISABLED: "true"
+          SCHEMA_GROUP: "${{ matrix.group }}"
       - name: Stop containers
         if: always()
         run: docker rm -f modulo-ci-pg modulo-ci-redis 2>/dev/null || true

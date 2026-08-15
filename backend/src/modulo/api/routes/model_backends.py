@@ -25,6 +25,7 @@ from modulo.db.crud.model_backend import (
     create_model_backend,
     delete_model_backend,
     get_model_backend,
+    list_backends_referencing_fallback,
     list_model_backends,
     update_model_backend,
 )
@@ -206,6 +207,65 @@ _VALID_PROVIDERS = {
 }
 
 
+async def _validate_fallback_ids(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    fallback_ids: list[uuid.UUID],
+    *,
+    backend_id: uuid.UUID | None = None,
+) -> None:
+    """Reject fallback backend IDs that reference no existing org backend (422).
+
+    The ``fallback_backend_ids`` JSON column has no relational FK (PRD 8.1), so
+    the API is the enforcement point: a fallback chain pointing at a backend
+    that does not exist (or belongs to another org) is a configuration error,
+    not a runtime-failover concern. The hub already skips unregistered IDs
+    gracefully, but a silent skip hides a misconfiguration — fail fast instead.
+
+    On update, a self-reference (the backend listing itself as its own
+    fallback) is also rejected: it is a meaningless failover chain and would
+    permanently block deletion (the delete-protection scan reports the backend
+    as referencing itself).
+    """
+    if not fallback_ids:
+        return
+    unique_ids = list(dict.fromkeys(fallback_ids))
+    if backend_id is not None and backend_id in unique_ids:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=[
+                {
+                    "type": "value_error",
+                    "loc": ["body", "fallback_backend_ids"],
+                    "msg": "A model backend cannot reference itself as a fallback",
+                }
+            ],
+        )
+    found = set(
+        (
+            await session.execute(
+                select(ModelBackend.id).where(
+                    ModelBackend.organisation_id == org_id,
+                    ModelBackend.id.in_(unique_ids),
+                )
+            )
+        ).scalars()
+    )
+    missing = [fid for fid in unique_ids if fid not in found]
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=[
+                {
+                    "type": "value_error",
+                    "loc": ["body", "fallback_backend_ids"],
+                    "msg": "Unknown model backend id(s) referenced as fallbacks: "
+                    + ", ".join(str(fid) for fid in missing),
+                }
+            ],
+        )
+
+
 def _validate_provider(provider: str) -> None:
     """Raise 422 if provider is not a known built-in or plugin backend."""
     if provider in _VALID_PROVIDERS:
@@ -248,6 +308,9 @@ async def create_model_backend_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            if req.fallback_backend_ids:
+                await _validate_fallback_ids(session, principal.organisation_id, req.fallback_backend_ids)
 
             existing = (
                 await session.execute(
@@ -383,6 +446,12 @@ async def update_model_backend_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            fallback_ids = updates.get("fallback_backend_ids")
+            if fallback_ids is not None:
+                await _validate_fallback_ids(session, principal.organisation_id, fallback_ids, backend_id=backend_id)
+                # JSON column cannot serialize raw uuid.UUID objects; stringify
+                # before the write, mirroring the create path (line ~315).
+                updates["fallback_backend_ids"] = [str(fid) for fid in fallback_ids]
             mb = await update_model_backend(session, backend_id, updates)
             if mb is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
@@ -436,6 +505,15 @@ async def delete_model_backend_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            referencing = await list_backends_referencing_fallback(
+                session, org_id=principal.organisation_id, backend_id=backend_id
+            )
+            if referencing:
+                names = ", ".join(sorted(mb.name for mb in referencing))
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(f"Cannot delete model backend: it is referenced as a fallback by backend(s): {names}"),
+                )
             deleted = await delete_model_backend(session, backend_id)
     except IntegrityError:
         logger.exception("model_backends.delete_model_backend_endpoint")
