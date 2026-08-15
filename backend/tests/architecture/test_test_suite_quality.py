@@ -197,6 +197,20 @@ regression that silently weakens the suite:
   (after ``ast.literal_eval``), so ``1`` and ``True`` are deliberately treated
   as distinct and only byte-identical values are flagged — an unambiguous
   duplicate
+- ``@pytest.mark.skipif``/``@pytest.mark.xfail`` whose *condition* is a
+  statically-foldable literal (``True``, ``0``, ``[]``, a string, ...) — the
+  skip outcome is decided at source time. ``skipif(True, ...)`` permanently
+  deselects the test from every run (the same coverage loss as a ``@skip``
+  marker, but hiding behind a "conditional" spelling that reads as
+  deliberate), and ``skipif(False, ...)`` is a dead marker that never
+  triggers. Both are almost always leftovers from temporarily disabling a
+  test while debugging, and a reader — or a mutation-testing run — believes
+  the test participates when it silently does not. The module-level
+  ``pytestmark = pytest.mark.skipif(...)`` form is covered too. Dynamic
+  conditions (names, calls, comparisons, attributes) are left alone: those
+  evaluate at collection time and are the legitimate form, and the
+  skip-without-reason lens already owns the missing-``reason`` half of the
+  marker
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -3573,3 +3587,161 @@ def test_duplicate_parametrize_lens_flags_repeated_cases():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _duplicate_parametrize_case_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _skip_condition_truthiness(node: ast.AST) -> bool | None:
+    """Return the truthiness of a *literal* skip condition expression, or
+    ``None`` when the expression is not statically foldable (a name, call,
+    attribute, comparison, binary op, ...). Folding is deliberately shallow:
+    constants, container literals, and a ``not`` wrapper are the shapes a
+    leftover literal condition takes in practice."""
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, complex):
+            return None
+        return bool(node.value)
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return bool(node.elts)
+    if isinstance(node, ast.Dict):
+        return bool(node.keys)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        inner = _skip_condition_truthiness(node.operand)
+        return None if inner is None else (not inner)
+    return None
+
+
+def _constant_condition_skip_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``@pytest.mark.skipif`` /
+    ``@pytest.mark.xfail`` marker whose condition is a statically-foldable
+    literal, including the module-level ``pytestmark = pytest.mark.skipif(...)``
+    form. A literal condition decides the skip at source time: ``skipif(True)``
+    permanently deselects the test from every run and ``skipif(False)`` is a
+    dead marker that never triggers — both are almost always leftovers from
+    temporarily disabling a test during debugging. Dynamic conditions (names,
+    calls, comparisons, attributes) are left alone: they evaluate at collection
+    time and are the legitimate form. The skip-without-reason lens already
+    owns the missing-``reason`` half of these markers, so only the condition
+    is checked here."""
+
+    def _marker_condition(marker: ast.AST) -> tuple[str, ast.expr] | None:
+        """Return ``(marker_name, condition_expr)`` for a
+        ``pytest.mark.skipif/xfail`` marker application, or ``None``. For
+        ``skipif`` the condition is the first positional arg or the
+        ``condition=`` keyword; for ``xfail`` only the unambiguous
+        ``condition=`` keyword is considered (its positional slot historically
+        doubled as ``reason``)."""
+        if not isinstance(marker, ast.Call):
+            return None
+        func = marker.func
+        name = func.attr if isinstance(func, ast.Attribute) else (func.id if isinstance(func, ast.Name) else None)
+        if name not in ("skipif", "xfail"):
+            return None
+        for kw in marker.keywords:
+            if kw.arg == "condition":
+                return name, kw.value
+        if name == "skipif" and marker.args:
+            return name, marker.args[0]
+        return None
+
+    found = []
+
+    def _report(marker: ast.AST, context: str, lineno: int) -> None:
+        hit = _marker_condition(marker)
+        if hit is None:
+            return
+        name, condition = hit
+        truthy = _skip_condition_truthiness(condition)
+        if truthy is None:
+            return
+        if truthy:
+            found.append(
+                (
+                    lineno,
+                    f"{context}pytest.mark.{name} with a constant condition {ast.unparse(condition)} — "
+                    "always skips, so the item never runs (replace with a real condition or "
+                    "delete the marker entirely)",
+                )
+            )
+        else:
+            found.append(
+                (
+                    lineno,
+                    f"{context}pytest.mark.{name} with a constant condition {ast.unparse(condition)} — "
+                    "never skips, so the marker is dead code (delete it)",
+                )
+            )
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            for dec in node.decorator_list:
+                _report(dec, "@", node.lineno)
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "pytestmark" for t in node.targets):
+            _report(node.value, "pytestmark = ", node.lineno)
+    return found
+
+
+def test_no_constant_condition_skips():
+    """A ``@pytest.mark.skipif``/``@pytest.mark.xfail`` (or module-level
+    ``pytestmark = ...``) whose condition is a literal constant decides the skip
+    at source time and silently weakens the run set. ``skipif(True, ...)``
+    permanently deselects the test — the same coverage loss as a plain ``@skip``
+    marker, but spelled "conditionally" so it reads as deliberate — and
+    ``skipif(False, ...)`` is a dead marker that never triggers while readers
+    believe it does. Both are almost always leftovers from temporarily disabling
+    a test during debugging. Dynamic conditions (``sys.platform == ...``,
+    ``not openssl_available``, an env lookup, ...) are legitimate — they
+    evaluate at collection time — and the skip-without-reason lens already
+    guards the missing-``reason`` half of these markers, so this lens only
+    checks the condition."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _constant_condition_skip_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} skip marker(s) with a literal constant condition.\n"
+        "A constant condition decides the skip at source time: always-skip silently deselects "
+        "the test from every run, and never-skip is a dead marker. Replace it with a real "
+        "condition or delete the marker.\n" + "\n".join(violations)
+    )
+
+
+def test_constant_condition_skip_lens_flags_deterministic_skips():
+    """Synthetic positive/negative control for the constant-condition skip lens:
+    it must flag ``skipif``/``xfail`` markers whose condition is foldable
+    (``True``/``False``, numeric, an empty container, a ``not``-wrapped
+    literal, positional or ``condition=``, on a function, class, or module-level
+    ``pytestmark``) and ignore dynamic conditions (names, calls, comparisons,
+    attribute lookups) plus non-skipif markers."""
+    positive_sources = [
+        "@pytest.mark.skipif(True, reason='temp')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skipif(False, reason='legacy')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skipif(1, reason='x')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skipif('', reason='x')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skipif([], reason='x')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skipif(condition=True, reason='x')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skipif(not 0, reason='x')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.xfail(condition=False, reason='known bug')\ndef test_foo():\n    assert x\n",
+        "class TestFoo:\n    @pytest.mark.skipif(True, reason='x')\n    def test_bar(self):\n        assert x\n",
+        "pytestmark = pytest.mark.skipif(True, reason='x')\ndef test_foo():\n    assert x\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _constant_condition_skip_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "@pytest.mark.skipif(sys.version_info < (3, 9), reason='py')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skipif(not openssl_available, reason='openssl')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skipif(sys.platform == 'win32', reason='win')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skipif(platform.system() == 'Windows', reason='win')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skipif(condition=some_flag(), reason='x')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skipif(FLAG, reason='x')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skip(reason='x')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.xfail(reason='known bug')\ndef test_foo():\n    assert x\n",
+        "pytestmark = pytest.mark.skipif(_redis_reachable(), reason='redis')\ndef test_foo():\n    assert x\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _constant_condition_skip_violations(tree), f"lens should NOT flag:\n{source}"
