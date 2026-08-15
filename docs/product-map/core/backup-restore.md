@@ -62,6 +62,13 @@ status: partial
 - [x] Restore requires `--previous-fernet-key` for decryption when key changed
 - [x] Restore skips re-encryption when keys match
 
+### Dry run (`modulo restore --dry-run`)
+
+- [x] Restore supports `--dry-run` preview — validates manifest, checksums, and JSON shape then reports every step without touching the database
+- [x] Dry run reports per-file restore counts (database.sql presence, checkpoint blob/checkpoint/checkpoint-write record counts, credential re-encryption counts)
+- [x] Dry run surfaces blocking problems before commit (missing `--previous-fernet-key` when key changed, corrupt JSON, checksum mismatch)
+- [x] Dry run skips the confirmation prompt and makes no DB writes
+
 ### Edge cases
 
 - [x] Non-existent output directory is created
@@ -102,12 +109,13 @@ status: partial
 - No BDD feature files for backup/restore behaviour (operational CLI — BDD may not apply)
 - Restore assumes the same DB version — no cross-version compatibility check
 - No encryption verification step after credential restoration
-- No dry-run mode for restore preview
 - Restore sequence is non-transactional across steps (psql → checkpoints → credentials) — a failure mid-sequence leaves DB in partially-restored state
 - All checkpoint data is loaded into memory (list[dict]) — large orgs with millions of checkpoints may OOM; no streaming/batched export
 - Restore uses individual INSERT statements per row, not COPY — slow for large datasets
 
 ## QA History
+
+- 2026-08-15: improve-architecture: **RESOLVED the "No dry-run mode for restore preview" known gap** (`cli/backup.py`). `modulo restore` now accepts `--dry-run` — a read-only preview that validates the manifest, verifies file checksums, and pre-validates JSON shape (the same integrity gates as a real restore), then reports every step it WOULD take without touching the database: whether the psql SQL restore would run (and skips it when `database.sql` is missing), per-file checkpoint record counts (`checkpoint_blobs.json` / `checkpoints.json` / `checkpoint_writes.json`), and whether credential re-encryption would be required. The preview surfaces blocking problems before commit — missing `--previous-fernet-key` when the FERNET_KEY hash differs raises the exact ClickException the real restore would raise, and corrupt JSON / checksum mismatches still fail — and skips the overwrite confirmation prompt. New `_preview_restore()` helper keeps the dry-run branch read-only (no psql, no INSERTs, no re-encryption). Added 6 unit tests in `test_backup.py` (`TestRestoreCli`: full preview with counts, missing-file skips, key-changed-without-key failure, re-encryption preview counts, corrupt-JSON still fails, confirmation prompt skipped). 87/87 `test_backup.py` + 293/293 CLI unit tests pass, ruff check + format clean, mypy --strict clean. Status: partial (no BDD, cross-version compatibility check, credential-restore encryption verification, non-transactional restore sequence, in-memory checkpoint loading, per-row INSERTs remain).
 
 - 2026-07-02: improve-architecture (index 45) — cross-cutting QA: marked all 33 behaviours [ ]→[x], added 10 error-path behaviour checkboxes, added 62 unit tests covering all functions and CLI commands, fixed pre-existing `User`→`Account` import bug in `migrate_org.py`. Status: partial (4 known gaps remain).
 
