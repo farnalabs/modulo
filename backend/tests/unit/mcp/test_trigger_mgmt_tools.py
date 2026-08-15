@@ -469,3 +469,58 @@ class TestListTriggersSuccess(_AuthContext):
             limit=20,
             team_id=None,
         )
+
+
+# ---------------------------------------------------------------------------
+# list_triggers — streak_status surfacing (FAR-251)
+# ---------------------------------------------------------------------------
+
+
+class TestListTriggersStreakStatus(_AuthContext):
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.trigger.list_triggers")
+    async def test_list_triggers_includes_streak_status_per_item(
+        self,
+        mock_db_list: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """The MCP trigger list surfaces streak_status per item, exactly as the
+        REST trigger list serializer does — a deactivated ongoing trigger shows
+        state='deactivated' + reason so MCP operators can see it."""
+        deactivated = _make_mock_trigger(trigger_type="ongoing", active=False)
+        ok = _make_mock_trigger(trigger_type="cron")
+        streak_deactivated = {
+            "enabled": True,
+            "streak": 5,
+            "threshold": 5,
+            "state": "deactivated",
+            "deactivated_reason": "no_delivery_streak",
+            "last_outcomes": [],
+        }
+        streak_base = {
+            "enabled": False,
+            "streak": 0,
+            "threshold": 0,
+            "state": "unconfigured",
+            "deactivated_reason": None,
+            "last_outcomes": [],
+        }
+        mock_db_list.return_value = _make_list_result([deactivated, ok], total=2, next_cursor=None, has_more=False)
+        mock_sesh = AsyncMock()
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        with patch(
+            "modulo.api.routes.triggers.get_trigger_streak_status",
+            new_callable=AsyncMock,
+            side_effect=[streak_deactivated, streak_base],
+        ) as get_status:
+            result = await list_triggers()
+
+        assert result.get("error") is None
+        assert len(result["data"]) == 2
+        assert result["data"][0]["streak_status"] == streak_deactivated
+        assert result["data"][0]["active"] is False
+        assert result["data"][1]["streak_status"] == streak_base
+        assert get_status.await_count == 2
