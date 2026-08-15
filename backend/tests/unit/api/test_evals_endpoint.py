@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import Select
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -359,9 +360,18 @@ class TestListEvalDefinitions:
         resp = admin_client.get(self.URL)
         assert resp.status_code == 200
 
-        # The two real queries (count + select) both carry the org filter.
-        org_filter_sql = [str(s.compile()) for s in captured_stmts if hasattr(s, "compile")]
-        assert any("organisation_id" in sql for sql in org_filter_sql), "eval list query is not org-scoped"
+        # The two real queries (count + select) both carry the org filter. We
+        # restrict the scan to the count/list Selects on EvalDefinition: the RLS
+        # setup (`set_config('app.organisation_id', ...)`) is also executed on
+        # this session and always contains the literal "organisation_id", so a
+        # blanket substring scan could never fail even if the filter regressed.
+        eval_selects = [
+            stmt for stmt in captured_stmts if isinstance(stmt, Select) and "eval_definitions" in str(stmt.compile())
+        ]
+        assert len(eval_selects) == 2, f"expected count + list queries, got {len(eval_selects)}"
+        for stmt in eval_selects:
+            where_sql = str(stmt.whereclause) if stmt.whereclause is not None else ""
+            assert "organisation_id" in where_sql, "eval list query is not org-scoped"
 
     def test_list_filter_by_pipeline(self, admin_client: TestClient) -> None:
         mock_session = _make_mock_session()

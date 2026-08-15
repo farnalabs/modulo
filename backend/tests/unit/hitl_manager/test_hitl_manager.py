@@ -1773,8 +1773,9 @@ async def test_claim_update_returns_id_for_atomic_race_detection():
     """The claim UPDATE uses RETURNING id so the caller can detect a lost race:
     no returned id ⇒ someone else claimed first ⇒ AlreadyClaimedError."""
     _mgr, _session, captured = await _claim_capture()
-    update_stmt = captured[1]
-    assert any(c.name == "id" for c in update_stmt._returning or ())
+    update_stmt = captured[1]  # execute call 2 is the UPDATE ... RETURNING
+    sql = str(update_stmt.compile(compile_kwargs={"literal_binds": True}))
+    assert "RETURNING" in sql and "hitl_claims.id" in sql, f"claim UPDATE missing RETURNING id, got: {sql}"
 
 
 async def test_decide_update_where_checks_expires_at_gt_now():

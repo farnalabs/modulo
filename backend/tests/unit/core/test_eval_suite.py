@@ -221,9 +221,16 @@ class TestLoadEvalDefsForPipeline:
         session.execute = AsyncMock(return_value=result)
 
         executor = PipelineExecutor(MagicMock())
-        rows = await executor._load_eval_defs_for_pipeline(session, uuid4())
+        await executor._load_eval_defs_for_pipeline(session, uuid4())
 
-        assert [r.name for r in rows] == ["node-eval", "pipeline-eval"]
+        # Assert on the compiled WHERE clause, not on the mock rows: the mock
+        # returns whatever the SQL returns, so checking the returned names can
+        # never detect a dropped `node_id IS NOT NULL` filter.
+        stmt = session.execute.call_args[0][0]
+        where_sql = str(stmt.whereclause) if stmt.whereclause is not None else ""
+        assert "node_id" in where_sql and "IS NOT NULL" in where_sql, (
+            f"loading query must filter node_id IS NOT NULL, got: {where_sql}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -334,8 +341,26 @@ class TestCheckEvalSuites:
         executor = PipelineExecutor(MagicMock())
         # First query filters pass_threshold IS NOT NULL → empty → no suite check.
         session = self._session_with_rows([[]])
+        captured: list[Any] = []
+        orig_execute = session.execute
+
+        async def _capture_execute(stmt: Any) -> Any:
+            captured.append(stmt)
+            return await orig_execute(stmt)
+
+        session.execute = _capture_execute
         results = await executor._check_eval_suites(session, run_id, pipeline_id)
         assert results == []
+
+        # The threshold-less contract lives in the SQL filter, not just the
+        # empty-result early return — assert the query excludes defs without a
+        # pass_threshold so the test can detect a dropped filter.
+        assert captured, "expected the suite-loading query to be executed"
+        stmt = captured[0]
+        where_sql = str(stmt.whereclause) if stmt.whereclause is not None else ""
+        assert "pass_threshold" in where_sql and "IS NOT NULL" in where_sql, (
+            f"suite query must filter pass_threshold IS NOT NULL, got: {where_sql}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -464,6 +489,8 @@ class TestEvalBlockShortCircuitsRemainingEvals:
 
         with pytest.raises(EvalBlockedError, match="blocking-eval"):
             asyncio.run(_run())
-        # If "should-not-run" had been evaluated it would have PASSED (pattern
-        # matches) and no second EvalBlockedError would be needed — the single
-        # raise on the FIRST failing eval proves the loop stopped there.
+        # The raised error names the FIRST eval ("blocking-eval"). If the loop
+        # had reached "should-not-run", its pattern ALWAYS-PASS also fails to
+        # match state {"level": "fail"} (re.search is literal here), so it
+        # would raise a SECOND EvalBlockedError naming "should-not-run". The
+        # single raise on the first failing eval proves the loop stopped there.
