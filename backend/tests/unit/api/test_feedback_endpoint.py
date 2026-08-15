@@ -253,6 +253,26 @@ class TestUpdateStatus:
         )
         assert resp.status_code == 422
 
+    def test_accepts_dismissed_status(self, client: TestClient) -> None:
+        """'dismissed' is a valid terminal status per PRD 8.20 — PATCH must accept it."""
+        mock_record = _make_mock_record(feedback_status="dismissed")
+
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+        ):
+            mock_update.return_value = mock_record
+
+            resp = client.patch(
+                f"/api/v1/feedback/{_RECORD_ID}/status",
+                json={"status": "dismissed"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["feedback_status"] == "dismissed"
+        call_args, _call_kwargs = mock_update.call_args
+        assert call_args[1] == "dismissed"
+
     def test_returns_404_when_not_found(self, client: TestClient) -> None:
         with (
             patch("modulo.api.routes.feedback.set_rls_org"),
@@ -421,6 +441,27 @@ class TestReviewFeedback:
 
         assert resp.status_code == 200
         assert resp.json()["feedback_status"] == "dismissed"
+        call_args, _call_kwargs = mock_update.call_args
+        assert call_args[1] == "dismissed"
+
+    def test_mark_reviewed_uses_resolved_status(self, client: TestClient) -> None:
+        """mark_reviewed resolves the record; only the dismiss action sets 'dismissed' (PRD 8.20)."""
+        mock_record = _make_mock_record(feedback_status="resolved")
+
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+        ):
+            mock_get.return_value = _make_mock_record()
+            mock_update.return_value = mock_record
+
+            resp = client.post(
+                f"/api/v1/feedback/inbox/{_RECORD_ID}/review",
+                json={"action": "mark_reviewed"},
+            )
+
+        assert resp.status_code == 200
         call_args, _call_kwargs = mock_update.call_args
         assert call_args[1] == "resolved"
 

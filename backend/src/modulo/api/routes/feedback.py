@@ -413,7 +413,7 @@ async def update_feedback_status(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("feedback.update"),
 ) -> dict[str, Any]:
-    valid_statuses = {"pending", "routing", "correcting", "resolved", "escalated"}
+    valid_statuses = {"pending", "routing", "correcting", "resolved", "escalated", "dismissed"}
     if req.status not in valid_statuses:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -607,8 +607,10 @@ async def review_feedback(
             if record is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
 
-            if req.action in ("mark_reviewed", "dismiss"):
+            if req.action == "mark_reviewed":
                 record = await mgr.update_status(record_id, "resolved")
+            elif req.action == "dismiss":
+                record = await mgr.update_status(record_id, "dismissed")
 
             elif req.action == "create_correction_run":
                 if not record.run_id:

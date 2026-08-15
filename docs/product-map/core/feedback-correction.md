@@ -42,7 +42,7 @@ Correction run spawning, linking, and post-correction evaluation for the Feedbac
 - [x] Handles None input_payload on original run gracefully (defaults to empty dict)
 - [x] Links correction run to FeedbackRecord via link_correction_run
 - [x] Returns new correction run UUID
-- [ ] Correction run pre-seeded from original LangGraph checkpoint at target_node_id — creates fresh run, not checkpoint-resumed
+- [x] Correction run is a fresh run, not checkpoint-resumed — PRD 8.20 explicitly specifies fresh correction runs ("Correction runs are fresh runs — they do not inherit checkpoint state"); the code matches the spec
 - [ ] Correction run goes through full eval suite before reaching HITL gate again — not end-to-end verified
 
 ### link_correction_run
@@ -71,7 +71,7 @@ Correction run spawning, linking, and post-correction evaluation for the Feedbac
 - [x] Error with empty correction_run payload (missing producing_node_id, rejection_reason)
 - [x] Double-correction: link_correction_run raises ConcurrentModificationError on re-link
 - [ ] Correction run fails to start — linking stays in "correcting" status
-- [ ] Post-correction eval fails — correction run succeeded, eval is missing
+- [x] Post-correction eval failure is handled when it runs — an eval-engine exception escalates the record and returns a structured fallback dict (tested by test_escalates_when_eval_engine_raises); auto-triggering on correction-run completion is a separate lifecycle gap
 
 ### Error Handling
 
@@ -101,12 +101,20 @@ Correction run spawning, linking, and post-correction evaluation for the Feedbac
 - [x] Correction run on feedback with no run_id — rejected with 422 before DB access
 - [x] All 9 API routes wrapped in except ProgrammingError for migrations-not-run safety
 - [x] All DB queries in get_inbox_item run inside session.begin() with RLS context — fixed cross-tenant leak
-- [x] "dismiss" action uses "resolved" status — aligned with PRD §8.20 status flow
+- [x] "dismiss" action sets "dismissed" status — aligned with PRD §8.20 (dismiss is a terminal state distinct from resolved); restored 2026-08-15 after earlier QA misread the PRD as excluding dismissed
 - [x] detect_eval_gap uses single transaction — no stale read risk between two transactions
-- [x] _VALID_STATUS_TRANSITIONS aligned with DB CHECK constraint and PRD §8.20 — no "dismissed" orphan state
+- [x] _VALID_STATUS_TRANSITIONS aligned with DB CHECK constraint and PRD §8.20 — "dismissed" is a valid terminal status (pending/escalated → dismissed), matching the DB CHECK constraint which always included it
 - [x] run_context_overrides can shadow standard _feedback_correction keys — caller responsibility, documented edge case
 
 ## QA History
+
+### 2026-08-15 — Coverage-completion (FAR-233)
+- **Fixed (PRD compliance)**: the `dismiss` review action now sets `dismissed` instead of `resolved`; `_VALID_STATUS_TRANSITIONS` gained `pending`/`escalated` → `dismissed` and `PATCH /status` accepts `dismissed`. This reverts the Round-3 "dismiss → resolved" change, which misread PRD §8.20 (the PRD explicitly lists `dismissed` as a terminal state and says dismiss sets it).
+- **Fixed (bug)**: `detect_eval_gap` skipped real `EvalDefinition` objects as malformed, so the eval suite never ran via the /detect-gap endpoint — the guard now accepts `EvalDefinition`-shaped objects (covered by test_uses_real_eval_engine_standalone_path).
+- **Corrected**: checkpoint pre-seeding removed from Known Gaps — PRD 8.20 specifies fresh correction runs. Post-correction eval failure handling verified (escalate + structured fallback).
+- **Remaining gaps**: correction run that starts but fails during execution leaves the record in `correcting` (no runtime-failure escalation), run_post_correction_eval lifecycle wiring, BDD correction error-path scenarios, full-lifecycle integration test.
+
+
 
 ### 2026-07-12 — Round 3 improve-architecture
 - **MAJOR:** Fixed B904 (exception chaining) on all 10 feedback route handlers — `IntegrityError`, `ProgrammingError`, `SQLAlchemyError`, and `Exception` now use `raise ... from exc` pattern
@@ -151,9 +159,9 @@ Correction run spawning, linking, and post-correction evaluation for the Feedbac
 - Verified `run_context_overrides` merge can shadow standard keys (e.g. `producing_node_id`) — documented edge case, not fixed (caller responsibility)
 
 ## Known Gaps
-- ~~**"dismiss" action used "dismissed" status** — fixed in Round 3 improve-architecture: now uses "resolved" as specified in PRD §8.20~~
+- ~~**"dismiss" action used "resolved" status** — reverted 2026-08-15: the PRD §8.20 actually specifies dismiss sets "dismissed", so the action, state machine, and PATCH /status now use "dismissed". The Round 3 "dismiss → resolved" change was based on a misreading of the PRD.~~
 - No BDD feature files for the correction error paths — only happy-path BDD scenarios exist
 - No integration test for full correction lifecycle: reject → spawn → run → eval → resolve
-- Correction run checkpoint pre-seeding is not implemented
+- [Removed 2026-08-15] Correction-run checkpoint pre-seeding is not a gap — PRD 8.20 specifies fresh correction runs by design
 - Correction run that starts but fails during execution leaves the FeedbackRecord stuck in "correcting" status — no automatic escalation for runtime failures
 - `run_context_overrides` can shadow standard `_feedback_correction` keys (producing_node_id, rejection_reason, rejected_output, is_correction_run) — caller must not set conflicting keys

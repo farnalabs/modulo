@@ -65,11 +65,12 @@ class ValidationError(FeedbackManagerError):
 
 
 _VALID_STATUS_TRANSITIONS: dict[str, set[str]] = {
-    "pending": {"routing", "correcting", "resolved"},
+    "pending": {"routing", "correcting", "resolved", "dismissed"},
     "routing": {"escalated", "correcting", "resolved"},
     "correcting": {"correcting", "resolved", "escalated"},
-    "escalated": {"resolved"},
+    "escalated": {"resolved", "dismissed"},
     "resolved": set(),
+    "dismissed": set(),
 }
 
 
@@ -315,7 +316,9 @@ class FeedbackManager:
             return True
         processed_count = 0
         for eval_def in eval_suite:
-            if not isinstance(eval_def, dict) and not hasattr(eval_def, "passed"):
+            # A valid eval_def is either a raw config dict or an EvalDefinition
+            # (ORM or DTO) carrying an ``eval_type`` — anything else is malformed.
+            if not isinstance(eval_def, dict) and not hasattr(eval_def, "eval_type"):
                 logger.warning("Malformed eval_def in eval_suite: %s", eval_def)
                 continue
             processed_count += 1
