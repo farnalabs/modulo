@@ -165,8 +165,6 @@ def node_return(outputs_json: Any, telemetry_json: Any, node_id: str) -> Any:
     """
     if not isinstance(outputs_json, dict):
         return None
-    if isinstance(telemetry_json, dict) and node_id in telemetry_json:
-        return outputs_json.get(node_id)
     return outputs_json.get(node_id)
 
 

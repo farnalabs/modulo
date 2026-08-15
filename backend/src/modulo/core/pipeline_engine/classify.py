@@ -207,7 +207,7 @@ def _extract_pr_url_from_node(node_value: Any) -> str:
             raw = item.get("pr_url")
             if isinstance(raw, str) and _is_valid_pr_url(raw):
                 return raw.strip()
-            for _key, value in item.items():
+            for value in item.values():
                 if isinstance(value, dict):
                     nxt.append(value)
                 elif isinstance(value, list):
