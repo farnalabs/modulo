@@ -156,8 +156,10 @@ class _RoutedSession:
 class TestStreakConfig:
     def test_defaults(self) -> None:
         threshold, window = ts._streak_config({})
-        assert threshold == ts.ONGOING_MAX_NO_DELIVERY_STREAK_DEFAULT == 5
-        assert window == ts.ONGOING_MIN_NO_DELIVERY_WINDOW_HOURS_DEFAULT == 24
+        assert threshold == ts.ONGOING_MAX_NO_DELIVERY_STREAK_DEFAULT
+        assert threshold == 5
+        assert window == ts.ONGOING_MIN_NO_DELIVERY_WINDOW_HOURS_DEFAULT
+        assert window == 24
 
     def test_per_trigger_threshold(self) -> None:
         threshold, _ = ts._streak_config({"max_no_delivery_streak": 3})
