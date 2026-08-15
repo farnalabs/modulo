@@ -8,7 +8,7 @@
 ## Context
 
 An `ongoing` trigger keeps a pipeline topped up to a target number of in-flight
-runs "forever" (FAR-158; PRD §8.2). When the pipeline's work is exhausted — an
+runs "forever" (FAR-158; PRD §8.5). When the pipeline's work is exhausted — an
 empty backlog, a permanently broken source, or a silent infra/sandbox failure
 that produces runs but no delivery — the trigger keeps producing no-delivery
 runs indefinitely with no operator visibility. A daemon that "silently does
