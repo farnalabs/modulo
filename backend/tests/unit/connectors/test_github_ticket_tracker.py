@@ -82,6 +82,35 @@ class TestToTicket:
         ticket = tracker._to_ticket(raw)
         assert not ticket.labels
 
+    def test_handles_non_dict_label_entries(self, tracker: GitHubTicketTracker) -> None:
+        raw = _make_mock_issue({"labels": ["bug", {"name": "auth"}]})
+        ticket = tracker._to_ticket(raw)
+        assert ticket.labels == ["auth"]
+        assert ticket.ticket_type == "task"
+
+    def test_handles_corrupt_labels(self, tracker: GitHubTicketTracker) -> None:
+        raw = _make_mock_issue({"labels": "bug, auth"})
+        ticket = tracker._to_ticket(raw)
+        assert not ticket.labels
+        assert ticket.ticket_type == "task"
+
+    def test_handles_corrupt_assignee(self, tracker: GitHubTicketTracker) -> None:
+        raw = _make_mock_issue({"assignee": "alice"})
+        ticket = tracker._to_ticket(raw)
+        assert ticket.assignee is None
+
+    def test_handles_corrupt_created_at(self, tracker: GitHubTicketTracker) -> None:
+        raw = _make_mock_issue({"created_at": "not-a-date", "updated_at": "2025-13-99T10:00:00Z"})
+        ticket = tracker._to_ticket(raw)
+        assert ticket.created_at is None
+        assert ticket.updated_at is None
+
+    def test_handles_non_string_timestamps(self, tracker: GitHubTicketTracker) -> None:
+        raw = _make_mock_issue({"created_at": {"$date": "2025-01-15T10:00:00Z"}, "updated_at": 1737043200})
+        ticket = tracker._to_ticket(raw)
+        assert ticket.created_at is None
+        assert ticket.updated_at is None
+
 
 class TestListTickets:
     @patch("httpx.AsyncClient")

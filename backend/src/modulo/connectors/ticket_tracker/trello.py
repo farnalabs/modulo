@@ -9,11 +9,11 @@ otherwise it's "open".
 
 import asyncio
 import logging
-from datetime import datetime
 from typing import Any
 
 import httpx
 
+from modulo.connectors._safe_datetime import safe_datetime as _safe_datetime
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorResult, ConnectorType, HealthResult
 from modulo.connectors.ticket_tracker.base import Ticket, TicketFilter, TicketTrackerBase
 
@@ -183,6 +183,7 @@ class TrelloTicketTracker(TicketTrackerBase):
                 raise ValueError(f"Trello network error: {e}") from None
 
     def _to_ticket(self, raw: dict[str, Any]) -> Ticket:
+        labels = raw.get("labels")
         return Ticket(
             id=raw.get("id", ""),
             title=raw.get("name", ""),
@@ -190,9 +191,13 @@ class TrelloTicketTracker(TicketTrackerBase):
             status="closed" if raw.get("closed") else "open",
             priority=None,
             ticket_type="task",
-            labels=[label.get("name", "") for label in raw.get("labels", [])] if raw.get("labels") else [],
+            labels=(
+                [label.get("name", "") for label in labels if isinstance(label, dict)]
+                if isinstance(labels, list)
+                else []
+            ),
             url=raw.get("url") or raw.get("shortUrl"),
             created_at=None,
-            updated_at=(datetime.fromisoformat(raw["dateLastActivity"]) if raw.get("dateLastActivity") else None),
+            updated_at=_safe_datetime(raw.get("dateLastActivity")),
             raw=raw,
         )

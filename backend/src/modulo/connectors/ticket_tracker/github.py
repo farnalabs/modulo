@@ -1,11 +1,11 @@
 """GitHub Issues implementation of the TicketTrackerBase ABC."""
 
 import asyncio
-from datetime import datetime
 from typing import Any
 
 import httpx
 
+from modulo.connectors._safe_datetime import safe_datetime as _safe_datetime
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorResult, ConnectorType, HealthResult
 from modulo.connectors.ticket_tracker.base import Ticket, TicketFilter, TicketTrackerBase
 
@@ -136,17 +136,18 @@ class GitHubTicketTracker(TicketTrackerBase):
             return self._to_ticket(resp.json())
 
     def _to_ticket(self, raw: dict[str, Any]) -> Ticket:
+        labels = [label.get("name", "") for label in (raw.get("labels") or []) if isinstance(label, dict)]
         return Ticket(
             id=str(raw.get("number", "")),
             title=raw.get("title", ""),
             description=raw.get("body"),
             status="open" if not raw.get("closed_at") else "closed",
             priority=None,
-            ticket_type="bug" if any(label.get("name") == "bug" for label in (raw.get("labels") or [])) else "task",
-            labels=[label.get("name", "") for label in (raw.get("labels") or [])],
+            ticket_type="bug" if any(label.get("name") == "bug" for label in labels) else "task",
+            labels=labels,
             url=raw.get("html_url"),
-            assignee=raw.get("assignee", {}).get("login") if raw.get("assignee") else None,
-            created_at=(datetime.fromisoformat(raw["created_at"]) if raw.get("created_at") else None),
-            updated_at=(datetime.fromisoformat(raw["updated_at"]) if raw.get("updated_at") else None),
+            assignee=raw.get("assignee").get("login") if isinstance(raw.get("assignee"), dict) else None,
+            created_at=_safe_datetime(raw.get("created_at")),
+            updated_at=_safe_datetime(raw.get("updated_at")),
             raw=raw,
         )

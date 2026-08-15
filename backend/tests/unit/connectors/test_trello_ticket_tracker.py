@@ -76,6 +76,26 @@ class TestToTicket:
         ticket = tracker._to_ticket(raw)
         assert not ticket.labels
 
+    def test_handles_non_dict_label_entries(self, tracker: TrelloTicketTracker) -> None:
+        raw = _make_mock_card({"labels": ["bug", {"name": "auth"}]})
+        ticket = tracker._to_ticket(raw)
+        assert ticket.labels == ["auth"]
+
+    def test_handles_corrupt_labels(self, tracker: TrelloTicketTracker) -> None:
+        raw = _make_mock_card({"labels": "bug, auth"})
+        ticket = tracker._to_ticket(raw)
+        assert not ticket.labels
+
+    def test_handles_corrupt_date_last_activity(self, tracker: TrelloTicketTracker) -> None:
+        raw = _make_mock_card({"dateLastActivity": "not-a-date"})
+        ticket = tracker._to_ticket(raw)
+        assert ticket.updated_at is None
+
+    def test_handles_non_string_date_last_activity(self, tracker: TrelloTicketTracker) -> None:
+        raw = _make_mock_card({"dateLastActivity": 1737043200})
+        ticket = tracker._to_ticket(raw)
+        assert ticket.updated_at is None
+
 
 class TestListTickets:
     @patch("httpx.AsyncClient")
