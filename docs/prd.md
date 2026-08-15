@@ -1046,7 +1046,7 @@ The streak counts terminal runs since the later of the last delivered run and th
 
 Configuration (per-trigger, in `config_json`):
 - `max_no_delivery_streak` — the streak threshold. Default 5. The legacy key `max_consecutive_failures` is read as a fallback for one release. Only genuine integer values are accepted; a boolean, float, or out-of-range value falls back to the default, so a mis-typed config can never fire instantly.
-- `no_delivery_min_window_hours` — the minimum wall-clock window before a streak can deactivate (the quiet stretch must be at least this old). Default 24h via `MODULO_ONGOING_STREAK_MIN_WINDOW_HOURS` (the dogfood deployment sets 0 so a fast-moving repo's quiet stretch still stops the pool); a per-trigger value overrides the env default.
+- `no_delivery_min_window_hours` — the minimum wall-clock window before a streak can deactivate (the quiet stretch must be at least this old). Default 24h; override the default per-deployment via `MODULO_ONGOING_STREAK_MIN_WINDOW_HOURS` (0 disables the window entirely, for repos where any quiet stretch should stop the pool) or per-trigger via this config key. A per-trigger value overrides the env default.
 
 Re-enabling an auto-deactivated trigger is an operator action (`trigger.update` permission, i.e. the `operator` role): re-activating atomically re-anchors the streak epoch and clears the config-failure Redis counter, so the streak restarts cleanly. A deactivation is recorded as an `ongoing_trigger.auto_deactivated` AuditEvent plus an `auto_deactivated` TriggerEvent, and raises the `trigger_deactivated` notification.
 
