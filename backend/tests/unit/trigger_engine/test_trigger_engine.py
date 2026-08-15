@@ -948,7 +948,6 @@ async def test_handle_webhook_logs_trigger_event(
             modulo_timestamp=mod_ts,
             snapshot_id=_SNAP,
         )
-    session.add.assert_called()
     found = any(getattr(c[0][0], "validation_result", None) == expected_vr for c in session.add.call_args_list)
     assert found
 

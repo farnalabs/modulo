@@ -599,7 +599,6 @@ class TestTokenExchangeEndpoint:
             )
 
         assert resp.status_code == 200
-        mock_consume.assert_awaited()
         assert mock_consume.call_args.kwargs["code_verifier"] == _CODE_VERIFIER
 
     def test_json_body_still_supported_for_compat(self, admin_client: TestClient) -> None:
