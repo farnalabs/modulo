@@ -174,8 +174,7 @@ class TestErrorTrackingLogHandler:
         finally:
             org_id_var.reset(token)
 
-        mock_async.assert_awaited_once()
-        mock_async.assert_awaited_with(record)
+        mock_async.assert_awaited_once_with(record)
         assert handler._pending_tasks == 0
 
     async def test_captures_critical_level(self) -> None:
@@ -191,8 +190,7 @@ class TestErrorTrackingLogHandler:
         finally:
             org_id_var.reset(token)
 
-        mock_async.assert_awaited_once()
-        mock_async.assert_awaited_with(record)
+        mock_async.assert_awaited_once_with(record)
 
     async def test_drops_second_emit_during_rate_window(self) -> None:
         from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
@@ -210,8 +208,7 @@ class TestErrorTrackingLogHandler:
         finally:
             org_id_var.reset(token)
 
-        mock_async.assert_awaited_once()
-        mock_async.assert_awaited_with(first)
+        mock_async.assert_awaited_once_with(first)
 
     def test_drops_emit_when_backlog_full(self) -> None:
         from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
