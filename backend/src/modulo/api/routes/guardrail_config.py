@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_logger import append_audit_event
 from modulo.core.eval_engine import EvalDefinition
 from modulo.core.guardrails import GuardrailConfigError, to_engine_definition
 from modulo.core.guardrails.config import (
@@ -154,8 +155,6 @@ async def _audit(
     payload: dict[str, Any],
 ) -> None:
     """Best-effort audit append — a failed audit never breaks the operation."""
-    from modulo.core.audit_logger import append_audit_event
-
     try:
         await append_audit_event(
             session,
