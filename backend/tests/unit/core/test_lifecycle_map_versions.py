@@ -1577,6 +1577,82 @@ async def test_update_version_route_stamps_updated_by_actor() -> None:
     assert mock_save.await_args.kwargs["updated_by"] == _RoutePrincipal.account_id
 
 
+async def test_update_route_stamps_updated_by_actor() -> None:
+    """PUT /{id} must pass the principal as the version actor (updated_by) so a
+    content/metadata save reports who produced it — the version entry's
+    created_by was always null before this change."""
+    lm = _make_map(updated_by=_RoutePrincipal.account_id)
+    session = _route_session()
+    with (
+        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch(
+            "modulo.api.routes.lifecycle_maps.update_lifecycle_map",
+            AsyncMock(return_value=lm),
+        ) as mock_update,
+        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()),
+    ):
+        resp = await update_lifecycle_map_endpoint(
+            lifecycle_map_id=_MAP_ID,
+            req=LifecycleMapUpdate(name="Renamed"),
+            session=session,
+            principal=_RoutePrincipal(),
+        )
+    assert mock_update.await_args.kwargs["updated_by"] == _RoutePrincipal.account_id
+    assert resp.name == lm.name
+
+
+async def test_graduate_route_stamps_updated_by_actor() -> None:
+    """PATCH .../graduate must pass the principal as the version actor so the
+    graduated version entry reports who promoted the stage."""
+    lm = _make_map(
+        updated_by=_RoutePrincipal.account_id,
+        content_json={"stages": [], "edges": []},
+    )
+    session = _route_session()
+    with (
+        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch(
+            "modulo.api.routes.lifecycle_maps.graduate_stage",
+            AsyncMock(return_value=lm),
+        ) as mock_graduate,
+        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()),
+    ):
+        await graduate_lifecycle_map_stage_endpoint(
+            lifecycle_map_id=_MAP_ID,
+            version_id=_MAP_ID,
+            stage_id="s1",
+            req=GraduateStageRequest(pipeline_id=str(_PIPE_ID)),
+            session=session,
+            principal=_RoutePrincipal(),
+        )
+    assert mock_graduate.await_args.kwargs["updated_by"] == _RoutePrincipal.account_id
+
+
+async def test_restore_route_stamps_updated_by_actor() -> None:
+    """POST /{id}/restore must pass the principal as the version actor so the
+    restored map's version entry reports who brought it back."""
+    lm = _make_map(updated_by=_RoutePrincipal.account_id)
+    session = _route_session()
+    with (
+        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch(
+            "modulo.api.routes.lifecycle_maps.restore_lifecycle_map",
+            AsyncMock(return_value=lm),
+        ) as mock_restore,
+        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()),
+    ):
+        resp = await restore_lifecycle_map_endpoint(
+            lifecycle_map_id=_MAP_ID,
+            session=session,
+            principal=_RoutePrincipal(),
+        )
+    assert mock_restore.await_args.kwargs["updated_by"] == _RoutePrincipal.account_id
+    assert resp.name == lm.name
+
+
 async def test_update_version_route_maps_content_error_to_422() -> None:
     """The versions PUT route (update_lifecycle_map_version_endpoint) must map
     a content-validation error to 422 exactly like the POST route — it shares
