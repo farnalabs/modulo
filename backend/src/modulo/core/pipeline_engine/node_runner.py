@@ -563,7 +563,7 @@ def _normalize_marker_text(raw: Any) -> str:
 # (a mid-line occurrence in unrelated log prose must not fabricate a delivery).
 # ``^<sentinel>\r?$`` with MULTILINE + re.escape — the sentinel is a literal the
 # pipeline author chose, not a pattern. Compiled once at module load.
-def _compile_delivery_sentinel_pattern(sentinel: str) -> _re.Pattern[str] | None:
+def _compile_delivery_sentinel_pattern(sentinel: str | None) -> _re.Pattern[str] | None:
     """Compile the full-line sentinel matcher for *sentinel* (or None)."""
     if not sentinel or not isinstance(sentinel, str):
         return None
@@ -574,7 +574,20 @@ def _compile_delivery_sentinel_pattern(sentinel: str) -> _re.Pattern[str] | None
         return None
 
 
-def _source_contains_delivery_sentinel(text: Any, sentinel: str) -> bool:
+def _uncancel_current_task() -> None:
+    """Clear one pending cancellation on the CURRENT task (FAR-228).
+
+    ``uncancel()`` is a ``Task`` method, never a module-level function —
+    ``asyncio.uncancel()`` raises ``AttributeError``. Must be called from
+    within the task being uncancelled (the running task is the only one whose
+    pending-cancellation count we are permitted to mutate).
+    """
+    task = asyncio.current_task()
+    if task is not None:
+        task.uncancel()
+
+
+def _source_contains_delivery_sentinel(text: Any, sentinel: str | None) -> bool:
     """True when *text* contains *sentinel* as a FULL LINE (FAR-228).
 
     Full-line match only — ``re.search(r'^<sentinel>\r?$', text, re.M)``. A
@@ -872,7 +885,8 @@ async def _read_run_raw_output_markers_for_gate(
             ).fetchone()
             if row is None:
                 return None
-            return row[0]
+            value = row[0]
+            return value if isinstance(value, dict) else None
 
     try:
         return await asyncio.wait_for(_read(), timeout=_IDEMPOTENCY_GATE_READ_TIMEOUT)
@@ -2484,7 +2498,7 @@ def make_sandbox_agent_fn(
                         asyncio.shield(_drain_fn()), timeout=_IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT
                     )
                 except asyncio.CancelledError:
-                    asyncio.uncancel()
+                    _uncancel_current_task()
                 except Exception:
                     _log.exception(
                         "sandbox_agent.cancel_retention_drain_failed",
@@ -2528,9 +2542,9 @@ def make_sandbox_agent_fn(
                             asyncio.shield(_persist_task),
                             timeout=_IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT,
                         )
-                        asyncio.uncancel()
+                        _uncancel_current_task()
                     except asyncio.CancelledError:
-                        asyncio.uncancel()
+                        _uncancel_current_task()
                     except Exception:
                         _log.exception(
                             "sandbox_agent.cancel_retention_persist_failed",

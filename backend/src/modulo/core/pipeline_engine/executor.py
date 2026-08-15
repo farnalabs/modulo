@@ -1750,12 +1750,14 @@ class PipelineExecutor:
             retries = int(get_settings().saq_run_retries)
             node_attempt_count = 0
             current_token: str | None = None
+            run_markers: Any = None
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
                 current_run = await get_run(session, run_id)
                 if current_run is not None:
                     node_attempt_count = int(current_run.node_attempt_count or 0)
                     current_token = current_run.claim_token
+                    run_markers = current_run.raw_output_markers
 
             superseded = (
                 self._claim_token is not None and current_token is not None and current_token != self._claim_token
@@ -1775,7 +1777,7 @@ class PipelineExecutor:
             gate_ok = False
             try:
                 gate_ok = (
-                    _should_skip_retry(getattr(exc, "node_id", None), current_run.raw_output_markers, str(run_id))
+                    _should_skip_retry(getattr(exc, "node_id", None), run_markers, str(run_id))
                     and not superseded
                     and not stalled
                     and not bool(getattr(current_run, "cancellation_requested", False))
@@ -1785,8 +1787,11 @@ class PipelineExecutor:
             except Exception:
                 _log.warning("pipeline.idempotency_gate.check_failed", extra={"run_id": str(run_id)})
                 gate_ok = False
-            if gate_ok:
-                _gated_node_id = exc.node_id if isinstance(exc, SandboxNodeFailedError) else None
+            # Only SandboxNodeFailedError carries a node_id — the gate is
+            # keyed on it, so a None node_id (plain NodeCancelledError) can
+            # never suppress.
+            _gated_node_id = exc.node_id if isinstance(exc, SandboxNodeFailedError) else None
+            if gate_ok and _gated_node_id is not None:
                 _log.warning(
                     "pipeline.idempotency_gate.suppressed_retry",
                     extra={"run_id": str(run_id), "node_id": _gated_node_id},
