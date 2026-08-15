@@ -24,6 +24,8 @@ code:
   - backend/src/modulo/core/trigger_engine/agent_signal.py
   - backend/src/modulo/core/cron_helpers.py
   - backend/src/modulo/core/saq_worker.py
+  - backend/src/modulo/core/trigger_streak.py
+  - backend/src/modulo/core/pipeline_engine/classify.py
 depends-on: [feat-connectors-hub, feat-core-pipeline-execution]
 unit-tests:
   - backend/tests/unit/trigger_engine/test_trigger_engine.py
@@ -50,6 +52,8 @@ unit-tests:
   - backend/tests/integration/saq/test_fire_due_triggers.py
   - backend/tests/bdd/steps/test_org_pause.py
   - backend/tests/unit/core/test_trigger_validation.py
+  - backend/tests/unit/core/test_trigger_streak_engine.py
+  - backend/tests/integration/test_trigger_streak_engine_sql.py
 status: partial
 ---
 
@@ -173,6 +177,10 @@ concurrency management via `max_concurrent_runs`.
 - [x] Daily spend limit respected before run creation
 - [x] Org pause respected — no top-up on a paused org
 - [x] `in_flight` surfaced on trigger detail/list responses for ongoing triggers
+- [x] **No-delivery auto-deactivation (FAR-190)**: an ongoing trigger is auto-deactivated after N consecutive `no_delivery` terminal runs (default N=5, per-trigger `max_no_delivery_streak`; 24h wall-clock window, per-trigger `no_delivery_min_window_hours`) by the DB-backed streak engine (`core/trigger_streak.py`, sweep wired into `dispatcher_reconcile` every 60s) — a silently-dry daemon no longer runs forever
+- [x] Streak walk is fail-closed: stops at the first `delivered`/`excluded`/`unclassified` terminal run or any terminal run with no classification record; boundary = `GREATEST(last_delivery_at, streak_epoch)`; cancelled/budget-exceeded runs are excluded AND break the walk
+- [x] Deactivation is a guarded atomic `UPDATE ... WHERE active AND <streak folded into WHERE>` (no TOCTOU; concurrent ticks are a no-op) with AuditEvent + TriggerEvent lifecycle records + notifier dispatch; per-org cap 10/h, mass-cascade alert at 5/24h, kill switch `MODULO_STREAK_DEACTIVATE_KILL_SWITCH`
+- [x] `streak_epoch` (migration 0102) re-anchored on every `active=True` transition (create/update/toggle/restore/re-enable + circuit-breaker reset) so a re-enabled trigger's streak restarts; config-failure deactivation (FAR-158, 5 consecutive `no_pipeline` failures via Redis) and the no-delivery deactivation share the `record_ongoing_deactivation_lifecycle` audit ceremony
 
 ### Org-wide Pause (Kill-Switch)
 
