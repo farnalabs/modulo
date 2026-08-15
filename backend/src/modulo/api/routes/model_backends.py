@@ -211,6 +211,8 @@ async def _validate_fallback_ids(
     session: AsyncSession,
     org_id: uuid.UUID,
     fallback_ids: list[uuid.UUID],
+    *,
+    backend_id: uuid.UUID | None = None,
 ) -> None:
     """Reject fallback backend IDs that reference no existing org backend (422).
 
@@ -219,10 +221,26 @@ async def _validate_fallback_ids(
     that does not exist (or belongs to another org) is a configuration error,
     not a runtime-failover concern. The hub already skips unregistered IDs
     gracefully, but a silent skip hides a misconfiguration — fail fast instead.
+
+    On update, a self-reference (the backend listing itself as its own
+    fallback) is also rejected: it is a meaningless failover chain and would
+    permanently block deletion (the delete-protection scan reports the backend
+    as referencing itself).
     """
     if not fallback_ids:
         return
     unique_ids = list(dict.fromkeys(fallback_ids))
+    if backend_id is not None and backend_id in unique_ids:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=[
+                {
+                    "type": "value_error",
+                    "loc": ["body", "fallback_backend_ids"],
+                    "msg": "A model backend cannot reference itself as a fallback",
+                }
+            ],
+        )
     found = set(
         (
             await session.execute(
@@ -430,7 +448,10 @@ async def update_model_backend_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             fallback_ids = updates.get("fallback_backend_ids")
             if fallback_ids is not None:
-                await _validate_fallback_ids(session, principal.organisation_id, fallback_ids)
+                await _validate_fallback_ids(session, principal.organisation_id, fallback_ids, backend_id=backend_id)
+                # JSON column cannot serialize raw uuid.UUID objects; stringify
+                # before the write, mirroring the create path (line ~315).
+                updates["fallback_backend_ids"] = [str(fid) for fid in fallback_ids]
             mb = await update_model_backend(session, backend_id, updates)
             if mb is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")

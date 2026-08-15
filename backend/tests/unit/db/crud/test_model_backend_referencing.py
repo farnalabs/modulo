@@ -72,8 +72,23 @@ async def test_referencing_backend_is_reported(session: AsyncSession) -> None:
     assert [mb.id for mb in result] == [referencer.id]
 
 
-async def test_self_reference_is_not_reported_for_other_backend(session: AsyncSession) -> None:
-    backend = await _seed_backend(session, name="self-ref", fallback_ids=[str(uuid.uuid4())])
+async def test_unrelated_fallback_id_is_not_reported_for_target(session: AsyncSession) -> None:
+    """A backend whose fallback references an unrelated id does not report the target."""
+    backend = await _seed_backend(session, name="unrelated", fallback_ids=[str(uuid.uuid4())])
+    assert not await list_backends_referencing_fallback(session, org_id=_ORG_A, backend_id=backend.id)
+
+
+async def test_true_self_reference_does_not_block_deletion(session: AsyncSession) -> None:
+    """A backend listing ITSELF as a fallback must not be reported.
+
+    Regression: the delete-protection scan previously included the target
+    backend itself, so a self-referencing backend (legacy data) could never be
+    deleted via the API — DELETE returned 409 forever. Self-references are now
+    excluded from the scan.
+    """
+    backend = await _seed_backend(session, name="self-ref")
+    backend.fallback_backend_ids = [str(backend.id)]
+    await session.flush()
     assert not await list_backends_referencing_fallback(session, org_id=_ORG_A, backend_id=backend.id)
 
 

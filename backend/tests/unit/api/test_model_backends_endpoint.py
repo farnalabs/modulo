@@ -307,11 +307,23 @@ def test_create_model_backend_mixed_fallback_ids_reports_missing(client_with_fal
 
 
 def test_update_model_backend_with_fallback_ids(client_with_fallback_ids: TestClient) -> None:
-    """Update accepts a fallback list that references existing org backends."""
-    backend = _make_backend()
-    backend.fallback_backend_ids = [str(_FALLBACK_ID)]
+    """Update accepts a fallback list that references existing org backends.
+
+    The fallback ids are stringified before the CRUD write (the JSON column
+    cannot serialize raw ``uuid.UUID`` objects), mirroring the create path —
+    otherwise the flush 500s with ``TypeError: Object of type UUID is not JSON
+    serializable``.
+    """
+    captured: list[dict[str, object]] = []
+
+    async def fake_update(session: object, backend_id: object, updates: dict[str, object]) -> MagicMock:
+        captured.append(updates)
+        backend = _make_backend()
+        backend.fallback_backend_ids = updates.get("fallback_backend_ids")
+        return backend  # type: ignore[return-value]
+
     with (
-        patch("modulo.api.routes.model_backends.update_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.update_model_backend", new=fake_update),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
     ):
@@ -320,7 +332,30 @@ def test_update_model_backend_with_fallback_ids(client_with_fallback_ids: TestCl
             json={"fallback_backend_ids": [str(_FALLBACK_ID)]},
         )
     assert resp.status_code == 200
+    assert captured == [{"fallback_backend_ids": [str(_FALLBACK_ID)]}]
     assert resp.json()["fallback_backend_ids"] == [str(_FALLBACK_ID)]
+
+
+def test_update_model_backend_self_reference_returns_422(client_with_fallback_ids: TestClient) -> None:
+    """Update rejecting the backend referencing itself as a fallback (422).
+
+    A self-referencing chain is meaningless and would permanently block
+    deletion (the delete-protection scan reports the backend referencing
+    itself), so it is rejected before any DB write.
+    """
+    with (
+        patch("modulo.api.routes.model_backends.update_model_backend") as mock_update,
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client_with_fallback_ids.patch(
+            f"/api/v1/model-backends/{_BACKEND_ID}",
+            json={"fallback_backend_ids": [str(_BACKEND_ID)]},
+        )
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert "cannot reference itself" in detail
+    mock_update.assert_not_awaited()
 
 
 def test_update_model_backend_unknown_fallback_returns_422(client: TestClient) -> None:
