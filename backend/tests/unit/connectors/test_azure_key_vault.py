@@ -408,3 +408,57 @@ async def test_write_http_403(connector: AzureKeyVaultConnector) -> None:
     )
     with pytest.raises(httpx.HTTPStatusError):
         await connector.write(ConnectorPayload(resource="secret", data={"name": "blocked", "value": "val"}))
+
+
+@respx.mock
+async def test_query_secrets_corrupt_body_no_crash(connector: AzureKeyVaultConnector) -> None:
+    """A corrupt/hostile response returning a non-dict body must not crash the
+    connector — it falls back to an empty page with no cursor."""
+    respx.get(f"{_BASE}/secrets", params={"api-version": "7.4"}).mock(
+        return_value=httpx.Response(200, json=["garbage"])
+    )
+    result = await connector.query(ConnectorQuery(resource="secrets"))
+    assert not result.records
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_secrets_non_list_value_no_crash(connector: AzureKeyVaultConnector) -> None:
+    """A corrupt body placing a non-list in ``value`` must fall back to an
+    empty page instead of returning a bare string as the records list."""
+    respx.get(f"{_BASE}/secrets", params={"api-version": "7.4"}).mock(
+        return_value=httpx.Response(200, json={"value": "not-a-list"})
+    )
+    result = await connector.query(ConnectorQuery(resource="secrets"))
+    assert not result.records
+
+
+@respx.mock
+async def test_query_secret_versions_corrupt_body_no_crash(connector: AzureKeyVaultConnector) -> None:
+    """A non-dict versions page must degrade to an empty page, not crash."""
+    respx.get(f"{_BASE}/secrets/my-secret/versions", params={"api-version": "7.4"}).mock(
+        return_value=httpx.Response(200, json=["garbage"])
+    )
+    result = await connector.query(ConnectorQuery(resource="secret_versions", filters={"name": "my-secret"}))
+    assert not result.records
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_keys_corrupt_body_no_crash(connector: AzureKeyVaultConnector) -> None:
+    """A non-dict keys page must degrade to an empty page, not crash."""
+    respx.get(f"{_BASE}/keys", params={"api-version": "7.4"}).mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await connector.query(ConnectorQuery(resource="keys"))
+    assert not result.records
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_certificates_corrupt_body_no_crash(connector: AzureKeyVaultConnector) -> None:
+    """A non-dict certificates page must degrade to an empty page, not crash."""
+    respx.get(f"{_BASE}/certificates", params={"api-version": "7.4"}).mock(
+        return_value=httpx.Response(200, json=["garbage"])
+    )
+    result = await connector.query(ConnectorQuery(resource="certificates"))
+    assert not result.records
+    assert result.next_cursor is None

@@ -6,6 +6,7 @@ from typing import Any, cast
 import httpx
 
 from modulo.connectors._safe_int import safe_int as _safe_int
+from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     CIRun,
     CIRunLog,
@@ -21,16 +22,16 @@ from modulo.connectors.base import (
 _AZURE_DEVOPS_API = "https://dev.azure.com"
 
 
-def _paging_total(body: dict[str, Any]) -> int | None:
+def _paging_total(body: object) -> int | None:
     """Extract Azure DevOps' ``count`` field as a safe int.
 
     Guards against non-finite floats (``inf``/``nan``) which otherwise poison
     aggregation — Python's json parser produces ``inf`` for overflowing
     literals such as ``1e999``, so a corrupt or hostile response must not be
-    able to poison the reported total. A missing ``count`` keeps the
-    historical ``None`` behaviour.
+    able to poison the reported total. A non-dict body is treated as absent,
+    and a missing ``count`` keeps the historical ``None`` behaviour.
     """
-    raw = body.get("count")
+    raw = body.get("count") if isinstance(body, dict) else None
     if raw is None:
         return None
     return _safe_int(raw)
@@ -192,12 +193,14 @@ class AzurePipelinesConnector(ConnectorBase):
             logs_r.raise_for_status()
             logs_body = logs_r.json()
             if isinstance(logs_body, list):
-                logs_data: list[dict[str, Any]] = logs_body
+                logs_data: list[Any] = logs_body
             else:
-                logs_data = logs_body.get("value", [])
+                logs_data = _safe_records(logs_body, "value")
 
             all_lines: list[str] = []
             for log_entry in logs_data if isinstance(logs_data, list) else []:
+                if not isinstance(log_entry, dict):
+                    continue
                 log_id = log_entry.get("id", "")
                 log_url = log_entry.get("url", "")
                 log_name = log_entry.get("name", f"log-{log_id}")
@@ -232,7 +235,7 @@ class AzurePipelinesConnector(ConnectorBase):
             )
             r.raise_for_status()
             data = r.json()
-            raw_runs: list[dict[str, Any]] = data.get("value", [])
+            raw_runs: list[dict[str, Any]] = _safe_records(data, "value")
             runs = [self._parse_run(run) for run in raw_runs]
             if status:
                 runs = [r for r in runs if r.status == status]
@@ -249,7 +252,7 @@ class AzurePipelinesConnector(ConnectorBase):
                     r.raise_for_status()
                     body = r.json()
                     return ConnectorResult(
-                        records=body.get("value", []),
+                        records=_safe_records(body, "value"),
                         total=_paging_total(body),
                     )
                 case "pipelines":
@@ -260,7 +263,7 @@ class AzurePipelinesConnector(ConnectorBase):
                     r.raise_for_status()
                     body = r.json()
                     return ConnectorResult(
-                        records=body.get("value", []),
+                        records=_safe_records(body, "value"),
                         total=_paging_total(body),
                     )
                 case "runs":
@@ -274,7 +277,7 @@ class AzurePipelinesConnector(ConnectorBase):
                     r.raise_for_status()
                     body = r.json()
                     return ConnectorResult(
-                        records=body.get("value", []),
+                        records=_safe_records(body, "value"),
                         total=_paging_total(body),
                     )
                 case "releases":
@@ -285,7 +288,7 @@ class AzurePipelinesConnector(ConnectorBase):
                     r.raise_for_status()
                     body = r.json()
                     return ConnectorResult(
-                        records=body.get("value", []),
+                        records=_safe_records(body, "value"),
                         total=_paging_total(body),
                     )
                 case _:
