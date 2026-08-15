@@ -34,6 +34,16 @@ TESTS = BACKEND / "tests"
 FEATURES = TESTS / "bdd" / "features"
 QUARANTINE_FILE = REPO / ".quarantine.yml"
 
+#: Workflow self-report payloads (GitHub Actions → POST .../journeys/self-report)
+#: must name the lifecycle-map stage the workflow completes. The merge/deploy
+#: stages are EXTERNAL (a GitHub Actions workflow, no ``pipeline_id``), so the
+#: endpoint can only advance journeys into them via ``stage_id`` — a payload
+#: that drops it silently leaves journeys stuck at their old stage.
+SELF_REPORT_WORKFLOWS: dict[str, str] = {
+    "merge-queue.yml": "merge",
+    "deploy.yml": "deploy",
+}
+
 #: Scenarios deliberately excluded from every run via the
 #: ``awaiting-implementation`` marker (pyproject addopts). Keyed by feature
 #: file path relative to ``backend/``. Changing this set is a deliberate
@@ -164,6 +174,50 @@ def _quarantine_entries() -> list[dict]:
     if not data:
         return []
     return list(data.get("quarantine") or [])
+
+
+def _workflow_run_blocks(workflow: Path) -> list[str]:
+    """Return every step ``run:`` string in a GitHub Actions workflow."""
+    data = yaml.safe_load(workflow.read_text(encoding="utf-8"))
+    blocks: list[str] = []
+    for job in (data.get("jobs") or {}).values():
+        for step in job.get("steps") or []:
+            run = step.get("run")
+            if isinstance(run, str):
+                blocks.append(run)
+    return blocks
+
+
+def test_workflow_self_report_payloads_name_the_stage():
+    """The merge-queue and deploy workflows POST a self-report payload to
+    ``.../journeys/self-report`` naming the lifecycle-map stage they complete.
+    The merge/deploy stages are external (GitHub Actions, no ``pipeline_id``),
+    so the endpoint advances journeys into them via ``stage_id`` — a payload
+    that drops it silently leaves journeys stuck at their old stage. Drift
+    here is invisible to the unit tests, which exercise the endpoint with
+    hand-built bodies."""
+    violations = []
+    for filename, expected_stage in SELF_REPORT_WORKFLOWS.items():
+        path = REPO / ".github" / "workflows" / filename
+        if not path.exists():
+            violations.append(f"  .github/workflows/{filename}: workflow file not found")
+            continue
+        found_self_report = False
+        for block in _workflow_run_blocks(path):
+            if "workflow_self_report" not in block:
+                continue
+            found_self_report = True
+            if f'stage_id: "{expected_stage}"' not in block:
+                violations.append(
+                    f"  .github/workflows/{filename}: workflow_self_report payload missing "
+                    f'stage_id: "{expected_stage}" — the endpoint needs it to advance journeys '
+                    "into the external merge/deploy stage"
+                )
+        if not found_self_report:
+            violations.append(f"  .github/workflows/{filename}: no workflow_self_report payload step found")
+    assert not violations, "Workflow self-report payloads drifted from the lifecycle-map stage contract.\n" + "\n".join(
+        violations
+    )
 
 
 def test_awaiting_implementation_set_is_pinned():
