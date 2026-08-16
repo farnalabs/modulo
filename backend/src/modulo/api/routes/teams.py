@@ -20,6 +20,7 @@ from modulo.db.crud.team import (
     get_team,
     get_team_by_name,
     list_teams,
+    reassign_team_resources_to_org,
     update_team,
 )
 from modulo.db.crud.team_membership import (
@@ -506,19 +507,14 @@ async def reassign_team_resources_endpoint(
 ) -> TeamReassignResponse:
     """Reassign every team-owned resource to org-wide (PRD §9.3 Team Deletion Policy).
 
-    Sets ``owner_team_id = NULL`` on every pipeline, connector instance, model
-    backend and library primitive currently owned by the team, so the team can
-    then be deleted (deletion is blocked while ``owner_team_id`` references the
-    team). Admin-only (``team.delete``). Idempotent: re-running after a
-    successful reassignment finds zero owned rows and returns ``reassigned=0``.
+    Sets ``owner_team_id = NULL`` (and ``visibility = 'org'`` so the
+    ``ck_*_team_owner`` check constraints are satisfied) on every pipeline,
+    connector instance, model backend and library primitive currently owned by
+    the team, so the team can then be deleted (deletion is blocked while
+    ``owner_team_id`` references the team). Admin-only (``team.delete``).
+    Idempotent: re-running after a successful reassignment finds zero owned
+    rows and returns ``reassigned=0``.
     """
-    from sqlalchemy import update
-
-    from modulo.db.models.connector_instance import ConnectorInstance
-    from modulo.db.models.library_primitive import LibraryPrimitive
-    from modulo.db.models.model_backend import ModelBackend
-    from modulo.db.models.pipeline import Pipeline
-
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
@@ -528,17 +524,11 @@ async def reassign_team_resources_endpoint(
             if team is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
 
-            total = 0
-            for model_cls in (Pipeline, ConnectorInstance, ModelBackend, LibraryPrimitive):
-                result = await session.execute(
-                    update(model_cls)
-                    .where(
-                        model_cls.organisation_id == current_user.organisation_id,
-                        model_cls.owner_team_id == team_id,
-                    )
-                    .values(owner_team_id=None)
-                )
-                total += int(result.rowcount or 0)  # type: ignore[attr-defined]
+            total, _ = await reassign_team_resources_to_org(
+                session,
+                org_id=current_user.organisation_id,
+                team_id=team_id,
+            )
     except IntegrityError as exc:
         _log.exception("teams.reassign_team_resources_endpoint")
         raise HTTPException(

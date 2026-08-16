@@ -744,6 +744,47 @@ class TestReassignTeamResources:
         assert resp.status_code == 200
         assert resp.json()["reassigned"] == 0
 
+    def test_reassign_flips_visibility_to_org(self, client: TestClient) -> None:
+        """Every reassign UPDATE must also set visibility='org'.
+
+        The four resource tables carry a check constraint
+        ``'visibility = org OR owner_team_id IS NOT NULL'``; clearing
+        ``owner_team_id`` without flipping ``visibility`` would violate it and
+        the reassignment would fail with a misleading 409.
+        """
+        updates: list[str] = []
+        counts = iter([1, 1, 1, 1])
+
+        async def _execute(stmt, *args: object, **kwargs: object):
+            if "authz_enforce" in str(stmt):
+                result = MagicMock()
+                result.scalar_one_or_none.return_value = None
+                return result
+            if isinstance(stmt, Select):
+                result = MagicMock()
+                result.scalar_one_or_none.return_value = MagicMock()
+                return result
+            if isinstance(stmt, Update):
+                updates.append(str(stmt))
+                result = MagicMock()
+                result.rowcount = next(counts, 0)
+                return result
+            result = MagicMock()
+            result.rowcount = 0
+            result.scalar_one_or_none.return_value = None
+            return result
+
+        session = _make_mock_session()
+        session.execute = AsyncMock(side_effect=_execute)
+        _override_session(client, session)
+        resp = client.post(self.URL)
+        assert resp.status_code == 200
+        assert resp.json()["reassigned"] == 4
+        assert len(updates) == 4
+        for stmt in updates:
+            assert "visibility" in stmt
+            assert "org" in stmt
+
     def test_reassign_unknown_team_returns_404(self, client: TestClient) -> None:
         session = self._reassign_session(team_exists=False, rowcounts=[])
         _override_session(client, session)
