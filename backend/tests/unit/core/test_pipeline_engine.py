@@ -1,17 +1,25 @@
 """Tests for pipeline execution core logic."""
 
+import json
 import uuid
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
+from langchain_core.messages import BaseMessage
 
+from modulo.core.model_backend_hub import ModelBackendHub
+from modulo.core.pipeline_engine.decorator import set_model_backend_hub
 from modulo.core.pipeline_engine.event_broker import RunEventBroker
 from modulo.core.pipeline_engine.executor import _map_lg_event, _seed_state
 from modulo.core.pipeline_engine.node_runner import (
     OutputSchemaValidationError,
     _validate_against_schema,
+    make_node_fn,
 )
 from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
+from modulo.model_backends.stub.backend import StubModelBackend
 
 
 class TestMapLgEvent:
@@ -217,3 +225,71 @@ class TestOutputSchemaValidation:
         from modulo.core.pipeline_engine.error_codes import map_legacy_code
 
         assert map_legacy_code("schema_validation_failure") == "contract.schema"
+
+
+class _AsyncStubAdapter:
+    """Wrap the sync StubModelBackend so make_node_fn can ``await backend.invoke()``."""
+
+    def __init__(self, fixture_map: dict[str, str]) -> None:
+        self._inner = StubModelBackend(fixture_map)
+
+    async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
+        return await self._inner.ainvoke(messages, **kwargs)
+
+    def stream(
+        self,
+        messages: list[BaseMessage],
+        tools: list[dict] | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[BaseMessage]:
+        return self._inner.astream(messages, tools=tools, **kwargs)
+
+    @property
+    def backend_id(self) -> str:
+        return "stub"
+
+
+class TestRunContextPromptTemplates:
+    """PRD 8.18: ``run_context`` fields render as template variables.
+
+    ``make_node_fn`` exposes ``run_context`` as a first-class Jinja variable
+    (alongside ``state``), so ``{{ run_context.model_tier }}`` interpolates the
+    seeded context key at node execution time.
+    """
+
+    async def test_run_context_key_renders_in_prompt_template(self) -> None:
+        node_id = str(uuid.uuid4())
+        backend_id = uuid.uuid4()
+        node_def = {
+            "id": node_id,
+            "prompt_template": "model tier is {{ run_context.model_tier }}",
+            "model_backend_id": str(backend_id),
+        }
+        node_fn = make_node_fn(node_def, role="agent")
+
+        hub = ModelBackendHub()
+        await hub.__aenter__()
+        hub.register(
+            backend_id,
+            _AsyncStubAdapter(
+                {
+                    "model tier is tier-2": json.dumps({"ok": True}),
+                }
+            ),
+        )
+        set_model_backend_hub(hub)
+
+        state: dict[str, Any] = {
+            "run_context": {"model_tier": "tier-2", "input": {}},
+            "artifacts": [],
+        }
+
+        try:
+            result = await node_fn(state)
+            assert "artifacts" in result
+            assert len(result["artifacts"]) == 1
+            assert result["artifacts"][0]["status"] == "completed"
+            assert result["artifacts"][0]["output"] == {"ok": True}
+        finally:
+            set_model_backend_hub(None)
+            await hub.__aexit__(None, None, None)

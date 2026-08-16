@@ -207,7 +207,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onBeforeUnmount } from 'vue'
+import { ref, computed, onBeforeUnmount, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
@@ -453,7 +453,6 @@ onBeforeUnmount(() => {
   }
 })
 
-import { onMounted } from 'vue'
 onMounted(async () => {
   await Promise.all([loadFeedback(), loadPipelines()])
 })

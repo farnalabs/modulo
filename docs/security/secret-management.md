@@ -45,7 +45,7 @@ Gitleaks runs as a pre-commit hook and in CI to catch accidental commits of thes
 3. Restart Modulo services (rolling restart recommended).
 4. Verify: check application logs for successful startup and JWT validation.
 
-**Note**: Rotating `SECRET_KEY` invalidates all existing JWT sessions. Rotating `FERNET_KEY` does not re-encrypt existing secrets — use the `rotate-credentials` management command to re-encrypt stored credentials under the new key.
+**Note**: Rotating `SECRET_KEY` invalidates all existing JWT sessions. Rotating `FERNET_KEY` does not re-encrypt existing secrets — use `modulo restore <backup-dir> --previous-fernet-key <old-key>` to re-encrypt stored credentials under the new key.
 
 ### Vault Secrets
 

@@ -125,6 +125,14 @@
           </div>
           <div class="overflow-x-auto">
             <table class="w-full text-left font-mono text-xs leading-relaxed">
+              <thead>
+                <tr>
+                  <th scope="col" class="sr-only">{{ $t('views.AgentOutputDiffView.run_a') }}</th>
+                  <th scope="col" class="sr-only">{{ $t('views.AgentOutputDiffView.plus_added') }}</th>
+                  <th scope="col" class="sr-only">{{ $t('views.AgentOutputDiffView.run_b') }}</th>
+                  <th scope="col" class="sr-only">{{ $t('views.AgentOutputDiffView.line_level_diff') }}</th>
+                </tr>
+              </thead>
               <tbody>
                 <tr
                   v-if="result.diff_lines.length === 0"

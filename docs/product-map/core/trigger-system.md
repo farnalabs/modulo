@@ -109,7 +109,7 @@ concurrency management via `max_concurrent_runs`.
 - [x] Background execution via `PipelineExecutor` and `BackgroundTasks` — route returns 202 immediately
 - [x] Snapshot created from live graph before each webhook run
 - [x] Replay endpoint `POST /triggers/{id}/webhook/replay/{event_id}` — re-fires from stored payload, skips HMAC+timestamp validation
-- [x] Replay preserves dedup and flood protection checks
+- [x] Replay preserves flood protection (active-run count) but bypasses deduplication — re-fires are intentional (verified: `replay_event` — "No dedup check for replays")
 - [x] `TriggerNotFoundError` → 404, `TriggerInactiveError` → 404 (masked), `TimestampExpiredError` → 400, `HmacValidationError` → 401, `DuplicateWebhookError` → 400, `ConcurrentRunLimitError` → 429
 - [x] Trigger loaded with `FOR UPDATE` lock to serialise concurrent webhook requests
 - [x] Cleanup job at `POST /cleanup-expired` — deletes expired `WebhookDedupHash` and `WebhookPayload` rows, uses Postgres advisory lock (key=20250601)
@@ -199,29 +199,29 @@ concurrency management via `max_concurrent_runs`.
 
 ## Edge Cases
 
-- [ ] `next_fire_at` is `None` → cron/polling schedulers skip without firing (comparison `<= now()` is false)
-- [ ] `cron_expression` is `None` on a cron trigger → preview endpoint returns 400 "Trigger has no cron expression configured"
-- [ ] Webhook duplicate payload during replay → `DuplicateWebhookError` with 400 (replay creates new dedup hash)
-- [ ] Webhook with `hmac_secret=None` — authentication skipped entirely
-- [ ] Webhook X-Modulo-Timestamp is malformed (not an integer) → `TimestampExpiredError` → 400
-- [ ] Webhook body is not a JSON object → 400 "Request body must be a JSON object"
-- [ ] Polling trigger with `connector_instance_id=None` in config → `poll_error` event logged, trigger skipped
-- [ ] Polling trigger with unset/invalid `snapshot_id` → falls back to `uuid.UUID(int=0)` (may create run against wrong snapshot)
-- [ ] Polling trigger with missing connector instance in DB → `poll_error` event logged
-- [ ] Polling connector init fails (bad creds, unsupported type) → `poll_error` event logged
-- [ ] Poll query execution fails → `poll_error` event logged
-- [ ] Invalid JMESPath condition expression → `poll_error` event logged with expression detail
-- [ ] Agent signal with `source_pipeline_id` that doesn't match any trigger → silent skip (no results)
-- [ ] Agent signal trigger for a non-existent node_id → all triggers evaluated but none match → empty results
-- [ ] Cron trigger with invalid timezone → validation returns error string, API returns 422
+- [x] `next_fire_at` is `None` → cron/polling schedulers skip without firing (both fire paths filter `Trigger.next_fire_at.isnot(None)` — verified in `cron_helpers.py` cron + polling candidate reads)
+- [x] `cron_expression` is `None` on a cron trigger → preview endpoint returns 400 "Trigger has no cron expression configured" (test: `test_preview_cron_schedule_no_expression_returns_400`)
+- [x] Webhook replay bypasses deduplication by design — an intentional re-fire never re-checks the dedup hash (verified: `replay_event` in `trigger_engine/__init__.py` — "No dedup check for replays"); flood protection (active-run count) IS still enforced on replay
+- [x] Webhook with `hmac_secret=None` — authentication skipped entirely (route validates only when `cfg.get("hmac_secret") is not None`; HMAC-less triggers accept unauthenticated deliveries by design)
+- [x] Webhook X-Modulo-Timestamp is malformed (not an integer) → `TimestampExpiredError` → 400 (verified: `verify_timestamp` raises on `ValueError`/`TypeError`)
+- [x] Webhook body is not a JSON object → 400 "Request body must be a JSON object" (test: `test_receive_webhook_missing_json_body_returns_400`)
+- [x] Polling trigger with `connector_instance_id=None` in config → `poll_error` event logged, trigger skipped (verified: `fire_polling_trigger` — "Polling trigger missing connector_instance_id in config_json")
+- [x] Polling trigger with unset/invalid `snapshot_id` → falls back to `uuid.UUID(int=0)` (tests: `test_invalid_snapshot_id_falls_back_to_zero_uuid`, `test_missing_snapshot_id_falls_back_to_zero_uuid`)
+- [x] Polling trigger with missing connector instance in DB → `poll_error` event logged (test: `test_connector_not_found_logs_warning`)
+- [x] Polling connector init fails (bad creds, unsupported type) → `poll_error` event logged (test: `test_connector_init_failed_returns_error`)
+- [x] Poll query execution fails → `poll_error` event logged (tests: `test_query_failed_returns_error`, `test_query_timeout_returns_error`)
+- [x] Invalid JMESPath condition expression → `poll_error` event logged with expression detail (tests: `test_invalid_jmespath_expression`, `test_condition_eval_failed_returns_error`)
+- [x] Agent signal with `source_pipeline_id` that doesn't match any trigger → silent skip (no results) (tests: `test_no_matching_triggers_returns_empty`, `test_skips_non_matching_source_pipeline`)
+- [x] Agent signal trigger for a non-existent node_id → all triggers evaluated but none match → empty results (test: `test_skips_non_matching_node_id`)
+- [x] Cron trigger with invalid timezone → validation returns error string (`validate_cron_expression` → "Invalid timezone: ..."), API returns 422 via `_validated_next_fire` (test added 2026-08-15 in `test_error_handling.py` — validator unit test + route 422 test)
 - [x] Cron trigger with `daily_spend_limit=0` → all runs blocked by spend check (0 >= 0)
-- [ ] Toggling a deleted trigger → 404 Not Found
-- [ ] Deleting a trigger that has TriggerEvent rows → cascade delete (TriggerEvent FK to trigger is ON DELETE CASCADE)
+- [x] Toggling a deleted trigger → 404 Not Found (toggle query filters `Trigger.deleted_at.is_(None)`)
+- [x] Deleting a trigger that has TriggerEvent rows → cascade delete (TriggerEvent.trigger_id FK `ondelete="CASCADE"` in `db/models/trigger_event.py`)
 - [x] Cursor parsing in list_trigger_events: malformed cursor (no `_` separator) → logged as warning, treated as no cursor
-- [ ] `FOR UPDATE` lock on trigger row prevents concurrent webhook/polling/cron fires for the same trigger — serialises to one at a time
-- [ ] Empty `page_size` in list_triggers → defaults to 20, clamped to [1, 100]
-- [ ] Page < 1 → FastAPI validation returns 422
-- [ ] `limit` in list_trigger_events clamped to [1, 100]
+- [x] `FOR UPDATE` lock / advisory lock on the trigger row prevents concurrent webhook/polling/cron fires for the same trigger — serialises to one at a time (webhook `FOR UPDATE`, polling `pg_try_advisory_lock` — test: `test_lock_not_acquired_returns_trigger_busy`)
+- [x] Empty `page_size` in list_triggers → defaults to 20, clamped to [1, 100] via `Query(20, ge=1, le=100)` (validation tests added 2026-08-15 in `test_error_handling.py`)
+- [x] Page < 1 → FastAPI validation returns 422 (test: `test_list_triggers_page_below_one_returns_422`)
+- [x] `limit` in list_trigger_events clamped to [1, 100] via `Query(20, ge=1, le=100)` (tests: `test_list_trigger_events_limit_above_100_returns_422`, `test_list_trigger_events_limit_below_one_returns_422`)
 
 ## Error Handling
 
@@ -249,16 +249,16 @@ concurrency management via `max_concurrent_runs`.
 
 - [x] All DB routes catch `ProgrammingError` → 501 with migration hint
 - [x] All DB routes catch `SQLAlchemyError` → 503 with retry hint
-- [ ] No retry/backoff on database connection failures at route level
-- [ ] Webhook dedup cleanup uses advisory lock — safe across workers
+- [ ] No retry/backoff on database connection failures at route level (routes return 501/503 immediately; retries live in the SAQ scheduler jobs, not the HTTP layer — a genuine product gap for transient DB blips on webhook delivery)
+- [x] Webhook dedup cleanup uses advisory lock — safe across workers (`cleanup_expired_dedup_hashes` acquires `pg_try_advisory_xact_lock(20250601)`; verified in `trigger_engine/__init__.py`)
 - [x] Cron scheduler retries on Exception (autoretry_for, max_retries=3)
 - [x] Polling scheduler retries on Exception (autoretry_for, max_retries=2)
 - [x] Webhook flood protection uses FOR UPDATE lock — serialises per trigger
-- [ ] No circuit breaker on repeat DB failures
+- [ ] No circuit breaker on repeat DB failures (a persistently failing DB keeps failing each request; no trip-and-cool-down layer at route level)
 
 ## Known Gaps
 
-- BDD feature file `webhook_trigger.feature` has 5 scenarios all tagged `@awaiting-implementation` — no executable BDD coverage exists for webhook triggers
+- BDD feature file `webhook_trigger.feature` has 5 scenarios all tagged `@awaiting-implementation` — no executable BDD coverage exists for webhook triggers (the step definitions exist in `steps/test_pipelines.py` but reference a hardcoded 2023 `X-Modulo-Timestamp` outside the ±300s replay window, so they 400 instead of passing; the route's own timestamp guard fires before the mocked engine is reached)
 - BDD `scheduling.feature` has 5 cron scenarios but zero polling scenarios — executable polling BDD lives in `triggers/polling.feature` (9 scenarios, wired)
 - `_build_polling_connector()` is a standalone copy of `connector_hub._build_connector()` — drifts as connector hub gains new types (41+ types registered vs 6 in polling)
 - (Resolved) Agent signal triggers had no BDD or unit test coverage for the `fire_agent_signal()` function — now covered by `triggers/agent_signal.feature` (9 scenarios, wired via `steps/test_agent_signal.py`) and `unit/trigger_engine/test_agent_signal.py`
@@ -270,10 +270,18 @@ concurrency management via `max_concurrent_runs`.
 - (Resolved) Trigger-level `daily_spend_limit` is enforced at fire time by both cron and polling but was not exposed via the trigger CRUD/polling-config API — resolved 2026-08-02: accepted on `TriggerCreate`/`TriggerUpdate`/`PollingConfigUpdate` and echoed on all trigger responses
 - (Resolved) No unit tests for `admin_triggers.py` ProgrammingError → 501 path — covered in test_admin_triggers.py
 - (Resolved) No unit tests for generic Exception→500 on trigger routes — covered in test_admin_triggers.py
-- No unit tests for `webhooks.py` ProgrammingError → 501 path — deleted in the 530-test reduction (previously test_trigger_programming_error.py)
+- (Resolved 2026-08-15) No unit tests for `webhooks.py` ProgrammingError → 501 path — deleted in the 530-test reduction; re-added as parametrized SESSION_CASES in `tests/unit/api/test_error_handling.py` (receive + replay ProgrammingError→501 / SQLAlchemyError→503; cleanup-expired is require_permission-gated and intentionally excluded)
 
 ## QA History
 
+- 2026-08-15 (dist/partial-core2): Behaviour-verification pass on the trigger system — drove the Edge Cases section from 8/23 to 21/23 checked and clarified the Resilience section.
+  - Marked [x] with code/test verification: `next_fire_at` None skip (cron + polling `isnot(None)` filters), cron-expression-None → 400 preview, HMAC-less webhook auth skip, malformed timestamp → 400, polling `connector_instance_id=None` → `poll_error`, missing connector / init-fail / query-fail / invalid-JMESPath → `poll_error`, agent-signal silent-skip / non-existent-node → empty, invalid cron timezone → 422, toggle-deleted → 404, TriggerEvent cascade delete (`ondelete="CASCADE"`), FOR-UPDATE/advisory-lock serialisation, pagination bounds (empty `page_size` → 20, page<1 → 422, `limit` clamp [1,100]), and webhook-dedup-cleanup advisory lock (key 20250601).
+  - **Corrected a stale claim**: replay does NOT re-check dedup — `replay_event` explicitly bypasses dedup ("No dedup check for replays — this is an intentional re-fire") while still enforcing flood protection. Rewrote the Edge Case + behaviour lines to match reality.
+  - **RESOLVED** the Known Gap "No unit tests for `webhooks.py` ProgrammingError → 501 path" — added receive/replay ProgrammingError→501 + SQLAlchemyError→503 parametrized SESSION_CASES in `tests/unit/api/test_error_handling.py` (cleanup-expired excluded: it is `require_permission`-gated so the kill-switch read fail-closes before the handler).
+  - **Added new tests**: 6 pagination/validation tests + 2 cron-timezone validation tests + 4 webhook error-path cases in `test_error_handling.py` (all pass).
+  - Left unchecked (genuine gaps): route-level DB retry/backoff and a DB-failure circuit breaker — both are real product gaps, noted inline.
+  - BDD: `webhook_trigger.feature`'s 5 `@awaiting-implementation` scenarios remain tagged — verified they fail because `steps/test_pipelines.py` hardcodes a 2023 `X-Modulo-Timestamp` outside the ±300s window (the route's real timestamp guard fires before the mocked engine). Not enableable without touching that step file.
+  - Status: partial (webhook BDD, `_build_polling_connector` drift, snapshot fallback semantics, pipeline-level vs trigger-level `max_concurrent_runs` remain).
 - 2026-08-13 (improve-tests): QA lens pass on the shared `ongoing` trigger validator (`modulo.core.trigger_validation.validate_ongoing_config`, FAR-158) — added a dedicated 39-test unit suite (`tests/unit/core/test_trigger_validation.py`; previously zero direct coverage). Locks the pure validator contract that every write surface (REST `create_trigger`/`update_trigger`, MCP `create_trigger`/`update_trigger`, `PATCH /triggers/{id}/ongoing`) shares: non-`ongoing` types pass through untouched, `daily_spend_limit` required and > 0 (None/0/negative/Decimal), target range 1..20 (boundaries and out-of-range), target ≤ pipeline `max_concurrent_runs` cap (reject above, accept at/below), `scan_interval_seconds` ≥ 60 tick (default 60 when absent or falsy, numeric-string coercion, below-tick rejection), rule ordering (spend-limit reported before target range, target range before pipeline cap), and non-numeric `daily_spend_limit`/`scan_interval_seconds` values raising the same 422 as every other rule (previously leaked `TypeError`/`ValueError` → 500).
 - 2026-08-04: Added the org-wide "pause all pipeline triggers" kill-switch. New `PUT /api/v1/admin/orgs/{org_id}/triggers/pause` admin endpoint, `create_run` authority gate, paused webhook contract (202 `{"status":"paused"}` + committed `paused` TriggerEvent), cron/polling SKIP-not-defer skip-with-advance, agent-signal pause event, `list_triggers` top-level `triggers_paused`/`paused_at`, and migration 0069 (new org columns + widened 19-value `ck_trigger_events_validation_result` — fixing a pre-existing IntegrityError on `event_type_not_accepted`/`spend_limit_reached`/`no_pipeline`/`test` writes). New BDD feature `triggers/pause.feature`, integration `test_org_trigger_pause.py`, and saq pause test. Behaviours marked [x] against code.
 - 2026-08-02 (round 2): improve-architecture: RESOLVED the Known Gap "Trigger-level `daily_spend_limit` is enforced at fire time by both cron and polling but not exposed via the trigger CRUD/polling-config API". `daily_spend_limit` is now accepted on `TriggerCreate`, `TriggerUpdate`, and `PollingConfigUpdate` (validated `ge=0`; explicit `null` clears via `model_fields_set`, omitted `None` leaves unchanged) and echoed on every trigger response (`list_triggers`, `create_trigger`, `update_trigger`, `restore_trigger`, `update_polling_config`, `list_pipeline_triggers`). MCP `create_trigger` now also accepts `max_concurrent_runs` + `daily_spend_limit`. Marked "Cron trigger with `daily_spend_limit=0` → all runs blocked" [x] (verified `0 >= 0` short-circuit in `cron_helpers.py`). Added 7 unit tests in `test_triggers_endpoint.py`.

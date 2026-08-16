@@ -1697,6 +1697,13 @@ Behaviour:
 
 - **Detection** is deterministic and pure. A guardrail is a *sibling* of the Eval Engine — routing a guardrail through `EvalEngine.evaluate` raises `GuardrailMisroutedError`.
 - **Interception** runs at run-creation (webhook trigger, manual, replay) inside `create_run` **before** `runs.input_payload` is persisted — persisted state is post-redaction. Two-phase pass: evaluate ALL bound guardrails against an immutable pre-act copy, then apply redaction masks in deterministic order. Zero-guardrail fast path.
+- **Pre-trigger boundary pass (webhook intake, FAR-214)** — webhook intake additionally runs a guardrail pass at the trigger boundary in `TriggerEngine.handle_webhook`, AFTER the event-type/value filters and BEFORE the dedup insert, so the delivery's ack semantics are decided per guardrail BEFORE any run-creation work:
+  - **block** → reject-and-retry at the boundary: the delivery is NOT acked-as-accepted — a `guardrail_blocked` TriggerEvent is recorded, the raw payload is stored for replay (the sender/provider can retry after fixing), and the route returns 400. No run is created and no dedup slot is consumed.
+  - **redact** → masks are applied at intake so the payload that proceeds to dedup + run creation is POST-redaction (persisted state is post-redaction, consistent with the T1 contract).
+  - **warn/observe** → advisory at the boundary (logged, never a raw payload); the delivery proceeds and the advisory evidence is persisted by the run-creation seam.
+  - **Replays** re-run the pass DETECTION-ONLY (no block decision, no redaction act), consistent with `create_run`'s `is_replay=True` handling.
+  - The boundary pass reuses the T1 engine (`run_interception_pass`, `to_engine_definition`, `EvalEngine`) and the run-creation seam's row-loading semantics — detection and validation are never reimplemented. Mechanism errors FAIL CLOSED when any bound guardrail carries a block/redact action; observe/warn-only guardrails log-and-continue.
+  - **Post-guardrail dedup hashing (FAR-214)** — the dedup key is a canonical SHA-256 over the canonical JSON serialization (sorted keys, compact separators) of the POST-guardrail payload, so logically identical payloads dedup regardless of encoding (key order, whitespace, unicode escapes). This CLOSES the raw-body-hash encoding-bypass residual exposure for the dedup key. Pre-guardrail failure events (timestamp, HMAC, event filters) still record the raw-body hash — those rows describe the raw delivery, not dedup.
 - **Redaction** is masks-only (fixed mask token, never payload-derived), static field paths with EXACT/ANCHOR matching (substring matching forbidden), and an allowlist of never-touch system fields.
 - **Block** is TERMINAL `eval_failed` (error_code `eval_blocked`); the run is never dispatched, never retried, and has no HITL gate. `failure_behaviour='retry'` is forbidden on guardrails (rejected at the API edge and the DB CHECK).
 - **Observe/warn** never block; observe-mode results stamp `eval_results.observed` so the guardrail_summary observed bucket counts once.
@@ -1732,7 +1739,7 @@ The Eval System (§8.17) must ship before the Feedback System (§8.20). The Feed
 
 #### Guardrails — phase history
 
-Guardrails are boundary enforcement for agent safety: the same eval primitives as §8.17 extended to the input side, with interception points, transform actions (redaction), and remediation wiring. T1 (the input-side engine, described above under "Guardrails — the input-side seam (FAR-208)") and T3 (snapshot-pinned, PR-gated config-as-code) are **shipped**. The original T1 planned-capability list is retained for traceability; every listed item is now shipped, with the caveats noted.
+Guardrails are boundary enforcement for agent safety: the same eval primitives as §8.17 extended to the input side, with interception points, transform actions (redaction), and remediation wiring. T1 (the input-side engine, described above under "Guardrails — the input-side seam (FAR-208)"), the T2 pre-trigger boundary pass at webhook intake (above), and T3 (snapshot-pinned, PR-gated config-as-code) are **shipped**. The original T1 planned-capability list is retained for traceability; every listed item is now shipped, with the caveats noted.
 
 T1 planned capability — all **shipped**:
 - **Input-side interception** at run creation — evaluated before the run's first node executes.

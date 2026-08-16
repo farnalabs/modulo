@@ -278,7 +278,7 @@ All connectors receive `_TracedConnector` wrapping at construction time. All use
 
 ### Jira Connector
 
-- [x] `ConnectorType.JIRA` with capabilities: `issue_read`, `issue_write`, `issue_search`
+- [x] `ConnectorType.JIRA` with capabilities: `ticket_read`, `ticket_write`, `ticket_search`
 - [x] Supports two auth modes: `token` (PAT/OAuth Bearer) or `email` + `api_token` (Basic auth)
 - [x] Missing an auth mode raises `ValueError` with guidance
 - [x] `instance` config field (e.g. `your-domain.atlassian.net`) required; resolution to `https://{instance}/rest/api/3`
@@ -291,7 +291,7 @@ All connectors receive `_TracedConnector` wrapping at construction time. All use
 
 ### Linear Connector
 
-- [x] `ConnectorType.LINEAR` with capabilities: `issue_read`, `issue_write`, `issue_search`
+- [x] `ConnectorType.LINEAR` with capabilities: `ticket_read`, `ticket_write`, `ticket_search`
 - [x] Auth via `api_key` in `Authorization` header; GraphQL API at `https://api.linear.app/graphql`
 - [x] Query resource `"issue"` — fetches single issue by `id` filter via GraphQL query
 - [x] Query resource `"search"` — searches issues by text via `searchIssues` GraphQL query
@@ -304,7 +304,7 @@ All connectors receive `_TracedConnector` wrapping at construction time. All use
 
 ### Slack Connector
 
-- [x] `ConnectorType.SLACK` with capabilities: `read`, `write`
+- [x] `ConnectorType.SLACK` with capabilities: `messaging`, `read`, `write`
 - [x] Auth via `bot_token` Bearer token; Slack Web API at `https://slack.com/api`
 - [x] Query resource `"channels"` — lists conversations via `conversations.list` with cursor pagination
 - [x] Query resource `"messages"` — fetches channel history via `conversations.history`; filters: `channel`, `oldest`, `latest`

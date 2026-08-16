@@ -265,7 +265,7 @@ authenticated requests by user ID. This prevents IP-based collisions behind NAT.
 **Verify:**
 ```bash
 # Trigger rate limit
-for i in $(seq 1 120); do curl -s -o /dev/null -w "%{http_code}\n" https://modulo.example.com/api/v1/health; done
+for i in $(seq 1 120); do curl -s -o /dev/null -w "%{http_code}\n" https://modulo.example.com/healthz/ready; done
 # Expected: after ~100 requests, responses return 429
 ```
 

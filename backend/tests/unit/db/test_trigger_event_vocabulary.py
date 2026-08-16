@@ -6,9 +6,11 @@ with the ORM model:
 * the model vocabulary (``VALIDATION_RESULT_VALUES``) contains
   ``auto_deactivated`` and the ORM CHECK constraint reflects it,
 * the migration's hardcoded vocabulary stays in sync with the model (the
-  single source of truth),
-* the migration sits on ``0103_lifecycle_map_version_actor`` and is revised by
-  the FAR-219 head ``0105_guardrail_pins`` (the sole head),
+  single source of truth) — comparing against the model MINUS the value added
+  after 0104 by FAR-214 (``guardrail_blocked``, migration 0106),
+* the migration sits on ``0103_lifecycle_map_version_actor`` and the chain is
+  revised up to the FAR-214 head ``0106_trigger_event_guardrail_blocked`` (the
+  sole head),
 * the migration's Postgres DDL widens the constraint to the FULL 20-value set
   (NOT VALID + VALIDATE, 0069-pattern) and the downgrade restores the 19-value
   set,
@@ -42,11 +44,17 @@ _MIGRATION_PATH = (
     Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 )
 
-# The FAR-219 migration that revises 0104 and is the current head of the chain.
-_HEAD_MIGRATION_NAME = "0105_guardrail_pins"
+# The FAR-214 migration that revises the 0104 chain and is the current head.
+_HEAD_MIGRATION_NAME = "0106_trigger_event_guardrail_blocked"
+
+# The value added AFTER 0104 shipped (by FAR-214 migration 0106). 0104's own
+# hardcoded vocabulary predates it, so 0104-era comparisons exclude it.
+_POST_0104_ADDITIONS = frozenset({"guardrail_blocked"})
 
 # The 19-value vocabulary BEFORE this migration (what 0069 created).
-_OLD_VALIDATION_RESULT_VALUES = tuple(v for v in VALIDATION_RESULT_VALUES if v != "auto_deactivated")
+_OLD_VALIDATION_RESULT_VALUES = tuple(
+    v for v in VALIDATION_RESULT_VALUES if v not in ("auto_deactivated", "guardrail_blocked")
+)
 
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
@@ -96,8 +104,8 @@ class TestModelVocabulary:
     def test_auto_deactivated_in_model_vocabulary(self) -> None:
         assert "auto_deactivated" in VALIDATION_RESULT_VALUES
 
-    def test_model_vocabulary_is_20_values(self) -> None:
-        assert len(VALIDATION_RESULT_VALUES) == 20
+    def test_model_vocabulary_has_21_values(self) -> None:
+        assert len(VALIDATION_RESULT_VALUES) == 21
         assert len(set(VALIDATION_RESULT_VALUES)) == len(VALIDATION_RESULT_VALUES)
 
     def test_orm_check_constraint_includes_auto_deactivated(self) -> None:
@@ -109,7 +117,7 @@ class TestModelVocabulary:
 
 
 class TestMigrationChain:
-    def test_migration_is_revised_by_head_0105(self) -> None:
+    def test_migration_is_revised_by_head_0106(self) -> None:
         migration = _load_migration()
         assert migration.revision == _MIGRATION_NAME
         assert migration.down_revision == "0103_lifecycle_map_version_actor"
@@ -122,18 +130,22 @@ class TestMigrationChain:
         assert _HEAD_MIGRATION_NAME in revisions
         head = script.get_revision(_HEAD_MIGRATION_NAME)
         assert head is not None
-        assert head.down_revision == _MIGRATION_NAME
+        assert head.down_revision == "0105_guardrail_pins"
 
     def test_migration_vocabulary_matches_model(self) -> None:
         """The migration's hardcoded vocabulary must equal the ORM single source
         of truth — a value added to one side and not the other breaks either the
         migration (constraint rejects a value the model allows) or the model
-        (the ORM CHECK rejects a value the migration accepts)."""
+        (the ORM CHECK rejects a value the migration accepts).
+
+        0104 shipped BEFORE FAR-214 added ``guardrail_blocked`` (migration
+        0106), so the comparison excludes the post-0104 additions."""
         migration = _load_migration()
-        assert tuple(migration._VALIDATION_RESULT_VALUES) == VALIDATION_RESULT_VALUES, (
+        model_vocab = tuple(v for v in VALIDATION_RESULT_VALUES if v not in _POST_0104_ADDITIONS)
+        assert tuple(migration._VALIDATION_RESULT_VALUES) == model_vocab, (
             "migration _VALIDATION_RESULT_VALUES must equal the model vocabulary "
-            f"(missing: {sorted(set(VALIDATION_RESULT_VALUES) - set(migration._VALIDATION_RESULT_VALUES))}, "
-            f"extra: {sorted(set(migration._VALIDATION_RESULT_VALUES) - set(VALIDATION_RESULT_VALUES))})"
+            f"(missing: {sorted(set(model_vocab) - set(migration._VALIDATION_RESULT_VALUES))}, "
+            f"extra: {sorted(set(migration._VALIDATION_RESULT_VALUES) - set(model_vocab))})"
         )
 
     def test_migration_old_vocabulary_is_19_values(self) -> None:
@@ -152,7 +164,7 @@ class TestMigrationDdl:
         assert _CHECK_CONSTRAINT_NAME in drop
         add = next(s for s in sql if "ADD CONSTRAINT" in s and "CHECK (validation_result IN" in s)
         assert "NOT VALID" in add
-        for value in VALIDATION_RESULT_VALUES:
+        for value in migration._VALIDATION_RESULT_VALUES:
             assert value in add, f"upgrade constraint missing {value!r}"
         assert "auto_deactivated" in add
         assert "VALIDATE CONSTRAINT" in "\n".join(sql)
