@@ -393,5 +393,5 @@ See `docs/prd.md#103b-alpha-exit-criteria` (§10.3b) for the authoritative defin
 - [Alpha Exit Verification Script](../scripts/verify-alpha-exit.ps1)
 - [Architecture Overview](./architecture.md)
 - [Quickstart Guide](./quickstart.md)
-- [Delivery Tracker](Repos/devtools/harness/docs/delivery-tracker.md)
+- Delivery Tracker (`Repos/devtools/harness/docs/delivery-tracker.md`)
 - [Implementation Order (AGENTS.md)](../AGENTS.md#implementation-order)
