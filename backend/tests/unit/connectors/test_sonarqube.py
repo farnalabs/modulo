@@ -429,7 +429,7 @@ async def test_query_projects_corrupt_body_no_crash(connector):
         return_value=httpx.Response(200, json=["garbage"]),
     )
     result = await connector.query(ConnectorQuery(resource="projects", limit=100))
-    assert result.records == []
+    assert not result.records
     assert result.total is None
     assert result.next_cursor is None
 
@@ -442,7 +442,7 @@ async def test_query_projects_corrupt_components_field_no_crash(connector):
         return_value=httpx.Response(200, json={"components": "garbage", "paging": {"total": 42}}),
     )
     result = await connector.query(ConnectorQuery(resource="projects", limit=100))
-    assert result.records == []
+    assert not result.records
     assert result.total == 42
     assert result.next_cursor is None
 
@@ -460,7 +460,7 @@ async def test_query_measures_corrupt_component_no_crash(connector):
             filters={"component": "proj1", "metricKeys": "coverage,bugs"},
         )
     )
-    assert result.records == []
+    assert not result.records
     assert result.total == 0
 
 
@@ -477,7 +477,7 @@ async def test_query_measures_corrupt_body_no_crash(connector):
             filters={"component": "proj1", "metricKeys": "coverage,bugs"},
         )
     )
-    assert result.records == []
+    assert not result.records
     assert result.total == 0
 
 
@@ -489,7 +489,7 @@ async def test_query_issues_corrupt_body_no_crash(connector):
         return_value=httpx.Response(200, json=["garbage"]),
     )
     result = await connector.query(ConnectorQuery(resource="issues", limit=100))
-    assert result.records == []
+    assert not result.records
     assert result.total is None
     assert result.next_cursor is None
 
@@ -502,7 +502,7 @@ async def test_query_quality_gates_corrupt_body_no_crash(connector):
         return_value=httpx.Response(200, json=["garbage"]),
     )
     result = await connector.query(ConnectorQuery(resource="quality_gates"))
-    assert result.records == []
+    assert not result.records
     assert result.total == 0
 
 
@@ -514,7 +514,7 @@ async def test_query_metrics_corrupt_body_no_crash(connector):
         return_value=httpx.Response(200, json=["garbage"]),
     )
     result = await connector.query(ConnectorQuery(resource="metrics", limit=100))
-    assert result.records == []
+    assert not result.records
     assert result.total is None
     assert result.next_cursor is None
 
@@ -527,7 +527,7 @@ async def test_query_plugins_corrupt_body_no_crash(connector):
         return_value=httpx.Response(200, json=["garbage"]),
     )
     result = await connector.query(ConnectorQuery(resource="plugins"))
-    assert result.records == []
+    assert not result.records
     assert result.total == 0
 
 
@@ -539,7 +539,7 @@ async def test_query_hotspots_corrupt_body_no_crash(connector):
         return_value=httpx.Response(200, json=["garbage"]),
     )
     result = await connector.query(ConnectorQuery(resource="hotspots", filters={"project": "p1"}, limit=100))
-    assert result.records == []
+    assert not result.records
     assert result.total is None
     assert result.next_cursor is None
 

@@ -753,7 +753,7 @@ async def test_query_projects_corrupt_body_no_crash(connector):
             limit=100,
         )
     )
-    assert result.records == []
+    assert not result.records
     assert result.total == 0
     assert result.next_cursor is None
 
@@ -772,7 +772,7 @@ async def test_query_projects_corrupt_data_field_no_crash(connector):
             limit=100,
         )
     )
-    assert result.records == []
+    assert not result.records
     assert result.total == 42
 
 
@@ -793,7 +793,7 @@ async def test_query_issues_corrupt_body_no_crash(connector):
             limit=100,
         )
     )
-    assert result.records == []
+    assert not result.records
     assert result.total == 0
 
 
@@ -805,7 +805,7 @@ async def test_query_orgs_corrupt_data_field_no_crash(connector):
         return_value=httpx.Response(200, json={"data": {"id": "org-1"}}),
     )
     result = await connector.query(ConnectorQuery(resource="orgs", limit=100))
-    assert result.records == []
+    assert not result.records
     assert result.total == 0
 
 
@@ -823,6 +823,6 @@ async def test_query_tests_corrupt_body_no_crash(connector):
             limit=100,
         )
     )
-    assert result.records == []
+    assert not result.records
     assert result.total == 0
     assert result.next_cursor is None
