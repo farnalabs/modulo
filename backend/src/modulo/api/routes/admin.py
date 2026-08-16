@@ -47,7 +47,16 @@ from modulo.db.crud.run import (
     get_sandbox_concurrency_limit,
     purge_runs,
 )
-from modulo.db.crud.team import count_owned_resources, create_team, delete_team, get_team, get_team_by_name, list_teams
+from modulo.db.crud.team import (
+    TeamUpdateOutcome,
+    count_owned_resources,
+    create_team,
+    delete_team,
+    get_team,
+    get_team_by_name,
+    list_teams,
+    update_team_if_unchanged,
+)
 from modulo.db.crud.team import update_team as crud_update_team
 from modulo.db.crud.team_membership import list_team_memberships_for_account, remove_team_member
 from modulo.db.crud.token_family import blacklist_family, list_families_for_account
@@ -67,29 +76,6 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
-
-
-async def _assert_team_not_stale(
-    session: AsyncSession,
-    team_id: uuid.UUID,
-    expected_updated_at: str,
-) -> None:
-    """Optimistic-concurrency guard: reject a team update if the client's
-    ``expected_updated_at`` no longer matches the row's current ``updated_at``.
-
-    Two concurrent renames by different admins: the second writer sends the
-    first writer's now-stale timestamp and is rejected with 409 instead of
-    silently overwriting the other rename.
-    """
-    team = await get_team(session, team_id)
-    if team is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
-    current = team.updated_at.isoformat() if team.updated_at else ""
-    if current != expected_updated_at:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=("Team was modified by another request. Refresh and try again (optimistic lock mismatch)."),
-        )
 
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -1476,9 +1462,23 @@ async def admin_update_team(
                     )
 
             if req.expected_updated_at is not None:
-                await _assert_team_not_stale(session, team_id, req.expected_updated_at)
-
-            team = await crud_update_team(session, team_id, updates)
+                outcome, team = await update_team_if_unchanged(
+                    session,
+                    team_id,
+                    updates,
+                    req.expected_updated_at,
+                )
+                if outcome is TeamUpdateOutcome.NOT_FOUND:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+                if outcome is TeamUpdateOutcome.STALE:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=(
+                            "Team was modified by another request. Refresh and try again (optimistic lock mismatch)."
+                        ),
+                    )
+            else:
+                team = await crud_update_team(session, team_id, updates)
     except IntegrityError:
         logger.exception("admin.admin_update_team")
         raise HTTPException(

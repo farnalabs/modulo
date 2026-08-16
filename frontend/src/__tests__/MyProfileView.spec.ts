@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 
 const { mockPut, mockGet } = vi.hoisted(() => {
@@ -38,9 +39,11 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import MyProfileView from '../views/MyProfileView.vue'
+import { usePlanStore } from '../stores/planStore'
 
 describe('MyProfileView', () => {
   beforeEach(() => {
+    setActivePinia(createPinia())
     vi.clearAllMocks()
   })
 
@@ -52,6 +55,7 @@ describe('MyProfileView', () => {
   })
 
   it('renders the My Teams section with team names and roles', async () => {
+    usePlanStore().currentTier = 'team'
     const wrapper = mount(MyProfileView)
     await nextTick()
     await nextTick()
@@ -66,6 +70,7 @@ describe('MyProfileView', () => {
   })
 
   it('shows empty state when the user belongs to no teams', async () => {
+    usePlanStore().currentTier = 'team'
     mockGet.mockImplementation((url: string) => {
       if (url === '/api/v1/teams/my') return Promise.resolve({ data: [], error: undefined })
       return Promise.resolve({
@@ -87,6 +92,65 @@ describe('MyProfileView', () => {
 
     expect(wrapper.text()).toContain('My Teams')
     expect(wrapper.text()).toContain('not a member of any team')
+  })
+
+  it('gates the My Teams card behind the team_rbac feature on community tier', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/teams/my') {
+        return Promise.resolve({
+          data: undefined,
+          error: { detail: 'Feature not available on your plan' },
+        })
+      }
+      return Promise.resolve({
+        data: {
+          id: '1',
+          email: 'user@example.com',
+          display_name: 'Test User',
+          org_role: 'admin',
+          active: true,
+          created_at: '2025-01-01T00:00:00Z',
+          is_system_admin: false,
+        },
+        error: undefined,
+      })
+    })
+    const wrapper = mount(MyProfileView)
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="feature-gate-disabled"]').exists()).toBe(true)
+  })
+
+  it('shows the My Teams error card only when the feature is enabled', async () => {
+    usePlanStore().currentTier = 'team'
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/teams/my') {
+        return Promise.resolve({
+          data: undefined,
+          error: { detail: 'Failed to load teams' },
+        })
+      }
+      return Promise.resolve({
+        data: {
+          id: '1',
+          email: 'user@example.com',
+          display_name: 'Test User',
+          org_role: 'admin',
+          active: true,
+          created_at: '2025-01-01T00:00:00Z',
+          is_system_admin: false,
+        },
+        error: undefined,
+      })
+    })
+    const wrapper = mount(MyProfileView)
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="feature-gate-disabled"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Failed to load teams')
+    expect(wrapper.find('[data-testid="my-profile-my-teams-retry"]').exists()).toBe(true)
   })
 
   it('shows error when passwords do not match', async () => {

@@ -19,25 +19,27 @@
       </div>
     </div>
 
-    <div class="card p-6">
-      <h2 class="text-base font-semibold mb-4">{{ $t('views.MyProfileView.my_teams') }}</h2>
-      <div v-if="myTeamsLoading" class="flex items-center justify-center py-4">
-        <div class="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent"></div>
-      </div>
-      <div v-else-if="myTeamsError" class="py-2 text-sm text-destructive">
-        {{ myTeamsError }}
-        <button class="ml-2 underline" data-testid="my-profile-my-teams-retry" @click="loadMyTeams">{{ $t('views.SettingsTeamsView.retry') }}</button>
-      </div>
-      <div v-else-if="myTeams.length === 0" class="py-2 text-sm text-muted-foreground">
-        {{ $t('views.MyProfileView.not_a_member_of_any_team') }}
-      </div>
-      <div v-else class="space-y-2">
-        <div v-for="team in myTeams" :key="team.team_id" class="flex items-center justify-between rounded-lg border bg-muted/30 px-3 py-2" data-testid="my-profile-my-team">
-          <span class="font-medium">{{ team.team_name }}</span>
-          <span class="inline-flex items-center rounded-md border border-primary/20 bg-primary/5 px-2 py-0.5 text-xs font-medium text-primary">{{ $t('views.SettingsTeamsView.' + team.role) }}</span>
+    <FeatureGate feature-name="team_rbac" required-tier="team" show-disabled>
+      <div class="card p-6">
+        <h2 class="text-base font-semibold mb-4">{{ $t('views.MyProfileView.my_teams') }}</h2>
+        <div v-if="myTeamsLoading" class="flex items-center justify-center py-4">
+          <div class="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent"></div>
+        </div>
+        <div v-else-if="myTeamsError" class="py-2 text-sm text-destructive">
+          {{ myTeamsError }}
+          <button class="ml-2 underline" data-testid="my-profile-my-teams-retry" @click="loadMyTeams">{{ $t('views.SettingsTeamsView.retry') }}</button>
+        </div>
+        <div v-else-if="myTeams.length === 0" class="py-2 text-sm text-muted-foreground">
+          {{ $t('views.MyProfileView.not_a_member_of_any_team') }}
+        </div>
+        <div v-else class="space-y-2">
+          <div v-for="team in myTeams" :key="team.team_id" class="flex items-center justify-between rounded-lg border bg-muted/30 px-3 py-2" data-testid="my-profile-my-team">
+            <span class="font-medium">{{ team.team_name }}</span>
+            <span class="inline-flex items-center rounded-md border border-primary/20 bg-primary/5 px-2 py-0.5 text-xs font-medium text-primary">{{ $t('views.SettingsTeamsView.' + team.role) }}</span>
+          </div>
         </div>
       </div>
-    </div>
+    </FeatureGate>
 
     <div class="card p-6">
       <h2 class="text-base font-semibold mb-4">{{ $t('views.MyProfileView.change_password') }}</h2>
@@ -94,6 +96,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import PageHeader from '../components/shared/PageHeader.vue'
+import FeatureGate from '../components/FeatureGate.vue'
 import { Button } from '@/components/ui/button'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'

@@ -6,13 +6,13 @@ from datetime import UTC, datetime
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.db.crud.team import TeamUpdateOutcome
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -603,14 +603,11 @@ class TestAdminUpdateTeamOptimisticLock:
     def test_stale_expected_updated_at_returns_409(self, admin_rls_client: TestClient) -> None:
         team = self._mock_team(uuid.uuid4(), "Current")
 
-        async def _stale(*_a: object, **_k: object) -> None:
-            raise HTTPException(
-                status_code=409,
-                detail="Team was modified by another request. Refresh and try again (optimistic lock mismatch).",
-            )
-
         with (
-            patch("modulo.api.routes.admin._assert_team_not_stale", new=_stale),
+            patch(
+                "modulo.api.routes.admin.update_team_if_unchanged",
+                new=AsyncMock(return_value=(TeamUpdateOutcome.STALE, None)),
+            ),
             patch("modulo.api.routes.admin.get_team_by_name", new=AsyncMock(return_value=None)),
             patch("modulo.api.routes.admin.set_rls_org", new=AsyncMock()),
             patch("modulo.api.routes.admin.set_rls_user_context", new=AsyncMock()),
@@ -622,18 +619,55 @@ class TestAdminUpdateTeamOptimisticLock:
         assert resp.status_code == 409
         assert "optimistic lock" in resp.json()["detail"].lower()
 
+    def test_stale_expected_updated_at_does_not_update(self, admin_rls_client: TestClient) -> None:
+        team = self._mock_team(uuid.uuid4(), "Current")
+
+        with (
+            patch(
+                "modulo.api.routes.admin.update_team_if_unchanged",
+                new=AsyncMock(return_value=(TeamUpdateOutcome.STALE, None)),
+            ),
+            patch("modulo.api.routes.admin.get_team_by_name", new=AsyncMock(return_value=None)),
+            patch(
+                "modulo.api.routes.admin.crud_update_team",
+                new=AsyncMock(),
+            ) as crud_update_mock,
+            patch("modulo.api.routes.admin.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.admin.set_rls_user_context", new=AsyncMock()),
+        ):
+            resp = admin_rls_client.put(
+                f"{self.URL}/{team.id}",
+                json={"name": "Renamed", "expected_updated_at": "2024-01-01T00:00:00+00:00"},
+            )
+        assert resp.status_code == 409
+        crud_update_mock.assert_not_awaited()
+
+    def test_missing_team_with_expected_updated_at_returns_404(self, admin_rls_client: TestClient) -> None:
+        team = self._mock_team(uuid.uuid4(), "Current")
+
+        with (
+            patch(
+                "modulo.api.routes.admin.update_team_if_unchanged",
+                new=AsyncMock(return_value=(TeamUpdateOutcome.NOT_FOUND, None)),
+            ),
+            patch("modulo.api.routes.admin.get_team_by_name", new=AsyncMock(return_value=None)),
+            patch("modulo.api.routes.admin.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.admin.set_rls_user_context", new=AsyncMock()),
+        ):
+            resp = admin_rls_client.put(
+                f"{self.URL}/{team.id}",
+                json={"name": "Renamed", "expected_updated_at": "2024-01-01T00:00:00+00:00"},
+            )
+        assert resp.status_code == 404
+
     def test_matching_expected_updated_at_succeeds(self, admin_rls_client: TestClient) -> None:
         team = self._mock_team(uuid.uuid4(), "Updated")
         expected = team.updated_at.isoformat()
         with (
             patch("modulo.api.routes.admin.get_team_by_name", new=AsyncMock(return_value=None)),
             patch(
-                "modulo.api.routes.admin.crud_update_team",
-                new=AsyncMock(return_value=team),
-            ),
-            patch(
-                "modulo.api.routes.admin._assert_team_not_stale",
-                new=AsyncMock(return_value=None),
+                "modulo.api.routes.admin.update_team_if_unchanged",
+                new=AsyncMock(return_value=(TeamUpdateOutcome.UPDATED, team)),
             ),
             patch("modulo.api.routes.admin.set_rls_org", new=AsyncMock()),
             patch("modulo.api.routes.admin.set_rls_user_context", new=AsyncMock()),
@@ -647,45 +681,94 @@ class TestAdminUpdateTeamOptimisticLock:
         assert resp.json()["name"] == "Updated"
 
 
-class TestAssertTeamNotStale:
-    """Direct tests of the _assert_team_not_stale optimistic-lock helper."""
+class TestUpdateTeamIfUnchanged:
+    """Direct CRUD tests of the atomic optimistic-lock update."""
 
-    async def test_matching_timestamp_passes(self) -> None:
+    @pytest.mark.asyncio
+    async def test_matching_timestamp_updates_and_returns_team(self) -> None:
         team = MagicMock()
         team.id = uuid.uuid4()
         team.updated_at = _NOW
 
         session = _make_mock_session()
-        session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=team)))
+        result = MagicMock()
+        result.scalar_one_or_none = MagicMock(return_value=team)
+        session.execute = AsyncMock(return_value=result)
 
-        from modulo.api.routes.admin import _assert_team_not_stale
+        from modulo.db.crud.team import update_team_if_unchanged
 
-        await _assert_team_not_stale(session, team.id, _NOW.isoformat())
+        outcome, returned = await update_team_if_unchanged(
+            session,
+            team.id,
+            {"name": "Renamed"},
+            _NOW.isoformat(),
+        )
+        assert outcome is TeamUpdateOutcome.UPDATED
+        assert returned is team
 
-    async def test_stale_timestamp_raises_409(self) -> None:
+    @pytest.mark.asyncio
+    async def test_stale_timestamp_returns_stale_without_update(self) -> None:
         team = MagicMock()
         team.id = uuid.uuid4()
         team.updated_at = _NOW
 
         session = _make_mock_session()
-        session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=team)))
+        update_result = MagicMock()
+        update_result.scalar_one_or_none = MagicMock(return_value=None)
+        exists_result = MagicMock()
+        exists_result.scalar_one_or_none = MagicMock(return_value=team.id)
+        session.execute = AsyncMock(side_effect=[update_result, exists_result])
 
-        from modulo.api.routes.admin import _assert_team_not_stale
+        from modulo.db.crud.team import update_team_if_unchanged
 
-        with pytest.raises(HTTPException) as exc_info:
-            await _assert_team_not_stale(session, team.id, "2024-01-01T00:00:00+00:00")
-        assert exc_info.value.status_code == 409
-        assert "optimistic lock" in exc_info.value.detail.lower()
+        outcome, returned = await update_team_if_unchanged(
+            session,
+            team.id,
+            {"name": "Renamed"},
+            "2024-01-01T00:00:00+00:00",
+        )
+        assert outcome is TeamUpdateOutcome.STALE
+        assert returned is None
 
-    async def test_missing_team_raises_404(self) -> None:
+    @pytest.mark.asyncio
+    async def test_missing_team_returns_not_found(self) -> None:
+        team = MagicMock()
+        team.id = uuid.uuid4()
+        team.updated_at = _NOW
+
         session = _make_mock_session()
-        session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
+        update_result = MagicMock()
+        update_result.scalar_one_or_none = MagicMock(return_value=None)
+        exists_result = MagicMock()
+        exists_result.scalar_one_or_none = MagicMock(return_value=None)
+        session.execute = AsyncMock(side_effect=[update_result, exists_result])
 
-        from modulo.api.routes.admin import _assert_team_not_stale
+        from modulo.db.crud.team import update_team_if_unchanged
 
-        with pytest.raises(HTTPException) as exc_info:
-            await _assert_team_not_stale(session, uuid.uuid4(), _NOW.isoformat())
-        assert exc_info.value.status_code == 404
+        outcome, returned = await update_team_if_unchanged(
+            session,
+            uuid.uuid4(),
+            {"name": "Renamed"},
+            _NOW.isoformat(),
+        )
+        assert outcome is TeamUpdateOutcome.NOT_FOUND
+        assert returned is None
+
+    @pytest.mark.asyncio
+    async def test_unparseable_expected_timestamp_returns_stale(self) -> None:
+        session = _make_mock_session()
+
+        from modulo.db.crud.team import update_team_if_unchanged
+
+        outcome, returned = await update_team_if_unchanged(
+            session,
+            uuid.uuid4(),
+            {"name": "Renamed"},
+            "not-a-timestamp",
+        )
+        assert outcome is TeamUpdateOutcome.STALE
+        assert returned is None
+        session.execute.assert_not_awaited()
 
 
 @pytest.fixture

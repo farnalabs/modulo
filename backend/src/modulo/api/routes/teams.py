@@ -16,12 +16,14 @@ from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, TEAM_ROLE_HIERARCHY
 from modulo.db.crud.team import (
+    TeamUpdateOutcome,
     create_team,
     delete_team,
     get_team,
     get_team_by_name,
     list_teams,
     update_team,
+    update_team_if_unchanged,
 )
 from modulo.db.crud.team_membership import (
     add_team_member,
@@ -429,19 +431,6 @@ async def update_team_endpoint(
             await set_rls_org(session, current_user.organisation_id)
             await set_rls_user_context(session, current_user.account_id, current_user.org_role)
 
-            if req.expected_updated_at is not None:
-                team = await get_team(session, team_id)
-                if team is None:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
-                current = team.updated_at.isoformat() if team.updated_at else ""
-                if current != req.expected_updated_at:
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail=(
-                            "Team was modified by another request. Refresh and try again (optimistic lock mismatch)."
-                        ),
-                    )
-
             if "name" in updates:
                 existing = await get_team_by_name(session, current_user.organisation_id, updates["name"])
                 if existing is not None and existing.id != team_id:
@@ -450,7 +439,24 @@ async def update_team_endpoint(
                         detail="A team with this name already exists in your organisation",
                     )
 
-            team = await update_team(session, team_id, updates)
+            if req.expected_updated_at is not None:
+                outcome, team = await update_team_if_unchanged(
+                    session,
+                    team_id,
+                    updates,
+                    req.expected_updated_at,
+                )
+                if outcome is TeamUpdateOutcome.NOT_FOUND:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+                if outcome is TeamUpdateOutcome.STALE:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=(
+                            "Team was modified by another request. Refresh and try again (optimistic lock mismatch)."
+                        ),
+                    )
+            else:
+                team = await update_team(session, team_id, updates)
     except IntegrityError as exc:
         _log.exception("teams.update_team_endpoint")
         raise HTTPException(

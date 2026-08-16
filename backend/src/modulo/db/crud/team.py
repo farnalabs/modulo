@@ -2,13 +2,22 @@
 
 import uuid
 from datetime import UTC, datetime
+from enum import Enum
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
 from modulo.db.models.team import Team
+
+
+class TeamUpdateOutcome(Enum):
+    """Result of an optimistic-concurrency team update."""
+
+    UPDATED = "updated"
+    NOT_FOUND = "not_found"
+    STALE = "stale"
 
 
 async def create_team(
@@ -87,6 +96,40 @@ async def update_team(
     apply_updates(team, updates)
     await session.flush()
     return team
+
+
+async def update_team_if_unchanged(
+    session: AsyncSession,
+    team_id: uuid.UUID,
+    updates: dict[str, object],
+    expected_updated_at: str,
+) -> tuple[TeamUpdateOutcome, Team | None]:
+    """Optimistic-concurrency team update: the version check is part of the write.
+
+    A single conditional UPDATE bumps ``updated_at`` and only matches rows whose
+    ``updated_at`` still equals the caller's ``expected_updated_at``. Under
+    READ COMMITTED two truly concurrent writers both run this UPDATE; the first
+    to commit wins, and the second matches zero rows (the winner already bumped
+    ``updated_at``) and is reported as STALE. This closes the lost-update race
+    that a separate SELECT-then-UPDATE check-then-write leaves open.
+    """
+    try:
+        expected = datetime.fromisoformat(expected_updated_at)
+    except ValueError:
+        return TeamUpdateOutcome.STALE, None
+    result = await session.execute(
+        update(Team)
+        .where(Team.id == team_id, Team.deleted_at.is_(None), Team.updated_at == expected)
+        .values(**updates, updated_at=datetime.now(UTC))
+        .returning(Team)
+    )
+    team = result.scalar_one_or_none()
+    if team is not None:
+        return TeamUpdateOutcome.UPDATED, team
+    exists = await session.execute(select(Team.id).where(Team.id == team_id, Team.deleted_at.is_(None)))
+    if exists.scalar_one_or_none() is None:
+        return TeamUpdateOutcome.NOT_FOUND, None
+    return TeamUpdateOutcome.STALE, None
 
 
 async def delete_team(session: AsyncSession, team_id: uuid.UUID) -> bool:

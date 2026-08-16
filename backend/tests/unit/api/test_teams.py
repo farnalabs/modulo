@@ -16,6 +16,7 @@ from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.team_visibility import find_model_backend_team_mismatches, model_backend_team_mismatch
 from modulo.db.crud.pipeline import PipelineHasActiveRunsError, update_pipeline
+from modulo.db.crud.team import TeamUpdateOutcome
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -800,9 +801,12 @@ class TestUpdateTeamOptimisticLock:
     """PATCH /api/v1/teams/{id} with expected_updated_at — optimistic concurrency."""
 
     def test_stale_expected_updated_at_returns_409(self, client: TestClient) -> None:
-        team = _make_team(name="Current Name")
         with (
-            patch("modulo.api.routes.teams.get_team", return_value=team),
+            patch(
+                "modulo.api.routes.teams.update_team_if_unchanged",
+                new=AsyncMock(return_value=(TeamUpdateOutcome.STALE, None)),
+            ),
+            patch("modulo.api.routes.teams.get_team_by_name", new=AsyncMock(return_value=None)),
             patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
             patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
         ):
@@ -813,12 +817,48 @@ class TestUpdateTeamOptimisticLock:
         assert resp.status_code == 409
         assert "optimistic lock" in resp.json()["detail"].lower()
 
+    def test_stale_expected_updated_at_does_not_update(self, client: TestClient) -> None:
+        with (
+            patch(
+                "modulo.api.routes.teams.update_team_if_unchanged",
+                new=AsyncMock(return_value=(TeamUpdateOutcome.STALE, None)),
+            ),
+            patch("modulo.api.routes.teams.get_team_by_name", new=AsyncMock(return_value=None)),
+            patch("modulo.api.routes.teams.update_team", new=AsyncMock()) as update_team_mock,
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+        ):
+            resp = client.patch(
+                f"/api/v1/teams/{_TEAM_ID}",
+                json={"name": "Renamed", "expected_updated_at": "2024-01-01T00:00:00+00:00"},
+            )
+        assert resp.status_code == 409
+        update_team_mock.assert_not_awaited()
+
+    def test_missing_team_with_expected_updated_at_returns_404(self, client: TestClient) -> None:
+        with (
+            patch(
+                "modulo.api.routes.teams.update_team_if_unchanged",
+                new=AsyncMock(return_value=(TeamUpdateOutcome.NOT_FOUND, None)),
+            ),
+            patch("modulo.api.routes.teams.get_team_by_name", new=AsyncMock(return_value=None)),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+        ):
+            resp = client.patch(
+                f"/api/v1/teams/{_TEAM_ID}",
+                json={"name": "Renamed", "expected_updated_at": "2024-01-01T00:00:00+00:00"},
+            )
+        assert resp.status_code == 404
+
     def test_matching_expected_updated_at_succeeds(self, client: TestClient) -> None:
         team = _make_team(name="Updated")
         expected = team.updated_at.isoformat()
         with (
-            patch("modulo.api.routes.teams.get_team", return_value=team),
-            patch("modulo.api.routes.teams.update_team", return_value=team),
+            patch(
+                "modulo.api.routes.teams.update_team_if_unchanged",
+                new=AsyncMock(return_value=(TeamUpdateOutcome.UPDATED, team)),
+            ),
             patch("modulo.api.routes.teams.get_team_by_name", return_value=None),
             patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
             patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
