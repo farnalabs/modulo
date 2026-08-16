@@ -1,20 +1,32 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 
 const { mockPut, mockGet } = vi.hoisted(() => {
   const mockPut = vi.fn().mockResolvedValue({ data: {}, error: undefined })
-  const mockGet = vi.fn().mockResolvedValue({
-    data: {
-      id: '1',
-      email: 'user@example.com',
-      display_name: 'Test User',
-      org_role: 'admin',
-      active: true,
-      created_at: '2025-01-01T00:00:00Z',
-      is_system_admin: false,
-    },
-    error: undefined,
+  const mockGet = vi.fn().mockImplementation((url: string) => {
+    if (url === '/api/v1/teams/my') {
+      return Promise.resolve({
+        data: [
+          { team_id: 't1', team_name: 'Engineering', role: 'operator' },
+          { team_id: 't2', team_name: 'Design', role: 'viewer' },
+        ],
+        error: undefined,
+      })
+    }
+    return Promise.resolve({
+      data: {
+        id: '1',
+        email: 'user@example.com',
+        display_name: 'Test User',
+        org_role: 'admin',
+        active: true,
+        created_at: '2025-01-01T00:00:00Z',
+        is_system_admin: false,
+      },
+      error: undefined,
+    })
   })
   return { mockPut, mockGet }
 })
@@ -27,9 +39,11 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import MyProfileView from '../views/MyProfileView.vue'
+import { usePlanStore } from '../stores/planStore'
 
 describe('MyProfileView', () => {
   beforeEach(() => {
+    setActivePinia(createPinia())
     vi.clearAllMocks()
   })
 
@@ -38,6 +52,105 @@ describe('MyProfileView', () => {
     await nextTick()
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.text()).toContain('My Profile')
+  })
+
+  it('renders the My Teams section with team names and roles', async () => {
+    usePlanStore().currentTier = 'team'
+    const wrapper = mount(MyProfileView)
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('My Teams')
+    const teamRows = wrapper.findAll('[data-testid="my-profile-my-team"]')
+    expect(teamRows.length).toBe(2)
+    expect(teamRows[0].text()).toContain('Engineering')
+    expect(teamRows[0].text()).toContain('Operator')
+    expect(teamRows[1].text()).toContain('Design')
+    expect(teamRows[1].text()).toContain('Viewer')
+  })
+
+  it('shows empty state when the user belongs to no teams', async () => {
+    usePlanStore().currentTier = 'team'
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/teams/my') return Promise.resolve({ data: [], error: undefined })
+      return Promise.resolve({
+        data: {
+          id: '1',
+          email: 'user@example.com',
+          display_name: 'Test User',
+          org_role: 'admin',
+          active: true,
+          created_at: '2025-01-01T00:00:00Z',
+          is_system_admin: false,
+        },
+        error: undefined,
+      })
+    })
+    const wrapper = mount(MyProfileView)
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('My Teams')
+    expect(wrapper.text()).toContain('not a member of any team')
+  })
+
+  it('gates the My Teams card behind the team_rbac feature on community tier', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/teams/my') {
+        return Promise.resolve({
+          data: undefined,
+          error: { detail: 'Feature not available on your plan' },
+        })
+      }
+      return Promise.resolve({
+        data: {
+          id: '1',
+          email: 'user@example.com',
+          display_name: 'Test User',
+          org_role: 'admin',
+          active: true,
+          created_at: '2025-01-01T00:00:00Z',
+          is_system_admin: false,
+        },
+        error: undefined,
+      })
+    })
+    const wrapper = mount(MyProfileView)
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="feature-gate-disabled"]').exists()).toBe(true)
+  })
+
+  it('shows the My Teams error card only when the feature is enabled', async () => {
+    usePlanStore().currentTier = 'team'
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/teams/my') {
+        return Promise.resolve({
+          data: undefined,
+          error: { detail: 'Failed to load teams' },
+        })
+      }
+      return Promise.resolve({
+        data: {
+          id: '1',
+          email: 'user@example.com',
+          display_name: 'Test User',
+          org_role: 'admin',
+          active: true,
+          created_at: '2025-01-01T00:00:00Z',
+          is_system_admin: false,
+        },
+        error: undefined,
+      })
+    })
+    const wrapper = mount(MyProfileView)
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="feature-gate-disabled"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Failed to load teams')
+    expect(wrapper.find('[data-testid="my-profile-my-teams-retry"]').exists()).toBe(true)
   })
 
   it('shows error when passwords do not match', async () => {

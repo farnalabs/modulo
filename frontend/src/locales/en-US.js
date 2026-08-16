@@ -453,7 +453,9 @@ export default {
       "new_password_must_differ": "New password must be different from the current password",
       "manage_your_account_settings_and_password": "Manage your account settings and password.",
       "password_must_be_at_least_8_characters": "Password must be at least 8 characters",
-      "member_since": "Member since {date}"
+      "member_since": "Member since {date}",
+      "my_teams": "My Teams",
+      "not_a_member_of_any_team": "You are not a member of any team."
     },
     "AdminModelBackendsView": {
       "preview_model_backends_count": "{count} preview model backend | {count} preview model backends",
@@ -1933,7 +1935,8 @@ export default {
       "viewer": "Viewer",
       "runner": "Runner",
       "operator": "Operator",
-      "webhook_notifications": "Webhook Notifications"
+      "webhook_notifications": "Webhook Notifications",
+      "owned_resource_count": "{count} owned resource | {count} owned resources"
     },
     "SettingsSsoView": {
       "sso_provider_management_is_not_available_on_your_current_pla": "SSO provider management is not available on your current plan.",
