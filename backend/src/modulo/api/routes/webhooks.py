@@ -22,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from modulo.api.constants import MSG_DB_OPERATION_FAILED, MSG_FEATURE_NOT_AVAILABLE
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import (
     _get_engine,
@@ -64,6 +65,10 @@ from modulo.db.rls import set_rls_org
 from modulo.db.settings_resolver import ensure_triggers_resumable
 from modulo.settings import get_settings
 from modulo.version import get_version
+
+_CODE_WEBHOOKS_RECEIVE_WEBHOOK = "webhooks.receive_webhook"
+_MSG_TRIGGER_NOT_FOUND = "Trigger not found"
+
 
 _log = logging.getLogger(__name__)
 
@@ -137,7 +142,7 @@ async def _dispatch_webhook_run(run_id: str, org_id: str) -> None:
 
 
 @router.post("/{trigger_id}/webhook", status_code=status.HTTP_202_ACCEPTED)
-@handle_db_errors("webhooks.receive_webhook")
+@handle_db_errors(_CODE_WEBHOOKS_RECEIVE_WEBHOOK)
 async def receive_webhook(
     trigger_id: uuid.UUID,
     request: Request,
@@ -172,7 +177,7 @@ async def receive_webhook(
         if not isinstance(raw_payload, dict):
             raise TypeError("not a JSON object")
     except Exception as exc:
-        _log.exception("webhooks.receive_webhook")
+        _log.exception(_CODE_WEBHOOKS_RECEIVE_WEBHOOK)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Request body must be a JSON object",
@@ -272,9 +277,9 @@ async def receive_webhook(
                 # acked-as-accepted, and no run was created.
                 guardrail_block_detail = exc.detail
     except TriggerNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found") from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND) from exc
     except TriggerInactiveError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found") from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND) from exc
     except TimestampExpiredError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -308,16 +313,16 @@ async def receive_webhook(
         )
         return {"run_id": None, "status": "queued", "detail": "Pipeline busy — queued for retry"}
     except ProgrammingError:
-        _log.exception("webhooks.receive_webhook")
+        _log.exception(_CODE_WEBHOOKS_RECEIVE_WEBHOOK)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("webhooks.receive_webhook")
+        _log.exception(_CODE_WEBHOOKS_RECEIVE_WEBHOOK)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -497,9 +502,9 @@ async def replay_webhook(
     except ReplayNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger event not found") from exc
     except TriggerNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found") from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND) from exc
     except TriggerInactiveError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found") from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND) from exc
     except DuplicateWebhookError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -521,13 +526,13 @@ async def replay_webhook(
         _log.exception("webhooks.replay_webhook")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("webhooks.replay_webhook")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -573,13 +578,13 @@ async def cleanup_expired(
         _log.exception("webhooks.cleanup_expired")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("webhooks.cleanup_expired")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except Exception:
         _log.exception("Cleanup job failed")

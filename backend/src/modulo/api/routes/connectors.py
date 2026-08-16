@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_RESOURCE_ALREADY_EXISTS
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_in_dev_operator, require_permission
 from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK, mask_config_json
@@ -34,6 +35,15 @@ from modulo.db.crud.connector_instance import (
 )
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
+
+_CODE_CONNECTORS_LIST_CONNECTORS_ENDPOINT = "connectors.list_connectors_endpoint"
+_MSG_CONNECTORS_NOT_AVAILABLE_RUN = "Connectors are not available. Run database migrations to enable this feature."
+_CODE_CONNECTORS_CREATE_CONNECTOR_ENDPOINT = "connectors.create_connector_endpoint"
+_CODE_CONNECTORS_GET_CONNECTOR_ENDPOINT = "connectors.get_connector_endpoint"
+_MSG_CONNECTOR_NOT_FOUND = "Connector not found"
+_CODE_CONNECTORS_UPDATE_CONNECTOR_ENDPOINT = "connectors.update_connector_endpoint"
+_CODE_CONNECTORS_DELETE_CONNECTOR_ENDPOINT = "connectors.delete_connector_endpoint"
+
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +157,7 @@ def _to_response(ci: Any) -> ConnectorResponse:
 
 
 @router.get("", response_model=ConnectorListResponse, responses={401: {"description": "Unauthorized"}})
-@handle_db_errors("connectors.list_connectors_endpoint")
+@handle_db_errors(_CODE_CONNECTORS_LIST_CONNECTORS_ENDPOINT)
 async def list_connectors_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -170,19 +180,19 @@ async def list_connectors_endpoint(
                 excluded_tiers=[] if include_in_dev else None,
             )
     except IntegrityError:
-        logger.exception("connectors.list_connectors_endpoint")
+        logger.exception(_CODE_CONNECTORS_LIST_CONNECTORS_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        logger.exception("connectors.list_connectors_endpoint")
+        logger.exception(_CODE_CONNECTORS_LIST_CONNECTORS_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Connectors are not available. Run database migrations to enable this feature.",
+            detail=_MSG_CONNECTORS_NOT_AVAILABLE_RUN,
         ) from None
     except SQLAlchemyError:
-        logger.exception("connectors.list_connectors_endpoint")
+        logger.exception(_CODE_CONNECTORS_LIST_CONNECTORS_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while listing connectors.",
@@ -211,7 +221,7 @@ async def list_connectors_endpoint(
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(deny_break_glass_mint)],
 )
-@handle_db_errors("connectors.create_connector_endpoint")
+@handle_db_errors(_CODE_CONNECTORS_CREATE_CONNECTOR_ENDPOINT)
 async def create_connector_endpoint(
     req: ConnectorCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -252,7 +262,7 @@ async def create_connector_endpoint(
                 tier=req.tier,
             )
     except IntegrityError:
-        logger.exception("connectors.create_connector_endpoint")
+        logger.exception(_CODE_CONNECTORS_CREATE_CONNECTOR_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
@@ -261,13 +271,13 @@ async def create_connector_endpoint(
             ),
         ) from None
     except ProgrammingError:
-        logger.exception("connectors.create_connector_endpoint")
+        logger.exception(_CODE_CONNECTORS_CREATE_CONNECTOR_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Connectors are not available. Run database migrations to enable this feature.",
+            detail=_MSG_CONNECTORS_NOT_AVAILABLE_RUN,
         ) from None
     except SQLAlchemyError:
-        logger.exception("connectors.create_connector_endpoint")
+        logger.exception(_CODE_CONNECTORS_CREATE_CONNECTOR_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while creating connector.",
@@ -284,7 +294,7 @@ async def create_connector_endpoint(
 
 
 @router.get("/{connector_id}", response_model=ConnectorResponse)
-@handle_db_errors("connectors.get_connector_endpoint")
+@handle_db_errors(_CODE_CONNECTORS_GET_CONNECTOR_ENDPOINT)
 async def get_connector_endpoint(
     connector_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -296,19 +306,19 @@ async def get_connector_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             ci = await get_connector_instance(session, connector_id)
     except IntegrityError:
-        logger.exception("connectors.get_connector_endpoint")
+        logger.exception(_CODE_CONNECTORS_GET_CONNECTOR_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        logger.exception("connectors.get_connector_endpoint")
+        logger.exception(_CODE_CONNECTORS_GET_CONNECTOR_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Connectors are not available. Run database migrations to enable this feature.",
+            detail=_MSG_CONNECTORS_NOT_AVAILABLE_RUN,
         ) from None
     except SQLAlchemyError:
-        logger.exception("connectors.get_connector_endpoint")
+        logger.exception(_CODE_CONNECTORS_GET_CONNECTOR_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching connector.",
@@ -322,12 +332,12 @@ async def get_connector_endpoint(
             detail="An unexpected error occurred while fetching connector.",
         ) from None
     if ci is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_CONNECTOR_NOT_FOUND)
     return _to_response(ci)
 
 
 @router.patch("/{connector_id}", response_model=ConnectorResponse, dependencies=[Depends(deny_break_glass_mint)])
-@handle_db_errors("connectors.update_connector_endpoint")
+@handle_db_errors(_CODE_CONNECTORS_UPDATE_CONNECTOR_ENDPOINT)
 async def update_connector_endpoint(
     connector_id: uuid.UUID,
     req: ConnectorUpdate,
@@ -375,7 +385,7 @@ async def update_connector_endpoint(
                     )
             ci = await update_connector_instance(session, connector_id, updates)
     except IntegrityError:
-        logger.exception("connectors.update_connector_endpoint")
+        logger.exception(_CODE_CONNECTORS_UPDATE_CONNECTOR_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
@@ -384,13 +394,13 @@ async def update_connector_endpoint(
             ),
         ) from None
     except ProgrammingError:
-        logger.exception("connectors.update_connector_endpoint")
+        logger.exception(_CODE_CONNECTORS_UPDATE_CONNECTOR_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Connectors are not available. Run database migrations to enable this feature.",
+            detail=_MSG_CONNECTORS_NOT_AVAILABLE_RUN,
         ) from None
     except SQLAlchemyError:
-        logger.exception("connectors.update_connector_endpoint")
+        logger.exception(_CODE_CONNECTORS_UPDATE_CONNECTOR_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating connector.",
@@ -404,12 +414,12 @@ async def update_connector_endpoint(
             detail="An unexpected error occurred while updating connector.",
         ) from None
     if ci is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_CONNECTOR_NOT_FOUND)
     return _to_response(ci)
 
 
 @router.delete("/{connector_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(deny_break_glass_mint)])
-@handle_db_errors("connectors.delete_connector_endpoint")
+@handle_db_errors(_CODE_CONNECTORS_DELETE_CONNECTOR_ENDPOINT)
 async def delete_connector_endpoint(
     connector_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -421,19 +431,19 @@ async def delete_connector_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             deleted = await delete_connector_instance(session, connector_id)
     except IntegrityError:
-        logger.exception("connectors.delete_connector_endpoint")
+        logger.exception(_CODE_CONNECTORS_DELETE_CONNECTOR_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        logger.exception("connectors.delete_connector_endpoint")
+        logger.exception(_CODE_CONNECTORS_DELETE_CONNECTOR_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Connectors are not available. Run database migrations to enable this feature.",
+            detail=_MSG_CONNECTORS_NOT_AVAILABLE_RUN,
         ) from None
     except SQLAlchemyError:
-        logger.exception("connectors.delete_connector_endpoint")
+        logger.exception(_CODE_CONNECTORS_DELETE_CONNECTOR_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while deleting connector.",
@@ -447,4 +457,4 @@ async def delete_connector_endpoint(
             detail="An unexpected error occurred while deleting connector.",
         ) from None
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_CONNECTOR_NOT_FOUND)

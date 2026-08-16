@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_DB_OPERATION_FAILED, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
@@ -23,6 +24,10 @@ from modulo.db.crud.node_category import (
     update_node_category,
 )
 from modulo.db.rls import set_rls_org, set_rls_user_context
+
+_MSG_NODE_CATEGORY_NAME_ALREADY = "A node category with this name already exists."
+_MSG_NODE_CATEGORY_NOT_FOUND = "Node category not found"
+
 
 logger = logging.getLogger(__name__)
 
@@ -87,20 +92,20 @@ async def list_node_categories_endpoint(
         logger.warning("node_categories.list.programming_error — missing DB table?")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except IntegrityError:
         logger.exception("node_categories.list_node_categories_endpoint")
         logger.warning("node_categories.list.integrity_error")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A node category with this name already exists.",
+            detail=_MSG_NODE_CATEGORY_NAME_ALREADY,
         ) from None
     except SQLAlchemyError:
         logger.warning("node_categories.list.database_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -110,7 +115,7 @@ async def list_node_categories_endpoint(
         logger.exception("node_categories.list.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
     return NodeCategoryListResponse(
         items=[NodeCategoryResponse.model_validate(c) for c in result.items],
@@ -146,20 +151,20 @@ async def create_node_category_endpoint(
         logger.warning("node_categories.create.programming_error — missing DB table?")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except IntegrityError:
         logger.exception("node_categories.create_node_category_endpoint")
         logger.warning("node_categories.create.integrity_error — duplicate name")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A node category with this name already exists.",
+            detail=_MSG_NODE_CATEGORY_NAME_ALREADY,
         ) from None
     except SQLAlchemyError:
         logger.warning("node_categories.create.database_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -169,7 +174,7 @@ async def create_node_category_endpoint(
         logger.exception("node_categories.create.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
     return NodeCategoryResponse.model_validate(category)
 
@@ -191,20 +196,20 @@ async def get_node_category_endpoint(
         logger.warning("node_categories.get.programming_error — missing DB table?")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except IntegrityError:
         logger.exception("node_categories.get_node_category_endpoint")
         logger.warning("node_categories.get.integrity_error")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A node category with this name already exists.",
+            detail=_MSG_NODE_CATEGORY_NAME_ALREADY,
         ) from None
     except SQLAlchemyError:
         logger.warning("node_categories.get.database_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -214,10 +219,10 @@ async def get_node_category_endpoint(
         logger.exception("node_categories.get.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
     if category is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node category not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_NODE_CATEGORY_NOT_FOUND)
     return NodeCategoryResponse.model_validate(category)
 
 
@@ -240,20 +245,20 @@ async def update_node_category_endpoint(
         logger.warning("node_categories.update.programming_error — missing DB table?")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except IntegrityError:
         logger.exception("node_categories.update_node_category_endpoint")
         logger.warning("node_categories.update.integrity_error — duplicate name")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A node category with this name already exists.",
+            detail=_MSG_NODE_CATEGORY_NAME_ALREADY,
         ) from None
     except SQLAlchemyError:
         logger.warning("node_categories.update.database_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -263,10 +268,10 @@ async def update_node_category_endpoint(
         logger.exception("node_categories.update.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
     if category is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node category not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_NODE_CATEGORY_NOT_FOUND)
     return NodeCategoryResponse.model_validate(category)
 
 
@@ -287,7 +292,7 @@ async def delete_node_category_endpoint(
         logger.warning("node_categories.delete.programming_error — missing DB table?")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except IntegrityError:
         logger.exception("node_categories.delete_node_category_endpoint")
@@ -307,7 +312,7 @@ async def delete_node_category_endpoint(
         logger.warning("node_categories.delete.database_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -317,10 +322,10 @@ async def delete_node_category_endpoint(
         logger.exception("node_categories.delete.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node category not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_NODE_CATEGORY_NOT_FOUND)
 
 
 @router.post("/{category_id}/restore", response_model=NodeCategoryResponse)
@@ -340,13 +345,13 @@ async def restore_node_category_endpoint(
         logger.warning("node_categories.restore.programming_error — missing DB table?")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.warning("node_categories.restore.database_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -356,8 +361,8 @@ async def restore_node_category_endpoint(
         logger.exception("node_categories.restore.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
     if category is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node category not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_NODE_CATEGORY_NOT_FOUND)
     return NodeCategoryResponse.model_validate(category)

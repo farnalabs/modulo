@@ -26,6 +26,10 @@ from modulo.db.crud.organisation import get_organisation
 from modulo.db.models.organisation import Organisation
 from modulo.settings import Settings, get_settings
 
+_CODE_ORG_LICENSE_MANAGE = "org.license.manage"
+_CODE_LICENSE_GET_FAILED = "license.get_failed"
+
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/license", tags=["admin-license"])
@@ -116,7 +120,7 @@ def _resolve_effective_license(settings: Settings, org: Organisation | None = No
 @handle_db_errors("admin.license.get_license_status")
 async def get_license_status(
     settings: Settings = Depends(get_settings),
-    current_user: TenantPrincipal = require_permission("org.license.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_ORG_LICENSE_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> LicenseStatusResponse:
 
@@ -159,13 +163,13 @@ async def get_license_status(
 
         return response
     except ProgrammingError:
-        logger.exception("license.get_failed")
+        logger.exception(_CODE_LICENSE_GET_FAILED)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="License information is not available. Run database migrations to enable this feature.",
         ) from None
     except SQLAlchemyError:
-        logger.exception("license.get_failed")
+        logger.exception(_CODE_LICENSE_GET_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching license status.",
@@ -173,7 +177,7 @@ async def get_license_status(
     except HTTPException:
         raise
     except Exception:
-        logger.exception("license.get_failed")
+        logger.exception(_CODE_LICENSE_GET_FAILED)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve license status.",
@@ -184,7 +188,7 @@ async def get_license_status(
 @handle_db_errors("admin.license.upload_license")
 async def upload_license(
     req: LicenseUploadRequest,
-    _: TenantPrincipal = require_permission("org.license.manage"),
+    _: TenantPrincipal = require_permission(_CODE_ORG_LICENSE_MANAGE),
 ) -> LicenseUploadResponse:
     try:
         validation = parse_and_verify(req.license_key)
@@ -219,7 +223,7 @@ async def issue_license(
     req: LicenseIssueRequest,
     background_tasks: BackgroundTasks,
     settings: Settings = Depends(get_settings),
-    _: TenantPrincipal = require_permission("org.license.manage"),
+    _: TenantPrincipal = require_permission(_CODE_ORG_LICENSE_MANAGE),
 ) -> LicenseIssueResponse:
     """Manually issue (sign) a team license key for a customer.
 

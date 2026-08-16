@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_RESOURCE_ALREADY_EXISTS, MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
@@ -32,6 +33,27 @@ from modulo.db.crud.parameter_set import (
     update_set,
 )
 from modulo.db.rls import set_rls_org, set_rls_user_context
+
+_CODE_PARAMETER_SCHEMA_LIST = "parameter_schema.list"
+_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE = "Parameter schemas are not available. Run database migrations to enable it."
+_MSG_PARAMETER_SCHEMAS_TEMPORARILY_UNAVAILABLE = "Parameter schemas are temporarily unavailable."
+_CODE_PARAMETER_SCHEMAS_CREATE = "parameter_schemas.create"
+_CODE_PARAMETER_SCHEMAS_GET = "parameter_schemas.get"
+_MSG_PARAMETER_SCHEMA_NOT_FOUND = "Parameter schema not found"
+_CODE_PARAMETER_SCHEMAS_UPDATE = "parameter_schemas.update"
+_CODE_PARAMETER_SCHEMAS_DELETE = "parameter_schemas.delete"
+_CODE_PARAMETER_SCHEMAS_RESTORE = "parameter_schemas.restore"
+_CODE_PARAMETER_SCHEMAS_REFERENCES = "parameter_schemas.references"
+_CODE_PARAMETER_SCHEMAS_VALIDATE = "parameter_schemas.validate"
+_CODE_PARAMETER_SCHEMAS_LIST_SETS = "parameter_schemas.list_sets"
+_CODE_PARAMETER_SCHEMAS_CREATE_SET = "parameter_schemas.create_set"
+_CODE_PARAMETER_SCHEMAS_GET_SET = "parameter_schemas.get_set"
+_MSG_PARAMETER_SET_NOT_FOUND = "Parameter set not found"
+_CODE_PARAMETER_SCHEMAS_UPDATE_SET = "parameter_schemas.update_set"
+_CODE_PARAMETER_SCHEMAS_DELETE_SET = "parameter_schemas.delete_set"
+_CODE_PARAMETER_SCHEMAS_RESTORE_SET = "parameter_schemas.restore_set"
+_CODE_PARAMETER_SETS_REFERENCES = "parameter_sets.references"
+
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +188,7 @@ async def list_parameter_schemas_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("parameter_schema.list"),
+    principal: TenantPrincipal = require_permission(_CODE_PARAMETER_SCHEMA_LIST),
 ) -> SchemaListResponse:
     try:
         async with session.begin():
@@ -177,19 +199,19 @@ async def list_parameter_schemas_endpoint(
         logger.exception("parameter_schemas.list_parameter_schemas_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         logger.exception("parameter_schemas.table_missing")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Parameter schemas are not available. Run database migrations to enable it.",
+            detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("parameter_schemas.list")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Parameter schemas are temporarily unavailable.",
+            detail=_MSG_PARAMETER_SCHEMAS_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -197,7 +219,7 @@ async def list_parameter_schemas_endpoint(
         logger.exception("parameter_schemas.list")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return SchemaListResponse(
         items=[SchemaResponse.model_validate(s) for s in result.items],
@@ -208,7 +230,7 @@ async def list_parameter_schemas_endpoint(
 
 
 @router.post("/parameter-schemas", response_model=SchemaResponse, status_code=status.HTTP_201_CREATED)
-@handle_db_errors("parameter_schemas.create")
+@handle_db_errors(_CODE_PARAMETER_SCHEMAS_CREATE)
 async def create_parameter_schema_endpoint(
     req: SchemaCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -233,34 +255,34 @@ async def create_parameter_schema_endpoint(
             detail="A parameter schema with this name already exists.",
         ) from None
     except ProgrammingError:
-        logger.exception("parameter_schemas.create")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_CREATE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Parameter schemas are not available. Run database migrations to enable it.",
+            detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("parameter_schemas.create")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_CREATE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Parameter schemas are temporarily unavailable.",
+            detail=_MSG_PARAMETER_SCHEMAS_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
     except Exception:
-        logger.exception("parameter_schemas.create")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_CREATE)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return SchemaResponse.model_validate(schema)
 
 
 @router.get("/parameter-schemas/{schema_id}", response_model=SchemaResponse)
-@handle_db_errors("parameter_schemas.get")
+@handle_db_errors(_CODE_PARAMETER_SCHEMAS_GET)
 async def get_parameter_schema_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("parameter_schema.list"),
+    principal: TenantPrincipal = require_permission(_CODE_PARAMETER_SCHEMA_LIST),
 ) -> SchemaResponse:
     try:
         async with session.begin():
@@ -271,35 +293,35 @@ async def get_parameter_schema_endpoint(
         logger.exception("parameter_schemas.get_parameter_schema_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        logger.exception("parameter_schemas.get")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_GET)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Parameter schemas are not available. Run database migrations to enable it.",
+            detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("parameter_schemas.get")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_GET)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Parameter schemas are temporarily unavailable.",
+            detail=_MSG_PARAMETER_SCHEMAS_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
     except Exception:
-        logger.exception("parameter_schemas.get")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_GET)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if schema is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parameter schema not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PARAMETER_SCHEMA_NOT_FOUND)
     return SchemaResponse.model_validate(schema)
 
 
 @router.put("/parameter-schemas/{schema_id}", response_model=SchemaResponse)
-@handle_db_errors("parameter_schemas.update")
+@handle_db_errors(_CODE_PARAMETER_SCHEMAS_UPDATE)
 async def update_parameter_schema_endpoint(
     schema_id: uuid.UUID,
     req: SchemaUpdate,
@@ -325,24 +347,24 @@ async def update_parameter_schema_endpoint(
             detail="A parameter schema with this name already exists.",
         ) from None
     except ProgrammingError:
-        logger.exception("parameter_schemas.update")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_UPDATE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Parameter schemas are not available. Run database migrations to enable it.",
+            detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("parameter_schemas.update")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_UPDATE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Parameter schemas are temporarily unavailable.",
+            detail=_MSG_PARAMETER_SCHEMAS_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
     except Exception:
-        logger.exception("parameter_schemas.update")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_UPDATE)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if schema is None:
         raise HTTPException(
@@ -353,7 +375,7 @@ async def update_parameter_schema_endpoint(
 
 
 @router.delete("/parameter-schemas/{schema_id}", response_model=SchemaResponse)
-@handle_db_errors("parameter_schemas.delete")
+@handle_db_errors(_CODE_PARAMETER_SCHEMAS_DELETE)
 async def delete_parameter_schema_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -368,35 +390,35 @@ async def delete_parameter_schema_endpoint(
         logger.exception("parameter_schemas.delete_parameter_schema_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        logger.exception("parameter_schemas.delete")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_DELETE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Parameter schemas are not available. Run database migrations to enable it.",
+            detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("parameter_schemas.delete")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_DELETE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Parameter schemas are temporarily unavailable.",
+            detail=_MSG_PARAMETER_SCHEMAS_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
     except Exception:
-        logger.exception("parameter_schemas.delete")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_DELETE)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if schema is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parameter schema not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PARAMETER_SCHEMA_NOT_FOUND)
     return SchemaResponse.model_validate(schema)
 
 
 @router.post("/parameter-schemas/{schema_id}/restore", response_model=SchemaResponse)
-@handle_db_errors("parameter_schemas.restore")
+@handle_db_errors(_CODE_PARAMETER_SCHEMAS_RESTORE)
 async def restore_parameter_schema_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -408,24 +430,24 @@ async def restore_parameter_schema_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             schema = await restore_schema(session, schema_id)
     except ProgrammingError:
-        logger.exception("parameter_schemas.restore")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_RESTORE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Parameter schemas are not available. Run database migrations to enable it.",
+            detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("parameter_schemas.restore")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_RESTORE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Parameter schemas are temporarily unavailable.",
+            detail=_MSG_PARAMETER_SCHEMAS_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
     except Exception:
-        logger.exception("parameter_schemas.restore")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_RESTORE)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if schema is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parameter schema not found or not deleted")
@@ -439,7 +461,7 @@ async def diff_parameter_schema_endpoint(
     from_version: int = Query(..., description="Source version"),
     to_version: int = Query(..., description="Target version"),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("parameter_schema.list"),
+    principal: TenantPrincipal = require_permission(_CODE_PARAMETER_SCHEMA_LIST),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -450,7 +472,7 @@ async def diff_parameter_schema_endpoint(
         logger.exception("parameter_schemas.diff")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Parameter schemas are temporarily unavailable.",
+            detail=_MSG_PARAMETER_SCHEMAS_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -458,10 +480,10 @@ async def diff_parameter_schema_endpoint(
         logger.exception("parameter_schemas.diff")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if schema is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parameter schema not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PARAMETER_SCHEMA_NOT_FOUND)
 
     if from_version < 1 or to_version < 1:
         raise HTTPException(
@@ -496,11 +518,11 @@ async def diff_parameter_schema_endpoint(
 
 
 @router.get("/parameter-schemas/{schema_id}/references", response_model=SchemaReferencesResponse)
-@handle_db_errors("parameter_schemas.references")
+@handle_db_errors(_CODE_PARAMETER_SCHEMAS_REFERENCES)
 async def get_parameter_schema_references_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("parameter_schema.list"),
+    principal: TenantPrincipal = require_permission(_CODE_PARAMETER_SCHEMA_LIST),
 ) -> SchemaReferencesResponse:
     try:
         async with session.begin():
@@ -508,24 +530,24 @@ async def get_parameter_schema_references_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             refs = await get_schema_references(session, schema_id)
     except ProgrammingError:
-        logger.exception("parameter_schemas.references")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_REFERENCES)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Parameter schemas are not available. Run database migrations to enable it.",
+            detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("parameter_schemas.references")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_REFERENCES)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Parameter schemas are temporarily unavailable.",
+            detail=_MSG_PARAMETER_SCHEMAS_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
     except Exception:
-        logger.exception("parameter_schemas.references")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_REFERENCES)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return SchemaReferencesResponse(
         agents=[{"id": str(a)} for a in refs["agents"]],
@@ -534,7 +556,7 @@ async def get_parameter_schema_references_endpoint(
 
 
 @router.post("/parameter-schemas/{schema_id}/validate", response_model=ValidateResponse)
-@handle_db_errors("parameter_schemas.validate")
+@handle_db_errors(_CODE_PARAMETER_SCHEMAS_VALIDATE)
 async def validate_parameter_values_endpoint(
     schema_id: uuid.UUID,
     req: ValidateRequest,
@@ -547,7 +569,7 @@ async def validate_parameter_values_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             schema = await get_schema(session, schema_id)
             if schema is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parameter schema not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PARAMETER_SCHEMA_NOT_FOUND)
 
             params = schema.parameters if isinstance(schema.parameters, list) else []
             errors: list[ValidationErrorItem] = []
@@ -588,24 +610,24 @@ async def validate_parameter_values_endpoint(
                             )
                         )
     except ProgrammingError:
-        logger.exception("parameter_schemas.validate")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_VALIDATE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Parameter schemas are not available. Run database migrations to enable it.",
+            detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("parameter_schemas.validate")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_VALIDATE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Parameter schemas are temporarily unavailable.",
+            detail=_MSG_PARAMETER_SCHEMAS_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
     except Exception:
-        logger.exception("parameter_schemas.validate")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_VALIDATE)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
     return ValidateResponse(valid=len(errors) == 0, errors=errors)
@@ -617,11 +639,11 @@ async def validate_parameter_values_endpoint(
 
 
 @router.get("/parameter-schemas/{schema_id}/sets", response_model=list[SetResponse])
-@handle_db_errors("parameter_schemas.list_sets")
+@handle_db_errors(_CODE_PARAMETER_SCHEMAS_LIST_SETS)
 async def list_parameter_sets_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("parameter_schema.list"),
+    principal: TenantPrincipal = require_permission(_CODE_PARAMETER_SCHEMA_LIST),
 ) -> list[SetResponse]:
     try:
         async with session.begin():
@@ -629,7 +651,7 @@ async def list_parameter_sets_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             schema = await get_schema(session, schema_id)
             if schema is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parameter schema not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PARAMETER_SCHEMA_NOT_FOUND)
             sets = await list_sets(
                 session,
                 parameter_schema_id=schema_id,
@@ -639,27 +661,27 @@ async def list_parameter_sets_endpoint(
         logger.exception("parameter_schemas.list_parameter_sets_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        logger.exception("parameter_schemas.list_sets")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_LIST_SETS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Parameter schemas are not available. Run database migrations to enable it.",
+            detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("parameter_schemas.list_sets")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_LIST_SETS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Parameter schemas are temporarily unavailable.",
+            detail=_MSG_PARAMETER_SCHEMAS_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
     except Exception:
-        logger.exception("parameter_schemas.list_sets")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_LIST_SETS)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return [SetResponse.model_validate(s) for s in sets]
 
@@ -669,7 +691,7 @@ async def list_parameter_sets_endpoint(
     response_model=SetResponse,
     status_code=status.HTTP_201_CREATED,
 )
-@handle_db_errors("parameter_schemas.create_set")
+@handle_db_errors(_CODE_PARAMETER_SCHEMAS_CREATE_SET)
 async def create_parameter_set_endpoint(
     schema_id: uuid.UUID,
     req: SetCreate,
@@ -682,7 +704,7 @@ async def create_parameter_set_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             schema = await get_schema(session, schema_id)
             if schema is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parameter schema not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PARAMETER_SCHEMA_NOT_FOUND)
             ps = await create_set(
                 session,
                 parameter_schema_id=schema_id,
@@ -700,35 +722,35 @@ async def create_parameter_set_endpoint(
             detail="A parameter set with this name already exists for this schema.",
         ) from None
     except ProgrammingError:
-        logger.exception("parameter_schemas.create_set")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_CREATE_SET)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Parameter schemas are not available. Run database migrations to enable it.",
+            detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("parameter_schemas.create_set")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_CREATE_SET)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Parameter schemas are temporarily unavailable.",
+            detail=_MSG_PARAMETER_SCHEMAS_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
     except Exception:
-        logger.exception("parameter_schemas.create_set")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_CREATE_SET)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return SetResponse.model_validate(ps)
 
 
 @router.get("/parameter-schemas/{schema_id}/sets/{set_id}", response_model=SetResponse)
-@handle_db_errors("parameter_schemas.get_set")
+@handle_db_errors(_CODE_PARAMETER_SCHEMAS_GET_SET)
 async def get_parameter_set_endpoint(
     schema_id: uuid.UUID,
     set_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("parameter_schema.list"),
+    principal: TenantPrincipal = require_permission(_CODE_PARAMETER_SCHEMA_LIST),
 ) -> SetResponse:
     try:
         async with session.begin():
@@ -739,35 +761,35 @@ async def get_parameter_set_endpoint(
         logger.exception("parameter_schemas.get_parameter_set_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        logger.exception("parameter_schemas.get_set")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_GET_SET)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Parameter schemas are not available. Run database migrations to enable it.",
+            detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("parameter_schemas.get_set")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_GET_SET)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Parameter schemas are temporarily unavailable.",
+            detail=_MSG_PARAMETER_SCHEMAS_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
     except Exception:
-        logger.exception("parameter_schemas.get_set")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_GET_SET)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if ps is None or ps.parameter_schema_id != schema_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parameter set not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PARAMETER_SET_NOT_FOUND)
     return SetResponse.model_validate(ps)
 
 
 @router.put("/parameter-schemas/{schema_id}/sets/{set_id}", response_model=SetResponse)
-@handle_db_errors("parameter_schemas.update_set")
+@handle_db_errors(_CODE_PARAMETER_SCHEMAS_UPDATE_SET)
 async def update_parameter_set_endpoint(
     schema_id: uuid.UUID,
     set_id: uuid.UUID,
@@ -781,7 +803,7 @@ async def update_parameter_set_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             schema = await get_schema(session, schema_id)
             if schema is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parameter schema not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PARAMETER_SCHEMA_NOT_FOUND)
             ps = await update_set(
                 session,
                 set_id,
@@ -797,24 +819,24 @@ async def update_parameter_set_endpoint(
             detail="A parameter set with this name already exists.",
         ) from None
     except ProgrammingError:
-        logger.exception("parameter_schemas.update_set")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_UPDATE_SET)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Parameter schemas are not available. Run database migrations to enable it.",
+            detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("parameter_schemas.update_set")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_UPDATE_SET)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Parameter schemas are temporarily unavailable.",
+            detail=_MSG_PARAMETER_SCHEMAS_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
     except Exception:
-        logger.exception("parameter_schemas.update_set")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_UPDATE_SET)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if ps is None:
         raise HTTPException(
@@ -828,7 +850,7 @@ async def update_parameter_set_endpoint(
     "/parameter-schemas/{schema_id}/sets/{set_id}",
     response_model=SetResponse,
 )
-@handle_db_errors("parameter_schemas.delete_set")
+@handle_db_errors(_CODE_PARAMETER_SCHEMAS_DELETE_SET)
 async def delete_parameter_set_endpoint(
     schema_id: uuid.UUID,
     set_id: uuid.UUID,
@@ -841,43 +863,43 @@ async def delete_parameter_set_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             schema = await get_schema(session, schema_id)
             if schema is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parameter schema not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PARAMETER_SCHEMA_NOT_FOUND)
             ps = await soft_delete_set(session, set_id)
     except IntegrityError:
         logger.exception("parameter_schemas.delete_parameter_set_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        logger.exception("parameter_schemas.delete_set")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_DELETE_SET)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Parameter schemas are not available. Run database migrations to enable it.",
+            detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("parameter_schemas.delete_set")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_DELETE_SET)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Parameter schemas are temporarily unavailable.",
+            detail=_MSG_PARAMETER_SCHEMAS_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
     except Exception:
-        logger.exception("parameter_schemas.delete_set")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_DELETE_SET)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if ps is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parameter set not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PARAMETER_SET_NOT_FOUND)
     if ps.parameter_schema_id != schema_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parameter set not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PARAMETER_SET_NOT_FOUND)
     return SetResponse.model_validate(ps)
 
 
 @router.post("/parameter-schemas/{schema_id}/sets/{set_id}/restore", response_model=SetResponse)
-@handle_db_errors("parameter_schemas.restore_set")
+@handle_db_errors(_CODE_PARAMETER_SCHEMAS_RESTORE_SET)
 async def restore_parameter_set_endpoint(
     schema_id: uuid.UUID,
     set_id: uuid.UUID,
@@ -890,27 +912,27 @@ async def restore_parameter_set_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             schema = await get_schema(session, schema_id)
             if schema is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parameter schema not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PARAMETER_SCHEMA_NOT_FOUND)
             ps = await restore_set(session, set_id)
     except ProgrammingError:
-        logger.exception("parameter_schemas.restore_set")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_RESTORE_SET)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Parameter schemas are not available. Run database migrations to enable it.",
+            detail=_MSG_PARAMETER_SCHEMAS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("parameter_schemas.restore_set")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_RESTORE_SET)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Parameter schemas are temporarily unavailable.",
+            detail=_MSG_PARAMETER_SCHEMAS_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
     except Exception:
-        logger.exception("parameter_schemas.restore_set")
+        logger.exception(_CODE_PARAMETER_SCHEMAS_RESTORE_SET)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if ps is None or ps.parameter_schema_id != schema_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parameter set not found or not deleted")
@@ -923,11 +945,11 @@ async def restore_parameter_set_endpoint(
 
 
 @router.get("/parameter-sets/{set_id}/references")
-@handle_db_errors("parameter_sets.references")
+@handle_db_errors(_CODE_PARAMETER_SETS_REFERENCES)
 async def get_parameter_set_references_endpoint(
     set_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("parameter_schema.list"),
+    principal: TenantPrincipal = require_permission(_CODE_PARAMETER_SCHEMA_LIST),
 ) -> dict[str, list[uuid.UUID]]:
     try:
         async with session.begin():
@@ -935,13 +957,13 @@ async def get_parameter_set_references_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             refs = await get_set_references(session, set_id)
     except ProgrammingError:
-        logger.exception("parameter_sets.references")
+        logger.exception(_CODE_PARAMETER_SETS_REFERENCES)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Parameter sets are not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        logger.exception("parameter_sets.references")
+        logger.exception(_CODE_PARAMETER_SETS_REFERENCES)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Parameter sets are temporarily unavailable.",
@@ -949,9 +971,9 @@ async def get_parameter_set_references_endpoint(
     except HTTPException:
         raise
     except Exception:
-        logger.exception("parameter_sets.references")
+        logger.exception(_CODE_PARAMETER_SETS_REFERENCES)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return refs

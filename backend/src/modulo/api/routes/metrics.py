@@ -12,11 +12,15 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_UNEXPECTED_ERROR
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.models.web_vital_event import WebVitalEvent
 from modulo.db.rls import set_rls_org, set_rls_user_context
+
+_MSG_DATABASE_TEMPORARILY_UNAVAILABLE = "Database temporarily unavailable."
+
 
 _log = logging.getLogger(__name__)
 
@@ -91,13 +95,13 @@ async def ingest_web_vitals(
         _log.exception("Failed to ingest web vitals", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
     except Exception:
         _log.exception("Failed to ingest web vitals", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
 
@@ -144,13 +148,13 @@ async def get_web_vitals_summary(
         _log.exception("Failed to fetch web vitals summary", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
     except Exception:
         _log.exception("Failed to fetch web vitals summary", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
 
@@ -195,11 +199,11 @@ async def get_web_vitals_timeseries(
         _log.exception("Failed to fetch web vitals timeseries", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
     except Exception:
         _log.exception("Failed to fetch web vitals timeseries", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None

@@ -31,6 +31,14 @@ from modulo.db.models.error_forwarder_config import ErrorForwarderConfig
 from modulo.db.models.error_group import ErrorGroup
 from modulo.db.rls import set_rls_org
 
+_MSG_NO_ORGANISATION = "No organisation"
+_MSG_ERROR_TRACKING_NOT_AVAILABLE = "Error tracking is not available. Run database migrations to enable it."
+_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE = "Error tracking is temporarily unavailable. Please try again."
+_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE = "An unexpected error occurred while processing your request."
+_CODE_ERROR_FORWARDER_MANAGE = "error_forwarder.manage"
+_CODE_ERROR_FORWARDER_CONFIG_TEST = "error_forwarder_config.test_forwarder"
+
+
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/errors/forwarders", tags=["error-forwarders"])
@@ -117,7 +125,7 @@ async def list_forwarders(
 ) -> ForwarderListResponse:
     org_id = principal.organisation_id
     if org_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organisation")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_NO_ORGANISATION)
 
     try:
         async with session.begin():
@@ -134,20 +142,20 @@ async def list_forwarders(
         _log.exception("error_forwarder_config.list_forwarders")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Error tracking is not available. Run database migrations to enable it.",
+            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("error_forwarder_config.list_forwarders")
         _log.warning("error_tracking.list_forwarders_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Error tracking is temporarily unavailable. Please try again.",
+            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except Exception as exc:
         _log.exception("error_tracking.list_forwarders_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while processing your request.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
 
     items: list[ForwarderListItem] = []
@@ -176,11 +184,11 @@ async def configure_forwarder(
     forwarder_type: str,
     req: ForwarderConfigUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("error_forwarder.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ERROR_FORWARDER_MANAGE),
 ) -> ForwarderConfigResponse:
     org_id = principal.organisation_id
     if org_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organisation")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_NO_ORGANISATION)
 
     if forwarder_type not in _FORWARDER_TYPES:
         raise HTTPException(
@@ -239,20 +247,20 @@ async def configure_forwarder(
         _log.exception("error_forwarder_config.configure_forwarder")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Error tracking is not available. Run database migrations to enable it.",
+            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("error_forwarder_config.configure_forwarder")
         _log.warning("error_tracking.configure_forwarder_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Error tracking is temporarily unavailable. Please try again.",
+            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except Exception as exc:
         _log.exception("error_tracking.configure_forwarder_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while processing your request.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
 
     return ForwarderConfigResponse.from_orm_model(cfg)
@@ -271,7 +279,7 @@ async def test_forwarder(
 ) -> ForwarderTestResult:
     org_id = principal.organisation_id
     if org_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organisation")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_NO_ORGANISATION)
 
     if forwarder_type not in _FORWARDER_TYPES:
         raise HTTPException(
@@ -299,23 +307,23 @@ async def test_forwarder(
                 if db_cfg and db_cfg.config_json:
                     config = {**db_cfg.config_json, **config}
         except ProgrammingError as exc:
-            _log.exception("error_forwarder_config.test_forwarder")
+            _log.exception(_CODE_ERROR_FORWARDER_CONFIG_TEST)
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                detail="Error tracking is not available. Run database migrations to enable it.",
+                detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
             ) from exc
         except SQLAlchemyError as exc:
-            _log.exception("error_forwarder_config.test_forwarder")
+            _log.exception(_CODE_ERROR_FORWARDER_CONFIG_TEST)
             _log.warning("error_tracking.test_forwarder_db_error")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Error tracking is temporarily unavailable. Please try again.",
+                detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
             ) from exc
         except Exception as exc:
             _log.exception("error_tracking.test_forwarder_config_read_error")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="An unexpected error occurred while processing your request.",
+                detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
             ) from exc
 
     test_group = ErrorGroup(
@@ -358,23 +366,23 @@ async def test_forwarder(
                 db_cfg.last_test_ok = ok
                 await session.flush()
     except ProgrammingError as exc:
-        _log.exception("error_forwarder_config.test_forwarder")
+        _log.exception(_CODE_ERROR_FORWARDER_CONFIG_TEST)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Error tracking is not available. Run database migrations to enable it.",
+            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        _log.exception("error_forwarder_config.test_forwarder")
+        _log.exception(_CODE_ERROR_FORWARDER_CONFIG_TEST)
         _log.warning("error_tracking.test_forwarder_save_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Error tracking is temporarily unavailable. Please try again.",
+            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except Exception as exc:
         _log.exception("error_tracking.test_forwarder_save_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while processing your request.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
 
     name = _FORWARDER_DISPLAY_NAMES.get(forwarder_type, forwarder_type)
@@ -391,11 +399,11 @@ async def test_forwarder(
 async def delete_forwarder(
     forwarder_type: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("error_forwarder.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ERROR_FORWARDER_MANAGE),
 ) -> None:
     org_id = principal.organisation_id
     if org_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organisation")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_NO_ORGANISATION)
 
     if forwarder_type not in _FORWARDER_TYPES:
         raise HTTPException(
@@ -421,20 +429,20 @@ async def delete_forwarder(
         _log.exception("error_forwarder_config.delete_forwarder")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Error tracking is not available. Run database migrations to enable it.",
+            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("error_forwarder_config.delete_forwarder")
         _log.warning("error_tracking.delete_forwarder_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Error tracking is temporarily unavailable. Please try again.",
+            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except Exception as exc:
         _log.exception("error_tracking.delete_forwarder_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while processing your request.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Forwarder configuration not found")
@@ -448,11 +456,11 @@ async def delete_forwarder(
 async def restore_forwarder(
     forwarder_type: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("error_forwarder.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ERROR_FORWARDER_MANAGE),
 ) -> ForwarderConfigResponse:
     org_id = principal.organisation_id
     if org_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organisation")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_NO_ORGANISATION)
 
     if forwarder_type not in _FORWARDER_TYPES:
         raise HTTPException(
@@ -478,20 +486,20 @@ async def restore_forwarder(
         _log.exception("error_forwarder_config.restore_forwarder")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Error tracking is not available. Run database migrations to enable it.",
+            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("error_forwarder_config.restore_forwarder")
         _log.warning("error_tracking.restore_forwarder_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Error tracking is temporarily unavailable. Please try again.",
+            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except Exception as exc:
         _log.exception("error_tracking.restore_forwarder_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while processing your request.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
     if cfg is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Forwarder configuration not found")

@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_RESOURCE_ALREADY_EXISTS
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_in_dev_operator, require_permission
 from modulo.api.models.team_visibility import TeamVisibilityMixin
@@ -75,6 +76,14 @@ from modulo.db.crud.rating import (
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.team import Team
 from modulo.db.rls import set_rls_org, set_rls_user_context
+
+_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE = (
+    "The library feature is temporarily unavailable due to a database issue. Please retry."
+)
+_CODE_LIBRARY_MANAGE = "library.manage"
+_CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE = "library.create_pipeline_from_template_endpoint"
+_MSG_ORGANISATION_ID_REQUIRED = "Organisation ID required"
+
 
 _MAX_UPLOAD_SIZE: int = 50 * 1024 * 1024  # 50 MB
 
@@ -325,13 +334,13 @@ async def list_library_primitives_endpoint(
             )
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                detail="Feature is not available. Run database migrations to enable it.",
+                detail=MSG_FEATURE_NOT_AVAILABLE,
             ) from None
         except SQLAlchemyError:
             _log.exception("list_library_primitives_endpoint: SQLAlchemyError — transient DB failure")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
+                detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
             ) from None
         try:
             items = [LibraryPrimitiveResponse.model_validate(p) for p in result.items]
@@ -394,19 +403,19 @@ async def get_library_primitive_endpoint(
         _log.exception("library.get_library_primitive_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         _log.exception("library.get_library_primitive_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("get_library_primitive_endpoint: SQLAlchemyError")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
+            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
         ) from None
     if primitive is None:
         raise HTTPException(
@@ -426,7 +435,7 @@ async def get_library_primitive_endpoint(
 async def create_library_primitive_endpoint(
     req: LibraryPrimitiveCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("library.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
 ) -> LibraryPrimitiveResponse:
     try:
         async with session.begin():
@@ -479,13 +488,13 @@ async def create_library_primitive_endpoint(
         _log.exception("library.create_library_primitive_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("create_library_primitive_endpoint: SQLAlchemyError")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
+            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
         ) from None
     return LibraryPrimitiveResponse.model_validate(prim)
 
@@ -496,7 +505,7 @@ async def update_library_primitive_endpoint(
     primitive_id: uuid.UUID,
     req: LibraryPrimitiveUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("library.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
 ) -> LibraryPrimitiveResponse:
     updates = req.model_dump(exclude_unset=True)
     try:
@@ -508,19 +517,19 @@ async def update_library_primitive_endpoint(
         _log.exception("library.update_library_primitive_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         _log.exception("library.update_library_primitive_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("update_library_primitive_endpoint: SQLAlchemyError")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
+            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
         ) from None
     if prim is None:
         raise HTTPException(
@@ -535,7 +544,7 @@ async def update_library_primitive_endpoint(
 async def delete_library_primitive_endpoint(
     primitive_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("library.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
 ) -> LibraryPrimitiveResponse:
     try:
         async with session.begin():
@@ -546,19 +555,19 @@ async def delete_library_primitive_endpoint(
         _log.exception("library.delete_library_primitive_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         _log.exception("library.delete_library_primitive_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("delete_library_primitive_endpoint: SQLAlchemyError")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
+            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
         ) from None
     if prim is None:
         raise HTTPException(
@@ -573,7 +582,7 @@ async def delete_library_primitive_endpoint(
 async def restore_library_primitive_endpoint(
     primitive_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("library.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
 ) -> LibraryPrimitiveResponse:
     try:
         async with session.begin():
@@ -584,13 +593,13 @@ async def restore_library_primitive_endpoint(
         _log.exception("library.restore_library_primitive_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("restore_library_primitive_endpoint: SQLAlchemyError")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
+            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
         ) from None
     if prim is None:
         raise HTTPException(
@@ -637,19 +646,19 @@ async def copy_to_adapt_endpoint(
         _log.exception("library.copy_to_adapt_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         _log.exception("library.copy_to_adapt_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("copy_to_adapt_endpoint: SQLAlchemyError")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
+            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
         ) from None
     return LibraryPrimitiveResponse.model_validate(result)
 
@@ -665,7 +674,7 @@ async def export_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     format: str = Query("v1", pattern="^(v1|v2)$"),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("library.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
 ) -> Response:
     try:
         async with session.begin():
@@ -685,19 +694,19 @@ async def export_pipeline_endpoint(
         _log.exception("library.export_pipeline_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         _log.exception("library.export_pipeline_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("export_pipeline_endpoint: SQLAlchemyError")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
+            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
         ) from None
     safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in pipeline.name)
     if format == "v2":
@@ -839,13 +848,13 @@ async def _analyse_bundle(
         _log.exception("library._analyse_bundle")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         _log.warning("_analyse_bundle: ProgrammingError — missing DB table or migration", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.warning("_analyse_bundle: SQLAlchemyError — database connection failure", exc_info=True)
@@ -873,7 +882,7 @@ async def _analyse_bundle(
 async def upload_zip_and_analyse_endpoint(
     file: UploadFile = File(...),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("library.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
 ) -> ImportBundleResponse:
     """Upload a .modulo.zip file, extract bundle.json, and return analysis.
 
@@ -912,7 +921,7 @@ async def upload_zip_and_analyse_endpoint(
 async def analyse_import_bundle_endpoint(
     req: AnalyseBundleRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("library.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
 ) -> ImportBundleResponse:
     """Analyse a bundle JSON and return resolution warnings + available teams.
 
@@ -932,7 +941,7 @@ async def analyse_import_bundle_endpoint(
 async def confirm_import_endpoint(
     req: ImportConfirmRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("library.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
 ) -> dict[str, Any]:
     """Confirm and execute the import.
 
@@ -968,13 +977,13 @@ async def confirm_import_endpoint(
         _log.exception("library.confirm_import_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         _log.warning("confirm_import_endpoint: ProgrammingError — missing DB table or migration", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.warning("confirm_import_endpoint: SQLAlchemyError — database connection failure", exc_info=True)
@@ -1018,19 +1027,19 @@ async def list_ratings_endpoint(
         _log.exception("library.list_ratings_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         _log.exception("library.list_ratings_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("list_ratings_endpoint: SQLAlchemyError")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
+            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
         ) from None
     return RatingListResponse(
         items=[RatingResponse.model_validate(r) for r in result.items],
@@ -1054,19 +1063,19 @@ async def get_rating_aggregate_endpoint(
         _log.exception("library.get_rating_aggregate_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         _log.exception("library.get_rating_aggregate_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("get_rating_aggregate_endpoint: SQLAlchemyError")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
+            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
         ) from None
     return RatingAggregateResponse(
         average_rating=float(avg) if avg is not None else None,
@@ -1111,19 +1120,19 @@ async def submit_rating_endpoint(
         _log.exception("library.submit_rating_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from e
     except ProgrammingError:
         _log.exception("library.submit_rating_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("submit_rating_endpoint: SQLAlchemyError")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
+            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
         ) from None
     return RatingResponse.model_validate(rating)
 
@@ -1156,19 +1165,19 @@ async def submit_abuse_report_endpoint(
         _log.exception("library.submit_abuse_report_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         _log.exception("library.submit_abuse_report_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("submit_abuse_report_endpoint: SQLAlchemyError")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
+            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
         ) from None
     return AbuseReportResponse.model_validate(report)
 
@@ -1253,7 +1262,7 @@ def _build_pipeline_from_template(
     response_model=PipelineFromTemplateResponse,
     status_code=status.HTTP_201_CREATED,
 )
-@handle_db_errors("library.create_pipeline_from_template_endpoint")
+@handle_db_errors(_CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE)
 async def create_pipeline_from_template_endpoint(
     primitive_id: uuid.UUID,
     req: CreatePipelineFromTemplateRequest,
@@ -1263,16 +1272,16 @@ async def create_pipeline_from_template_endpoint(
     try:
         primitive = await get_primitive(session, principal.organisation_id, primitive_id)
     except IntegrityError:
-        _log.exception("library.create_pipeline_from_template_endpoint")
+        _log.exception(_CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("library.create_pipeline_from_template_endpoint")
+        _log.exception(_CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     if primitive is None:
         raise HTTPException(
@@ -1319,16 +1328,16 @@ async def create_pipeline_from_template_endpoint(
                 )
             await session.flush()
     except IntegrityError:
-        _log.exception("library.create_pipeline_from_template_endpoint")
+        _log.exception(_CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("library.create_pipeline_from_template_endpoint")
+        _log.exception(_CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
 
     return PipelineFromTemplateResponse(
@@ -1393,19 +1402,19 @@ async def create_lifecycle_map_from_primitive_endpoint(
         _log.exception("library.create_lifecycle_map_from_primitive_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         _log.exception("library.create_lifecycle_map_from_primitive_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("create_lifecycle_map_from_primitive_endpoint: SQLAlchemyError")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
+            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
         ) from None
     return LifecycleMapResponse.model_validate(lifecycle_map)
 
@@ -1444,7 +1453,7 @@ async def community_contribute_endpoint(
 ) -> LibraryPrimitiveResponse:
     """Submit a community library contribution."""
     try:
-        assert principal.organisation_id is not None, "Organisation ID required"
+        assert principal.organisation_id is not None, _MSG_ORGANISATION_ID_REQUIRED
         result = await contribute_primitive(
             session,
             org_id=principal.organisation_id,
@@ -1461,19 +1470,19 @@ async def community_contribute_endpoint(
         _log.exception("library.community_contribute_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         _log.exception("library.community_contribute_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("community_contribute_endpoint: SQLAlchemyError")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
+            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
         ) from None
     return LibraryPrimitiveResponse.model_validate(result)
 
@@ -1489,7 +1498,7 @@ async def list_community_contributions_endpoint(
 ) -> CommunityContributionListResponse:
     """List the org's own community contributions, optionally filtered by status."""
     try:
-        assert principal.organisation_id is not None, "Organisation ID required"
+        assert principal.organisation_id is not None, _MSG_ORGANISATION_ID_REQUIRED
         try:
             result = await list_org_contributions(
                 session,
@@ -1502,7 +1511,7 @@ async def list_community_contributions_endpoint(
             _log.exception("library.list_community_contributions_endpoint")
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="A resource with this value already exists",
+                detail=MSG_RESOURCE_ALREADY_EXISTS,
             ) from None
         except ProgrammingError:
             _log.exception("library.list_community_contributions_endpoint")
@@ -1512,7 +1521,7 @@ async def list_community_contributions_endpoint(
             )
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                detail="Feature is not available. Run database migrations to enable it.",
+                detail=MSG_FEATURE_NOT_AVAILABLE,
             ) from None
         items = [LibraryPrimitiveResponse.model_validate(p) for p in result.items]
     except HTTPException:
@@ -1545,7 +1554,7 @@ async def admin_publish_contribution_endpoint(
 ) -> LibraryPrimitiveResponse:
     """Publish a community contribution to the community library (admin only)."""
     try:
-        assert principal.organisation_id is not None, "Organisation ID required"
+        assert principal.organisation_id is not None, _MSG_ORGANISATION_ID_REQUIRED
         result = await publish_contribution(
             session,
             principal.organisation_id,
@@ -1565,18 +1574,18 @@ async def admin_publish_contribution_endpoint(
         _log.exception("library.admin_publish_contribution_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         _log.exception("library.admin_publish_contribution_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("admin_publish_contribution_endpoint: SQLAlchemyError")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
+            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
         ) from None
     return LibraryPrimitiveResponse.model_validate(result)
