@@ -14,6 +14,9 @@ unit-tests:
   - backend/tests/unit/core/test_guardrails_contract.py
   - backend/tests/unit/db/test_guardrails_interception.py
   - backend/tests/unit/test_guardrail_config.py
+bdd:
+  - backend/tests/bdd/features/evals/guardrails.feature
+  - backend/tests/bdd/features/evals/guardrail_config.feature
 depends-on: [feat-evals-eval-engine]
 status: partial
 ---
@@ -65,11 +68,12 @@ Boundary enforcement for agent safety: the same eval primitives as §8.17 extend
 
 ## Known Gaps
 
-- [ ] No BDD feature files cover the guardrails engine or config-as-code workflow (unit + integration coverage only)
+- [x] **RESOLVED** (2026-08-16): No BDD feature files cover the guardrails engine or config-as-code workflow. New `evals/guardrails.feature` (10 scenarios) covers the T1 detection engine — block raises `GuardrailBlockedError` on regex violation / passes clean payloads, warn never raises, redaction masks with the fixed token without mutating the source payload, non-raising interception reports the block, generic-engine misrouting raises `GuardrailMisroutedError`, forbidden `retry` failure behaviour raises `GuardrailConfigError`, and conformance derivation present/absent. New `evals/guardrail_config.feature` (11 scenarios) covers the T3 config-as-code workflow through the real `/api/v1/guardrails/config` route handlers — propose validates + hashes + diffs (add/update), malformed YAML and rule violations → 422, apply/reject with no pending proposal → 409, apply reconciles rows + reports clean, reject discards, drift reports clean/drift, and viewer propose → 403. Step files: `tests/bdd/steps/test_guardrails_steps.py` + `test_guardrail_config_steps.py`.
 - [ ] Config-as-code has no frontend management UI (planned in PRD §8.17)
 - [ ] Conformance enforcement wiring at dispatch time (three-state derivation shipped as a pure helper) and the kill-switch rollout flag remain planned
 - [ ] `guardrail_summary` telemetry on run detail and canary guardrails remain planned
 
 ## QA History
 
+- 2026-08-16: Added BDD coverage for the guardrails subsystem (`evals/guardrails.feature` + `evals/guardrail_config.feature`, 21 scenarios across both step files) — resolves the "No BDD feature files cover the guardrails engine or config-as-code workflow" known gap. The engine feature drives the pure `modulo.core.guardrails` functions directly (raising `evaluate_guardrails`, non-raising `run_interception_pass`, `apply_redaction_masks`, `derive_conformance_state`, misrouting/retry guards); the workflow feature drives the real route handlers with DB seams double-stubbed (`get_guardrail_pin`/`set_guardrail_pin` CRUD, `_load_guardrail_definitions`, `_reconcile_guardrail_rows`). Verification: 20/20 new BDD scenarios pass, 88 guardrails unit + contract + interception + config tests pass, `check-bdd-coverage.py` no longer lists either feature file, ruff check + format clean, mypy --strict clean. Status: partial (frontend management UI, dispatch-time conformance enforcement, `guardrail_summary` telemetry, canary guardrails remain).
 - 2026-08-15: Added product map entry for the guardrails subsystem (T1 engine + T3 config-as-code) — resolves the orphaned `guardrail_config.py` route module in the route→map orphan check. Wired the config-as-code code paths, unit tests, and integration test into the entry's frontmatter.
