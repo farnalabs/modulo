@@ -30,7 +30,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.trigger_engine import TriggerEngine
+from modulo.core.trigger_engine import (
+    HmacValidationError,
+    TimestampExpiredError,
+    TriggerEngine,
+    sha256_hex,
+)
 from modulo.core.trigger_engine.pre_guardrail import (
     GuardrailBlockedAtIntakeError,
     canonical_payload_hash,
@@ -642,3 +647,86 @@ async def test_run_pre_trigger_guardrail_pass_zero_definitions_fast_path() -> No
     )
     assert outcome.blocked is False
     assert outcome.payload == {"a": 1}
+
+
+# ---------------------------------------------------------------------------
+# Pre-guardrail failure events keep the RAW-body hash (behaviour 6)
+# ---------------------------------------------------------------------------
+
+
+def _assert_failure_event_keeps_raw_body_hash(session: AsyncMock, expected_vr: str) -> None:
+    """A pre-guardrail failure event describes the RAW delivery, so its
+    ``raw_payload_hash`` must be the raw-body hash — NOT the canonical
+    POST-guardrail payload hash (which is reserved for dedup/run-creation
+    events)."""
+    events = [c[0][0] for c in session.add.call_args_list if getattr(c[0][0], "validation_result", None)]
+    matched = [e for e in events if e.validation_result == expected_vr]
+    assert len(matched) == 1, f"expected exactly one {expected_vr} event, got {len(matched)}"
+    assert matched[0].raw_payload_hash == sha256_hex(_RAW_BODY)
+    assert matched[0].raw_payload_hash != canonical_payload_hash(_RAW_PAYLOAD)
+
+
+async def test_handle_webhook_timestamp_failure_keeps_raw_body_hash() -> None:
+    """timestamp_expired is a PRE-guardrail failure event — the canonical
+    POST-guardrail hash does not exist yet (the pass never ran), so the event
+    records the raw-body hash."""
+    trigger = _make_trigger()
+    session = _make_session(trigger=trigger, guardrail_rows=[])
+
+    with pytest.raises(TimestampExpiredError):
+        await TriggerEngine().handle_webhook(
+            session,
+            trigger_id=trigger.id,
+            org_id=_ORG,
+            raw_body=_RAW_BODY,
+            raw_payload=_RAW_PAYLOAD,
+            hmac_signature=None,
+            modulo_timestamp=str(int(time.time()) - 600),
+            snapshot_id=_SNAP,
+        )
+
+    _assert_failure_event_keeps_raw_body_hash(session, "timestamp_expired")
+
+
+async def test_handle_webhook_hmac_failure_keeps_raw_body_hash() -> None:
+    """hmac_failed is a PRE-guardrail failure event (auth precedes the pass) —
+    records the raw-body hash, not the canonical hash."""
+    trigger = _make_trigger()
+    trigger.config_json = {"hmac_secret": "secret"}
+    session = _make_session(trigger=trigger, guardrail_rows=[])
+
+    with pytest.raises(HmacValidationError):
+        await TriggerEngine().handle_webhook(
+            session,
+            trigger_id=trigger.id,
+            org_id=_ORG,
+            raw_body=_RAW_BODY,
+            raw_payload=_RAW_PAYLOAD,
+            hmac_signature="sha256=bad",
+            modulo_timestamp=str(int(time.time())),
+            snapshot_id=_SNAP,
+        )
+
+    _assert_failure_event_keeps_raw_body_hash(session, "hmac_failed")
+
+
+async def test_handle_webhook_event_filter_failure_keeps_raw_body_hash() -> None:
+    """event_type_not_accepted is a PRE-guardrail failure event (event filters
+    run before the pass) — records the raw-body hash, not the canonical hash."""
+    trigger = _make_trigger()
+    trigger.config_json = {"accepted_events": ["pull_request"]}
+    session = _make_session(trigger=trigger, guardrail_rows=[])
+
+    with pytest.raises(RuntimeError, match="none of the accepted event types"):
+        await TriggerEngine().handle_webhook(
+            session,
+            trigger_id=trigger.id,
+            org_id=_ORG,
+            raw_body=_RAW_BODY,
+            raw_payload=_RAW_PAYLOAD,
+            hmac_signature=None,
+            modulo_timestamp=str(int(time.time())),
+            snapshot_id=_SNAP,
+        )
+
+    _assert_failure_event_keeps_raw_body_hash(session, "event_type_not_accepted")

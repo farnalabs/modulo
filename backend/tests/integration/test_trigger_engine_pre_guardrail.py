@@ -34,6 +34,7 @@ from modulo.core.trigger_engine import DuplicateWebhookError, TriggerEngine
 from modulo.core.trigger_engine.pre_guardrail import (
     GuardrailBlockedAtIntakeError,
     canonical_payload_hash,
+    run_pre_trigger_guardrail_pass,
 )
 from modulo.db.rls import set_rls_org
 
@@ -398,6 +399,158 @@ class TestCanonicalDedupAcrossEncodings:
             intake_rig,
             body=b'{"event": "push", "ref": "refs/heads/dev"}',
             raw_payload={"event": "push", "ref": "refs/heads/dev"},
+        )
+        assert event.validation_result == "accepted"
+        assert run is not None
+
+
+class TestGuardrailRLSScoping:
+    async def test_guardrail_is_org_scoped(
+        self,
+        db_engine: AsyncEngine,
+        test_user: uuid.UUID,
+        intake_rig: dict[str, uuid.UUID | str],
+    ) -> None:
+        """The pre-trigger guardrail lookup is org-scoped: a guardrail bound to
+        a pipeline in ONE org must never fire for a delivery in ANOTHER org —
+        even when that other org's delivery targets the SAME pipeline_id (the
+        RLS row-level filter hides the foreign org's guardrail row).
+
+        This closes the cross-org leak class: without the org scope, org B's
+        pipeline would inherit org A's block policy and reject org B's
+        deliveries. The pass returns the payload unmodified (not blocked)."""
+        other_org = uuid.uuid4()
+        other_account = uuid.uuid4()
+        async with db_engine.connect() as conn, conn.begin():
+            await conn.execute(
+                text(
+                    "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"
+                ),
+                {"id": str(other_org), "name": "FAR-214 Other Org", "slug": f"other-{other_org.hex[:8]}"},
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO accounts (id, email, display_name, password_hash, "
+                    "auth_provider, active) "
+                    "VALUES (:id, :email, :name, 'hash', 'local', true)"
+                ),
+                {"id": str(other_account), "email": f"other-{other_org.hex[:8]}@example.com", "name": "Other User"},
+            )
+
+        # A block guardrail bound to the SHARED pipeline in org A (the rig org).
+        await _seed_guardrail(
+            db_engine,
+            org_id=intake_rig["org_id"],
+            pipeline_id=intake_rig["pipeline_id"],
+            account_id=test_user,
+            name="no-secrets-orgA",
+            action="block",
+        )
+
+        # Org B runs the pass against the SAME pipeline_id through its OWN
+        # session + RLS context — the foreign guardrail must be invisible.
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        async with factory() as session, session.begin():
+            await set_rls_org(session, other_org)
+            outcome = await run_pre_trigger_guardrail_pass(
+                session,
+                org_id=other_org,
+                pipeline_id=intake_rig["pipeline_id"],
+                raw_payload={"body": "leak SECRET_ABC12345"},
+            )
+        assert outcome.blocked is False
+        assert outcome.payload == {"body": "leak SECRET_ABC12345"}
+
+    async def test_guardrail_only_blocks_own_org_deliveries(
+        self,
+        db_engine: AsyncEngine,
+        test_user: uuid.UUID,
+        intake_rig: dict[str, uuid.UUID | str],
+    ) -> None:
+        """End-to-end: the SAME violating payload is blocked for org A's own
+        trigger but accepted for an org B trigger on its own pipeline — the
+        pass never applies another org's guardrail."""
+        await _seed_guardrail(
+            db_engine,
+            org_id=intake_rig["org_id"],
+            pipeline_id=intake_rig["pipeline_id"],
+            account_id=test_user,
+            name="no-secrets",
+            action="block",
+        )
+
+        with pytest.raises(GuardrailBlockedAtIntakeError):
+            await _deliver(
+                db_engine,
+                intake_rig,
+                body=b'{"body": "leak SECRET_ABC12345"}',
+                raw_payload={"body": "leak SECRET_ABC12345"},
+            )
+
+        other_org = uuid.uuid4()
+        other_pipeline = uuid.uuid4()
+        other_snapshot = uuid.uuid4()
+        other_trigger = uuid.uuid4()
+        hmac_secret = "whsec_far214_other"
+        async with db_engine.connect() as conn, conn.begin():
+            await conn.execute(
+                text(
+                    "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"
+                ),
+                {"id": str(other_org), "name": "FAR-214 Org B", "slug": f"orgb-{other_org.hex[:8]}"},
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO pipelines (id, organisation_id, name, account_id, "
+                    "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
+                    "run_context_defaults, graph_nodes_json) "
+                    "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)"
+                ),
+                {
+                    "id": str(other_pipeline),
+                    "oid": str(other_org),
+                    "name": "FAR-214 Org B Pipeline",
+                    "uid": str(test_user),
+                },
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, "
+                    "snapshot_version, graph_json, connector_bindings_json, "
+                    "schema_pins_json, prompt_pins_json, model_backend_pins_json, "
+                    "run_context_defaults, config_json) "
+                    "VALUES (:id, :pid, :oid, 1, '{}'::json, '[]'::json, "
+                    "'[]'::json, '[]'::json, '[]'::json, '{}'::json, '{}'::json)"
+                ),
+                {"id": str(other_snapshot), "pid": str(other_pipeline), "oid": str(other_org)},
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO triggers (id, organisation_id, pipeline_id, "
+                    "trigger_type, active, max_concurrent_runs, config_json, account_id) "
+                    "VALUES (:id, :oid, :pid, 'webhook', true, 5, (:config)::json, :uid)"
+                ),
+                {
+                    "id": str(other_trigger),
+                    "oid": str(other_org),
+                    "pid": str(other_pipeline),
+                    "config": json.dumps({"hmac_secret": hmac_secret}),
+                    "uid": str(test_user),
+                },
+            )
+
+        other_rig = {
+            "org_id": other_org,
+            "pipeline_id": other_pipeline,
+            "snapshot_id": other_snapshot,
+            "trigger_id": other_trigger,
+            "hmac_secret": hmac_secret,
+        }
+        run, event, _ = await _deliver(
+            db_engine,
+            other_rig,
+            body=b'{"body": "leak SECRET_ABC12345"}',
+            raw_payload={"body": "leak SECRET_ABC12345"},
         )
         assert event.validation_result == "accepted"
         assert run is not None

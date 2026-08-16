@@ -3890,7 +3890,8 @@ export interface paths {
          *     NOT exempt — see those handlers.
          *
          *     Returns 202 on success. All validation outcomes are recorded as TriggerEvent rows.
-         *     Returns 400 on duplicate payload, 401 on HMAC failure, 429 on flood rejection.
+         *     Returns 400 on duplicate payload or guardrail-blocked payload, 401 on HMAC
+         *     failure, 429 on flood rejection.
          */
         post: operations["receive_webhook_api_v1_triggers__trigger_id__webhook_post"];
         delete?: never;
