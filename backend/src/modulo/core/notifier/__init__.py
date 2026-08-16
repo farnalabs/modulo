@@ -80,6 +80,7 @@ def endpoint_events_to_list(raw_events: object) -> list[str]:
                 return parsed
     return []
 
+
 # Lazy OTel counter — records the fail-closed owner-read drop so a DB blip that
 # suppresses ALL webhook dispatch for an event is observable (review #657 obs 1).
 _owner_read_failures_total: Any = None
