@@ -267,9 +267,10 @@ def step_scorer_json_schema_criterion(eval_type, ctx):
 def step_scorer_llm_judge_criterion(eval_type, rubric, ctx):
     """LLM judge criterion (eval_scorer.feature).
 
-    Must be registered before the generic ``the criterion uses eval_type
-    "{eval_type}"`` step so its more-specific pattern wins the prefix match
-    for ``... with rubric prompt "..."`` scenarios.
+    pytest-bdd matches the most specific step pattern regardless of
+    registration order, so the rubric-prompt variant wins over the generic
+    ``the criterion uses eval_type "{eval_type}"`` step for ``... with rubric
+    prompt "..."`` scenarios.
     """
     ctx["eval_scorer_type"] = eval_type
     ctx["eval_config"] = {"rubric_prompt": rubric}
@@ -409,9 +410,10 @@ def step_eval_def_exists(name, request, ctx):
 )
 def step_create_eval_def(name, eval_type, request, ctx):
     """Create eval definition — checks auth context for 403."""
-    # Detect viewer role from scenario name
-    scenario_name = request.node.name.lower()
-    if "nonadmin" in scenario_name or "viewer" in scenario_name:
+    # The conftest auth steps flag viewer scenarios on the node; branching on
+    # that real auth state (instead of the scenario title) keeps new scenarios
+    # from accidentally inheriting a spurious 403.
+    if getattr(request.node, "_viewer_auth", False):
         request.node._resp = _eval_resp(403, detail="Only admins can create eval definitions")
         return
 
@@ -455,8 +457,7 @@ def step_create_eval_def(name, eval_type, request, ctx):
 
 @when(parsers.parse('I PUT /api/evals/{eval_id} with a new name "{name}"'))
 def step_update_eval_def(name, request, ctx):
-    scenario_name = request.node.name.lower()
-    if "nonadmin" in scenario_name or "viewer" in scenario_name:
+    if getattr(request.node, "_viewer_auth", False):
         request.node._resp = _eval_resp(403, detail="Only admins can update eval definitions")
         return
     eval_id = ctx.get("eval_def_id", uuid.uuid4())
@@ -465,8 +466,7 @@ def step_update_eval_def(name, request, ctx):
 
 @when(parsers.parse("I DELETE /api/evals/{eval_id}"))
 def step_delete_eval_def(request, ctx):
-    scenario_name = request.node.name.lower()
-    if "nonadmin" in scenario_name or "viewer" in scenario_name:
+    if getattr(request.node, "_viewer_auth", False):
         request.node._resp = _eval_resp(403, detail="Only admins can delete eval definitions")
         return
     request.node._resp = _eval_resp(204)

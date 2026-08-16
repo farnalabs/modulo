@@ -21,11 +21,12 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import jwt as pyjwt
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
+from sqlalchemy.exc import IntegrityError
 
 # ---------------------------------------------------------------------------
 # Register feature files
@@ -215,21 +216,47 @@ def step_hierarchy_strictly_increasing() -> None:
 
 # ===========================================================================
 # auth/rbac.feature — team CRUD, membership, feature gating, deletion
+#
+# These steps drive the real ``/api/v1/teams`` routes (through the
+# authenticated ``client`` / ``viewer_client`` fixtures from conftest.py) with
+# only the DB CRUD functions patched, so the scenarios assert the actual API
+# contract — status codes, response shapes, and the router's own
+# ``require_permission`` / ``require_feature`` gates — rather than a
+# hand-rolled response.  This mirrors how the sibling team step modules
+# (test_team_crud.py, test_team_membership.py) implement the same step text.
 # ===========================================================================
 
 
-def _team_body(name: str, team_id: uuid.UUID) -> dict[str, Any]:
-    return {
-        "id": str(team_id),
-        "name": name,
-        "description": f"{name} description",
-        "organisation_id": str(ORG_ID),
-        "account_id": str(USER_ID),
-    }
+def _active_client(request: Any, client: Any) -> Any:
+    """Return the client matching the active auth Given step.
+
+    The conftest auth steps stash the principal client on
+    ``request.node._client`` (``viewer_client`` for viewer scenarios, the
+    admin ``client`` otherwise), so steps never branch on scenario names.
+    """
+    return getattr(request.node, "_client", client)
 
 
-def _team_id(name: str) -> uuid.UUID:
-    return uuid.uuid5(ORG_ID, f"team:{name}")
+def _make_mock_team(name: str, description: str = "") -> MagicMock:
+    team = MagicMock()
+    team.id = uuid.uuid4()
+    team.organisation_id = ORG_ID
+    team.name = name
+    team.description = description
+    team.account_id = USER_ID
+    team.created_at = datetime(2025, 1, 1, tzinfo=UTC)
+    team.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
+    return team
+
+
+def _make_mock_membership(team_id: uuid.UUID, user_id: uuid.UUID, role: str) -> MagicMock:
+    membership = MagicMock()
+    membership.id = uuid.uuid4()
+    membership.team_id = team_id
+    membership.account_id = user_id
+    membership.role = role
+    membership.created_at = datetime(2025, 1, 1, tzinfo=UTC)
+    return membership
 
 
 @given(parsers.parse('a team "{name}" does not exist'))
@@ -239,17 +266,17 @@ def step_team_does_not_exist(name: str, ctx: dict[str, Any]) -> None:
 
 @given(parsers.parse('a team "{name}" exists'))
 def step_team_exists(name: str, ctx: dict[str, Any]) -> None:
-    ctx.setdefault("teams", {})[name] = {"name": name, "id": _team_id(name)}
+    ctx.setdefault("teams", {})[name] = _make_mock_team(name)
 
 
 @given(parsers.parse('a user "{name}" exists'))
 def step_user_exists(name: str, ctx: dict[str, Any]) -> None:
-    ctx.setdefault("users", {})[name] = {"name": name, "org_role": "admin"}
+    ctx.setdefault("users", {})[name] = {"id": uuid.uuid4(), "org_role": "admin"}
 
 
 @given(parsers.parse('a user "{name}" exists with org role "{role}"'))
 def step_user_exists_with_role(name: str, role: str, ctx: dict[str, Any]) -> None:
-    ctx.setdefault("users", {})[name] = {"name": name, "org_role": role}
+    ctx.setdefault("users", {})[name] = {"id": uuid.uuid4(), "org_role": role}
 
 
 @given(parsers.parse('user "{name}" is already a member of team "{team}"'))
@@ -258,12 +285,20 @@ def step_user_already_member(name: str, team: str, ctx: dict[str, Any]) -> None:
 
 
 @given("the team has no resources")
-def step_team_no_resources(ctx: dict[str, Any]) -> None:
+def step_team_no_resources(request: Any, ctx: dict[str, Any]) -> None:
+    # ``delete_team_endpoint`` counts owned resources via ``execute(...).scalar()``
+    # before deleting; a zero count lets the deletion through.
+    session = request.getfixturevalue("mock_session")
+    session.execute.return_value.scalar = MagicMock(return_value=0)
     ctx["team_has_resources"] = False
 
 
 @given(parsers.parse('a pipeline "{name}" is owned by team "{team}"'))
-def step_pipeline_owned_by_team(name: str, team: str, ctx: dict[str, Any]) -> None:
+def step_pipeline_owned_by_team(name: str, team: str, request: Any, ctx: dict[str, Any]) -> None:
+    # Owned resources block deletion — make the route's resource-count query
+    # report at least one owned pipeline.
+    session = request.getfixturevalue("mock_session")
+    session.execute.return_value.scalar = MagicMock(return_value=1)
     ctx["team_has_resources"] = True
 
 
@@ -273,110 +308,178 @@ def step_no_team_license(ctx: dict[str, Any]) -> None:
 
 
 @when(parsers.re(r'I create a team with name "(?P<name>[^"]*)" and description "(?P<desc>[^"]*)"'))
-def step_create_team(request: Any, name: str, desc: str, ctx: dict[str, Any]) -> None:
-    scenario_name = request.node.name.lower()
-    if "nonadmin" in scenario_name or "viewer" in scenario_name:
-        request.node._resp = _make_key_response(403, detail="Only admins can create teams")
-        return
-    if not name:
-        request.node._resp = _make_key_response(422, detail="Team name must not be empty")
-        return
-    teams = ctx.setdefault("teams", {})
-    if name in teams:
-        request.node._resp = _make_key_response(409, detail="A team with this name already exists")
-        return
-    teams[name] = {"name": name, "id": _team_id(name)}
-    request.node._resp = _make_key_response(201, **_team_body(name, teams[name]["id"]))
+def step_create_team(request: Any, client: Any, name: str, desc: str, ctx: dict[str, Any]) -> None:
+    """POST /api/v1/teams — the route's ``require_permission("team.create")``
+    gate returns 403 for the viewer principal and its ``CreateTeamRequest``
+    validation returns 422 for empty names, so no scenario-name matching is
+    needed here."""
+    existing = ctx.get("teams", {}).get(name)
+    created = _make_mock_team(name, desc)
+    with (
+        patch("modulo.api.routes.teams.get_team_by_name", new_callable=AsyncMock, return_value=existing),
+        patch("modulo.api.routes.teams.create_team", new_callable=AsyncMock, return_value=created),
+    ):
+        resp = _active_client(request, client).post("/api/v1/teams", json={"name": name, "description": desc})
+    _store_response(request, ctx, resp)
 
 
 @when("I list teams")
-def step_list_teams(request: Any, ctx: dict[str, Any]) -> None:
-    teams = ctx.get("teams", {})
-    items = [_team_body(name, data["id"]) for name, data in teams.items()]
-    request.node._resp = _make_key_response(200, items=items, total=len(items), page=1, page_size=20)
+def step_list_teams(request: Any, client: Any, ctx: dict[str, Any]) -> None:
+    teams = list(ctx.get("teams", {}).values())
+    page = SimpleNamespace(items=teams, total=len(teams), page=1, page_size=20)
+    with patch("modulo.api.routes.teams.list_teams", new_callable=AsyncMock, return_value=page):
+        resp = _active_client(request, client).get("/api/v1/teams")
+    _store_response(request, ctx, resp)
 
 
 @when(parsers.parse('I get team "{name}"'))
-def step_get_team(request: Any, name: str, ctx: dict[str, Any]) -> None:
-    teams = ctx.get("teams", {})
-    if name not in teams:
-        request.node._resp = _make_key_response(404, detail="Team not found")
-        return
-    request.node._resp = _make_key_response(200, **_team_body(name, teams[name]["id"]))
+def step_get_team(request: Any, client: Any, name: str, ctx: dict[str, Any]) -> None:
+    team = ctx.get("teams", {}).get(name)
+    team_id = team.id if team is not None else uuid.uuid4()
+    with patch("modulo.api.routes.teams.get_team", new_callable=AsyncMock, return_value=team):
+        resp = _active_client(request, client).get(f"/api/v1/teams/{team_id}")
+    _store_response(request, ctx, resp)
 
 
 @when(parsers.parse('I get team by id "{team_id}"'))
-def step_get_team_by_id(request: Any, team_id: str, ctx: dict[str, Any]) -> None:
-    request.node._resp = _make_key_response(404, detail="Team not found")
+def step_get_team_by_id(request: Any, client: Any, team_id: str, ctx: dict[str, Any]) -> None:
+    with patch("modulo.api.routes.teams.get_team", new_callable=AsyncMock, return_value=None):
+        resp = _active_client(request, client).get(f"/api/v1/teams/{team_id}")
+    _store_response(request, ctx, resp)
 
 
 @when(parsers.parse('I delete team by id "{team_id}"'))
-def step_delete_team_by_id(request: Any, team_id: str, ctx: dict[str, Any]) -> None:
-    request.node._resp = _make_key_response(404, detail="Team not found")
+def step_delete_team_by_id(request: Any, client: Any, team_id: str, ctx: dict[str, Any]) -> None:
+    with patch("modulo.api.routes.teams.delete_team", new_callable=AsyncMock, return_value=False):
+        resp = _active_client(request, client).delete(f"/api/v1/teams/{team_id}")
+    _store_response(request, ctx, resp)
 
 
 @when(parsers.parse('I rename team "{name}" to "{new_name}"'))
-def step_rename_team(request: Any, name: str, new_name: str, ctx: dict[str, Any]) -> None:
-    teams = ctx.setdefault("teams", {})
-    if name not in teams:
-        request.node._resp = _make_key_response(404, detail="Team not found")
-        return
-    if new_name in teams:
-        request.node._resp = _make_key_response(409, detail="A team with this name already exists")
-        return
-    data = teams.pop(name)
-    data["name"] = new_name
-    teams[new_name] = data
-    request.node._resp = _make_key_response(200, **_team_body(new_name, data["id"]))
+def step_rename_team(request: Any, client: Any, name: str, new_name: str, ctx: dict[str, Any]) -> None:
+    team = ctx.get("teams", {}).get(name, _make_mock_team(name))
+    conflict = ctx.get("teams", {}).get(new_name)
+    if conflict is not None and conflict.id != team.id:
+        with patch("modulo.api.routes.teams.get_team_by_name", new_callable=AsyncMock, return_value=conflict):
+            resp = _active_client(request, client).patch(f"/api/v1/teams/{team.id}", json={"name": new_name})
+    else:
+        updated = _make_mock_team(new_name)
+        updated.id = team.id
+        with (
+            patch("modulo.api.routes.teams.get_team_by_name", new_callable=AsyncMock, return_value=None),
+            patch("modulo.api.routes.teams.update_team", new_callable=AsyncMock, return_value=updated),
+        ):
+            resp = _active_client(request, client).patch(f"/api/v1/teams/{team.id}", json={"name": new_name})
+    _store_response(request, ctx, resp)
 
 
 @when(parsers.parse('I delete the team "{name}"'))
-def step_delete_team(request: Any, name: str, ctx: dict[str, Any]) -> None:
-    teams = ctx.get("teams", {})
-    if name not in teams:
-        request.node._resp = _make_key_response(404, detail="Team not found")
-        return
-    if ctx.get("team_has_resources"):
-        request.node._resp = _make_key_response(409, detail="The team still has resources and cannot be deleted")
-        return
-    teams.pop(name, None)
-    request.node._resp = _make_key_response(204)
+def step_delete_team(request: Any, client: Any, name: str, ctx: dict[str, Any]) -> None:
+    team = ctx.get("teams", {}).get(name, _make_mock_team(name))
+    with patch("modulo.api.routes.teams.delete_team", new_callable=AsyncMock, return_value=True):
+        resp = _active_client(request, client).delete(f"/api/v1/teams/{team.id}")
+    _store_response(request, ctx, resp)
 
 
 @when(parsers.parse('I add user "{name}" to team "{team}" with role "{role}"'))
-def step_add_user_to_team(request: Any, name: str, team: str, role: str, ctx: dict[str, Any]) -> None:
-    from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
-
+def step_add_user_to_team(request: Any, client: Any, name: str, team: str, role: str, ctx: dict[str, Any]) -> None:
     teams = ctx.get("teams", {})
-    if team not in teams:
-        request.node._resp = _make_key_response(404, detail="Team not found")
+    team_mock = teams.get(team)
+    user = ctx.get("users", {}).get(name, {})
+    user_id = user.get("id", uuid.uuid4())
+
+    if team_mock is None:
+        with (
+            patch("modulo.api.routes.teams.get_team", new_callable=AsyncMock, return_value=None),
+            patch("modulo.api.routes.teams.add_team_member", new_callable=AsyncMock),
+        ):
+            resp = _active_client(request, client).post(
+                f"/api/v1/teams/{uuid.uuid4()}/members",
+                json={"user_id": str(user_id), "role": role},
+            )
+        _store_response(request, ctx, resp)
         return
-    user = ctx.get("users", {}).get(name, {"org_role": "admin"})
-    if ORG_ROLE_HIERARCHY.get(user.get("org_role", "viewer"), 0) < ORG_ROLE_HIERARCHY.get(role, 0):
-        request.node._resp = _make_key_response(422, detail="User org role does not permit the requested team role")
-        return
-    members = ctx.setdefault("members", {})
-    if name in members.setdefault(team, set()):
-        request.node._resp = _make_key_response(409, detail="User is already a member of this team")
-        return
-    members[team].add(name)
-    request.node._resp = _make_key_response(201, team_id=str(teams[team]["id"]), user=name, role=role)
+
+    already_member = name in ctx.setdefault("members", {}).get(team, set())
+    target_membership = MagicMock()
+    target_membership.role = user.get("org_role", "admin")
+    account = MagicMock()
+    account.id = user_id
+    membership = _make_mock_membership(team_mock.id, user_id, role)
+    duplicate_error = {"side_effect": IntegrityError("stmt", {}, Exception("duplicate member"))}
+    membership_value = {"return_value": membership}
+    with (
+        patch("modulo.api.routes.teams.get_team", new_callable=AsyncMock, return_value=team_mock),
+        patch("modulo.db.crud.account.get_account_by_id", new_callable=AsyncMock, return_value=account),
+        patch(
+            "modulo.db.crud.org_membership.get_membership_by_account_and_org",
+            new_callable=AsyncMock,
+            return_value=target_membership,
+        ),
+        patch(
+            "modulo.api.routes.teams.add_team_member",
+            new_callable=AsyncMock,
+            **(duplicate_error if already_member else membership_value),
+        ),
+    ):
+        resp = _active_client(request, client).post(
+            f"/api/v1/teams/{team_mock.id}/members",
+            json={"user_id": str(user_id), "role": role},
+        )
+    _store_response(request, ctx, resp)
 
 
 @when(parsers.parse('I remove user "{name}" from team "{team}"'))
-def step_remove_user_from_team(request: Any, name: str, team: str, ctx: dict[str, Any]) -> None:
-    teams = ctx.get("teams", {})
-    if team not in teams:
-        request.node._resp = _make_key_response(404, detail="Team not found")
+def step_remove_user_from_team(request: Any, client: Any, name: str, team: str, ctx: dict[str, Any]) -> None:
+    team_mock = ctx.get("teams", {}).get(team)
+    user = ctx.get("users", {}).get(name, {})
+    user_id = user.get("id", uuid.uuid4())
+    if team_mock is None:
+        with (
+            patch("modulo.api.routes.teams.get_membership", new_callable=AsyncMock, return_value=None),
+            patch("modulo.api.routes.teams.remove_team_member", new_callable=AsyncMock),
+        ):
+            resp = _active_client(request, client).delete(f"/api/v1/teams/{uuid.uuid4()}/members/{uuid.uuid4()}")
+        _store_response(request, ctx, resp)
         return
-    members = ctx.setdefault("members", {})
-    members.setdefault(team, set()).discard(name)
-    request.node._resp = _make_key_response(200, team_id=str(teams[team]["id"]), user=name)
+    membership = _make_mock_membership(team_mock.id, user_id, "viewer")
+    with (
+        patch("modulo.api.routes.teams.get_membership", new_callable=AsyncMock, return_value=membership),
+        patch("modulo.api.routes.teams.remove_team_member", new_callable=AsyncMock),
+    ):
+        resp = _active_client(request, client).delete(f"/api/v1/teams/{team_mock.id}/members/{membership.id}")
+    _store_response(request, ctx, resp)
 
 
 @when("I GET /api/v1/teams")
-def step_get_teams_gated(request: Any, ctx: dict[str, Any]) -> None:
-    request.node._resp = _make_key_response(402, detail="team_rbac requires a Team license")
+def step_get_teams_gated(request: Any, client: Any, ctx: dict[str, Any]) -> None:
+    """GET /api/v1/teams under a plan without ``team_rbac`` — the router-level
+    ``require_feature("team_rbac")`` gate returns a real 402."""
+
+    class _NoTeamRbacPlan:
+        def feature_enabled(self, name: str) -> bool:
+            return name != "team_rbac"
+
+        def list_enabled_features(self) -> list:
+            return []
+
+        def tier(self) -> str:
+            return "community"
+
+        def has_license_key(self) -> bool:
+            return False
+
+    from modulo.api.dependencies import get_plan_context
+    from modulo.api.main import app
+
+    previous = dict(app.dependency_overrides)
+    app.dependency_overrides[get_plan_context] = lambda: _NoTeamRbacPlan()
+    try:
+        resp = client.get("/api/v1/teams")
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(previous)
+    _store_response(request, ctx, resp)
 
 
 @then(parsers.parse('the response contains a team with name "{name}"'))
@@ -401,13 +504,6 @@ def step_response_contains_team_list(request: Any) -> None:
     body = request.node._resp.json()
     assert "items" in body, f"Response missing items list: {body}"
     assert isinstance(body["items"], list)
-
-
-@then("the error indicates user is already a member")
-def step_error_user_already_member(request: Any) -> None:
-    body = request.node._resp.json()
-    detail = body.get("detail", "")
-    assert "already a member" in detail, f"Expected an already-a-member error, got {detail!r}"
 
 
 @then(parsers.parse('the error detail mentions "{text}"'))
@@ -470,8 +566,7 @@ def step_create_api_key(
     ctx: dict[str, Any],
 ) -> None:
     """Create an API key via business logic."""
-    scenario_name = request.node.name.lower()
-    if "nonadmin" in scenario_name or "viewer" in scenario_name:
+    if getattr(request.node, "_viewer_auth", False):
         request.node._resp = _make_key_response(403, detail="Only admin users can perform this action")
         return
 
