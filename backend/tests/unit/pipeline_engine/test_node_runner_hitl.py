@@ -1128,4 +1128,4 @@ async def test_eval_before_interrupt_skips_persist_without_run_id(monkeypatch: p
             }
         )
 
-    assert session.added == []
+    assert not session.added
