@@ -5,6 +5,7 @@ never exposed in any response — only a boolean `has_credentials` field.
 """
 
 import asyncio
+import json
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -23,6 +24,7 @@ from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.model_backend_hub import _build_backend
 from modulo.core.plugin_registry import get_plugin_registry
+from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.model_backend import (
     create_model_backend,
     delete_model_backend,
@@ -41,6 +43,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/model-backends", tags=["model-backends"])
 
+HealthCheckStatus = Literal["ok", "unhealthy", "not_applicable"]
+
 
 def _encrypt(api_key: str, fernet_key: str) -> bytes:
     return Fernet(fernet_key.encode()).encrypt(api_key.encode())
@@ -51,7 +55,7 @@ async def _run_health_check_on_save(
     model_id: str,
     api_key: str | None,
     default_params: dict[str, Any],
-) -> tuple[bool, str | None]:
+) -> tuple[HealthCheckStatus, str | None]:
     """Best-effort test-inference health check run on save (PRD §8.1 ``health_check``).
 
     Builds the configured backend and runs its health check — a ``GET /models``
@@ -61,27 +65,100 @@ async def _run_health_check_on_save(
     ``last_health_check_error`` columns, which the graph validator surfaces as
     ``MODEL_BACKEND_UNHEALTHY`` at save/run time.
 
+    Returns ``(status, detail)`` where *detail* is ``None`` on success:
+
+    * ``"ok"`` — the provider responded; the credentials are valid.
+    * ``"unhealthy"`` — the provider responded with a failure (auth, quota,
+      network, timeout); *detail* carries the provider error.
+    * ``"not_applicable"`` — the provider cannot be built from the API-supplied
+      credentials alone (e.g. Bedrock needs aws keys, vertexai needs ``project``,
+      watsonx needs ``project_id``, azure_openai needs ``azure_endpoint``). This
+      is a configuration limitation, NOT a health failure — the caller must not
+      record an error, or the graph validator would hard-block every run.
+
     Never raises and never blocks the create/update: the check is best-effort
     (a transient provider outage must not prevent configuring a backend).
-    Returns ``(ok, detail)`` where *detail* is ``None`` on success.
     """
     try:
         creds: dict[str, Any] = {"api_key": api_key} if api_key else {}
         backend = _build_backend(provider, model_id, creds, default_params)
-    except Exception as exc:
-        # The API-supplied credentials cannot construct the provider backend
-        # (e.g. Bedrock needs aws keys the REST API does not accept) — surface
-        # the construction failure as the health result.
-        return False, str(exc)
+    except Exception:
+        # Provider cannot be constructed from API-supplied credentials — not a
+        # health failure. Never persisted as last_health_check_error (the graph
+        # validator would surface it as MODEL_BACKEND_UNHEALTHY on every run).
+        return "not_applicable", None
     try:
         result = await asyncio.wait_for(backend.health_check(), timeout=HEALTH_CHECK_TIMEOUT)
         if result.ok:
-            return True, None
-        return False, result.detail
+            return "ok", None
+        return "unhealthy", result.detail
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        return False, str(exc)[:500]
+        return "unhealthy", str(exc)[:500]
+
+
+async def _persist_health_check_result(
+    session: AsyncSession,
+    backend_id: uuid.UUID,
+    status_: HealthCheckStatus,
+    detail: str | None,
+    *,
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    org_role: str,
+) -> None:
+    """Persist a health-check result on the entity in a short transaction.
+
+    Called AFTER the request's write transaction has committed, so the provider
+    network call that produced the result never held the DB connection or a row
+    lock (the check runs with ``HEALTH_CHECK_TIMEOUT`` seconds of budget).
+    ``not_applicable`` records no error (and clears any stale one) — a provider
+    the API cannot construct must never block runs as ``MODEL_BACKEND_UNHEALTHY``.
+    """
+    checked_at = datetime.now(UTC)
+    async with session.begin():
+        await set_rls_org(session, org_id)
+        await set_rls_user_context(session, user_id, org_role)
+        row = await session.get(ModelBackend, backend_id)
+        if row is None:
+            return
+        row.last_health_check_at = checked_at
+        row.last_health_check_error = None if status_ != "unhealthy" else detail
+
+
+async def _run_health_check_on_save_and_persist(
+    session: AsyncSession,
+    backend: ModelBackend,
+    provider: str,
+    model_id: str,
+    api_key: str | None,
+    default_params: dict[str, Any],
+    *,
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    org_role: str,
+) -> tuple[HealthCheckStatus, str | None]:
+    """Run the save-time health check outside the write transaction and persist it.
+
+    Best-effort end to end: the entity write has already committed before this
+    runs, so a check or persistence failure must not fail the request — the
+    result is logged, not propagated.
+    """
+    status_, detail = await _run_health_check_on_save(provider, model_id, api_key, default_params)
+    try:
+        await _persist_health_check_result(
+            session,
+            backend.id,
+            status_,
+            detail,
+            org_id=org_id,
+            user_id=user_id,
+            org_role=org_role,
+        )
+    except Exception:
+        logger.exception("Failed to persist health check result for model backend %s", backend.id)
+    return status_, detail
 
 
 class ModelBackendCreate(TeamVisibilityMixin):
@@ -134,6 +211,12 @@ class ModelBackendListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class ModelBackendHealthCheckResponse(BaseModel):
+    status: Literal["healthy", "unhealthy", "not_applicable"]
+    detail: str | None = None
+    checked_at: datetime | None = None
 
 
 def _to_response(mb: Any) -> ModelBackendResponse:
@@ -388,24 +471,25 @@ async def create_model_backend_endpoint(
                 tier=req.tier,
             )
 
-            import json
-
-            from modulo.core.secrets_backend import create_secrets_backend
-
             secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
             secret_value = json.dumps({"api_key": req.api_key})
             await secrets_backend.set_secret(str(mb.id), secret_value)
-            if isinstance(mb, ModelBackend):
-                # PRD 8.1: test-inference health check on save. Runs against the
-                # just-submitted credentials and records the result on the entity;
-                # the graph validator surfaces it as MODEL_BACKEND_UNHEALTHY.
-                ok, detail = await _run_health_check_on_save(
-                    req.provider, req.model_id, req.api_key, dict(req.default_params or {})
-                )
-                mb.last_health_check_at = datetime.now(UTC)
-                mb.last_health_check_error = None if ok else detail
-                await session.flush()
             response = _to_response(mb)
+        # The entity write has COMMITTED above. The PRD 8.1 health check runs
+        # OUTSIDE the write transaction so the provider network call (up to
+        # HEALTH_CHECK_TIMEOUT=10s) never holds the DB connection or a row
+        # lock; the result is persisted in a short second transaction.
+        await _run_health_check_on_save_and_persist(
+            session,
+            mb,
+            req.provider,
+            req.model_id,
+            req.api_key,
+            dict(req.default_params or {}),
+            org_id=principal.organisation_id,
+            user_id=principal.account_id,
+            org_role=principal.org_role,
+        )
     except IntegrityError:
         logger.exception("model_backends.create_model_backend_endpoint")
         raise HTTPException(
@@ -508,24 +592,26 @@ async def update_model_backend_endpoint(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
             await session.refresh(mb)
             if req.api_key is not None:
-                import json
-
-                from modulo.core.secrets_backend import create_secrets_backend
-
                 secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
                 secret_value = json.dumps({"api_key": req.api_key})
                 await secrets_backend.set_secret(str(mb.id), secret_value)
-                if isinstance(mb, ModelBackend):
-                    # PRD 8.1: a credential change re-runs the health check with
-                    # the new key (post-rotation validation). Non-blocking: the
-                    # result is recorded, not used to reject the update.
-                    ok, detail = await _run_health_check_on_save(
-                        mb.provider, mb.model_id, req.api_key, dict(mb.default_params or {})
-                    )
-                    mb.last_health_check_at = datetime.now(UTC)
-                    mb.last_health_check_error = None if ok else detail
-                    await session.flush()
             response = _to_response(mb)
+        # The entity write has COMMITTED above. A credential change re-runs the
+        # PRD 8.1 health check OUTSIDE the write transaction (post-rotation
+        # validation) so the provider network call never holds the DB connection
+        # or row lock; the result is persisted in a short second transaction.
+        if req.api_key is not None:
+            await _run_health_check_on_save_and_persist(
+                session,
+                mb,
+                mb.provider,
+                mb.model_id,
+                req.api_key,
+                dict(mb.default_params or {}),
+                org_id=principal.organisation_id,
+                user_id=principal.account_id,
+                org_role=principal.org_role,
+            )
     except IntegrityError:
         logger.exception("model_backends.update_model_backend_endpoint")
         raise HTTPException(
@@ -553,6 +639,76 @@ async def update_model_backend_endpoint(
             detail="An unexpected error occurred while updating model backend.",
         ) from None
     return response
+
+
+@router.post("/{backend_id}/health-check", response_model=ModelBackendHealthCheckResponse)
+@handle_db_errors("model_backends.recheck_model_backend_health_endpoint")
+async def recheck_model_backend_health_endpoint(
+    backend_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("model_backend.update"),
+    settings: Settings = Depends(get_settings),
+) -> ModelBackendHealthCheckResponse:
+    """Re-run the health check on demand and persist the result (PRD §8.1).
+
+    Operators use this to re-validate a backend after a transient save-time
+    outage — the only alternative before this route was PATCHing a new API key,
+    which made a sticky ``last_health_check_error`` un-clearable without rotation.
+    The stored credential is decrypted and re-pinged against the provider; the
+    result is persisted in a short transaction after the read transaction
+    commits, so the network call never holds a DB connection or row lock.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            mb = await get_model_backend(session, backend_id)
+            if mb is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
+        try:
+            api_key = Fernet(settings.fernet_key.encode()).decrypt(mb.credentials_ciphertext).decode()
+        except Exception:
+            logger.warning("Failed to decrypt credentials for model backend %s; health check skipped", backend_id)
+            api_key = None
+        status_, detail = await _run_health_check_on_save_and_persist(
+            session,
+            mb,
+            mb.provider,
+            mb.model_id,
+            api_key,
+            dict(mb.default_params or {}),
+            org_id=principal.organisation_id,
+            user_id=principal.account_id,
+            org_role=principal.org_role,
+        )
+    except IntegrityError:
+        logger.exception("model_backends.recheck_model_backend_health_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        ) from None
+    except ProgrammingError:
+        logger.exception("model_backends.recheck_model_backend_health_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Model backends are not available. Run database migrations to enable this feature.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("model_backends.recheck_model_backend_health_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while re-checking model backend health.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Unexpected error re-checking model backend health")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while re-checking model backend health.",
+        ) from None
+    label = {"ok": "healthy", "unhealthy": "unhealthy", "not_applicable": "not_applicable"}[status_]
+    return ModelBackendHealthCheckResponse(status=label, detail=detail, checked_at=datetime.now(UTC))
 
 
 @router.delete("/{backend_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(deny_break_glass_mint)])

@@ -786,10 +786,9 @@ def _submit_model_backend_save(ctx: dict, *, method: str, body: dict) -> None:
     """POST or PATCH the real /api/v1/model-backends route with a mock session.
 
     ``create_model_backend`` / ``update_model_backend`` are patched to return a
-    real ``ModelBackend`` ORM instance so the route's health-check-on-save block
-    (guarded by ``isinstance(mb, ModelBackend)``) runs; the health check itself
-    is patched so no network call is made. The persisted health result is read
-    back from the returned entity via ``ctx["created_backend"]``.
+    real ``ModelBackend`` ORM instance; the health check itself is patched so no
+    network call is made, and ``session.get`` returns the same instance so the
+    persisted health result is read back via ``ctx["created_backend"]``.
     """
     from datetime import UTC, datetime
     from unittest.mock import AsyncMock, MagicMock, patch
@@ -835,6 +834,13 @@ def _submit_model_backend_save(ctx: dict, *, method: str, body: dict) -> None:
     dup_result.scalar_one_or_none.return_value = None
     mock_session.execute.return_value = dup_result
 
+    async def _fake_get(entity_cls: object, identity: object) -> object:
+        if entity_cls is ModelBackend:
+            return mb
+        return MagicMock()
+
+    mock_session.get = AsyncMock(side_effect=_fake_get)
+
     settings = Settings(
         database_url="postgresql+asyncpg://localhost/test",
         secret_key="a" * 32,
@@ -858,18 +864,18 @@ def _submit_model_backend_save(ctx: dict, *, method: str, body: dict) -> None:
     )
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
 
-    health_ok = bool(ctx.get("health_ok"))
+    health_status = "ok" if ctx.get("health_ok") else "unhealthy"
     health_detail = ctx.get("health_detail")
     try:
         client = TestClient(app)
         with (
             patch(
                 "modulo.api.routes.model_backends._run_health_check_on_save",
-                new=AsyncMock(return_value=(health_ok, health_detail)),
+                new=AsyncMock(return_value=(health_status, health_detail)),
             ),
             patch("modulo.api.routes.model_backends.set_rls_org"),
             patch("modulo.api.routes.model_backends.set_rls_user_context"),
-            patch("modulo.core.secrets_backend.create_secrets_backend", return_value=AsyncMock()),
+            patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
         ):
             if method == "POST":
                 with patch("modulo.api.routes.model_backends.create_model_backend", return_value=mb):
