@@ -1677,6 +1677,34 @@ export interface paths {
         patch: operations["update_team_endpoint_api_v1_teams__team_id__patch"];
         trace?: never;
     };
+    "/api/v1/teams/{team_id}/reassign-org": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reassign Team Resources Endpoint
+         * @description Reassign every team-owned resource to org-wide (PRD §9.3 Team Deletion Policy).
+         *
+         *     Sets ``owner_team_id = NULL`` (and flips ``visibility`` to ``'org'``, keeping
+         *     the ``ck_*_team_owner`` CHECK constraints satisfied) on every pipeline,
+         *     connector instance, model backend and library primitive currently owned by
+         *     the team, so the team can then be deleted (deletion is blocked while
+         *     ``owner_team_id`` references the team). Admin-only (``team.delete``).
+         *     Idempotent: re-running after a successful reassignment finds zero owned
+         *     rows and returns ``reassigned=0``.
+         */
+        post: operations["reassign_team_resources_endpoint_api_v1_teams__team_id__reassign_org_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teams/{team_id}/members": {
         parameters: {
             query?: never;
@@ -2915,6 +2943,33 @@ export interface paths {
         head?: never;
         /** Update Model Backend Endpoint */
         patch: operations["update_model_backend_endpoint_api_v1_model_backends__backend_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/model-backends/{backend_id}/health-check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Recheck Model Backend Health Endpoint
+         * @description Re-run the health check on demand and persist the result (PRD §8.1).
+         *
+         *     Operators use this to re-validate a backend after a transient save-time
+         *     outage — the only alternative before this route was PATCHing a new API key,
+         *     which made a sticky ``last_health_check_error`` un-clearable without rotation.
+         *     The stored credential is decrypted and re-pinged against the provider; the
+         *     result is persisted in a short transaction after the read transaction
+         *     commits, so the network call never holds a DB connection or row lock.
+         */
+        post: operations["recheck_model_backend_health_endpoint_api_v1_model_backends__backend_id__health_check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/node-categories": {
@@ -5719,6 +5774,35 @@ export interface paths {
         get?: never;
         /** Admin Set Org Triggers Paused */
         put: operations["admin_set_org_triggers_paused_api_v1_admin_orgs__org_id__triggers_pause_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/orgs/{org_id}/guardrails/kill-switch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Get Org Guardrails Kill Switch
+         * @description Read the org's guardrails kill-switch state (admin only).
+         */
+        get: operations["admin_get_org_guardrails_kill_switch_api_v1_admin_orgs__org_id__guardrails_kill_switch_get"];
+        /**
+         * Admin Set Org Guardrails Kill Switch
+         * @description Set the org's guardrails kill-switch (admin only).
+         *
+         *     Enabling downgrades every bound guardrail to observe (shadow-only) at run
+         *     start — never a full disable. Enabling fires an audit event AND a
+         *     paging Notification (``guardrail_kill_switch``) so the downgrade is never
+         *     silent. Disabling restores full enforcement.
+         */
+        put: operations["admin_set_org_guardrails_kill_switch_api_v1_admin_orgs__org_id__guardrails_kill_switch_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -9850,6 +9934,13 @@ export interface components {
             /** Decision At */
             decision_at?: string | null;
         };
+        /** GetOrgGuardrailsKillSwitchResponse */
+        GetOrgGuardrailsKillSwitchResponse: {
+            /** Enabled */
+            enabled: boolean;
+            /** Enabled At */
+            enabled_at: string | null;
+        };
         /** GraduateStageRequest */
         GraduateStageRequest: {
             /** Pipeline Id */
@@ -10874,6 +10965,18 @@ export interface components {
              * @enum {string}
              */
             tier: "native" | "preview" | "in_dev";
+        };
+        /** ModelBackendHealthCheckResponse */
+        ModelBackendHealthCheckResponse: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "healthy" | "unhealthy" | "not_applicable";
+            /** Detail */
+            detail?: string | null;
+            /** Checked At */
+            checked_at?: string | null;
         };
         /** ModelBackendListResponse */
         ModelBackendListResponse: {
@@ -13131,6 +13234,8 @@ export interface components {
             suggestion_name: string;
             /** Suggestion Description */
             suggestion_description?: string | null;
+            /** Rare Fields */
+            rare_fields?: string[];
         };
         /** SchemaMigrationPlanRequest */
         SchemaMigrationPlanRequest: {
@@ -13484,6 +13589,18 @@ export interface components {
             org_id: string;
             /** Enforce */
             enforce: boolean;
+        };
+        /** SetOrgGuardrailsKillSwitchRequest */
+        SetOrgGuardrailsKillSwitchRequest: {
+            /** Enabled */
+            enabled: boolean;
+        };
+        /** SetOrgGuardrailsKillSwitchResponse */
+        SetOrgGuardrailsKillSwitchResponse: {
+            /** Enabled */
+            enabled: boolean;
+            /** Enabled At */
+            enabled_at: string | null;
         };
         /** SetOrgLicenseRequest */
         SetOrgLicenseRequest: {
@@ -14005,6 +14122,13 @@ export interface components {
             team_id: string;
             /** Team Role */
             team_role: string;
+        };
+        /** TeamReassignResponse */
+        TeamReassignResponse: {
+            /** Team Id */
+            team_id: string;
+            /** Reassigned */
+            reassigned: number;
         };
         /** TeamResponse */
         TeamResponse: {
@@ -19203,6 +19327,39 @@ export interface operations {
             };
         };
     };
+    reassign_team_resources_endpoint_api_v1_teams__team_id__reassign_org_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamReassignResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_members_endpoint_api_v1_teams__team_id__members_get: {
         parameters: {
             query?: {
@@ -22500,6 +22657,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ModelBackendResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recheck_model_backend_health_endpoint_api_v1_model_backends__backend_id__health_check_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                backend_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelBackendHealthCheckResponse"];
                 };
             };
             /** @description Validation Error */
@@ -28662,6 +28852,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SetOrgTriggersPausedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_get_org_guardrails_kill_switch_api_v1_admin_orgs__org_id__guardrails_kill_switch_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GetOrgGuardrailsKillSwitchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_set_org_guardrails_kill_switch_api_v1_admin_orgs__org_id__guardrails_kill_switch_put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetOrgGuardrailsKillSwitchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetOrgGuardrailsKillSwitchResponse"];
                 };
             };
             /** @description Validation Error */

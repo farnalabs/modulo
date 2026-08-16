@@ -120,7 +120,8 @@ async def file_engine(tmp_path) -> AsyncGenerator[AsyncEngine, None]:
         connect_args={"timeout": 10},
     )
     async with engine.begin() as conn:
-        # Raw DDL matching migration 0093_run_number_sequence — the ORM
+        # Raw DDL matching the reconciliation chain's run_number_counters
+        # surface (0110_schema_pipeline_runtime) — the ORM
         # RunNumberCounter model no longer exists (FAR-253 dead-code cleanup).
         await conn.exec_driver_sql(
             "CREATE TABLE run_number_counters ("

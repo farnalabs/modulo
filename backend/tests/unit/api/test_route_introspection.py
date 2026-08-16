@@ -220,6 +220,7 @@ def test_scoped_hybrid_min_roles() -> None:
                 "org.license.manage",
                 "org.authz_enforce.manage",
                 "org.triggers.pause.manage",
+                "org.guardrails.kill_switch.manage",
             ), f"unexpected scoped-hybrid permission {perm} on {route.path}"
             if perm in ("org.email.view", "org.license.view"):
                 assert tag["min_role"] == "operator", f"{perm} should be operator, got {tag['min_role']}"

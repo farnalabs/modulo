@@ -111,10 +111,14 @@ class GraphValidator:
         connector_bindings: list[dict[str, Any]] | None = None,
         model_backend_pins: list[dict[str, Any]] | None = None,
         environment_profile_id: uuid.UUID | None = None,
+        guardrail_definitions: list[Any] | None = None,
     ) -> ValidationResult:
         """Validate a live graph definition or an immutable snapshot.
 
-        Returns warnings and errors. Errors block execution; warnings are advisory.
+        *guardrail_definitions*, when provided, are the pipeline's
+        ``eval_type='guardrail'`` ``EvalDefinition`` rows — used for the
+        per-node guardrail cap check (FAR-223 item 7). Returns warnings and
+        errors. Errors block execution; warnings are advisory.
         """
         result = ValidationResult()
 
@@ -138,6 +142,7 @@ class GraphValidator:
         await self._check_node_categories(graph_json, session, result)
         await self._check_composite_nodes(graph_json, session, result)
         await self._check_parameter_references(graph_json, session, result)
+        self._check_guardrail_caps(guardrail_definitions or [], result)
 
         return result
 
@@ -1092,6 +1097,33 @@ class GraphValidator:
         """
         cat_result = await validate_node_categories(graph_json, session)
         result.issues.extend(cat_result.issues)
+
+    # ------------------------------------------------------------------
+    # Guardrail per-node cap (FAR-223 item 7)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _check_guardrail_caps(
+        guardrail_rows: list[Any],
+        result: ValidationResult,
+    ) -> None:
+        """Reject a graph where a single node binds more than the guardrail cap.
+
+        The cap is org-configurable via guardrail config-as-code (mirrored onto
+        every row's ``config_json``); ``guardrail_cap_violation`` shares the
+        same resolution the ``create_run`` seam enforces at run start, so the
+        authoring-time rejection and the dispatch-time fail-closed backstop
+        agree. A violation is a hard error — the graph-save route turns it into
+        a 422.
+        """
+        if not guardrail_rows:
+            return
+        from modulo.core.guardrails import guardrail_cap_violation, to_engine_definition
+
+        definitions = [to_engine_definition(row) for row in guardrail_rows]
+        violation = guardrail_cap_violation(definitions)
+        if violation:
+            result.error("GUARDRAIL_CAP_EXCEEDED", violation)
 
     # ------------------------------------------------------------------
     # Composite nodes
