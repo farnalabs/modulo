@@ -212,6 +212,35 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity="warning",
         guidance="Connector network failure.",
     ),
+    # --- provider (model backend) codes -----------------------------------
+    # Raw exception class names that executor's generic catch publishes
+    # (``type(exc).__name__``) for LLM-node failures. ``provider.authentication``
+    # is permanent (a bad API key); the others are transient infra states and
+    # match the analogous connector.transient retryable conventions.
+    "provider.unavailable": ErrorCodeSpec(
+        error_class="provider",
+        retryable=True,
+        alert_severity="warning",
+        guidance="The model provider is unavailable (gateway outage or upstream 5xx).",
+    ),
+    "provider.authentication": ErrorCodeSpec(
+        error_class="provider",
+        retryable=False,
+        alert_severity="critical",
+        guidance="The model provider rejected the API key.",
+    ),
+    "provider.rate_limited": ErrorCodeSpec(
+        error_class="provider",
+        retryable=True,
+        alert_severity="warning",
+        guidance="The model provider rate-limited the request.",
+    ),
+    "provider.connection": ErrorCodeSpec(
+        error_class="provider",
+        retryable=True,
+        alert_severity="warning",
+        guidance="A connection to the model provider failed.",
+    ),
     # --- capacity codes --------------------------------------------------
     "capacity.org": ErrorCodeSpec(
         error_class="capacity",
@@ -295,6 +324,12 @@ LEGACY_ALIASES: dict[str, str] = {
     "gate_creation_failed": "harness.gate_creation_failed",
     # FAR-228 raw code used by the executor's retry-suppression write.
     "idempotency_gate": "harness.idempotency_gate",
+    # Provider (model backend) exception class names published by executor's
+    # generic catch (``type(exc).__name__``) on LLM-node failures.
+    "RateLimitError": "provider.rate_limited",
+    "ProviderUnavailableError": "provider.unavailable",
+    "AuthenticationError": "provider.authentication",
+    "APIConnectionError": "provider.connection",
     # Eval.
     "eval_blocked": "eval.blocked",
     "eval_suite_blocked": "eval.blocked",
@@ -345,6 +380,43 @@ def is_retryable(code: str | None) -> bool:
     if spec is None:
         return False
     return spec.retryable
+
+
+def expand_code_variants(code: str) -> set[str]:
+    """All raw DB values equivalent to *code* (dotted, legacy, or exception class name).
+
+    The API presents canonical dotted codes while ``runs.error_code`` /
+    ``run_daily_facts.error_code`` are written raw (legacy snake_case / class
+    names), so a filter must match every spelling that maps to the same
+    canonical code.
+    """
+    canonical = map_legacy_code(code)
+    variants = {code, canonical}
+    for legacy, dotted in LEGACY_ALIASES.items():
+        if dotted == canonical:
+            variants.add(legacy)
+    return variants
+
+
+def known_error_codes() -> set[str]:
+    """All raw DB code spellings that resolve to a KNOWN canonical code.
+
+    The union of every registry key and every legacy alias. Any raw code NOT in
+    this set is exactly what :func:`map_legacy_code` falls back to
+    ``harness.unknown`` — i.e. the raw rows the analytics "Unknown error"
+    dimension slice shows (``bucket_rows`` canonicalizes unmapped raw codes
+    into that slice, and the facts table stores raw codes, never the literal
+    dotted aggregate).
+
+    ``harness.unknown`` itself IS in the set — it is a registry key and passes
+    through ``map_legacy_code`` unchanged. Consumers that need the EXACT raw
+    rows the unknown slice shows must subtract it
+    (``known_error_codes() - {"harness.unknown"}``): a raw literal
+    ``harness.unknown`` row is bucketed into the unknown slice (registry
+    passthrough) and must therefore still match the unknown filter, while
+    every other known spelling is excluded.
+    """
+    return set(ERROR_CODE_REGISTRY) | set(LEGACY_ALIASES)
 
 
 # ---------------------------------------------------------------------------
@@ -408,7 +480,12 @@ def sanitize_error_text(text: Any) -> str:
 def present_error(code: str | None, detail: Any, limit: int) -> tuple[str | None, str | None]:
     """Present one run's error for a read surface (sanitize + truncate).
 
-    * ``code`` passes through RAW (no mapping — codes stay raw on the wire).
+    * ``code`` is canonicalized to the dotted taxonomy via
+      :func:`map_legacy_code` so every read surface presents a resolvable
+      dotted code (legacy ``executor_stalled`` → ``agent.stall``, unmapped
+      codes → ``harness.unknown``). ``None`` stays ``None`` — a missing code
+      is never turned into ``harness.unknown`` (callers rely on error_code
+      being absent).
     * ``detail``: ``None`` → ``None``; otherwise :func:`sanitize_error_text`
       then a code-point-safe truncate to *limit* with a ``…`` suffix when cut.
       Python ``str`` slicing never splits a multi-byte character.
@@ -416,6 +493,8 @@ def present_error(code: str | None, detail: Any, limit: int) -> tuple[str | None
 
     Returns ``(code, detail)`` ready for the response dict.
     """
+    if code is not None:
+        code = map_legacy_code(code)
     if detail is None:
         return code, None
     cleaned = sanitize_error_text(detail)

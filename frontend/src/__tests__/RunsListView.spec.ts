@@ -147,14 +147,14 @@ describe('RunsListView', () => {
 
   it('renders an error column with a badge and detail preview for failed runs', async () => {
     mockResponses['/api/v1/runs'] = listWith([
-      { ...baseRun, status: 'failed', error_code: 'task_failure', error_detail: 'worker crashed: sk-abc1234567890' },
+      { ...baseRun, status: 'failed', error_code: 'harness.worker_failed', error_detail: 'worker crashed: sk-abc1234567890' },
     ])
     const wrapper = mountView()
     await flushPromises()
     await nextTick()
     const badge = wrapper.find('[data-testid="runs-list-error-run1"]')
     expect(badge.exists()).toBe(true)
-    expect(badge.text()).toBe('task_failure')
+    expect(badge.text()).toBe('Worker failed')
     expect(badge.attributes('title')).toBe('worker crashed: sk-abc1234567890')
     wrapper.unmount()
   })

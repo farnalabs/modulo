@@ -10,7 +10,9 @@ from modulo.core.pipeline_engine.error_codes import (
     ERROR_CODE_REGISTRY,
     LEGACY_ALIASES,
     class_for,
+    expand_code_variants,
     is_retryable,
+    known_error_codes,
     map_legacy_code,
     present_error,
     sanitize_error_text,
@@ -36,6 +38,31 @@ def test_core_registry_entries_present_with_expected_attributes():
     assert ERROR_CODE_REGISTRY["harness.unknown"].error_class == "harness"
 
 
+def test_provider_codes_present_with_expected_attributes():
+    """Provider codes classify as ``provider``; transient ones are retryable."""
+    unavailable = ERROR_CODE_REGISTRY["provider.unavailable"]
+    assert unavailable.error_class == "provider"
+    assert unavailable.retryable is True
+    assert unavailable.alert_severity == "warning"
+    auth = ERROR_CODE_REGISTRY["provider.authentication"]
+    assert auth.error_class == "provider"
+    assert auth.retryable is False
+    assert auth.alert_severity == "critical"
+    rate_limited = ERROR_CODE_REGISTRY["provider.rate_limited"]
+    assert rate_limited.error_class == "provider"
+    assert rate_limited.retryable is True
+    connection = ERROR_CODE_REGISTRY["provider.connection"]
+    assert connection.error_class == "provider"
+    assert connection.retryable is True
+
+
+def test_provider_aliases_resolve_to_provider_class():
+    assert class_for("RateLimitError") == "provider"
+    assert class_for("ProviderUnavailableError") == "provider"
+    assert class_for("AuthenticationError") == "provider"
+    assert class_for("APIConnectionError") == "provider"
+
+
 def test_map_legacy_code_legacy_aliases():
     """Legacy codes map to their dotted equivalents per §3.2."""
     assert map_legacy_code("executor_stalled") == "agent.stall"
@@ -51,6 +78,10 @@ def test_map_legacy_code_legacy_aliases():
     assert map_legacy_code("configuration_error") == "config.error"
     assert map_legacy_code("OperationalError") == "harness.db.connection_lost"
     assert map_legacy_code("TypeError") == "harness.state_serialization"
+    assert map_legacy_code("RateLimitError") == "provider.rate_limited"
+    assert map_legacy_code("ProviderUnavailableError") == "provider.unavailable"
+    assert map_legacy_code("AuthenticationError") == "provider.authentication"
+    assert map_legacy_code("APIConnectionError") == "provider.connection"
 
 
 def test_map_legacy_code_dotted_passthrough():
@@ -116,6 +147,69 @@ def test_is_retryable_transient_codes_true():
         assert is_retryable(code) is True, code
 
 
+def test_is_retryable_provider_transient_codes():
+    """Transient provider codes are retryable; authentication is permanent."""
+    assert is_retryable("provider.unavailable") is True
+    assert is_retryable("provider.rate_limited") is True
+    assert is_retryable("provider.connection") is True
+    assert is_retryable("provider.authentication") is False
+    # Raw class names resolve through the aliases to the same defaults.
+    assert is_retryable("RateLimitError") is True
+    assert is_retryable("ProviderUnavailableError") is True
+    assert is_retryable("APIConnectionError") is True
+    assert is_retryable("AuthenticationError") is False
+
+
+def test_expand_code_variants_dotted_input_returns_raw_variants():
+    """A dotted input expands to every legacy alias that maps to it."""
+    assert expand_code_variants("harness.worker_failed") == {"harness.worker_failed", "task_failure"}
+    assert expand_code_variants("agent.stall") == {"agent.stall", "executor_stalled"}
+    assert expand_code_variants("node.timeout") == {"node.timeout", "node_timeout", "TimeoutError"}
+
+
+def test_expand_code_variants_legacy_input_includes_canonical():
+    """A legacy input expands to its canonical dotted code and all its aliases."""
+    assert expand_code_variants("task_failure") == {"harness.worker_failed", "task_failure"}
+    assert "RateLimitError" in expand_code_variants("RateLimitError")
+    assert "provider.rate_limited" in expand_code_variants("RateLimitError")
+
+
+def test_expand_code_variants_unmapped_self_only():
+    """An unmapped code has no other spellings."""
+    assert expand_code_variants("some_mystery_code") == {"some_mystery_code", "harness.unknown"}
+
+
+def test_known_error_codes_is_registry_plus_aliases():
+    """known_error_codes() is exactly the union of registry keys and aliases."""
+    assert known_error_codes() == set(ERROR_CODE_REGISTRY) | set(LEGACY_ALIASES)
+
+
+def test_known_error_codes_complement_is_the_unknown_fallback_set():
+    # The analytics "Unknown error" slice shows every raw code whose
+    # map_legacy_code falls back to harness.unknown — precisely the codes NOT
+    # in known_error_codes(). Known spellings (dotted, legacy, raw class names)
+    # resolve to a known canonical; unmapped spellings resolve to harness.unknown.
+    known = known_error_codes()
+    for code in ("task_failure", "executor_stalled", "agent.failed", "RateLimitError", "harness.unknown"):
+        assert code in known
+        assert map_legacy_code(code) != "harness.unknown" or code == "harness.unknown"
+    for code in ("ValueError", "ConnectionRefusedError", "SomeMysteryError"):
+        assert code not in known
+        assert map_legacy_code(code) == "harness.unknown"
+
+
+def test_known_error_codes_unknown_slice_excludes_harness_unknown_literal():
+    # bucket_rows maps a raw literal "harness.unknown" row into the unknown
+    # slice (registry passthrough), so the aggregate filter must NOT exclude it
+    # — consumers subtract "harness.unknown" from the exclude set. Every other
+    # known spelling IS excluded.
+    exclude = known_error_codes() - {"harness.unknown"}
+    assert "harness.unknown" not in exclude
+    assert "task_failure" in exclude
+    assert "executor_stalled" in exclude
+    assert "agent.failed" in exclude
+
+
 # ---------------------------------------------------------------------------
 # sanitize_error_text / present_error (P4)
 # ---------------------------------------------------------------------------
@@ -165,10 +259,19 @@ def test_sanitize_coerces_non_str():
     assert sanitize_error_text(b"bytes") == "b'bytes'"
 
 
-def test_present_error_passes_code_through_raw():
-    # P2 dropped: codes stay raw on every wire surface.
+def test_present_error_canonicalizes_code_via_map_legacy_code():
+    # Legacy codes are canonicalized to the dotted taxonomy on every read surface.
+    code, detail = present_error("executor_stalled", "detail", 5000)
+    assert code == "agent.stall"
+    assert detail == "detail"
+
+    # Already-dotted registry codes pass through unchanged.
+    code, _ = present_error("agent.failed", "detail", 5000)
+    assert code == "agent.failed"
+
+    # Unmapped legacy codes resolve to the harness.unknown fallback.
     code, detail = present_error("rate_limited", "LLM provider returned 429 Too Many Requests", 5000)
-    assert code == "rate_limited"
+    assert code == "harness.unknown"
     assert detail == "LLM provider returned 429 Too Many Requests"
 
 
@@ -178,9 +281,17 @@ def test_present_error_none_detail_returns_none():
     assert detail is None
 
 
+def test_present_error_none_code_preserved_when_detail_present():
+    # A missing code is never turned into harness.unknown — the (None, detail)
+    # contract keeps error_code absent on the wire.
+    code, detail = present_error(None, "boom", 5000)
+    assert code is None
+    assert detail == "boom"
+
+
 def test_present_error_truncates_codepoint_safely_with_ellipsis():
     code, detail = present_error("task_failure", "e" * 300, 200)
-    assert code == "task_failure"
+    assert code == "harness.worker_failed"
     assert detail.endswith("…")
     assert len(detail) == 201
 
@@ -194,5 +305,5 @@ def test_present_error_sanitizes_before_truncate():
 
 def test_present_error_coerces_non_str_detail():
     code, detail = present_error("task_failure", 12345, 5000)
-    assert code == "task_failure"
+    assert code == "harness.worker_failed"
     assert detail == "12345"
