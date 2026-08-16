@@ -205,8 +205,21 @@ class TestFAR102Filters:
         stmt, params = build_facts_query(_query(error_code="executor_stalled"))
         sql = str(stmt.compile(dialect=postgresql.dialect()))
         assert "executor_stalled" not in sql, "error_code must be bound, never interpolated"
-        assert params["error_code"] == "executor_stalled"
+        assert set(params["error_codes"]) == {"executor_stalled", "agent.stall"}
         assert "error_code" in sql
+
+    def test_error_code_filter_expands_dotted_input_to_raw_variants(self) -> None:
+        # The runs API emits dotted codes but the facts table stores the raw DB
+        # value — a dotted filter must also match the legacy alias.
+        stmt, params = build_facts_query(_query(error_code="harness.worker_failed"))
+        assert set(params["error_codes"]) == {"harness.worker_failed", "task_failure"}
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert "task_failure" not in sql, "variants must be bound, never interpolated"
+        assert "harness.worker_failed" not in sql, "variants must be bound, never interpolated"
+        assert "IN" in sql.upper()
+
+        _concurrency_stmt, concurrency_params = build_concurrency_query(_query(error_code="harness.worker_failed"))
+        assert set(concurrency_params["error_codes"]) == {"harness.worker_failed", "task_failure"}
 
     def test_error_code_dimension_selects_raw_key(self) -> None:
         stmt, _ = build_facts_query(_query(dimension=AnalyticsDimension.ERROR_CODE))
@@ -566,6 +579,41 @@ class TestBucketing:
         )
         assert {b["key"] for b in out} == {"Team A", str(team_b)}
         assert sum(b["count"] for b in out) == 2
+
+    def test_error_code_dimension_canonicalizes_keys_to_dotted(self) -> None:
+        # The facts table stores RAW codes; the dimension series must present
+        # dotted codes matching the runs UI, and legacy/dotted variants of the
+        # same code must collapse into one chart slice.
+        rows = [
+            _row(date(2026, 8, 5), count=2, error_code="task_failure"),
+            _row(date(2026, 8, 5), count=1, error_code="harness.worker_failed"),
+            _row(date(2026, 8, 5), count=1, error_code="node_timeout"),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=AnalyticsDimension.ERROR_CODE,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        by_key = {b["key"]: b for b in out}
+        assert set(by_key) == {"harness.worker_failed", "node.timeout"}
+        assert by_key["harness.worker_failed"]["count"] == 3, "raw + dotted variants must collapse into one slice"
+        assert "task_failure" not in by_key, "raw legacy codes must never surface on the wire"
+        assert sum(b["count"] for b in out) == 4
+
+    def test_error_code_dimension_unknown_code_falls_back_to_dotted_unknown(self) -> None:
+        rows = [
+            _row(date(2026, 8, 5), count=1, error_code="some_mystery_code"),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=AnalyticsDimension.ERROR_CODE,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        assert {b["key"] for b in out} == {"harness.unknown"}
 
     def test_dimensioned_empty_range_zero_fills(self) -> None:
         # A dimensioned query over an empty range must still return a zero-filled

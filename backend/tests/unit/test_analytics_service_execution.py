@@ -399,7 +399,7 @@ class TestExportFilters:
         assert bind["trigger_type"] == "cron"
         assert bind["status"] == "failed"
         assert bind["pipeline_ids"] == [pid]
-        assert bind["error_code"] == "node_timeout"
+        assert set(bind["error_codes"]) == {"node_timeout", "node.timeout", "TimeoutError"}
         assert bind["folder_id"] is not None
         assert len(conditions) == 8  # org, date_from, date_to + 5 optional filters
 

@@ -10,6 +10,7 @@ from modulo.core.pipeline_engine.error_codes import (
     ERROR_CODE_REGISTRY,
     LEGACY_ALIASES,
     class_for,
+    expand_code_variants,
     is_retryable,
     map_legacy_code,
     present_error,
@@ -36,6 +37,31 @@ def test_core_registry_entries_present_with_expected_attributes():
     assert ERROR_CODE_REGISTRY["harness.unknown"].error_class == "harness"
 
 
+def test_provider_codes_present_with_expected_attributes():
+    """Provider codes classify as ``provider``; transient ones are retryable."""
+    unavailable = ERROR_CODE_REGISTRY["provider.unavailable"]
+    assert unavailable.error_class == "provider"
+    assert unavailable.retryable is True
+    assert unavailable.alert_severity == "warning"
+    auth = ERROR_CODE_REGISTRY["provider.authentication"]
+    assert auth.error_class == "provider"
+    assert auth.retryable is False
+    assert auth.alert_severity == "critical"
+    rate_limited = ERROR_CODE_REGISTRY["provider.rate_limited"]
+    assert rate_limited.error_class == "provider"
+    assert rate_limited.retryable is True
+    connection = ERROR_CODE_REGISTRY["provider.connection"]
+    assert connection.error_class == "provider"
+    assert connection.retryable is True
+
+
+def test_provider_aliases_resolve_to_provider_class():
+    assert class_for("RateLimitError") == "provider"
+    assert class_for("ProviderUnavailableError") == "provider"
+    assert class_for("AuthenticationError") == "provider"
+    assert class_for("APIConnectionError") == "provider"
+
+
 def test_map_legacy_code_legacy_aliases():
     """Legacy codes map to their dotted equivalents per §3.2."""
     assert map_legacy_code("executor_stalled") == "agent.stall"
@@ -51,6 +77,10 @@ def test_map_legacy_code_legacy_aliases():
     assert map_legacy_code("configuration_error") == "config.error"
     assert map_legacy_code("OperationalError") == "harness.db.connection_lost"
     assert map_legacy_code("TypeError") == "harness.state_serialization"
+    assert map_legacy_code("RateLimitError") == "provider.rate_limited"
+    assert map_legacy_code("ProviderUnavailableError") == "provider.unavailable"
+    assert map_legacy_code("AuthenticationError") == "provider.authentication"
+    assert map_legacy_code("APIConnectionError") == "provider.connection"
 
 
 def test_map_legacy_code_dotted_passthrough():
@@ -114,6 +144,38 @@ def test_is_retryable_transient_codes_true():
         "connector.rate_limit",
     ):
         assert is_retryable(code) is True, code
+
+
+def test_is_retryable_provider_transient_codes():
+    """Transient provider codes are retryable; authentication is permanent."""
+    assert is_retryable("provider.unavailable") is True
+    assert is_retryable("provider.rate_limited") is True
+    assert is_retryable("provider.connection") is True
+    assert is_retryable("provider.authentication") is False
+    # Raw class names resolve through the aliases to the same defaults.
+    assert is_retryable("RateLimitError") is True
+    assert is_retryable("ProviderUnavailableError") is True
+    assert is_retryable("APIConnectionError") is True
+    assert is_retryable("AuthenticationError") is False
+
+
+def test_expand_code_variants_dotted_input_returns_raw_variants():
+    """A dotted input expands to every legacy alias that maps to it."""
+    assert expand_code_variants("harness.worker_failed") == {"harness.worker_failed", "task_failure"}
+    assert expand_code_variants("agent.stall") == {"agent.stall", "executor_stalled"}
+    assert expand_code_variants("node.timeout") == {"node.timeout", "node_timeout", "TimeoutError"}
+
+
+def test_expand_code_variants_legacy_input_includes_canonical():
+    """A legacy input expands to its canonical dotted code and all its aliases."""
+    assert expand_code_variants("task_failure") == {"harness.worker_failed", "task_failure"}
+    assert "RateLimitError" in expand_code_variants("RateLimitError")
+    assert "provider.rate_limited" in expand_code_variants("RateLimitError")
+
+
+def test_expand_code_variants_unmapped_self_only():
+    """An unmapped code has no other spellings."""
+    assert expand_code_variants("some_mystery_code") == {"some_mystery_code", "harness.unknown"}
 
 
 # ---------------------------------------------------------------------------

@@ -29,4 +29,12 @@ describe('RunErrorTag', () => {
     const wrapper = mount(RunErrorTag, { props: { code: 'node.timeout', detail: 'hit the timeout guard' } })
     expect(wrapper.attributes('title')).toBe('hit the timeout guard')
   })
+
+  it('renders provider codes with a warning-style pill and their i18n label', () => {
+    const wrapper = mount(RunErrorTag, { props: { code: 'provider.rate_limited' } })
+    expect(wrapper.text()).toBe('Provider rate limited')
+    expect(wrapper.classes()).toContain('text-warning')
+    const auth = mount(RunErrorTag, { props: { code: 'provider.authentication' } })
+    expect(auth.text()).toBe('Authentication failed')
+  })
 })

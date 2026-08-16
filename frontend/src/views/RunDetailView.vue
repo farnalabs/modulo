@@ -176,7 +176,7 @@
           <RunErrorTag
             v-if="run.error_code"
             :code="run.error_code"
-            :detail="run.error_detail"
+            :detail="(run.error_detail as string | null | undefined)?.slice(0, 200)"
           />
         </div>
         <pre class="text-xs whitespace-pre-wrap font-mono text-destructive/80">{{ run.error_detail }}</pre>

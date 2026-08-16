@@ -212,6 +212,35 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity="warning",
         guidance="Connector network failure.",
     ),
+    # --- provider (model backend) codes -----------------------------------
+    # Raw exception class names that executor's generic catch publishes
+    # (``type(exc).__name__``) for LLM-node failures. ``provider.authentication``
+    # is permanent (a bad API key); the others are transient infra states and
+    # match the analogous connector.transient retryable conventions.
+    "provider.unavailable": ErrorCodeSpec(
+        error_class="provider",
+        retryable=True,
+        alert_severity="warning",
+        guidance="The model provider is unavailable (gateway outage or upstream 5xx).",
+    ),
+    "provider.authentication": ErrorCodeSpec(
+        error_class="provider",
+        retryable=False,
+        alert_severity="critical",
+        guidance="The model provider rejected the API key.",
+    ),
+    "provider.rate_limited": ErrorCodeSpec(
+        error_class="provider",
+        retryable=True,
+        alert_severity="warning",
+        guidance="The model provider rate-limited the request.",
+    ),
+    "provider.connection": ErrorCodeSpec(
+        error_class="provider",
+        retryable=True,
+        alert_severity="warning",
+        guidance="A connection to the model provider failed.",
+    ),
     # --- capacity codes --------------------------------------------------
     "capacity.org": ErrorCodeSpec(
         error_class="capacity",
@@ -295,6 +324,12 @@ LEGACY_ALIASES: dict[str, str] = {
     "gate_creation_failed": "harness.gate_creation_failed",
     # FAR-228 raw code used by the executor's retry-suppression write.
     "idempotency_gate": "harness.idempotency_gate",
+    # Provider (model backend) exception class names published by executor's
+    # generic catch (``type(exc).__name__``) on LLM-node failures.
+    "RateLimitError": "provider.rate_limited",
+    "ProviderUnavailableError": "provider.unavailable",
+    "AuthenticationError": "provider.authentication",
+    "APIConnectionError": "provider.connection",
     # Eval.
     "eval_blocked": "eval.blocked",
     "eval_suite_blocked": "eval.blocked",
@@ -345,6 +380,22 @@ def is_retryable(code: str | None) -> bool:
     if spec is None:
         return False
     return spec.retryable
+
+
+def expand_code_variants(code: str) -> set[str]:
+    """All raw DB values equivalent to *code* (dotted, legacy, or exception class name).
+
+    The API presents canonical dotted codes while ``runs.error_code`` /
+    ``run_daily_facts.error_code`` are written raw (legacy snake_case / class
+    names), so a filter must match every spelling that maps to the same
+    canonical code.
+    """
+    canonical = map_legacy_code(code)
+    variants = {code, canonical}
+    for legacy, dotted in LEGACY_ALIASES.items():
+        if dotted == canonical:
+            variants.add(legacy)
+    return variants
 
 
 # ---------------------------------------------------------------------------

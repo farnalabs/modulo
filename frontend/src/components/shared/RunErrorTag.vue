@@ -19,6 +19,7 @@ const CLASS_STYLES: Record<string, string> = {
   node: 'bg-warning/10 text-warning',
   connector: 'bg-warning/10 text-warning',
   capacity: 'bg-primary/10 text-primary',
+  provider: 'bg-warning/10 text-warning',
   eval: 'bg-destructive/10 text-destructive',
   config: 'bg-warning/10 text-warning',
   contract: 'bg-warning/10 text-warning',

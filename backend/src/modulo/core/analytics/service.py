@@ -49,6 +49,7 @@ from modulo.core.analytics.builder import (
     resolve_group_by,
     to_utc_aware,
 )
+from modulo.core.pipeline_engine.error_codes import expand_code_variants
 from modulo.db.crud.run import get_org_run_concurrency_limit
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import TERMINAL_STATUSES
@@ -631,8 +632,10 @@ def _export_filters(
         conditions.append(RunDailyFact.pipeline_id.in_(sa.bindparam("pipeline_ids", type_=sa.Uuid, expanding=True)))
         bind["pipeline_ids"] = list(params.pipeline_ids)
     if params.error_code is not None:
-        conditions.append(RunDailyFact.error_code == sa.bindparam("error_code", type_=sa.String))
-        bind["error_code"] = params.error_code
+        # The facts table stores the RAW DB code while the runs API emits
+        # dotted codes — a filter must match every spelling of the same code.
+        conditions.append(RunDailyFact.error_code.in_(sa.bindparam("error_codes", type_=sa.String, expanding=True)))
+        bind["error_codes"] = sorted(expand_code_variants(params.error_code))
     if params.folder_id is not None:
         conditions.append(RunDailyFact.folder_id == sa.bindparam("folder_id", type_=sa.Uuid))
         bind["folder_id"] = params.folder_id

@@ -4648,7 +4648,7 @@ async def resource_run(run_id: str) -> str:
         f"Created: {run.created_at.isoformat()}",
     ]
     if run.error_code:
-        parts.append(f"Error: {run.error_code}")
+        parts.append(f"Error: {map_legacy_code(run.error_code)}")
     if run.total_cost_usd is not None:
         parts.append(f"Total cost: ${run.total_cost_usd}")
     parts.append(f"Child runs cost: ${child_cost}")

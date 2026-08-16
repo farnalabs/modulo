@@ -891,7 +891,7 @@ export default {
       "filter_trigger_type": "Trigger type",
       "filter_status": "Status",
       "filter_error_code": "Error code",
-      "filter_error_code_placeholder": "e.g. executor_stalled",
+      "filter_error_code_placeholder": "e.g. agent.failed",
       "all": "All",
       "measure": "Measure",
       "measure_count": "Run count",
@@ -1089,7 +1089,6 @@ export default {
       "trace_id": "Trace ID",
       "run_detail": "Run Detail",
       "run_error": "Run Error",
-      "error_code_title": "Run error code",
       "run_input": "Run Input",
       "hide": "Hide",
       "show": "Show",
@@ -2835,6 +2834,12 @@ export default {
       "pipeline": "Pipeline at capacity",
       "claim": "Capacity claim exhausted",
       "timeout": "Capacity wait timed out"
+    },
+    "provider": {
+      "unavailable": "Provider unavailable",
+      "authentication": "Authentication failed",
+      "rate_limited": "Provider rate limited",
+      "connection": "Provider connection error"
     },
     "eval": { "blocked": "Eval blocked", "failed": "Eval failed" },
     "config": { "error": "Configuration error", "invalid": "Invalid configuration" }

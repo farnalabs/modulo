@@ -31,6 +31,7 @@ from typing import Any
 
 import sqlalchemy as sa
 
+from modulo.core.pipeline_engine.error_codes import expand_code_variants, map_legacy_code
 from modulo.db.crud.team_scope import team_scope_clause
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run_daily_facts import RunDailyFact
@@ -248,8 +249,8 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
         effective_team = sa.func.coalesce(RunDailyFact.team_id, Pipeline.owner_team_id)
         stmt = stmt.where(team_scope_clause(effective_team, sa.bindparam("team_id", type_=sa.Uuid)))
     if query.error_code is not None:
-        params["error_code"] = query.error_code
-        stmt = stmt.where(RunDailyFact.error_code == sa.bindparam("error_code", type_=sa.String))
+        params["error_codes"] = sorted(expand_code_variants(query.error_code))
+        stmt = stmt.where(RunDailyFact.error_code.in_(sa.bindparam("error_codes", type_=sa.String, expanding=True)))
     if query.folder_id is not None:
         params["folder_id"] = query.folder_id
         stmt = stmt.where(RunDailyFact.folder_id == sa.bindparam("folder_id", type_=sa.Uuid))
@@ -321,8 +322,8 @@ def build_concurrency_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict
         effective_team = sa.func.coalesce(RunDailyFact.team_id, Pipeline.owner_team_id)
         stmt = stmt.where(team_scope_clause(effective_team, sa.bindparam("team_id", type_=sa.Uuid)))
     if query.error_code is not None:
-        params["error_code"] = query.error_code
-        stmt = stmt.where(RunDailyFact.error_code == sa.bindparam("error_code", type_=sa.String))
+        params["error_codes"] = sorted(expand_code_variants(query.error_code))
+        stmt = stmt.where(RunDailyFact.error_code.in_(sa.bindparam("error_codes", type_=sa.String, expanding=True)))
     if query.folder_id is not None:
         params["folder_id"] = query.folder_id
         stmt = stmt.where(RunDailyFact.folder_id == sa.bindparam("folder_id", type_=sa.Uuid))
@@ -641,6 +642,12 @@ def bucket_rows(
         if dimension is not None:
             label = getattr(row, "key_label", None)
             raw = label if label is not None else getattr(row, _DIMENSION_KEY_ATTR[dimension], None)
+            # Presentation maps on read: the facts table stores the RAW DB code
+            # while the runs API emits dotted codes, so the error_code dimension
+            # canonicalizes each key (legacy `task_failure` -> `harness.worker_failed`)
+            # to match the runs UI — variants collapse into one chart slice.
+            if dimension == AnalyticsDimension.ERROR_CODE and raw is not None:
+                raw = map_legacy_code(str(raw))
             # Normalize to a comparable string: dimension keys may be UUID ids
             # (folder_id/pipeline_id/team_id fallback when the snapshot label is
             # NULL) or label strings. Never emit a raw UUID — mixing UUID and
