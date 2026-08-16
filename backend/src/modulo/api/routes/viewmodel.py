@@ -62,7 +62,7 @@ class MeResponse(BaseModel):
     team_memberships: list[TeamMembershipInfo]
     team_memberships_truncated: bool
     org_role: str
-    preferences: dict[str, Any] = {}
+    preferences: dict[str, Any] = Field(default_factory=dict)
     is_system_admin: bool = False
 
 
