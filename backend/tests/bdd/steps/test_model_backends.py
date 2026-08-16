@@ -772,3 +772,161 @@ def configuration_error_returned(ctx):
     assert ctx.get("init_error_type") == "configuration", (
         f"Expected configuration error, got {ctx.get('init_error_type')}"
     )
+
+
+# ============================================================================
+# Health check on save - real route handler + mock session
+# ============================================================================
+
+_HC_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+_HC_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+
+
+def _submit_model_backend_save(ctx: dict, *, method: str, body: dict) -> None:
+    """POST or PATCH the real /api/v1/model-backends route with a mock session.
+
+    ``create_model_backend`` / ``update_model_backend`` are patched to return a
+    real ``ModelBackend`` ORM instance so the route's health-check-on-save block
+    (guarded by ``isinstance(mb, ModelBackend)``) runs; the health check itself
+    is patched so no network call is made. The persisted health result is read
+    back from the returned entity via ``ctx["created_backend"]``.
+    """
+    from datetime import UTC, datetime
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from cryptography.fernet import Fernet
+    from fastapi.testclient import TestClient
+
+    from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
+    from modulo.api.main import app
+    from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+    from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+    from modulo.db.models.model_backend import ModelBackend
+    from modulo.settings import Settings, get_settings
+    from tests.unit.api.mock_session import configure_mock_session
+
+    backend_id = uuid.uuid4()
+    now = datetime.now(UTC)
+    mb = ModelBackend(
+        id=backend_id,
+        organisation_id=_HC_ORG_ID,
+        name=body.get("name", "test-backend"),
+        display_name=body.get("display_name", "Test Backend"),
+        provider=body.get("provider", "openai"),
+        model_id=body.get("model_id", "gpt-4o"),
+        credentials_ciphertext=b"gAAAAAB",
+        default_params={},
+        visibility="org",
+        tier="native",
+        account_id=_HC_USER_ID,
+    )
+    mb.created_at = now
+    mb.updated_at = now
+    mb.last_health_check_at = None
+    mb.last_health_check_error = None
+
+    mock_session = AsyncMock()
+    configure_mock_session(mock_session)
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_session.begin = MagicMock(return_value=begin_cm)
+    dup_result = MagicMock()
+    dup_result.scalar_one_or_none.return_value = None
+    mock_session.execute.return_value = dup_result
+
+    settings = Settings(
+        database_url="postgresql+asyncpg://localhost/test",
+        secret_key="a" * 32,
+        fernet_key=Fernet.generate_key().decode(),
+        modulo_admin_password="testpass",
+    )
+
+    async def override_session() -> AsyncMock:
+        yield mock_session
+
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="admin", organisation_id=_HC_ORG_ID, account_id=_HC_USER_ID, org_role="admin"
+    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="admin", organisation_id=_HC_ORG_ID, account_id=_HC_USER_ID, org_role="admin"
+    )
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+
+    health_ok = bool(ctx.get("health_ok"))
+    health_detail = ctx.get("health_detail")
+    try:
+        client = TestClient(app)
+        with (
+            patch(
+                "modulo.api.routes.model_backends._run_health_check_on_save",
+                new=AsyncMock(return_value=(health_ok, health_detail)),
+            ),
+            patch("modulo.api.routes.model_backends.set_rls_org"),
+            patch("modulo.api.routes.model_backends.set_rls_user_context"),
+            patch("modulo.core.secrets_backend.create_secrets_backend", return_value=AsyncMock()),
+        ):
+            if method == "POST":
+                with patch("modulo.api.routes.model_backends.create_model_backend", return_value=mb):
+                    ctx["response"] = client.post("/api/v1/model-backends", json=body)
+            else:
+                with patch("modulo.api.routes.model_backends.update_model_backend", return_value=mb):
+                    ctx["response"] = client.patch(f"/api/v1/model-backends/{backend_id}", json=body)
+    finally:
+        app.dependency_overrides.clear()
+    ctx["created_backend"] = mb
+
+
+@given("a model backend is created with a healthy health check")
+def backend_created_healthy_health_check(ctx):
+    ctx["health_ok"] = True
+    ctx["health_detail"] = None
+
+
+@given("a model backend is created with an unhealthy health check")
+def backend_created_unhealthy_health_check(ctx):
+    ctx["health_ok"] = False
+    ctx["health_detail"] = "401 Incorrect API key provided"
+
+
+@given("a model backend API key update with an unhealthy health check")
+def backend_key_update_unhealthy_health_check(ctx):
+    ctx["health_ok"] = False
+    ctx["health_detail"] = "429 rate limit exceeded"
+
+
+@when("the model backend creation is submitted")
+def model_backend_creation_submitted(ctx):
+    body = {
+        "name": "test-backend",
+        "display_name": "Test Backend",
+        "provider": "openai",
+        "model_id": "gpt-4o",
+        "api_key": "sk-test",
+    }
+    _submit_model_backend_save(ctx, method="POST", body=body)
+
+
+@when("the model backend update is submitted")
+def model_backend_update_submitted(ctx):
+    body = {"api_key": "sk-rotated"}
+    _submit_model_backend_save(ctx, method="PATCH", body=body)
+
+
+@then("the backend health check result is persisted as healthy")
+def backend_health_result_persisted_healthy(ctx):
+    assert ctx["response"].status_code == 201
+    assert ctx["created_backend"].last_health_check_at is not None
+    assert ctx["created_backend"].last_health_check_error is None
+
+
+@then("the backend health check result is persisted with the error detail")
+def backend_health_result_persisted_error(ctx):
+    assert ctx["response"].status_code in (200, 201)
+    assert ctx["created_backend"].last_health_check_at is not None
+    assert ctx["created_backend"].last_health_check_error == ctx["health_detail"]

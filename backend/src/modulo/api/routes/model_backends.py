@@ -4,9 +4,10 @@ Credentials (API keys) are encrypted at rest with Fernet. The ciphertext is
 never exposed in any response — only a boolean `has_credentials` field.
 """
 
+import asyncio
 import logging
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, ClassVar, Literal
 
 from cryptography.fernet import Fernet
@@ -31,6 +32,7 @@ from modulo.db.crud.model_backend import (
 )
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.model_backends.base import HEALTH_CHECK_TIMEOUT
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -41,6 +43,46 @@ router = APIRouter(prefix="/api/v1/model-backends", tags=["model-backends"])
 
 def _encrypt(api_key: str, fernet_key: str) -> bytes:
     return Fernet(fernet_key.encode()).encrypt(api_key.encode())
+
+
+async def _run_health_check_on_save(
+    provider: str,
+    model_id: str,
+    api_key: str | None,
+    default_params: dict[str, Any],
+) -> tuple[bool, str | None]:
+    """Best-effort test-inference health check run on save (PRD §8.1 ``health_check``).
+
+    Builds the configured backend and runs its health check — a ``GET /models``
+    ping for OpenAI-compatible providers, an inference call for the rest — so
+    auth failures and quota errors are surfaced before pipelines reference the
+    backend. The result is recorded on the entity's ``last_health_check_at`` /
+    ``last_health_check_error`` columns, which the graph validator surfaces as
+    ``MODEL_BACKEND_UNHEALTHY`` at save/run time.
+
+    Never raises and never blocks the create/update: the check is best-effort
+    (a transient provider outage must not prevent configuring a backend).
+    Returns ``(ok, detail)`` where *detail* is ``None`` on success.
+    """
+    try:
+        from modulo.core.model_backend_hub import _build_backend
+
+        creds: dict[str, Any] = {"api_key": api_key} if api_key else {}
+        backend = _build_backend(provider, model_id, creds, default_params)
+    except Exception as exc:
+        # The API-supplied credentials cannot construct the provider backend
+        # (e.g. Bedrock needs aws keys the REST API does not accept) — surface
+        # the construction failure as the health result.
+        return False, str(exc)
+    try:
+        result = await asyncio.wait_for(backend.health_check(), timeout=HEALTH_CHECK_TIMEOUT)
+        if result.ok:
+            return True, None
+        return False, result.detail
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        return False, str(exc)[:500]
 
 
 class ModelBackendCreate(TeamVisibilityMixin):
@@ -354,6 +396,16 @@ async def create_model_backend_endpoint(
             secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
             secret_value = json.dumps({"api_key": req.api_key})
             await secrets_backend.set_secret(str(mb.id), secret_value)
+            if isinstance(mb, ModelBackend):
+                # PRD 8.1: test-inference health check on save. Runs against the
+                # just-submitted credentials and records the result on the entity;
+                # the graph validator surfaces it as MODEL_BACKEND_UNHEALTHY.
+                ok, detail = await _run_health_check_on_save(
+                    req.provider, req.model_id, req.api_key, dict(req.default_params or {})
+                )
+                mb.last_health_check_at = datetime.now(UTC)
+                mb.last_health_check_error = None if ok else detail
+                await session.flush()
             response = _to_response(mb)
     except IntegrityError:
         logger.exception("model_backends.create_model_backend_endpoint")
@@ -464,6 +516,16 @@ async def update_model_backend_endpoint(
                 secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
                 secret_value = json.dumps({"api_key": req.api_key})
                 await secrets_backend.set_secret(str(mb.id), secret_value)
+                if isinstance(mb, ModelBackend):
+                    # PRD 8.1: a credential change re-runs the health check with
+                    # the new key (post-rotation validation). Non-blocking: the
+                    # result is recorded, not used to reject the update.
+                    ok, detail = await _run_health_check_on_save(
+                        mb.provider, mb.model_id, req.api_key, dict(mb.default_params or {})
+                    )
+                    mb.last_health_check_at = datetime.now(UTC)
+                    mb.last_health_check_error = None if ok else detail
+                    await session.flush()
             response = _to_response(mb)
     except IntegrityError:
         logger.exception("model_backends.update_model_backend_endpoint")

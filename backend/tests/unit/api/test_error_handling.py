@@ -653,3 +653,147 @@ def test_update_schema_patch_can_clear_nullable_field(client: TestClient) -> Non
     mock_update.assert_awaited_once()
     updates = mock_update.await_args.args[2]
     assert updates == {"abstract_name": None}
+
+
+def test_model_backend_create_persists_health_check_on_save(client: TestClient) -> None:
+    """PRD 8.1 - creating a model backend runs a test-inference health check on
+    save and persists ``last_health_check_at`` / ``last_health_check_error`` on
+    the entity. The create succeeds even when the check reports a failure
+    (non-blocking - the graph validator surfaces the recorded error later)."""
+    from datetime import UTC, datetime
+    from unittest.mock import AsyncMock, patch
+
+    from cryptography.fernet import Fernet
+
+    from modulo.api.dependencies import get_db_session
+    from modulo.db.models.model_backend import ModelBackend
+    from modulo.settings import Settings, get_settings
+
+    backend_id = uuid.uuid4()
+    now = datetime.now(UTC)
+    mb = ModelBackend(
+        id=backend_id,
+        organisation_id=_ORG_ID,
+        name="test-backend",
+        display_name="Test Backend",
+        provider="openai",
+        model_id="gpt-4o",
+        credentials_ciphertext=b"gAAAAAB",
+        default_params={},
+        visibility="org",
+        tier="native",
+        account_id=_USER_ID,
+    )
+    mb.created_at = now
+    mb.updated_at = now
+    mb.last_health_check_at = None
+    mb.last_health_check_error = None
+
+    mock_session = _make_mock_session()
+    dup_result = MagicMock()
+    dup_result.scalar_one_or_none.return_value = None
+    mock_session.execute.return_value = dup_result
+
+    async def override_session() -> AsyncMock:
+        yield mock_session
+
+    settings = Settings(
+        database_url="postgresql+asyncpg://localhost/test",
+        secret_key=_VALID_32,
+        fernet_key=Fernet.generate_key().decode(),
+        modulo_admin_password="testpass",
+    )
+
+    with (
+        patch("modulo.api.routes.model_backends.create_model_backend", return_value=mb),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.core.secrets_backend.create_secrets_backend", return_value=AsyncMock()),
+        patch(
+            "modulo.api.routes.model_backends._run_health_check_on_save",
+            new=AsyncMock(return_value=(False, "401 Incorrect API key provided")),
+        ),
+    ):
+        client.app.dependency_overrides[get_settings] = lambda: settings
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.post(
+            "/api/v1/model-backends",
+            json={
+                "name": "test-backend",
+                "display_name": "Test Backend",
+                "provider": "openai",
+                "model_id": "gpt-4o",
+                "api_key": "sk-test",
+            },
+        )
+
+    assert resp.status_code == 201
+    assert mb.last_health_check_at is not None
+    assert mb.last_health_check_error == "401 Incorrect API key provided"
+
+
+def test_model_backend_update_persists_health_check_on_key_rotation(client: TestClient) -> None:
+    """PRD 8.1 - PATCHing a new API key re-runs the health check on save and
+    records the post-rotation result on the entity."""
+    from datetime import UTC, datetime
+    from unittest.mock import AsyncMock, patch
+
+    from cryptography.fernet import Fernet
+
+    from modulo.api.dependencies import get_db_session
+    from modulo.db.models.model_backend import ModelBackend
+    from modulo.settings import Settings, get_settings
+
+    backend_id = uuid.uuid4()
+    now = datetime.now(UTC)
+    mb = ModelBackend(
+        id=backend_id,
+        organisation_id=_ORG_ID,
+        name="test-backend",
+        display_name="Test Backend",
+        provider="openai",
+        model_id="gpt-4o",
+        credentials_ciphertext=b"gAAAAAB",
+        default_params={},
+        visibility="org",
+        tier="native",
+        account_id=_USER_ID,
+    )
+    mb.created_at = now
+    mb.updated_at = now
+    mb.last_health_check_at = None
+    mb.last_health_check_error = None
+
+    mock_session = _make_mock_session()
+    mock_session.execute.return_value = MagicMock()
+
+    async def override_session() -> AsyncMock:
+        yield mock_session
+
+    settings = Settings(
+        database_url="postgresql+asyncpg://localhost/test",
+        secret_key=_VALID_32,
+        fernet_key=Fernet.generate_key().decode(),
+        modulo_admin_password="testpass",
+    )
+
+    with (
+        patch("modulo.api.routes.model_backends.update_model_backend", return_value=mb),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.core.secrets_backend.create_secrets_backend", return_value=AsyncMock()),
+        patch(
+            "modulo.api.routes.model_backends._run_health_check_on_save",
+            new=AsyncMock(return_value=(False, "429 rate limit exceeded")),
+        ),
+    ):
+        client.app.dependency_overrides[get_settings] = lambda: settings
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.patch(
+            f"/api/v1/model-backends/{backend_id}",
+            json={"api_key": "sk-rotated"},
+        )
+
+    assert resp.status_code == 200
+    assert mb.last_health_check_at is not None
+    assert mb.last_health_check_error == "429 rate limit exceeded"
