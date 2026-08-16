@@ -208,36 +208,83 @@ def _split_merge_outputs(
     stored_tel = stored_telemetry if isinstance(stored_telemetry, dict) else {}
 
     for node_id, value in stored_out.items():
-        node_id = str(node_id)
-        if node_id in stored_tel:
-            merged_outputs[node_id] = value
-            merged_telemetry[node_id] = stored_tel[node_id]
-            continue
-        _log_output_resplit(run_id, node_id)
-        ret, telemetry = split_node_output(value, node_type_map.get(node_id, ""), None, run_id=run_id, node_id=node_id)
-        if not (ret is None and telemetry.get("skipped") is True):
-            merged_outputs[node_id] = ret
-        merged_telemetry[node_id] = telemetry
+        _merge_stored_output(merged_outputs, merged_telemetry, str(node_id), value, stored_tel, node_type_map, run_id)
 
     if isinstance(segment, dict):
         for node_id, seg_value in segment.items():
-            node_id = str(node_id)
-            stored_entry = stored_tel.get(node_id)
-            ret, telemetry = split_node_output(
+            _merge_segment_output(
+                merged_outputs,
+                merged_telemetry,
+                str(node_id),
                 seg_value,
-                node_type_map.get(node_id, ""),
-                stored_entry,
-                run_id=run_id,
-                node_id=node_id,
+                stored_tel,
+                node_type_map,
+                run_id,
             )
-            if stored_entry is None:
-                _log_output_resplit(run_id, node_id)
-            _preserve_recovery_fields(stored_entry, telemetry)
-            if not (ret is None and telemetry.get("skipped") is True):
-                merged_outputs[node_id] = ret
-            merged_telemetry[node_id] = telemetry
 
     return merged_outputs, merged_telemetry
+
+
+def _store_split_result(
+    merged_outputs: dict[str, Any],
+    merged_telemetry: dict[str, Any],
+    node_id: str,
+    ret: Any,
+    telemetry: dict[str, Any],
+) -> None:
+    """Store one split result into the two LOCKSTEP columns.
+
+    The outputs key is omitted when the split is a skipped-recovery marker
+    (``ret is None and telemetry.skipped``); the telemetry entry is the sole
+    record. Lockstep is otherwise strict: every stored output key gets a
+    telemetry key.
+    """
+    if not (ret is None and telemetry.get("skipped") is True):
+        merged_outputs[node_id] = ret
+    merged_telemetry[node_id] = telemetry
+
+
+def _merge_stored_output(
+    merged_outputs: dict[str, Any],
+    merged_telemetry: dict[str, Any],
+    node_id: str,
+    value: Any,
+    stored_tel: dict[str, Any],
+    node_type_map: dict[str, str],
+    run_id: str | None,
+) -> None:
+    """Split-then-merge ONE stored (already-persisted) output row."""
+    if node_id in stored_tel:
+        merged_outputs[node_id] = value
+        merged_telemetry[node_id] = stored_tel[node_id]
+        return
+    _log_output_resplit(run_id, node_id)
+    ret, telemetry = split_node_output(value, node_type_map.get(node_id, ""), None, run_id=run_id, node_id=node_id)
+    _store_split_result(merged_outputs, merged_telemetry, node_id, ret, telemetry)
+
+
+def _merge_segment_output(
+    merged_outputs: dict[str, Any],
+    merged_telemetry: dict[str, Any],
+    node_id: str,
+    seg_value: Any,
+    stored_tel: dict[str, Any],
+    node_type_map: dict[str, str],
+    run_id: str | None,
+) -> None:
+    """Split-then-merge ONE segment output row (fresh split against the stored signal)."""
+    stored_entry = stored_tel.get(node_id)
+    ret, telemetry = split_node_output(
+        seg_value,
+        node_type_map.get(node_id, ""),
+        stored_entry,
+        run_id=run_id,
+        node_id=node_id,
+    )
+    if stored_entry is None:
+        _log_output_resplit(run_id, node_id)
+    _preserve_recovery_fields(stored_entry, telemetry)
+    _store_split_result(merged_outputs, merged_telemetry, node_id, ret, telemetry)
 
 
 def _node_output_dict(merged_outputs: Any, node_id: str, merged_telemetry: Any = None) -> dict[str, Any] | None:
@@ -362,26 +409,13 @@ def _enrich_union(
 
     for node_id, node_dict in union.items():
         output_obj = _node_output_dict(merged_outputs, node_id, merged_telemetry)
-        has_wallclock = isinstance(output_obj, dict) and isinstance(output_obj.get("wall_clock_time_ms"), (int, float))
-        if isinstance(output_obj, dict) and isinstance(output_obj.get("wall_clock_time_ms"), (int, float)):
-            node_dict["wall_clock_time_ms"] = output_obj["wall_clock_time_ms"]
-
-        map_type = node_type_map.get(node_id)
-        node_dict["sandbox_by_map"] = map_type == NODE_TYPE_SANDBOX_AGENT
-        node_dict["is_sandbox_for_wallclock"] = (map_type == NODE_TYPE_SANDBOX_AGENT) or (
-            map_type is None and has_wallclock
-        )
-
-        _fold_model_cost(node_dict, output_obj)
-
+        map_type = _enrich_node_fields(node_dict, output_obj, node_type_map.get(node_id))
         if output_obj is not None:
             executed_types[map_type or "<map_absent>"] += 1
             if map_type is None:
                 missing_node_type.append(node_id)
             if is_terminal:
-                schema_drift = output_obj.get("schema_drift")
-                if schema_drift and output_obj.get("pin_failed") is not True and map_type == NODE_TYPE_SANDBOX_AGENT:
-                    record_schema_drift()
+                _record_node_schema_drift(output_obj, map_type)
 
     if missing_node_type:
         _log.warning("cost_components_missing_node_type", extra={"node_ids": missing_node_type})
@@ -389,6 +423,38 @@ def _enrich_union(
         _log.info("cost_components_node_type_ratio", extra={"executed_types": dict(executed_types)})
 
     return union
+
+
+def _enrich_node_fields(
+    node_dict: dict[str, Any],
+    output_obj: dict[str, Any] | None,
+    map_type: str | None,
+) -> str | None:
+    """Stamp one union entry's derived fields from its node-output dict.
+
+    Sets ``wall_clock_time_ms`` (server-verified when present), the split
+    sandbox flags (``sandbox_by_map`` / ``is_sandbox_for_wallclock``) and the
+    pinned model-cost fold. Returns the node's mapped type (``None`` when the
+    frozen map lacks the node — the schema-drift provenance gate).
+    """
+    if isinstance(output_obj, dict) and isinstance(output_obj.get("wall_clock_time_ms"), (int, float)):
+        node_dict["wall_clock_time_ms"] = output_obj["wall_clock_time_ms"]
+
+    has_wallclock = isinstance(output_obj, dict) and isinstance(output_obj.get("wall_clock_time_ms"), (int, float))
+    node_dict["sandbox_by_map"] = map_type == NODE_TYPE_SANDBOX_AGENT
+    node_dict["is_sandbox_for_wallclock"] = (map_type == NODE_TYPE_SANDBOX_AGENT) or (
+        map_type is None and has_wallclock
+    )
+
+    _fold_model_cost(node_dict, output_obj)
+    return map_type
+
+
+def _record_node_schema_drift(output_obj: dict[str, Any], map_type: str | None) -> None:
+    """TERMINAL-ONLY schema-drift counter, gated on pin_failed + sandbox-by-map."""
+    schema_drift = output_obj.get("schema_drift")
+    if schema_drift and output_obj.get("pin_failed") is not True and map_type == NODE_TYPE_SANDBOX_AGENT:
+        record_schema_drift()
 
 
 def _write_back_node_cost(
@@ -584,40 +650,8 @@ async def _fallback_write(
     total = token_cost + sandbox_cost
     if not total.is_finite():
         total = Decimal(0)
-    wall_hours = 0.0
-    if isinstance(merged_outputs, dict):
-        for node_id in merged_outputs:
-            out = node_telemetry(merged_telemetry, merged_outputs, node_id)
-            if isinstance(out, dict) and isinstance(out.get("wall_clock_time_ms"), (int, float)):
-                wall_hours += float(out["wall_clock_time_ms"]) / 3600000.0
-    breakdown: list[dict[str, Any]] = [
-        {
-            "component": "llm_tokens",
-            "display_name": "LLM Tokens",
-            "source": "calculated",
-            "amount_usd": _entry_amount(token_cost),
-            "formula_applied": ("tokens_input * input_token_rate + tokens_output * output_token_rate"),
-            "rate_usd": None,
-            "basis": {
-                "tokens_input": int(
-                    sum((e.get("input_tokens") or 0) for e in (merged_usage or {}).values() if isinstance(e, dict))
-                ),
-                "tokens_output": int(
-                    sum((e.get("output_tokens") or 0) for e in (merged_usage or {}).values() if isinstance(e, dict))
-                ),
-                "nodes_estimated": 0,
-            },
-        },
-        {
-            "component": "sandbox_infra",
-            "display_name": "Sandbox Infrastructure",
-            "source": "calculated",
-            "amount_usd": _entry_amount(sandbox_cost),
-            "formula_applied": "rate * wall_clock_hours",
-            "rate_usd": str(_e2b_rate()),
-            "basis": {"wall_clock_hours": wall_hours},
-        },
-    ]
+    wall_hours = _fallback_wall_hours(merged_outputs, merged_telemetry)
+    breakdown = _build_fallback_breakdown(token_cost, sandbox_cost, wall_hours, merged_usage)
     if total > COST_COLUMN_CAP:
         total = COST_COLUMN_CAP
         breakdown.insert(0, dict(TOTAL_CLAMPED_MARKER))
@@ -636,12 +670,71 @@ async def _fallback_write(
         claim_token=claim_token,
     )
     if is_terminal:
-        run = await session.get(Run, run_id)
-        if run is not None:
-            await record_run_facts(session, run)
-            # FAR-143 — the LEGACY FALLBACK terminal also advances journeys
-            # (fail-open, own savepoint).
-            await _advance_journeys_on_terminal(session, run, status, merged_outputs, writer=_WRITER_FALLBACK)
+        await _record_fallback_terminal_facts(session, run_id, status, merged_outputs)
+
+
+def _fallback_wall_hours(merged_outputs: dict[str, Any], merged_telemetry: Any) -> float:
+    """Server-verified wall-clock hours across completed nodes (legacy fallback)."""
+    wall_hours = 0.0
+    if isinstance(merged_outputs, dict):
+        for node_id in merged_outputs:
+            out = node_telemetry(merged_telemetry, merged_outputs, node_id)
+            if isinstance(out, dict) and isinstance(out.get("wall_clock_time_ms"), (int, float)):
+                wall_hours += float(out["wall_clock_time_ms"]) / 3600000.0
+    return wall_hours
+
+
+def _build_fallback_breakdown(
+    token_cost: Decimal,
+    sandbox_cost: Decimal,
+    wall_hours: float,
+    merged_usage: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """The LEGACY FALLBACK breakdown — LLM tokens + sandbox infra entries."""
+    return [
+        {
+            "component": "llm_tokens",
+            "display_name": "LLM Tokens",
+            "source": "calculated",
+            "amount_usd": _entry_amount(token_cost),
+            "formula_applied": ("tokens_input * input_token_rate + tokens_output * output_token_rate"),
+            "rate_usd": None,
+            "basis": {
+                "tokens_input": _usage_token_sum(merged_usage, "input_tokens"),
+                "tokens_output": _usage_token_sum(merged_usage, "output_tokens"),
+                "nodes_estimated": 0,
+            },
+        },
+        {
+            "component": "sandbox_infra",
+            "display_name": "Sandbox Infrastructure",
+            "source": "calculated",
+            "amount_usd": _entry_amount(sandbox_cost),
+            "formula_applied": "rate * wall_clock_hours",
+            "rate_usd": str(_e2b_rate()),
+            "basis": {"wall_clock_hours": wall_hours},
+        },
+    ]
+
+
+def _usage_token_sum(merged_usage: dict[str, Any], key: str) -> int:
+    """Sum one token field across the SERVER usage entries (dicts only)."""
+    return int(sum((e.get(key) or 0) for e in (merged_usage or {}).values() if isinstance(e, dict)))
+
+
+async def _record_fallback_terminal_facts(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    status: str,
+    merged_outputs: dict[str, Any],
+) -> None:
+    """FAR-143 — the LEGACY FALLBACK terminal also records facts + advances journeys."""
+    run = await session.get(Run, run_id)
+    if run is not None:
+        await record_run_facts(session, run)
+        # FAR-143 — the LEGACY FALLBACK terminal also advances journeys
+        # (fail-open, own savepoint).
+        await _advance_journeys_on_terminal(session, run, status, merged_outputs, writer=_WRITER_FALLBACK)
 
 
 def _is_abort_error(exc: Exception) -> bool:
@@ -1139,26 +1232,17 @@ async def finalize_cost(
 
     if not merged_usage and not merged_outputs and not merged_telemetry:
         # Pre-component-read terminal: total 0, breakdown NULL, no ledger.
-        await update_run_status(
+        await _write_empty_terminal(
             session,
             run_id,
             status,
-            error_code=error_code,
-            error_detail=error_detail,
-            total_cost_usd=Decimal(0),
-            total_tokens=0,
-            claim_token=claim_token,
+            error_code,
+            error_detail,
+            claim_token,
+            is_terminal,
+            run,
+            merged_outputs,
         )
-        if is_terminal:
-            # Refresh AFTER the status write — the fenced UPDATE bypasses the
-            # ORM identity map, so without it the fact would snapshot the
-            # pre-write 'running' row (FAR-200). The refresh runs INSIDE
-            # ``record_run_facts``'s fail-open guard (ADR-020), so a refresh
-            # failure degrades to the in-memory object and never propagates.
-            await record_run_facts(session, run)
-            # FAR-143 — even with empty outputs the run still advances from its
-            # create-stamped refs (zero-cost terminal).
-            await _advance_journeys_on_terminal(session, run, status, merged_outputs, writer=_WRITER_EARLY_RETURN)
         return
 
     # --- the never-fail envelope: component read + build + run write (§1.5) ---
@@ -1182,10 +1266,9 @@ async def finalize_cost(
         # and BEFORE the status write, so the ``budget_exceeded`` status +
         # error message land in the SAME ``update_run_status`` call. Cancelled
         # (CANCEL-WINS) and eval_failed (the eval gate outcome) are preserved.
-        if is_terminal and status not in ("cancelled", "eval_failed"):
-            budget_override = await _enforce_agent_token_budgets(session, run=run, usage=enriched)
-            if budget_override is not None:
-                status, error_code, error_detail = budget_override
+        status, error_code, error_detail = await _apply_agent_budget_override(
+            session, run, enriched, is_terminal, status, error_code, error_detail
+        )
         if len(str(enriched).encode("utf-8")) > _UNION_SIZE_GUARDRAIL_BYTES:
             _log.warning(
                 "cost_union.size_guardrail",
@@ -1213,10 +1296,9 @@ async def finalize_cost(
         # FAR-104 — the budget check is FAIL-OPEN (never raises), so it is safe
         # inside the never-fail fallback envelope: an agent-budget breach still
         # terminalizes ``budget_exceeded`` even when the component build failed.
-        if is_terminal and status not in ("cancelled", "eval_failed"):
-            budget_override = await _enforce_agent_token_budgets(session, run=run, usage=merged_usage)
-            if budget_override is not None:
-                status, error_code, error_detail = budget_override
+        status, error_code, error_detail = await _apply_agent_budget_override(
+            session, run, merged_usage, is_terminal, status, error_code, error_detail
+        )
         await _fallback_write(
             session,
             run_id,
@@ -1267,6 +1349,62 @@ async def finalize_cost(
         # savepoint). Also covers the reduced-escape terminal (its fresh-tx
         # status write is committed before we get here).
         await _advance_journeys_on_terminal(session, run, status, merged_outputs, writer=_WRITER_LIVE)
+
+
+async def _apply_agent_budget_override(
+    session: AsyncSession,
+    run: Run,
+    usage: dict[str, Any],
+    is_terminal: bool,
+    status: str,
+    error_code: str | None,
+    error_detail: str | None,
+) -> tuple[str, str | None, str | None]:
+    """FAR-104 — per-agent token budget enforcement (TERMINAL-ONLY, atomic, fail-open).
+
+    Returns the (possibly overridden) ``status`` / ``error_code`` /
+    ``error_detail`` triple. Cancelled (CANCEL-WINS) and eval_failed (the eval
+    gate outcome) are preserved.
+    """
+    if is_terminal and status not in ("cancelled", "eval_failed"):
+        budget_override = await _enforce_agent_token_budgets(session, run=run, usage=usage)
+        if budget_override is not None:
+            return budget_override
+    return status, error_code, error_detail
+
+
+async def _write_empty_terminal(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    status: str,
+    error_code: str | None,
+    error_detail: str | None,
+    claim_token: str | None,
+    is_terminal: bool,
+    run: Run,
+    merged_outputs: dict[str, Any],
+) -> None:
+    """The PRE-COMPONENT-READ terminal write — total 0, breakdown NULL, no ledger."""
+    await update_run_status(
+        session,
+        run_id,
+        status,
+        error_code=error_code,
+        error_detail=error_detail,
+        total_cost_usd=Decimal(0),
+        total_tokens=0,
+        claim_token=claim_token,
+    )
+    if is_terminal:
+        # Refresh AFTER the status write — the fenced UPDATE bypasses the
+        # ORM identity map, so without it the fact would snapshot the
+        # pre-write 'running' row (FAR-200). The refresh runs INSIDE
+        # ``record_run_facts``'s fail-open guard (ADR-020), so a refresh
+        # failure degrades to the in-memory object and never propagates.
+        await record_run_facts(session, run)
+        # FAR-143 — even with empty outputs the run still advances from its
+        # create-stamped refs (zero-cost terminal).
+        await _advance_journeys_on_terminal(session, run, status, merged_outputs, writer=_WRITER_EARLY_RETURN)
 
 
 async def _load_node_type_map(session: AsyncSession, snapshot_id: uuid.UUID) -> dict[str, str]:
