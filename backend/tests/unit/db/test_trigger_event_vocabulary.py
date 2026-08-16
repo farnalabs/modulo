@@ -156,7 +156,7 @@ class TestMigrationChain:
 
 
 class TestGuardrailBlockedMigration0106:
-    """FAR-214 vocabulary twin for migration 0106 (the current head).
+    """FAR-214 vocabulary twin for migration 0106 (the FAR-214 head).
 
     0106 widens the constraint with ``guardrail_blocked``. Its hardcoded
     ``_VALIDATION_RESULT_VALUES`` must equal the FULL model vocabulary (a value
@@ -173,11 +173,19 @@ class TestGuardrailBlockedMigration0106:
         / "0106_trigger_event_guardrail_blocked.py"
     )
 
-    def test_migration_0106_is_sole_head(self) -> None:
+    def test_0106_is_in_single_head_chain(self) -> None:
+        """The migration graph has exactly ONE head and 0106 lives on that
+        chain. 0106 is the FAR-214 head but main may later revise it (FAR-223
+        ``0107_guardrail_t1_remainder`` sits on top of it), so pin the single
+        head + chain membership, not the head identity."""
         migration = self._load_0106()
         assert migration.revision == "0106_trigger_event_guardrail_blocked"
         assert migration.down_revision == "0105_guardrail_pins"
-        assert _script().get_heads() == ["0106_trigger_event_guardrail_blocked"]
+        script = _script()
+        heads = script.get_heads()
+        assert len(heads) == 1, f"expected a single head, got {heads}"
+        revisions = {rev.revision for rev in script.walk_revisions()}
+        assert "0106_trigger_event_guardrail_blocked" in revisions
 
     def test_0106_vocabulary_matches_full_model(self) -> None:
         """0106's hardcoded twin equals the FULL model vocabulary — including
