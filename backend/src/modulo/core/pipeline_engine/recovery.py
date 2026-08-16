@@ -304,21 +304,9 @@ async def guardrail_override(
         run_interception_pass_async,
         to_engine_definition,
     )
-    from modulo.db.models.eval_definition import EvalDefinition as EvalDefinitionModel
+    from modulo.db.crud.eval_definition import load_pipeline_guardrail_rows
 
-    guardrail_rows = (
-        (
-            await session.execute(
-                select(EvalDefinitionModel).where(
-                    EvalDefinitionModel.pipeline_id == run.pipeline_id,
-                    EvalDefinitionModel.organisation_id == org_id,
-                    EvalDefinitionModel.eval_type == "guardrail",
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
+    guardrail_rows = await load_pipeline_guardrail_rows(session, pipeline_id=run.pipeline_id, org_id=org_id)
     guardrail_defs = [to_engine_definition(row) for row in guardrail_rows]
     outcome: GuardrailInterceptionOutcome = await run_interception_pass_async(
         EvalEngine(),

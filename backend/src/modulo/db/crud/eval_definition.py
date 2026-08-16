@@ -10,6 +10,29 @@ from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.eval_definition import EvalDefinition
 
 
+async def load_pipeline_guardrail_rows(
+    session: AsyncSession,
+    *,
+    pipeline_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> list[EvalDefinition]:
+    """Load the live ``eval_type='guardrail'`` rows bound to a pipeline.
+
+    The ingestion-edge guardrail seams (``create_run``, snapshot pinning,
+    recovery, and the pipeline validator) all load the same org + pipeline +
+    ``eval_type='guardrail'`` filter. Centralised here so the filter cannot
+    drift across the four call sites.
+    """
+    result = await session.execute(
+        select(EvalDefinition).where(
+            EvalDefinition.pipeline_id == pipeline_id,
+            EvalDefinition.organisation_id == org_id,
+            EvalDefinition.eval_type == "guardrail",
+        )
+    )
+    return list(result.scalars().all())
+
+
 async def list_eval_definitions(
     session: AsyncSession,
     org_id: uuid.UUID,

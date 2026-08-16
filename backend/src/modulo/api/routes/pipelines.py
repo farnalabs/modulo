@@ -993,22 +993,10 @@ async def replace_pipeline_graph_endpoint(
                 # validation can reject a per-node guardrail-cap violation
                 # (FAR-223 item 7) — the authoring-time rejection that the
                 # create_run fail-closed backstop also enforces at run start.
-                from sqlalchemy import select
+                from modulo.db.crud.eval_definition import load_pipeline_guardrail_rows
 
-                from modulo.db.models.eval_definition import EvalDefinition
-
-                guardrail_rows = (
-                    (
-                        await session.execute(
-                            select(EvalDefinition).where(
-                                EvalDefinition.pipeline_id == pipeline_id,
-                                EvalDefinition.organisation_id == principal.organisation_id,
-                                EvalDefinition.eval_type == "guardrail",
-                            )
-                        )
-                    )
-                    .scalars()
-                    .all()
+                guardrail_rows = await load_pipeline_guardrail_rows(
+                    session, pipeline_id=pipeline_id, org_id=principal.organisation_id
                 )
                 validation = await GraphValidator().validate_definition(
                     validator_graph,

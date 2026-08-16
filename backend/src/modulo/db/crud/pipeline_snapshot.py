@@ -281,20 +281,10 @@ async def create_snapshot_from_live_graph(
         # (the pinned set), never the live rows. Loaded here — not inside
         # create_run — so the pin is immutable like the graph itself.
         from modulo.core.guardrails import serialize_guardrail_pin
-        from modulo.db.models.eval_definition import EvalDefinition
+        from modulo.db.crud.eval_definition import load_pipeline_guardrail_rows
 
-        guardrail_rows = (
-            (
-                await session.execute(
-                    select(EvalDefinition).where(
-                        EvalDefinition.pipeline_id == pipeline_id,
-                        EvalDefinition.organisation_id == pipeline.organisation_id,
-                        EvalDefinition.eval_type == "guardrail",
-                    )
-                )
-            )
-            .scalars()
-            .all()
+        guardrail_rows = await load_pipeline_guardrail_rows(
+            session, pipeline_id=pipeline_id, org_id=pipeline.organisation_id
         )
         guardrail_pins = [serialize_guardrail_pin(row) for row in guardrail_rows] or None
 

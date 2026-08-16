@@ -50,6 +50,8 @@ from modulo.core.guardrails import (
     GuardrailAction,
     GuardrailConfigError,
     _resolve_detection,
+    resolve_guardrail_cap,
+    resolve_guardrail_timeout,
 )
 
 GuardrailPinStatus = Literal["clean", "proposed", "drift"]
@@ -515,18 +517,10 @@ def build_config_set_from_definitions(definitions: list[EvalDefinition]) -> Guar
     # Recover the org-level knobs (item 7) from the applied rows so the rebuilt
     # set hashes identically to the applied set. ``to_eval_config`` mirrors
     # these onto every row; the effective value is the MAX declared (0 =
-    # feature off for the cap), matching the engine's own resolution.
-    cap_values: list[int] = []
-    timeout_values: list[float] = []
-    for d in by_id.values():
-        raw_cap = d.config.get("max_guardrails_per_node")
-        if isinstance(raw_cap, int) and not isinstance(raw_cap, bool):
-            cap_values.append(raw_cap)
-        raw_timeout = d.config.get("guardrail_timeout_seconds")
-        if isinstance(raw_timeout, (int, float)) and not isinstance(raw_timeout, bool):
-            timeout_values.append(float(raw_timeout))
-    cap = 0 if 0 in cap_values else max(cap_values, default=DEFAULT_MAX_GUARDRAILS_PER_NODE)
-    timeout = float(max(timeout_values, default=DEFAULT_GUARDRAIL_TIMEOUT_SECONDS))
+    # feature off for the cap), matching the engine's own resolution. Reuse the
+    # engine resolvers so the two resolutions can never drift.
+    cap = resolve_guardrail_cap(list(by_id.values()))
+    timeout = resolve_guardrail_timeout(list(by_id.values()))
     try:
         return GuardrailConfigSet(
             guardrails=items,

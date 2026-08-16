@@ -12,7 +12,7 @@ from typing import Any, ClassVar
 
 import pytest
 
-from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalType
+from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult, EvalType
 from modulo.core.guardrails import (
     DEFAULT_GUARDRAIL_TIMEOUT_SECONDS,
     DEFAULT_MAX_GUARDRAILS_PER_NODE,
@@ -74,6 +74,31 @@ class _SleepingEngine(EvalEngine):
     def evaluate(self, output: dict[str, Any], eval_def: EvalDefinition, **kwargs: Any) -> Any:
         time.sleep(self._delay)
         raise AssertionError("should never reach real evaluation in timeout tests")
+
+
+class _SelectiveSleepingEngine(EvalEngine):
+    """Engine that blocks only a NAMED guardrail; other guardrails evaluate fast.
+
+    Lets a test prove per-guardrail independence: one guardrail hangs (and
+    times out) while a sibling evaluates cleanly within the same pass.
+    """
+
+    def __init__(self, delay: float, slow_name: str) -> None:
+        super().__init__()
+        self._delay = delay
+        self._slow_name = slow_name
+
+    def evaluate(self, output: dict[str, Any], eval_def: EvalDefinition, **kwargs: Any) -> Any:
+        if eval_def.name == self._slow_name:
+            time.sleep(self._delay)
+            raise AssertionError("should never reach real evaluation in timeout tests")
+        return EvalResult(
+            run_id=uuid.uuid4(),
+            node_id=eval_def.node_id or "",
+            eval_id=eval_def.id,
+            passed=False,
+            score=0.0,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -205,14 +230,17 @@ async def test_timeout_applies_per_guardrail_not_pass_wide():
     fast = _def("fast", "block")
     slow = _def("slow", "block", timeout=0.05)
     outcome = await run_interception_pass_async(
-        _SleepingEngine(5.0),
+        _SelectiveSleepingEngine(5.0, slow_name="slow"),
         [fast, slow],
         {"body": "leak SECRET_ABC12345"},
         timeout_seconds=0.05,
     )
-    # The slow block guardrail timed out → fail closed.
+    # The slow block guardrail timed out → fail closed. The FAST guardrail
+    # evaluated cleanly (no timeout, no violation), which is what proves the
+    # budget is PER-GUARDRAIL, not pass-wide.
     assert outcome.blocked is True
     assert outcome.blocking_eval_name == "slow"
+    assert [r.eval_id for r in outcome.results] == [fast.id]
 
 
 # ---------------------------------------------------------------------------
