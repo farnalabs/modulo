@@ -147,6 +147,26 @@ from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
 
+_CT_APPLICATION_JSON = "application/json"
+_MSG_TOKEN_REVOKED = "Token revoked or expired - re-authenticate"
+_MSG_ERROR_TOKEN_REVOKED = "error: Token revoked or expired - re-authenticate"
+_MSG_DB_MIGRATION_REQUIRED = "Database migration required. Run `alembic upgrade head`."
+_MSG_DB_MIGRATION_REQUIRED_HEADS = "Database migration required. Run alembic upgrade heads."
+_MSG_TRIGGER_NOT_FOUND = "Trigger not found"
+_MSG_CREATE_API_KEY_FAILED = "create_api_key failed"
+_MSG_LIST_API_KEYS_FAILED = "list_api_keys failed"
+_MSG_REVOKE_API_KEY_FAILED = "revoke_api_key failed"
+_MSG_CREATE_SCHEMA_FAILED = "create_schema failed"
+_MSG_DB_TEMPORARILY_UNAVAILABLE = "Database temporarily unavailable"
+_MSG_FEATURE_NOT_AVAILABLE_MIGRATE = "Feature is not available. Run database migrations to enable it."
+_MSG_DB_ERROR_TRY_AGAIN = "Database error occurred. Please try again."
+_MSG_UNEXPECTED_ERROR = "An unexpected error occurred"
+_MSG_MCP_AUTH_DB_UNAVAILABLE = "mcp.auth.db_unavailable"
+_CODE_PERMISSION_API_KEY_ROLE_CAP = "permission.api_key_role_cap"
+_JSON_AUTH_DB_UNAVAILABLE = '{"error":"temporarily_unavailable","detail":"Auth backend temporarily unavailable"}'
+_JSON_FORBIDDEN_ORG_MEMBERSHIP = '{"error":"forbidden","detail":"Organisation membership required"}'
+_BASIC_PREFIX = "Basic "
+
 _MCP_SANITIZE_STRING_MAX = 256
 _MCP_BREAKDOWN_KEYS = frozenset(
     {
@@ -447,7 +467,7 @@ def _record_api_key_role_cap(
     with _api_key_role_cap_lock:
         _api_key_role_cap_count += 1
     _log.warning(
-        "permission.api_key_role_cap",
+        _CODE_PERMISSION_API_KEY_ROLE_CAP,
         extra={
             "minted_role": minted_role,
             "effective_role": effective_role,
@@ -705,7 +725,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
             return Response(
                 '{"error":"unauthorized","detail":"Bearer token required"}',
                 status_code=401,
-                media_type="application/json",
+                media_type=_CT_APPLICATION_JSON,
             )
         token = auth_header[len("Bearer ") :].strip()
 
@@ -803,14 +823,14 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                 return Response(
                     '{"error":"unauthorized","detail":"Invalid or revoked API key"}',
                     status_code=401,
-                    media_type="application/json",
+                    media_type=_CT_APPLICATION_JSON,
                 )
             except (SQLAlchemyError, OperationalError, TimeoutError):
-                _log.exception("mcp.auth.db_unavailable")
+                _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
                 return Response(
-                    '{"error":"temporarily_unavailable","detail":"Auth backend temporarily unavailable"}',
+                    _JSON_AUTH_DB_UNAVAILABLE,
                     status_code=503,
-                    media_type="application/json",
+                    media_type=_CT_APPLICATION_JSON,
                 )
             await _set_authz_enforce(org_id)
             resp3: Response = await call_next(request)
@@ -830,13 +850,13 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                 return Response(
                     '{"error":"unauthorized","detail":"Invalid or expired access token"}',
                     status_code=401,
-                    media_type="application/json",
+                    media_type=_CT_APPLICATION_JSON,
                 )
             if principal.organisation_id is None:
                 return Response(
-                    '{"error":"forbidden","detail":"Organisation membership required"}',
+                    _JSON_FORBIDDEN_ORG_MEMBERSHIP,
                     status_code=403,
-                    media_type="application/json",
+                    media_type=_CT_APPLICATION_JSON,
                 )
             # ADR 017: no claim-less default-up. A None role claim fails closed,
             # and the LIVE role is re-read from org_memberships so a demoted or
@@ -845,7 +865,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                 return Response(
                     '{"error":"forbidden","detail":"No org role claim on token"}',
                     status_code=403,
-                    media_type="application/json",
+                    media_type=_CT_APPLICATION_JSON,
                 )
             try:
                 async with _session(principal.organisation_id) as s:
@@ -855,17 +875,17 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                         str(principal.organisation_id),
                     )
             except (SQLAlchemyError, OperationalError, TimeoutError):
-                _log.exception("mcp.auth.db_unavailable")
+                _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
                 return Response(
-                    '{"error":"temporarily_unavailable","detail":"Auth backend temporarily unavailable"}',
+                    _JSON_AUTH_DB_UNAVAILABLE,
                     status_code=503,
-                    media_type="application/json",
+                    media_type=_CT_APPLICATION_JSON,
                 )
             if live_role is None:
                 return Response(
-                    '{"error":"forbidden","detail":"Organisation membership required"}',
+                    _JSON_FORBIDDEN_ORG_MEMBERSHIP,
                     status_code=403,
-                    media_type="application/json",
+                    media_type=_CT_APPLICATION_JSON,
                 )
             _ctx_org_id.set(principal.organisation_id)
             _ctx_role.set(live_role)
@@ -896,21 +916,21 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                     return Response(
                         '{"error":"unauthorized","detail":"Token family revoked"}',
                         status_code=401,
-                        media_type="application/json",
+                        media_type=_CT_APPLICATION_JSON,
                     )
         except (SQLAlchemyError, OperationalError, TimeoutError):
-            _log.exception("mcp.auth.db_unavailable")
+            _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
             return Response(
-                '{"error":"temporarily_unavailable","detail":"Auth backend temporarily unavailable"}',
+                _JSON_AUTH_DB_UNAVAILABLE,
                 status_code=503,
-                media_type="application/json",
+                media_type=_CT_APPLICATION_JSON,
             )
         except Exception:
             _log.exception("OAuth token family check failed")
             return Response(
                 '{"error":"unauthorized","detail":"Token validation failed"}',
                 status_code=401,
-                media_type="application/json",
+                media_type=_CT_APPLICATION_JSON,
             )
 
         # Resolve role from scopes (highest scope wins) — ADR 017: the scope
@@ -926,17 +946,17 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                     str(claims.organisation_id),
                 )
         except (SQLAlchemyError, OperationalError, TimeoutError):
-            _log.exception("mcp.auth.db_unavailable")
+            _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
             return Response(
-                '{"error":"temporarily_unavailable","detail":"Auth backend temporarily unavailable"}',
+                _JSON_AUTH_DB_UNAVAILABLE,
                 status_code=503,
-                media_type="application/json",
+                media_type=_CT_APPLICATION_JSON,
             )
         if live_role is None:
             return Response(
-                '{"error":"forbidden","detail":"Organisation membership required"}',
+                _JSON_FORBIDDEN_ORG_MEMBERSHIP,
                 status_code=403,
-                media_type="application/json",
+                media_type=_CT_APPLICATION_JSON,
             )
         role = clamp_oauth_role(scope_role, live_role)
 
@@ -1004,7 +1024,7 @@ async def list_pipelines_tool(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         org_id = _ctx_org_id_val()
         from modulo.db.crud.pipeline import list_pipelines
 
@@ -1019,7 +1039,7 @@ async def list_pipelines_tool(
         }
     except ProgrammingError:
         _log.exception("list_pipelines_tool failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("list_pipelines_tool failed")
         return _tool_error("Failed to list pipelines")
@@ -1046,7 +1066,7 @@ async def create_pipeline(
 
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "create_pipeline")
         from modulo.db.crud.pipeline import create_pipeline
 
@@ -1081,7 +1101,7 @@ async def create_pipeline(
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("create_pipeline failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("create_pipeline failed")
         return _tool_error("Failed to create pipeline")
@@ -1099,7 +1119,7 @@ async def list_runs(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "list_runs")
         from modulo.db.crud.run import get_child_run_rollup
         from modulo.db.crud.run import list_runs as db_list_runs
@@ -1158,7 +1178,7 @@ async def list_runs(
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("list_runs failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("list_runs failed")
         return _tool_error("Failed to list runs")
@@ -1241,7 +1261,7 @@ async def query_analytics(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "query_analytics")
 
         org_id = _ctx_org_id_val()
@@ -1321,7 +1341,7 @@ async def query_analytics(
         return {"error": "database_error", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("query_analytics failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("query_analytics failed")
         return _tool_error("Failed to query analytics")
@@ -1355,7 +1375,7 @@ async def query_analytics_concurrency(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "query_analytics_concurrency")
 
         org_id = _ctx_org_id_val()
@@ -1432,7 +1452,7 @@ async def query_analytics_concurrency(
         return {"error": "database_error", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("query_analytics_concurrency failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("query_analytics_concurrency failed")
         return _tool_error("Failed to query analytics concurrency")
@@ -1451,7 +1471,7 @@ async def get_pipeline_graph_tool(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         from modulo.db.crud.pipeline import get_pipeline_graph
 
         org_id = _ctx_org_id_val()
@@ -1553,7 +1573,7 @@ async def update_pipeline_graph(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "update_pipeline_graph")
         from modulo.core.team_visibility import (
             CONNECTOR_TEAM_MISMATCH,
@@ -1651,7 +1671,7 @@ async def update_pipeline_graph(
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("update_pipeline_graph failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("update_pipeline_graph failed")
         return _tool_error("Failed to update pipeline graph")
@@ -1671,7 +1691,7 @@ async def bind_connector_to_node(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "bind_connector_to_node")
 
         from modulo.db.crud.connector_instance import get_connector_instance
@@ -1746,7 +1766,7 @@ async def bind_connector_to_node(
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("bind_connector_to_node failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("bind_connector_to_node failed")
         return _tool_error("Failed to bind connector to node")
@@ -1760,7 +1780,7 @@ async def trigger_pipeline(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "trigger_pipeline")
         if not await _trigger_pipeline_rate_allowed():
             _log.warning(
@@ -1823,7 +1843,7 @@ async def trigger_pipeline(
         return {"error": "org_not_found", "detail": f"Organisation {exc.org_id} not found"}
     except ProgrammingError:
         _log.exception("trigger_pipeline failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("trigger_pipeline failed")
         return _tool_error("Failed to trigger pipeline")
@@ -1834,7 +1854,7 @@ async def trigger_pipeline(
 async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         org_id = _ctx_org_id_val()
         try:
             rid = uuid.UUID(run_id)
@@ -1911,7 +1931,7 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
         return result
     except ProgrammingError:
         _log.exception("get_run_status failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("get_run_status failed")
         return _tool_error("Failed to get run status")
@@ -1928,7 +1948,7 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
 async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "get_run_output")
         from modulo.api.routes.runs import _mask_output_value
         from modulo.core.node_output_split import node_return, node_telemetry
@@ -1972,7 +1992,7 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("get_run_output failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("get_run_output failed")
         return _tool_error("Failed to get node output")
@@ -1986,7 +2006,7 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
 async def get_run_evals(run_id: str) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "get_run_evals")
         from modulo.db.crud.eval_run import get_run_evals as db_get_run_evals
 
@@ -2025,7 +2045,7 @@ async def get_run_evals(run_id: str) -> dict[str, Any]:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("get_run_evals failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("get_run_evals failed")
         return _tool_error("Failed to get run evals")
@@ -2042,7 +2062,7 @@ async def list_eval_definitions(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "list_eval_definitions")
         from modulo.db.crud.eval_definition import list_eval_definitions as db_list_eval_definitions
 
@@ -2074,7 +2094,7 @@ async def list_eval_definitions(
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("list_eval_definitions failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("list_eval_definitions failed")
         return _tool_error("Failed to list eval definitions")
@@ -2085,7 +2105,7 @@ async def list_eval_definitions(
 async def cancel_run(run_id: str) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "cancel_run")
         from modulo.db.crud.run import request_cancellation
 
@@ -2121,7 +2141,7 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("cancel_run failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("cancel_run failed")
         return _tool_error("Failed to cancel run")
@@ -2132,7 +2152,7 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
 async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "list_pending_hitl")
         from sqlalchemy import func, select
 
@@ -2198,7 +2218,7 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("list_pending_hitl failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("list_pending_hitl failed")
         return _tool_error("Failed to list pending HITL gates")
@@ -2223,7 +2243,7 @@ async def review_hitl(
     output: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not await validate_current_auth():
-        return _tool_auth_error("Token revoked or expired - re-authenticate")
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
 
     from sqlalchemy import select
 
@@ -2359,7 +2379,7 @@ async def copy_library_primitive(
     primitive_id: str,
 ) -> dict[str, Any]:
     if not await validate_current_auth():
-        return _tool_auth_error("Token revoked or expired - re-authenticate")
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
     try:
         check_tool_scope(_ctx_role_val(), "copy_library_primitive")
     except MCPAuthorizationError as exc:
@@ -2378,7 +2398,7 @@ async def copy_library_primitive(
             return {"error": "not_found", "primitive_id": primitive_id}
         except ProgrammingError:
             _log.exception("copy_library_primitive failed")
-            return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+            return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
         except Exception:
             _log.exception("copy_library_primitive failed")
             return _tool_error("Failed to copy library primitive")
@@ -2409,7 +2429,7 @@ async def search_library(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
             result = await list_primitives(
@@ -2441,7 +2461,7 @@ async def search_library(
         }
     except ProgrammingError:
         _log.exception("search_library failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("search_library failed")
         return _tool_error("Failed to search library")
@@ -2464,7 +2484,7 @@ async def list_trigger_events(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "list_trigger_events")
         from sqlalchemy import func, select
 
@@ -2591,7 +2611,7 @@ async def list_trigger_events(
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("list_trigger_events failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("list_trigger_events failed")
         return _tool_error("Failed to list trigger events")
@@ -2610,7 +2630,7 @@ async def list_triggers(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "list_triggers")
         from modulo.db.crud.trigger import list_triggers as db_list_triggers
 
@@ -2660,7 +2680,7 @@ async def list_triggers(
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("list_triggers failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("list_triggers failed")
         return _tool_error("Failed to list triggers")
@@ -2684,7 +2704,7 @@ async def create_model_backend(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "create_model_backend")
 
         from modulo.core.mcp_setup_handoff import create_handoff
@@ -2728,7 +2748,7 @@ async def create_model_backend(
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("create_model_backend failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("create_model_backend failed")
         return _tool_error("Failed to create model backend")
@@ -2749,7 +2769,7 @@ async def create_connector(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "create_connector")
 
         from cryptography.fernet import Fernet
@@ -2785,7 +2805,7 @@ async def create_connector(
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("create_connector failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("create_connector failed")
         return _tool_error("Failed to create connector")
@@ -2806,7 +2826,7 @@ async def create_trigger(
 
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "create_trigger")
 
         org_id = _ctx_org_id_val()
@@ -2891,7 +2911,7 @@ async def create_trigger(
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("create_trigger failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("create_trigger failed")
         return _tool_error("Failed to create trigger")
@@ -2902,7 +2922,7 @@ async def create_trigger(
 async def get_trigger(trigger_id: str) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "get_trigger")
 
         org_id = _ctx_org_id_val()
@@ -2937,7 +2957,7 @@ async def get_trigger(trigger_id: str) -> dict[str, Any]:
             streak_status = await _streak_status_for(s, trigger) if trigger is not None else None
 
         if trigger is None:
-            return {"error": "not_found", "detail": "Trigger not found"}
+            return {"error": "not_found", "detail": _MSG_TRIGGER_NOT_FOUND}
 
         return {
             "id": str(trigger.id),
@@ -2959,7 +2979,7 @@ async def get_trigger(trigger_id: str) -> dict[str, Any]:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("get_trigger failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("get_trigger failed")
         return _tool_error("Failed to get trigger")
@@ -2983,7 +3003,7 @@ async def update_trigger(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "update_trigger")
 
         org_id = _ctx_org_id_val()
@@ -3011,7 +3031,7 @@ async def update_trigger(
             )
             trigger = (await s.execute(q)).scalar_one_or_none()
             if trigger is None:
-                return {"error": "not_found", "detail": "Trigger not found"}
+                return {"error": "not_found", "detail": _MSG_TRIGGER_NOT_FOUND}
             if _team_scoped_key_mismatch(await _pipeline_owner_team_id(s, trigger.pipeline_id)):
                 return _team_scope_error("pipeline", str(trigger.pipeline_id))
 
@@ -3146,7 +3166,7 @@ async def update_trigger(
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("update_trigger failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("update_trigger failed")
         return _tool_error("Failed to update trigger")
@@ -3157,7 +3177,7 @@ async def update_trigger(
 async def delete_trigger(trigger_id: str) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "delete_trigger")
 
         org_id = _ctx_org_id_val()
@@ -3182,20 +3202,20 @@ async def delete_trigger(trigger_id: str) -> dict[str, Any]:
                 )
             ).scalar_one_or_none()
             if trigger is None:
-                return {"error": "not_found", "detail": "Trigger not found"}
+                return {"error": "not_found", "detail": _MSG_TRIGGER_NOT_FOUND}
             if _team_scoped_key_mismatch(await _pipeline_owner_team_id(s, trigger.pipeline_id)):
                 return _team_scope_error("pipeline", str(trigger.pipeline_id))
             deleted = await soft_delete_trigger(s, tid)
 
         if deleted is None:
-            return {"error": "not_found", "detail": "Trigger not found"}
+            return {"error": "not_found", "detail": _MSG_TRIGGER_NOT_FOUND}
 
         return {"id": str(tid), "deleted": True}
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("delete_trigger failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("delete_trigger failed")
         return _tool_error("Failed to delete trigger")
@@ -3212,7 +3232,7 @@ async def delete_trigger(trigger_id: str) -> dict[str, Any]:
 async def set_org_triggers_paused(paused: bool) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "set_org_triggers_paused")
 
         org_id = _ctx_org_id_val()
@@ -3259,7 +3279,7 @@ async def set_org_triggers_paused(paused: bool) -> dict[str, Any]:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("set_org_triggers_paused failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except StarletteHTTPException:
         return {"error": "not_found", "detail": "Organisation not found"}
     except Exception:
@@ -3274,7 +3294,7 @@ async def delete_pipeline(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "delete_pipeline")
 
         org_id = _ctx_org_id_val()
@@ -3299,7 +3319,7 @@ async def delete_pipeline(
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("delete_pipeline failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("delete_pipeline failed")
         return _tool_error("Failed to delete pipeline")
@@ -3312,7 +3332,7 @@ async def delete_connector(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "delete_connector")
 
         org_id = _ctx_org_id_val()
@@ -3338,7 +3358,7 @@ async def delete_connector(
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("delete_connector failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run alembic upgrade heads."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED_HEADS}
     except Exception:
         _log.exception("delete_connector failed")
         return _tool_error("Failed to delete connector")
@@ -3356,7 +3376,7 @@ async def create_secret(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "create_secret")
 
         if not key or not key.strip():
@@ -3385,7 +3405,7 @@ async def create_secret(
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("create_secret failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run alembic upgrade heads."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED_HEADS}
     except Exception:
         _log.exception("create_secret failed")
         return _tool_error("Failed to create secret")
@@ -3402,7 +3422,7 @@ async def list_secrets(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "list_secrets")
 
         org_id = _ctx_org_id_val()
@@ -3441,7 +3461,7 @@ async def list_secrets(
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("list_secrets failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run alembic upgrade heads."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED_HEADS}
     except Exception:
         _log.exception("list_secrets failed")
         return _tool_error("Failed to list secrets")
@@ -3454,7 +3474,7 @@ async def delete_secret(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "delete_secret")
 
         if not key or not key.strip():
@@ -3479,7 +3499,7 @@ async def delete_secret(
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("delete_secret failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run alembic upgrade heads."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED_HEADS}
     except Exception:
         _log.exception("delete_secret failed")
         return _tool_error("Failed to delete secret")
@@ -3554,13 +3574,13 @@ async def _enforce_api_key_mint_cap(
     )
     if live_role is None:
         _log.warning(
-            "permission.api_key_role_cap",
+            _CODE_PERMISSION_API_KEY_ROLE_CAP,
             extra={"requested_role": requested_role, "live_role": None},
         )
         raise MCPAuthorizationError("Active organisation membership required to manage API keys")
     if org_role_level(requested_role) > org_role_level(live_role):
         _log.warning(
-            "permission.api_key_role_cap",
+            _CODE_PERMISSION_API_KEY_ROLE_CAP,
             extra={"requested_role": requested_role, "live_role": live_role},
         )
         raise MCPAuthorizationError(
@@ -3595,7 +3615,7 @@ async def create_api_key(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "create_api_key")
 
         org_id = _ctx_org_id_val()
@@ -3669,16 +3689,16 @@ async def create_api_key(
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except IntegrityError:
-        _log.exception("create_api_key failed")
+        _log.exception(_MSG_CREATE_API_KEY_FAILED)
         return {"error": "conflict", "detail": "A resource with this value already exists"}
     except ProgrammingError:
-        _log.exception("create_api_key failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run alembic upgrade heads."}
+        _log.exception(_MSG_CREATE_API_KEY_FAILED)
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED_HEADS}
     except SQLAlchemyError:
-        _log.exception("create_api_key failed")
-        return _tool_error("Database temporarily unavailable")
+        _log.exception(_MSG_CREATE_API_KEY_FAILED)
+        return _tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE)
     except Exception:
-        _log.exception("create_api_key failed")
+        _log.exception(_MSG_CREATE_API_KEY_FAILED)
         return _tool_error("Failed to create API key")
 
 
@@ -3692,7 +3712,7 @@ async def create_api_key(
 async def list_api_keys() -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "list_api_keys")
 
         org_id = _ctx_org_id_val()
@@ -3702,13 +3722,13 @@ async def list_api_keys() -> dict[str, Any]:
 
         return {"api_keys": keys, "total": len(keys)}
     except ProgrammingError:
-        _log.exception("list_api_keys failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run alembic upgrade heads."}
+        _log.exception(_MSG_LIST_API_KEYS_FAILED)
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED_HEADS}
     except SQLAlchemyError:
-        _log.exception("list_api_keys failed")
-        return _tool_error("Database temporarily unavailable")
+        _log.exception(_MSG_LIST_API_KEYS_FAILED)
+        return _tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE)
     except Exception:
-        _log.exception("list_api_keys failed")
+        _log.exception(_MSG_LIST_API_KEYS_FAILED)
         return _tool_error("Failed to list API keys")
 
 
@@ -3722,7 +3742,7 @@ async def list_api_keys() -> dict[str, Any]:
 async def revoke_api_key(key_id: str) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "revoke_api_key")
 
         org_id = _ctx_org_id_val()
@@ -3746,16 +3766,16 @@ async def revoke_api_key(key_id: str) -> dict[str, Any]:
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except IntegrityError:
-        _log.exception("revoke_api_key failed")
+        _log.exception(_MSG_REVOKE_API_KEY_FAILED)
         return {"error": "conflict", "detail": "A resource with this value already exists"}
     except ProgrammingError:
-        _log.exception("revoke_api_key failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run alembic upgrade heads."}
+        _log.exception(_MSG_REVOKE_API_KEY_FAILED)
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED_HEADS}
     except SQLAlchemyError:
-        _log.exception("revoke_api_key failed")
-        return _tool_error("Database temporarily unavailable")
+        _log.exception(_MSG_REVOKE_API_KEY_FAILED)
+        return _tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE)
     except Exception:
-        _log.exception("revoke_api_key failed")
+        _log.exception(_MSG_REVOKE_API_KEY_FAILED)
         return _tool_error("Failed to revoke API key")
 
 
@@ -3776,7 +3796,7 @@ async def create_agent(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "create_agent")
 
         from modulo.db.crud.agent import create_agent as db_create_agent
@@ -3819,7 +3839,7 @@ async def create_agent(
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("create_agent failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception as e:
         _log.exception("create_agent failed")
         return {"error": "internal_error", "detail": f"Failed to create agent: {e}"}
@@ -3875,7 +3895,7 @@ def _is_sensitive_key(key: str) -> bool:
 async def search_documentation(query: str, section: str | None = None) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         index = _get_doc_index()
         results = index.search(query, section=section)
         if not results:
@@ -3898,7 +3918,7 @@ async def search_documentation(query: str, section: str | None = None) -> dict[s
 async def get_integration_status() -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         from sqlalchemy import func, select
 
         from modulo.db.models.connector_instance import ConnectorInstance
@@ -3974,7 +3994,7 @@ async def get_integration_status() -> dict[str, Any]:
         }
     except ProgrammingError:
         _log.exception("get_integration_status failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("get_integration_status failed")
         return _tool_error("Failed to get integration status")
@@ -3992,7 +4012,7 @@ _VALID_CONFIG_SECTIONS = {"remy", "plan", "rate_limits"}
 async def get_org_config(section: str | None = None) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         if section is not None and section not in _VALID_CONFIG_SECTIONS:
             return {
                 "error": "invalid_section",
@@ -4033,7 +4053,7 @@ async def get_org_config(section: str | None = None) -> dict[str, Any]:
         return {"results": "\n".join(lines), "count": len(filtered)}
     except ProgrammingError:
         _log.exception("get_org_config failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("get_org_config failed")
         return _tool_error("Failed to get org configuration")
@@ -4045,7 +4065,7 @@ async def get_org_config(section: str | None = None) -> dict[str, Any]:
 async def get_available_features() -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         from modulo.core.feature_flags import resolve_plan_context
 
         org_id = _ctx_org_id_val()
@@ -4070,7 +4090,7 @@ async def get_available_features() -> dict[str, Any]:
         return {"results": "\n".join(lines), "tier": current_tier, "feature_count": len(all_flags)}
     except ProgrammingError:
         _log.exception("get_available_features failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("get_available_features failed")
         return _tool_error("Failed to get available features")
@@ -4089,7 +4109,7 @@ async def create_schema(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "create_schema")
 
         org_id = _ctx_org_id_val()
@@ -4128,16 +4148,16 @@ async def create_schema(
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except IntegrityError as exc:
-        _log.exception("create_schema failed")
+        _log.exception(_MSG_CREATE_SCHEMA_FAILED)
         return {"error": "conflict", "detail": f"A schema with this name already exists: {exc.orig}"}
     except ProgrammingError:
-        _log.exception("create_schema failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        _log.exception(_MSG_CREATE_SCHEMA_FAILED)
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except SQLAlchemyError:
-        _log.exception("create_schema failed")
+        _log.exception(_MSG_CREATE_SCHEMA_FAILED)
         return {"error": "database_unavailable", "detail": "Database operation failed. Please try again."}
     except Exception:
-        _log.exception("create_schema failed")
+        _log.exception(_MSG_CREATE_SCHEMA_FAILED)
         return _tool_error("Failed to create schema")
 
 
@@ -4151,7 +4171,7 @@ async def list_schemas(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         org_id = _ctx_org_id_val()
         lim = max(1, min(limit, 100))
 
@@ -4175,7 +4195,7 @@ async def list_schemas(
         }
     except ProgrammingError:
         _log.exception("list_schemas failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("list_schemas failed")
         return _tool_error("Failed to list schemas")
@@ -4192,7 +4212,7 @@ async def infer_schema(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "infer_schema")
 
         # Preview feature - requires dev mode
@@ -4237,7 +4257,7 @@ async def infer_schema(
         return {"error": "inference_failed", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("infer_schema failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("infer_schema failed")
         return _tool_error("Failed to infer schema")
@@ -4253,7 +4273,7 @@ async def validate_payload(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         from jsonschema import Draft202012Validator, ValidationError  # type: ignore[import-untyped]
         from jsonschema.exceptions import SchemaError as JsSchemaError  # type: ignore[import-untyped]
 
@@ -4306,7 +4326,7 @@ async def validate_payload(
             }
     except ProgrammingError:
         _log.exception("validate_payload failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("validate_payload failed")
         return _tool_error("Failed to validate payload")
@@ -4321,7 +4341,7 @@ async def validate_payload(
 async def list_housekeeping(limit: int = 100) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "list_housekeeping")
         from modulo.core.housekeeping import scan_all as hk_scan_all
 
@@ -4346,7 +4366,7 @@ async def list_housekeeping(limit: int = 100) -> dict[str, Any]:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("list_housekeeping failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("list_housekeeping failed")
         return _tool_error("Failed to list housekeeping candidates")
@@ -4363,7 +4383,7 @@ async def list_housekeeping(limit: int = 100) -> dict[str, Any]:
 async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_auth_error("Token revoked or expired - re-authenticate")
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "perform_housekeeping")
         from modulo.core.housekeeping import ENTITY_MODEL_MAP as HK_ENTITY_MAP
 
@@ -4411,7 +4431,7 @@ async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("perform_housekeeping failed")
-        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception:
         _log.exception("perform_housekeeping failed")
         return _tool_error("Failed to perform housekeeping")
@@ -4425,7 +4445,7 @@ async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
 @mcp.resource("modulo://pipelines")
 async def resource_pipelines() -> str:
     if not await validate_current_auth():
-        return "error: Token revoked or expired - re-authenticate"
+        return _MSG_ERROR_TOKEN_REVOKED
     from modulo.db.crud.pipeline import list_pipelines
 
     org_id = _ctx_org_id_val()
@@ -4438,7 +4458,7 @@ async def resource_pipelines() -> str:
 @mcp.resource("modulo://pipelines/{pipeline_id}/runs")
 async def resource_pipeline_runs(pipeline_id: str) -> str:
     if not await validate_current_auth():
-        return "error: Token revoked or expired - re-authenticate"
+        return _MSG_ERROR_TOKEN_REVOKED
     from modulo.db.crud.run import list_runs
 
     org_id = _ctx_org_id_val()
@@ -4485,7 +4505,7 @@ async def resource_pipeline_runs(pipeline_id: str) -> str:
 @mcp.resource("modulo://pipelines/{pipeline_id}")
 async def resource_pipeline_detail(pipeline_id: str) -> str:
     if not await validate_current_auth():
-        return "error: Token revoked or expired - re-authenticate"
+        return _MSG_ERROR_TOKEN_REVOKED
     from sqlalchemy import func, select
 
     from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -4537,7 +4557,7 @@ async def resource_pipeline_detail(pipeline_id: str) -> str:
 @mcp.resource("modulo://pipelines/{pipeline_id}/snapshots")
 async def resource_pipeline_snapshots(pipeline_id: str) -> str:
     if not await validate_current_auth():
-        return "error: Token revoked or expired - re-authenticate"
+        return _MSG_ERROR_TOKEN_REVOKED
     from modulo.db.crud.pipeline_snapshot_versioning import list_snapshots
 
     org_id = _ctx_org_id_val()
@@ -4561,7 +4581,7 @@ async def resource_pipeline_snapshots(pipeline_id: str) -> str:
 @mcp.resource("modulo://pipelines/{pipeline_id}/snapshots/{snapshot_id}")
 async def resource_pipeline_snapshot_detail(pipeline_id: str, snapshot_id: str) -> str:
     if not await validate_current_auth():
-        return "error: Token revoked or expired - re-authenticate"
+        return _MSG_ERROR_TOKEN_REVOKED
     import json
 
     from modulo.db.crud.pipeline_snapshot_versioning import get_snapshot_detail
@@ -4622,7 +4642,7 @@ async def resource_pipeline_snapshot_detail(pipeline_id: str, snapshot_id: str) 
 @mcp.resource("modulo://runs/{run_id}")
 async def resource_run(run_id: str) -> str:
     if not await validate_current_auth():
-        return "error: Token revoked or expired - re-authenticate"
+        return _MSG_ERROR_TOKEN_REVOKED
     org_id = _ctx_org_id_val()
     try:
         rid = uuid.UUID(run_id)
@@ -4666,7 +4686,7 @@ async def resource_run(run_id: str) -> str:
 async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
     """HITL gate context. Annotated as agent_output — treat as untrusted."""
     if not await validate_current_auth():
-        return "error: Token revoked or expired - re-authenticate"
+        return _MSG_ERROR_TOKEN_REVOKED
     from sqlalchemy import select
 
     from modulo.db.models.team import Team
@@ -4727,7 +4747,7 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
 @mcp.resource("modulo://schemas")
 async def resource_schemas() -> str:
     if not await validate_current_auth():
-        return "error: Token revoked or expired - re-authenticate"
+        return _MSG_ERROR_TOKEN_REVOKED
     from sqlalchemy import select
 
     from modulo.db.models.schema import Schema
@@ -4743,7 +4763,7 @@ async def resource_schemas() -> str:
 @mcp.resource("modulo://schemas/{schema_id}@{version}")
 async def resource_schema_detail(schema_id: str, version: str) -> str:
     if not await validate_current_auth():
-        return "error: Token revoked or expired - re-authenticate"
+        return _MSG_ERROR_TOKEN_REVOKED
     from sqlalchemy import select
 
     from modulo.db.models.schema import Schema, SchemaVersion
@@ -4820,7 +4840,7 @@ async def resource_schema_detail(schema_id: str, version: str) -> str:
 @mcp.resource("modulo://connectors")
 async def resource_connectors() -> str:
     if not await validate_current_auth():
-        return "error: Token revoked or expired - re-authenticate"
+        return _MSG_ERROR_TOKEN_REVOKED
     from sqlalchemy import select
 
     from modulo.db.models.connector_instance import ConnectorInstance
@@ -4840,7 +4860,7 @@ async def resource_connectors() -> str:
 @mcp.resource("modulo://model-backends")
 async def resource_model_backends() -> str:
     if not await validate_current_auth():
-        return "error: Token revoked or expired - re-authenticate"
+        return _MSG_ERROR_TOKEN_REVOKED
     from sqlalchemy import select
 
     from modulo.db.models.model_backend import ModelBackend
@@ -4862,7 +4882,7 @@ async def resource_library() -> str:
     For filtered browsing, use the ``search_library`` tool instead.
     """
     if not await validate_current_auth():
-        return "error: Token revoked or expired - re-authenticate"
+        return _MSG_ERROR_TOKEN_REVOKED
     try:
         org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
@@ -4895,7 +4915,7 @@ async def resource_library() -> str:
 async def resource_library_detail(primitive_type: str, slug: str) -> str:
     """Get details of a single library primitive by type and slug."""
     if not await validate_current_auth():
-        return "error: Token revoked or expired - re-authenticate"
+        return _MSG_ERROR_TOKEN_REVOKED
     try:
         org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
@@ -5054,19 +5074,19 @@ async def _oauth_authorize(request: Request) -> JSONResponse | RedirectResponse:
     except ProgrammingError:
         _log.warning("mcp_oauth.authorize.programming_error", extra={"client_id": client_id})
         return JSONResponse(
-            {"error": "server_error", "detail": "Feature is not available. Run database migrations to enable it."},
+            {"error": "server_error", "detail": _MSG_FEATURE_NOT_AVAILABLE_MIGRATE},
             status_code=501,
         )
     except SQLAlchemyError:
         _log.warning("mcp_oauth.authorize.sqlalchemy_error", extra={"client_id": client_id})
         return JSONResponse(
-            {"error": "temporarily_unavailable", "detail": "Database error occurred. Please try again."},
+            {"error": "temporarily_unavailable", "detail": _MSG_DB_ERROR_TRY_AGAIN},
             status_code=503,
         )
     except Exception:
         _log.exception("mcp_oauth.authorize.unexpected_error", extra={"client_id": client_id})
         return JSONResponse(
-            {"error": "server_error", "detail": "An unexpected error occurred"},
+            {"error": "server_error", "detail": _MSG_UNEXPECTED_ERROR},
             status_code=500,
         )
 
@@ -5097,7 +5117,7 @@ async def _oauth_token(request: Request) -> JSONResponse:
     if content_type == "application/x-www-form-urlencoded":
         form = await request.form()
         params: dict[str, str] = {k: (str(v) if v is not None else "") for k, v in form.items()}
-    elif content_type == "application/json":
+    elif content_type == _CT_APPLICATION_JSON:
         try:
             body = await request.json()
         except json.JSONDecodeError:
@@ -5127,11 +5147,11 @@ async def _oauth_token(request: Request) -> JSONResponse:
     # client_secret may come from the body (RFC 6749) OR Basic auth.
     client_secret = params.get("client_secret", "")
     auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Basic "):
+    if auth_header.startswith(_BASIC_PREFIX):
         import base64 as _base64
 
         try:
-            decoded = _base64.b64decode(auth_header[len("Basic ") :]).decode("utf-8")
+            decoded = _base64.b64decode(auth_header[len(_BASIC_PREFIX) :]).decode("utf-8")
             basic_id, _, basic_secret = decoded.partition(":")
             if not client_secret:
                 client_secret = basic_secret
@@ -5247,7 +5267,7 @@ async def _oauth_token(request: Request) -> JSONResponse:
             extra={"client_id": client_id},
         )
         return JSONResponse(
-            {"error": "server_error", "detail": "Feature is not available. Run database migrations to enable it."},
+            {"error": "server_error", "detail": _MSG_FEATURE_NOT_AVAILABLE_MIGRATE},
             status_code=501,
         )
     except SQLAlchemyError:
@@ -5256,13 +5276,13 @@ async def _oauth_token(request: Request) -> JSONResponse:
             extra={"client_id": client_id},
         )
         return JSONResponse(
-            {"error": "temporarily_unavailable", "detail": "Database error occurred. Please try again."},
+            {"error": "temporarily_unavailable", "detail": _MSG_DB_ERROR_TRY_AGAIN},
             status_code=503,
         )
     except Exception:
         _log.exception("mcp_oauth.token.unexpected_error", extra={"client_id": client_id})
         return JSONResponse(
-            {"error": "server_error", "detail": "An unexpected error occurred"},
+            {"error": "server_error", "detail": _MSG_UNEXPECTED_ERROR},
             status_code=500,
         )
 
@@ -5281,7 +5301,7 @@ async def _oauth_refresh(request: Request) -> JSONResponse:
     if content_type == "application/x-www-form-urlencoded":
         form = await request.form()
         params: dict[str, str] = {k: (str(v) if v is not None else "") for k, v in form.items()}
-    elif content_type == "application/json":
+    elif content_type == _CT_APPLICATION_JSON:
         try:
             body = await request.json()
         except json.JSONDecodeError:
@@ -5308,11 +5328,11 @@ async def _oauth_refresh(request: Request) -> JSONResponse:
     client_secret = params.get("client_secret", "")
 
     auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Basic "):
+    if auth_header.startswith(_BASIC_PREFIX):
         import base64 as _base64
 
         try:
-            decoded = _base64.b64decode(auth_header[len("Basic ") :]).decode("utf-8")
+            decoded = _base64.b64decode(auth_header[len(_BASIC_PREFIX) :]).decode("utf-8")
             basic_id, _, basic_secret = decoded.partition(":")
             if not client_secret:
                 client_secret = basic_secret
@@ -5405,19 +5425,19 @@ async def _oauth_refresh(request: Request) -> JSONResponse:
     except ProgrammingError:
         _log.warning("mcp_oauth.refresh.programming_error", extra={"client_id": client_id})
         return JSONResponse(
-            {"error": "server_error", "detail": "Feature is not available. Run database migrations to enable it."},
+            {"error": "server_error", "detail": _MSG_FEATURE_NOT_AVAILABLE_MIGRATE},
             status_code=501,
         )
     except SQLAlchemyError:
         _log.warning("mcp_oauth.refresh.sqlalchemy_error", extra={"client_id": client_id})
         return JSONResponse(
-            {"error": "temporarily_unavailable", "detail": "Database error occurred. Please try again."},
+            {"error": "temporarily_unavailable", "detail": _MSG_DB_ERROR_TRY_AGAIN},
             status_code=503,
         )
     except Exception:
         _log.exception("mcp_oauth.refresh.unexpected_error")
         return JSONResponse(
-            {"error": "server_error", "detail": "An unexpected error occurred"},
+            {"error": "server_error", "detail": _MSG_UNEXPECTED_ERROR},
             status_code=500,
         )
 
@@ -5447,7 +5467,7 @@ async def _mcp_exception_handler(request: Request, exc: Exception) -> JSONRespon
     )
     return JSONResponse(
         status_code=500,
-        content={"error": "internal_error", "detail": "An unexpected error occurred"},
+        content={"error": "internal_error", "detail": _MSG_UNEXPECTED_ERROR},
     )
 
 
