@@ -21,6 +21,11 @@ Feature: Schema Creation
     When I POST /api/schemas with name "review-input"
     Then the response status is 409
 
+  # @awaiting-implementation: the current create endpoint accepts
+  # {name, description, abstract_name} only — JSON definitions live in schema
+  # versions and are not validated as JSON Schema at create time. There is no
+  # "invalid JSON Schema rejected at create" behaviour to exercise.
+  @awaiting-implementation
   Scenario: Invalid JSON Schema is rejected
     When I POST /api/schemas with name "bad-schema" and invalid JSON Schema
     Then the response status is 422

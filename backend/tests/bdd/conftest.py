@@ -190,6 +190,38 @@ def unauth_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
 
 from pytest_bdd import given, parsers, then, when  # noqa: E402
 
+from unittest.mock import patch  # noqa: E402
+
+from pytest_bdd import given, parsers, then, when  # noqa: E402
+
+
+def _make_mock_pipeline_full(name: str = "Test Pipeline", **kwargs: Any) -> MagicMock:
+    """Full-shaped Pipeline ORM mock matching PipelineResponse validation."""
+    p = MagicMock()
+    p.id = kwargs.get("id", uuid.uuid4())
+    p.organisation_id = ORG_ID
+    p.name = name
+    p.description = kwargs.get("description")
+    p.visibility = kwargs.get("visibility", "org")
+    p.max_concurrent_runs = kwargs.get("max_concurrent_runs", 5)
+    p.lock_wait_timeout_seconds = kwargs.get("lock_wait_timeout_seconds", 300)
+    p.node_timeout_seconds = kwargs.get("node_timeout_seconds", 300)
+    p.run_context_defaults = kwargs.get("run_context_defaults", {})
+    p.default_autonomy_level = kwargs.get("default_autonomy_level")
+    p.max_duration_seconds = None
+    p.stale_run_timeout_minutes = 30
+    p.rate_limit_config = kwargs.get("rate_limit_config")
+    p.retry_policy = kwargs.get("retry_policy", {})
+    p.snapshot_count = 0
+    p.archived_at = None
+    p.owner_team_id = None
+    p.folder_id = None
+    p.connector_rebind_required = False
+    p.account_id = USER_ID
+    p.created_at = datetime.now(UTC)
+    p.updated_at = datetime.now(UTC)
+    return p
+
 
 @given(parsers.parse('I am authenticated as an admin in org "{org}"'))
 def _bdd_auth_admin_in_org(org: str, request, client) -> None:
@@ -213,6 +245,37 @@ def _bdd_auth_viewer_in_org(org: str, request, viewer_client) -> None:
 @given("the organisation exists")
 def _bdd_org_exists() -> None:
     """No-op — DB fixtures handle org creation."""
+
+
+@when(parsers.parse('I POST /api/pipelines with name "{name}" and valid config'))
+@given(parsers.parse('I POST /api/pipelines with name "{name}" and valid config'))
+def _bdd_create_pipeline(name: str, client, request) -> None:
+    """Shared create-pipeline step used by create.feature and org_scoping.feature.
+
+    When a pipeline with this name was already declared (via `Given org "..."
+    has pipeline "{name}"`), the create path raises IntegrityError which the
+    route maps to 409.
+    """
+    existing = getattr(request.node, "_pipeline_name", None)
+    if existing == name:
+        from sqlalchemy.exc import IntegrityError
+
+        create_side_effect = IntegrityError("INSERT INTO pipelines", {}, Exception("duplicate key"))
+        create_return = None
+    else:
+        create_side_effect = None
+        create_return = _make_mock_pipeline_full(name=name)
+    with (
+        patch(
+            "modulo.api.routes.pipelines.create_pipeline",
+            side_effect=create_side_effect,
+            return_value=create_return,
+        ),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/pipelines", json={"name": name})
+    request.node._resp = resp
 
 
 @then(parsers.parse("the response status is {status:d}"))
@@ -501,6 +564,13 @@ def _bdd_error_detail_mentions(text: str, request: Any) -> None:
     body = request.node._resp.json()
     detail = body.get("detail", "")
     assert text in detail, f"Expected the error detail to mention {text!r}, got {detail!r}"
+
+@then("the response contains id and slug")
+def _bdd_response_id_and_slug(request) -> None:
+    """Shared assertion for pipeline create responses (create.feature + org_scoping.feature)."""
+    data = request.node._resp.json()
+    assert "id" in data, "Response missing id"
+    assert "name" in data, "Response missing name"
 
 
 def _make_test_client(mock_session: AsyncMock, **principal_kwargs: Any) -> Generator[TestClient, None, None]:

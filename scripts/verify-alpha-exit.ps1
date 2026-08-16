@@ -1,23 +1,39 @@
 ﻿<#
 .SYNOPSIS
     Verifies all 6 alpha exit criteria from PRD sec10.3b.
+
 .DESCRIPTION
-    Runs machine-verifiable checks (BDD test pass/fail, git log presence)
-    and prints a human-verifiable checklist for criteria requiring manual sign-off.
-    When -SkipBDD is set, BDD test execution and Docker checks are skipped
-    (expected when the CI workflow already ran them and passed).
+    FAILS unless ALL SIX criteria carry signed:true evidence — a named signee
+    AND an evidence_link — in the structured evidence file
+    (alpha-exit-evidence.json by default at the product root), AND the
+    supplementary machine checks (ruff, backend unit tests, artifact and file
+    existence, git log) pass. A missing sign-off fails the gate even when every
+    machine check passes.
+
+    The gate is the 6/6 sign-off record, not the machine checks. Machine checks
+    are supplementary: they must pass, but they can never substitute for a
+    human sign-off.
+
 .PARAMETER SkipBDD
-    Skip BDD test execution and Docker availability checks. The script will
-    report BDD-related criteria based on pre-existing results only.
+    Skip the live BDD test execution (used when the report is generated without
+    spinning up the full Postgres/Redis/frontend stack). With -SkipBDD the
+    script does NOT assume criterion #2 passing — criterion #2 still requires
+    signed:true evidence (signee + evidence_link) in the evidence file.
+
+.PARAMETER EvidencePath
+    Path to the structured evidence JSON. Defaults to alpha-exit-evidence.json
+    at the product root.
+
 .EXIT CODE
-    0 = all machine checks pass
-    1 = machine check failed
-    2 = script error
+    0 = all 6 criteria signed (signee + evidence_link) AND machine checks pass
+    1 = any criterion unsigned OR any machine check failed
+    2 = script error (evidence file missing or malformed, unexpected exception)
 #>
 
 [CmdletBinding()]
 param(
-    [switch]$SkipBDD
+    [switch]$SkipBDD,
+    [string]$EvidencePath
 )
 
 $ErrorActionPreference = "Stop"
@@ -27,6 +43,10 @@ $scriptRoot = $PSScriptRoot
 $productRoot = Resolve-Path (Join-Path $scriptRoot "..")
 $backendDir = Join-Path $productRoot "backend"
 $reportPath = Join-Path $productRoot "alpha-exit-report.txt"
+$reportJsonPath = Join-Path $productRoot "alpha-exit-report.json"
+if (-not $EvidencePath) {
+    $EvidencePath = Join-Path $productRoot "alpha-exit-evidence.json"
+}
 
 $reportLines = [System.Collections.Generic.List[string]]::new()
 $machinePassed = $true
@@ -97,10 +117,36 @@ function CheckFileExists($path, $label) {
 }
 
 # ==============================================================
+#  LOAD EVIDENCE
+# ==============================================================
+$dateStr = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+
+if (-not (Test-Path -LiteralPath $EvidencePath)) {
+    Log "ERROR: Evidence file not found at $EvidencePath"
+    Log "  Create it by copying the committed alpha-exit-evidence.json template and"
+    Log "  filling in signed/signee/evidence_link for all 6 criteria."
+    exit 2
+}
+
+try {
+    $evidence = Get-Content -LiteralPath $EvidencePath -Encoding UTF8 -Raw | ConvertFrom-Json
+} catch {
+    Log "ERROR: Evidence file is not valid JSON: $_"
+    exit 2
+}
+
+$criteria = @{}
+foreach ($id in @("1", "2", "3", "4", "5", "6")) {
+    $criteria[$id] = $evidence.criteria.$id
+    if (-not $criteria[$id]) {
+        Log "ERROR: Evidence file is missing criterion #$id. Expected keys 1..6 under 'criteria'."
+        exit 2
+    }
+}
+
+# ==============================================================
 #  HEADER
 # ==============================================================
-$bddSkipped = $SkipBDD
-$dateStr = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
 Log ""
 Log "+--------------------------------------------------------------------+"
 Log "|          Alpha Exit Verification Report                           |"
@@ -109,18 +155,83 @@ Log "+--------------------------------------------------------------------+"
 Log ""
 
 # ==============================================================
-#  MACHINE-VERIFIABLE CRITERIA
+#  THE GATE: 6/6 SIGNED CRITERIA
 # ==============================================================
-LogHeader "Machine-Verifiable Criteria"
+LogHeader "The Gate: 6/6 signed sign-offs (FAIL unless all six are signed)"
+Log ""
+Log "  A criterion is signed only when signed=true, signee names a human,"
+Log "  and evidence_link is a URL. Missing sign-off = FAIL, even if every"
+Log "  machine check passes. Human names are supplied by Duncan via the"
+Log "  evidence file (alpha-exit-evidence.json) — no names are invented."
 Log ""
 
-# --- Criterion #2: All happy-path BDD scenarios green in CI ---
-LogHeader "Criterion #2: All happy-path BDD scenarios green in CI"
+$allSigned = $true
+$signedCount = 0
+$signOffRows = [System.Collections.Generic.List[object]]::new()
+
+foreach ($id in @("1", "2", "3", "4", "5", "6")) {
+    $c = $criteria[$id]
+    $title = if ($c.title) { $c.title } else { "(no title)" }
+    $isSigned = $false
+    $signee = $null
+    $evidenceLink = $null
+    if ($c.signed) {
+        $signee = if ($c.signee) { [string]$c.signee } else { $null }
+        $evidenceLink = if ($c.evidence_link) { [string]$c.evidence_link } else { $null }
+        if ($signee -and $evidenceLink) {
+            $isSigned = $true
+        }
+    }
+    if ($isSigned) {
+        $signedCount++
+    } else {
+        $allSigned = $false
+        $reason = if (-not $c.signed) {
+            "not signed"
+        } elseif (-not $signee) {
+            "signed but no signee named"
+        } else {
+            "signed but no evidence_link"
+        }
+        $fixableIssues.Add("Criterion #$id NOT signed ($reason): $title")
+    }
+    LogCheckbox $isSigned "Criterion #$id — $title"
+    if ($isSigned) {
+        Log "      signed by: $signee ($evidenceLink)"
+    } else {
+        Log "      signee: $(if ($signee) { $signee } else { '—' })  evidence_link: $(if ($evidenceLink) { $evidenceLink } else { '—' })"
+    }
+    $signOffRows.Add([pscustomobject]@{
+        id = $id
+        title = $title
+        signed = $isSigned
+        signee = $signee
+        evidence_link = $evidenceLink
+        date = $(if ($c.date) { [string]$c.date } else { $null })
+    })
+}
+
+Log ""
+Log "  Signed: $signedCount/6"
+Log ""
+
+# ==============================================================
+#  MACHINE-VERIFIABLE CRITERIA (supplementary)
+# ==============================================================
+LogHeader "Supplementary Machine-Verifiable Criteria"
+Log ""
+Log "  Machine checks are supplementary to the 6/6 sign-off gate: they must"
+Log "  pass, but they can never substitute for a human sign-off above."
+Log ""
+
+# --- Criterion #2 live check (supplementary; the signed gate above is authoritative) ---
+LogHeader "Criterion #2 supplementary: All happy-path BDD scenarios green in CI"
 Log ""
 
 if ($SkipBDD) {
-    Log "  BDD tests skipped via -SkipBDD flag (expected when run from CI workflow that already tested)."
-    LogCheckbox $true "BDD scenarios: skipped (assumed passing from CI step)"
+    Log "  BDD tests skipped via -SkipBDD flag."
+    Log "  NOTE: criterion #2 is NOT assumed passing. It is satisfied only by"
+    Log "  the signed evidence in the JSON (see 'The Gate' section above)."
     Log ""
 } elseif (-not (Test-Path -LiteralPath $backendDir)) {
     Log "  ERROR: backend directory not found at $backendDir"
@@ -130,7 +241,7 @@ if ($SkipBDD) {
     $dockerCheck = & docker info 2>&1 | Out-String
     if ($LASTEXITCODE -ne 0) {
         Log "    WARNING: Docker does not appear to be available. BDD tests require Postgres and Redis."
-        Log "    Skipping BDD test execution. Run with Docker available to verify criterion #2."
+        Log "    Skipping BDD test execution. Criterion #2 still requires signed evidence in JSON."
         Log "    To run locally, start Postgres and Redis (see docs/dev-setup.md), then run:"
         Log "      pytest tests/bdd/ -x --tb=short -q"
         LogCheckbox $false "BDD scenarios: skipped (Docker not available)"
@@ -176,7 +287,7 @@ if ($SkipBDD) {
 
 Log ""
 
-# --- Criterion #2 (supplementary): git log check ---
+# --- Supplementary: git log check ---
 LogHeader "Supplementary: Git log check"
 Log ""
 
@@ -198,7 +309,7 @@ try {
 
 Log ""
 
-# --- Machine checks summary ---
+# --- Supplementary machine checks summary ---
 $machineStatus = if ($machinePassed) { "PASS" } else { "FAIL" }
 Log "  Machine checks result: $machineStatus"
 Log ""
@@ -322,99 +433,86 @@ LogCheckbox $triggerOk "Trigger engine directory exists"
 Log ""
 
 # ==============================================================
-#  HUMAN-VERIFIABLE CRITERIA
+#  HUMAN-VERIFIABLE CRITERIA (sign-off walkthrough)
 # ==============================================================
-LogHeader "Human-Verifiable Criteria (requires manual sign-off)"
+LogHeader "Human-Verifiable Criteria (sign-off walkthrough)"
 Log ""
-Log "  Each criterion below requires a human to verify and sign off."
+Log "  These instructions are now codified in alpha-exit-evidence.json — the"
+Log "  gate reads the JSON sign-offs above. This section is for reference only."
 Log ""
 
 # --- Criterion #1: Demo pipeline walkable by 3 non-authors ---
 LogHeader "Criterion #1: Demo pipeline walkable by 3 non-authors"
 Log ""
-Log "  [ ] Criterion #1: Demo pipeline walkable"
-Log "      +- How to verify"
-Log "      +- 1. Start Modulo with MODULO_DEMO_MODE=true"
-Log "      +- 2. Load the demo pipeline (prd-to-requirements)"
-Log "      +- 3. Walk through the full pipeline end-to-end"
-Log "      +- 4. Repeat with 2 additional people who did NOT author the code"
-Log "      +- Each walker should complete without assistance"
+Log "  How to verify"
+Log "  - 1. Start Modulo with modulo_seed_demo_data=true (MODULO_DEMO_MODE is deprecated)"
+Log "  - 2. Load the demo pipeline (prd-to-requirements)"
+Log "  - 3. Walk through the full pipeline end-to-end"
+Log "  - 4. Repeat with 2 additional people who did NOT author the code"
+Log "  - Each walker should complete without assistance"
 Log ""
-Log "      Verification log:"
-Log "      Walker #1: ___ (name) ___ (date) ___ (signed)"
-Log "      Walker #2: ___ (name) ___ (date) ___ (signed)"
-Log "      Walker #3: ___ (name) ___ (date) ___ (signed)"
+Log "  Evidence protocol: one Linear comment on FAR-265 per walker, naming the"
+Log "  walker, the date, and the run ID or screen capture. evidence_link = the"
+Log "  comment URL or run URL."
 Log ""
 
 # --- Criterion #3: Non-demo pipeline ---
 LogHeader "Criterion #3: At least one non-demo pipeline built and run to completion"
 Log ""
-Log "  [ ] Criterion #3: Non-demo pipeline"
-Log "      +- How to verify"
-Log "      +- 1. An internal user (not the demo author) builds a pipeline"
-Log "      +- 2. The pipeline uses real connectors (not demo stubs)"
-Log "      +- 3. The pipeline runs to completion without errors"
-Log "      +- 4. The output artifacts are inspectable and correct"
+Log "  How to verify"
+Log "  - 1. An internal user (not the demo author) builds a pipeline"
+Log "  - 2. The pipeline uses real connectors (not demo stubs)"
+Log "  - 3. The pipeline runs to completion without errors"
+Log "  - 4. The output artifacts are inspectable and correct"
 Log ""
-Log "      Pipeline name: ___"
-Log "      Built by: ___"
-Log "      Run ID: ___"
-Log "      Completed at: ___ (date) ___ (signed)"
+Log "  Evidence protocol: Linear comment on FAR-265 naming the builder, the"
+Log "  pipeline, and the run ID. evidence_link = the comment URL or run URL."
 Log ""
 
 # --- Criterion #4: HITL approve/reject by 2 different users ---
-LogHeader "Criterion #4: HITL approve/reject by 2 different users"
+LogHeader "Criterion #4: HITL approve and reject demonstrated by two different named users"
 Log ""
-Log "  [ ] Criterion #4: HITL approve/reject by 2 different users"
-Log "      +- How to verify"
-Log "      +- 1. Configure MODULO_USERS with at least 2 entries"
-Log "      +- 2. User A creates a pipeline with a HITL gate"
-Log "      +- 3. Run the pipeline until it reaches the HITL gate"
-Log "      +- 4. User B claims the HITL request"
-Log "      +- 5. User B approves the request -- pipeline continues"
-Log "      +- 6. In a second run, User B rejects -- pipeline stops"
-Log "      +- 7. Both outcomes are visible in run inspection"
+Log "  How to verify"
+Log "  - 1. Configure MODULO_USERS with at least 2 entries"
+Log "  - 2. User A creates a pipeline with a HITL gate"
+Log "  - 3. Run the pipeline until it reaches the HITL gate"
+Log "  - 4. User B claims the HITL request"
+Log "  - 5. User B approves the request -- pipeline continues"
+Log "  - 6. In a second run, User B rejects -- pipeline stops"
+Log "  - 7. Both outcomes are visible in run inspection"
 Log ""
-Log "      MODULO_USERS configured: ___"
-Log "      Reviewer (User B): ___"
-Log "      Approve run ID: ___"
-Log "      Reject run ID: ___"
-Log "      Verified by: ___ (date) ___ (signed)"
+Log "  Evidence protocol: Linear comment on FAR-265 naming both users and both"
+Log "  run IDs. evidence_link = the comment URL or run URLs."
 Log ""
 
 # --- Criterion #5: Connector swap ---
 LogHeader "Criterion #5: Connector swap (Filesystem <-> GitHub)"
 Log ""
-Log "  [ ] Criterion #5: Connector swap demonstrated"
-Log "      +- How to verify"
-Log "      +- 1. Create a pipeline bound to FilesystemConnector"
-Log "      +- 2. Run the pipeline to completion -- verify output"
-Log "      +- 3. Rebind the pipeline to GitHubConnector (same schema)"
-Log "      +- 4. Run the pipeline again -- verify equivalent output"
-Log "      +- 5. Both runs produce correct, inspectable results"
+Log "  How to verify"
+Log "  - 1. Create a pipeline bound to FilesystemConnector"
+Log "  - 2. Run the pipeline to completion -- verify output"
+Log "  - 3. Rebind the pipeline to GitHubConnector (same schema)"
+Log "  - 4. Run the pipeline again -- verify equivalent output"
+Log "  - 5. Both runs produce correct, inspectable results"
 Log ""
-Log "      Filesystem run ID: ___"
-Log "      GitHub run ID: ___"
-Log "      Verified by: ___ (date) ___ (signed)"
+Log "  Evidence protocol: Linear comment on FAR-265 with both run IDs."
+Log "  evidence_link = the comment URL or run URLs."
 Log ""
 
 # --- Criterion #6: Run Context ---
 LogHeader "Criterion #6: Run Context demonstrated"
 Log ""
-Log "  [ ] Criterion #6: Run Context demonstrated"
-Log "      +- How to verify"
-Log "      +- 1. Create a pipeline with a context-setter agent (e.g. complexity-reviewer)"
-Log "      +- 2. The context-setter must be the first node in the pipeline"
-Log "      +- 3. Run the pipeline"
-Log "      +- 4. In run inspection, verify the context-setter's output"
-Log "      +- 5. Verify a downstream agent's behaviour visibly changed"
-Log "      +-    based on the context-setter's output"
+Log "  How to verify"
+Log "  - 1. Create a pipeline with a context-setter agent (e.g. complexity-reviewer)"
+Log "  - 2. The context-setter must be the first node in the pipeline"
+Log "  - 3. Run the pipeline"
+Log "  - 4. In run inspection, verify the context-setter's output"
+Log "  - 5. Verify a downstream agent's behaviour visibly changed"
+Log "  -    based on the context-setter's output"
 Log ""
-Log "      Pipeline name: ___"
-Log "      Context-setter agent: ___"
-Log "      Downstream agent that changed: ___"
-Log "      Run ID: ___"
-Log "      Verified by: ___ (date) ___ (signed)"
+Log "  Evidence protocol: Linear comment on FAR-265 naming the pipeline, the"
+Log "  context-setter agent, the affected downstream agent, and the run ID."
+Log "  evidence_link = the comment URL or run URL."
 Log ""
 
 # ==============================================================
@@ -425,43 +523,30 @@ Log ""
 Log " +------+----------------------------------------------------+----------+"
 Log " | Crit | Description                                        | Status   |"
 Log " +------+----------------------------------------------------+----------+"
-$c1Status = "HUMAN"
-$supplementaryPassed = $machinePassed
-if ($bddSkipped) {
-    $c2Status = "SKIP"
-} elseif ($machinePassed -and $supplementaryPassed) {
-    $c2Status = "PASS"
-} else {
-    $c2Status = "FAIL"
+foreach ($row in $signOffRows) {
+    $rowStatus = if ($row.signed) { "SIGNED" } else { "NOT SIGNED" }
+    Log " |  $($row.id)   | $($row.title.PadRight(50).Substring(0,50)) | $rowStatus |"
 }
-$c3Status = "HUMAN"
-$c4Status = "HUMAN"
-$c5Status = "HUMAN"
-$c6Status = "HUMAN"
-$s1Status = if ($supplementaryPassed) { "PASS" } else { "FAIL" }
-Log " |  1   | Demo pipeline walkable by 3 non-authors            | $c1Status  |"
-Log " |  2   | All happy-path BDD scenarios green in CI           | $c2Status  |"
-Log " |  3   | Non-demo pipeline built and run to completion       | $c3Status  |"
-Log " |  4   | HITL approve/reject by 2 different users           | $c4Status  |"
-Log " |  5   | Connector swap (Filesystem <-> GitHub)               | $c5Status  |"
-Log " |  6   | Run Context demonstrated                           | $c6Status  |"
 Log " +------+----------------------------------------------------+----------+"
-Log " |  S   | Supplementary (lint, tests, docs, artifacts)       | $s1Status  |"
+Log " |  S   | Supplementary (lint, tests, docs, artifacts)       | $machineStatus |"
 Log " +------+----------------------------------------------------+----------+"
 Log ""
+$gateStatus = if ($allSigned -and $machinePassed) { "PASS" } else { "FAIL" }
+Log "  Sign-off gate: $signedCount/6 signed -> $(if ($allSigned) { 'PASS' } else { 'FAIL' })"
 Log "  Machine checks: $machineStatus"
-Log "  Supplementary checks: $s1Status"
-Log "  Human checks: PENDING (requires 6 manual sign-offs above)"
+Log "  OVERALL: $gateStatus"
 Log ""
 if ($fixableIssues.Count -gt 0) {
-    Log "  Notable items:"
+    Log "  Issues:"
     foreach ($issue in $fixableIssues) {
         Log "    - $issue"
     }
 }
 Log ""
 
-# --- Write report to file ---
+# ==============================================================
+#  WRITE REPORTS
+# ==============================================================
 try {
     $finalReport = $reportLines -join "`r`n"
     Set-Content -Encoding UTF8 -LiteralPath $reportPath -Value $finalReport
@@ -470,8 +555,33 @@ try {
     Log "WARNING: Could not write report file: $_"
 }
 
+try {
+    $reportObject = [pscustomobject]@{
+        schema_version = 1
+        ticket = "FAR-265"
+        timestamp = $dateStr
+        all_signed = [bool]$allSigned
+        machine_passed = [bool]$machinePassed
+        signed_count = $signedCount
+        total_criteria = 6
+        criteria = $signOffRows
+        skip_bdd = [bool]$SkipBDD
+    }
+    $reportJson = $reportObject | ConvertTo-Json -Depth 6
+    Set-Content -Encoding UTF8 -LiteralPath $reportJsonPath -Value $reportJson
+    Log "Report written to: $reportJsonPath"
+} catch {
+    Log "WARNING: Could not write report JSON: $_"
+}
+
 # --- Exit code ---
-if ($machinePassed) {
+if (-not $allSigned) {
+    Log "FAIL: $($signOffRows.Count - $signedCount) of 6 criteria are not signed (need signee + evidence_link)."
+}
+if (-not $machinePassed) {
+    Log "FAIL: one or more supplementary machine checks failed."
+}
+if ($allSigned -and $machinePassed) {
     exit 0
 } else {
     exit 1

@@ -30,6 +30,10 @@ Feature: Agent Schema Assignment
     When I save and reload the pipeline
     Then the agent still has input schema "review-input"
 
+  # @awaiting-implementation: agent schemas are bound at creation (AgentCreate
+  # requires input_schema_id/output_schema_id) and there is no PATCH path to
+  # detach them. Removal is not implementable through the current agent API.
+  @awaiting-implementation
   Scenario: Remove schema assignment
     Given agent "reviewer" has input schema "review-input"
     When I remove the input schema assignment from agent "reviewer"

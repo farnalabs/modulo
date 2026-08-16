@@ -3407,7 +3407,7 @@ Must be documented and stable before v1 public release.
 **Installation mechanism — v3 (SaaS)**: a dedicated plugin volume approach is required for SaaS (hosted environment cannot rebuild the container per-org). Design deferred to v3. The entry-point API is designed to support both approaches without code changes in the plugin itself.
 
 ### 10.3 First-Run Experience
-On first boot with empty database: pre-loaded demo pipeline + guided walkthrough. Walkable end-to-end in under 5 minutes via `MODULO_DEMO_MODE=true` (no external API keys required). Library surfaces recommended primitives post-walkthrough. Required in alpha — an empty state prevents effective adoption.
+On first boot with empty database: pre-loaded demo pipeline + guided walkthrough. Walkable end-to-end in under 5 minutes via `modulo_seed_demo_data=true` (no external API keys required). Library surfaces recommended primitives post-walkthrough. Required in alpha — an empty state prevents effective adoption.
 
 ### 10.3a Alpha Documentation (Internal, required before alpha is shared)
 - `docs/dev-setup.md` — local development environment: prerequisites, env var reference, how to run migrations, how to seed demo data, how to run tests
@@ -3417,7 +3417,7 @@ These are lightweight but essential for multi-person alpha development. Without 
 
 ### 10.3b Alpha Exit Criteria
 Alpha is done when all six conditions are met:
-1. Demo pipeline (`prd-to-requirements`) walkable by 3 non-authors without assistance, using `MODULO_DEMO_MODE`
+1. Demo pipeline (`prd-to-requirements`) walkable by 3 non-authors without assistance, using `modulo_seed_demo_data=true`
 2. All happy-path BDD scenarios green in CI
 3. At least one non-demo pipeline built by an internal user and run to completion
 4. HITL approve and reject demonstrated by two different named users. Alpha Basic Auth supports multiple users via `MODULO_USERS` env var (format: `username:bcrypt_hash,username2:bcrypt_hash2`); the single `MODULO_ADMIN_PASSWORD` shorthand creates one user named `admin`. This criterion requires at least two entries in `MODULO_USERS` performing the claim and review separately.

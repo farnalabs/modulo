@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "ticket": "FAR-265",
+  "updated_at": null,
+  "criteria": {
+    "1": {
+      "title": "Demo pipeline (prd-to-requirements) walkable by 3 non-authors without assistance (modulo_seed_demo_data=true)",
+      "signed": false,
+      "signee": null,
+      "run_id": null,
+      "evidence_link": null,
+      "date": null,
+      "notes": "Evidence protocol: for each of the 3 walkers, post a Linear comment on FAR-265 naming the walker, the date, and the run ID or screen capture showing the prd-to-requirements demo pipeline run to completion without assistance. evidence_link = the comment URL or the run URL. Start the demo with modulo_seed_demo_data=true (the canonical flag; MODULO_DEMO_MODE is deprecated)."
+    },
+    "2": {
+      "title": "All happy-path BDD scenarios green in CI",
+      "signed": false,
+      "signee": null,
+      "run_id": null,
+      "evidence_link": null,
+      "date": null,
+      "notes": "Evidence protocol: the full backend/tests/bdd/ suite must pass in CI (the bdd.yml workflow on the main branch). evidence_link = the green CI run URL for the latest main build; run_id = the workflow run id. A -SkipBDD report is NOT sufficient — criterion #2 still requires this signed evidence."
+    },
+    "3": {
+      "title": "At least one non-demo pipeline built by an internal user and run to completion",
+      "signed": false,
+      "signee": null,
+      "run_id": null,
+      "evidence_link": null,
+      "date": null,
+      "notes": "Evidence protocol: an internal user (not the demo author) builds a pipeline that uses real connectors (not demo stubs) and runs it to completion with inspectable output. Post a Linear comment on FAR-265 naming the builder, the pipeline, and the run ID. evidence_link = the comment URL or run URL."
+    },
+    "4": {
+      "title": "HITL approve and reject demonstrated by two different named users",
+      "signed": false,
+      "signee": null,
+      "run_id": null,
+      "evidence_link": null,
+      "date": null,
+      "notes": "Evidence protocol: two different named users demonstrate the HITL gate — one run reaches a HITL gate and is approved, a second run reaches a gate and is rejected, with both outcomes visible in run inspection. Post a Linear comment on FAR-265 naming both users and both run IDs. evidence_link = the comment URL or run URLs."
+    },
+    "5": {
+      "title": "Connector swap demonstrated (FilesystemConnector <-> GitHubConnector)",
+      "signed": false,
+      "signee": null,
+      "run_id": null,
+      "evidence_link": null,
+      "date": null,
+      "notes": "Evidence protocol: a pipeline bound to FilesystemConnector runs to completion; the same pipeline is rebound to GitHubConnector (same schema) and runs again with equivalent inspectable output. Post a Linear comment on FAR-265 with both run IDs. evidence_link = the comment URL or run URLs."
+    },
+    "6": {
+      "title": "Run Context demonstrated (context-setter agent visibly changes downstream behaviour)",
+      "signed": false,
+      "signee": null,
+      "run_id": null,
+      "evidence_link": null,
+      "date": null,
+      "notes": "Evidence protocol: a pipeline with a context-setter agent as its first node runs, and a downstream agent's behaviour visibly changes based on the context-setter's output (visible in run inspection). Post a Linear comment on FAR-265 naming the pipeline, the context-setter agent, the affected downstream agent, and the run ID. evidence_link = the comment URL or run URL."
+    }
+  }
+}
