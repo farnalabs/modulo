@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 
 from modulo.connectors._safe_int import safe_int as _safe_int
+from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     CIRun,
     CIRunLog,
@@ -179,7 +180,7 @@ class JenkinsConnector(ConnectorBase):
             )
             r.raise_for_status()
             data = r.json()
-            builds: list[dict[str, Any]] = data.get("builds", [])
+            builds: list[dict[str, Any]] = _safe_records(data, "builds")
             runs = [self._parse_build(b) for b in builds]
             if status:
                 runs = [r for r in runs if r.status == status]
@@ -192,7 +193,7 @@ class JenkinsConnector(ConnectorBase):
                     r = await client.get("/api/json", params={"tree": "jobs[name,url,color]"})
                     r.raise_for_status()
                     data = r.json()
-                    records = data.get("jobs", [])
+                    records = _safe_records(data, "jobs")
                     return ConnectorResult(records=records, total=len(records))
             case "builds":
                 job_name = q.filters.get("job_name", "")
@@ -201,14 +202,14 @@ class JenkinsConnector(ConnectorBase):
                     r = await client.get(f"/job/{job_name}/api/json", params={"tree": tree})
                     r.raise_for_status()
                     data = r.json()
-                    records = data.get("builds", [])
+                    records = _safe_records(data, "builds")
                     return ConnectorResult(records=records, total=len(records))
             case "nodes":
                 async with self._client() as client:
                     r = await client.get("/computer/api/json", params={"tree": "computer[displayName,offline]"})
                     r.raise_for_status()
                     data = r.json()
-                    records = data.get("computer", [])
+                    records = _safe_records(data, "computer")
                     return ConnectorResult(records=records, total=len(records))
             case _:
                 raise ValueError(f"Unsupported query resource: {q.resource!r}")

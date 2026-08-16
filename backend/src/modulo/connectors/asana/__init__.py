@@ -4,6 +4,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -78,7 +79,7 @@ class AsanaConnector(ConnectorBase):
                     r = await client.get("/projects", params=params)
                     r.raise_for_status()
                     body = r.json()
-                    records: list[dict[str, Any]] = body.get("data", [])
+                    records: list[dict[str, Any]] = _safe_records(body, "data")
                     return ConnectorResult(records=records, total=len(records))
 
                 case "project":
@@ -88,8 +89,8 @@ class AsanaConnector(ConnectorBase):
                     r = await client.get(f"/projects/{project_id}")
                     r.raise_for_status()
                     body = r.json()
-                    record = body.get("data", {})
-                    return ConnectorResult(records=[record])
+                    record = body.get("data", {}) if isinstance(body, dict) else {}
+                    return ConnectorResult(records=[record] if record else [])
 
                 case "tasks":
                     params = {}
@@ -104,7 +105,7 @@ class AsanaConnector(ConnectorBase):
                         raise ValueError("Asana tasks query requires 'project_id' or 'workspace' filter")
                     r.raise_for_status()
                     body = r.json()
-                    records = body.get("data", [])
+                    records = _safe_records(body, "data")
                     return ConnectorResult(records=records, total=len(records))
 
                 case "task":
@@ -114,8 +115,8 @@ class AsanaConnector(ConnectorBase):
                     r = await client.get(f"/tasks/{task_id}")
                     r.raise_for_status()
                     body = r.json()
-                    record = body.get("data", {})
-                    return ConnectorResult(records=[record])
+                    record = body.get("data", {}) if isinstance(body, dict) else {}
+                    return ConnectorResult(records=[record] if record else [])
 
                 case "sections":
                     project_id = q.filters.get("project_id")
@@ -124,14 +125,14 @@ class AsanaConnector(ConnectorBase):
                     r = await client.get(f"/projects/{project_id}/sections")
                     r.raise_for_status()
                     body = r.json()
-                    records = body.get("data", [])
+                    records = _safe_records(body, "data")
                     return ConnectorResult(records=records, total=len(records))
 
                 case "workspaces":
                     r = await client.get("/workspaces")
                     r.raise_for_status()
                     body = r.json()
-                    records = body.get("data", [])
+                    records = _safe_records(body, "data")
                     return ConnectorResult(records=records, total=len(records))
 
                 case "users":
@@ -141,7 +142,7 @@ class AsanaConnector(ConnectorBase):
                     r = await client.get("/users", params=params)
                     r.raise_for_status()
                     body = r.json()
-                    records = body.get("data", [])
+                    records = _safe_records(body, "data")
                     return ConnectorResult(records=records, total=len(records))
 
                 case _:

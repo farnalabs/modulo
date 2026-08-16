@@ -4,6 +4,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -113,7 +114,7 @@ class ConfluenceConnector(ConnectorBase):
                     r = await client.get("/wiki/api/v2/pages", params=params)
                     r.raise_for_status()
                     body: dict[str, Any] = r.json()
-                    results: list[dict[str, Any]] = body.get("results", [])
+                    results: list[dict[str, Any]] = _safe_records(body, "results")
                     return ConnectorResult(records=results)
 
                 case "page":
@@ -133,7 +134,7 @@ class ConfluenceConnector(ConnectorBase):
                     r = await client.get("/wiki/api/v2/spaces", params=params)
                     r.raise_for_status()
                     body = r.json()
-                    results = body.get("results", [])
+                    results = _safe_records(body, "results")
                     return ConnectorResult(records=results)
 
                 case "space":
@@ -152,7 +153,7 @@ class ConfluenceConnector(ConnectorBase):
                     r = await client.get("/wiki/rest/api/content/search", params=params)
                     r.raise_for_status()
                     body = r.json()
-                    results = body.get("results", [])
+                    results = _safe_records(body, "results")
                     return ConnectorResult(records=results)
 
                 case "children":
@@ -162,7 +163,7 @@ class ConfluenceConnector(ConnectorBase):
                     r = await client.get(f"/wiki/api/v2/pages/{page_id}/children")
                     r.raise_for_status()
                     body = r.json()
-                    results = body.get("results", [])
+                    results = _safe_records(body, "results")
                     return ConnectorResult(records=results)
 
                 case "labels":
@@ -172,7 +173,7 @@ class ConfluenceConnector(ConnectorBase):
                     r = await client.get(f"/wiki/api/v2/pages/{page_id}/labels")
                     r.raise_for_status()
                     body = r.json()
-                    results = body.get("results", [])
+                    results = _safe_records(body, "results")
                     return ConnectorResult(records=results)
 
                 case _:
