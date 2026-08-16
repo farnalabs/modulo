@@ -17,9 +17,13 @@
 #
 # The names are intentionally undefined here (they exist in backend/src) —
 # that is the whole point of a whitelist — so suppress ruff's F822 for this
-# file. This file lives at the repo root, outside the backend/ ruff scan scope;
-# the directive only protects against a future root-level lint.
-# ruff: noqa: F822
+# file. RUF022 (__all__ not sorted) is also suppressed: the entries are
+# deliberately grouped by contract category (see the section comments), not
+# sorted alphabetically, and an isort-style sort would interleave the
+# categories and destroy the grouping. This file lives at the repo root,
+# outside the backend/ ruff scan scope; the directive only protects against a
+# future root-level lint.
+# ruff: noqa: F822, RUF022
 __all__ = [
     # --- TYPE_CHECKING / string-annotation contracts (kept) ---
     "CursorResult",  # TYPE_CHECKING imports used as string annotations
@@ -30,7 +34,6 @@ __all__ = [
     "inputs",  # LangChain callback interface params
     "q_or_none",  # documented placeholder param (seam parity)
     "version_id",  # FastAPI path params (route shape, unused by design)
-
     # --- Framework-registered classes (registered lazily via __getattr__ in model_backends/__init__.py) ---
     "AzureOpenAIBackend",
     "BedrockBackend",
@@ -45,12 +48,10 @@ __all__ = [
     "VertexAIBackend",
     "VllmBackend",
     "WatsonXBackend",
-
     # --- Framework contracts (string-cast Protocol / config-driven registries) ---
     "_TaskGroupSessionManager",
     "RepositoryHub",
     "AdvisoryLockService",
-
     # --- Connector test doubles (referenced only by backend/tests) ---
     "_AzurePipelinesTestDouble",
     "_BuildkiteTestDouble",
@@ -59,7 +60,6 @@ __all__ = [
     "_GitLabCITestDouble",
     "_JenkinsTestDouble",
     "_TeamCityTestDouble",
-
     # --- Known dead in production, referenced only by tests (follow-up cleanup) ---
     "LicenseKeyTier",
     "get_plan_for_org",
@@ -70,7 +70,6 @@ __all__ = [
     "OkrSuite",
     "RateLimitRule",
     "RunNumberCounter",
-
     # --- Service methods exercised by tests / framework wiring (no direct prod call site vulture can see) ---
     "get_override",
     "expire_stale",
@@ -104,7 +103,6 @@ __all__ = [
     "apply",
     "describe_chain",
     "list_migrations",
-
     # --- Auth / feature helpers referenced only by tests ---
     "get_effective_team_role",
     "team_role_level",
@@ -117,7 +115,6 @@ __all__ = [
     "_parse_saml_datetime",
     "_require_runner",
     "build_tool_definitions_for_text",
-
     # --- CRUD functions referenced only by tests ---
     "delete_composite_template",
     "upsert_daily_run_count",
@@ -139,7 +136,6 @@ __all__ = [
     "is_family_blacklisted",
     "get_effective_setting",
     "extract_orm_entity",
-
     # --- Error-tracking / alerting helpers referenced only by tests ---
     "configure_forwarders",
     "emit_signal_event",
@@ -150,7 +146,6 @@ __all__ = [
     "clear_default_rule_tombstone",
     "restore_default_alert_rules_for_org",
     "record_settings_warning",
-
     # --- Reporting / polling / scheduler helpers referenced only by tests ---
     "_set_test_engine",
     "_fire_scheduled_report",
@@ -175,7 +170,6 @@ __all__ = [
     "verify_write_scopes",
     "_aggregate_sandbox_cost",
     "_compute_token_costs",
-
     # --- Observability / read-model properties referenced only by tests ---
     "active_run_count",
     "buffered_count",
@@ -186,7 +180,6 @@ __all__ = [
     "entry_point_errors",
     "locks",
     "effective_max_rate_usd",
-
     # --- ORM / framework attributes (SQLAlchemy mapped attrs, protocol attrs, dataclass-like slots) ---
     "blacklisted_at",
     "resolved_at",
@@ -211,5 +204,4 @@ __all__ = [
     "created_by_me",
     "circuit_breaker_tripped_at",
     "last_event_id",
-
 ]
