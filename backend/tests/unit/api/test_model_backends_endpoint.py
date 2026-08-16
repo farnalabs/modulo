@@ -651,6 +651,190 @@ def test_delete_model_backend_not_found_returns_404(client: TestClient) -> None:
     assert resp.status_code == 404
 
 
+# ---------------------------------------------------------------------------
+# PRD §8.12 audit trail — model-backend CRUD events
+# ---------------------------------------------------------------------------
+
+
+def test_create_model_backend_emits_model_backend_created_audit(client: TestClient) -> None:
+    """Registration fires the ``model_backend.created`` audit event."""
+    backend = _make_backend()
+    audit = AsyncMock(return_value=MagicMock())
+    with (
+        patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.core.audit_logger.append_audit_event", new=audit),
+    ):
+        resp = client.post("/api/v1/model-backends", json=_CREATE_BODY)
+    assert resp.status_code == 201
+    audit.assert_awaited_once()
+    kwargs = audit.await_args.kwargs
+    assert kwargs["event_type"] == "model_backend.created"
+    assert kwargs["org_id"] == _ORG_ID
+    assert kwargs["actor_user_id"] == _USER_ID
+    assert kwargs["resource_type"] == "model_backend"
+    assert kwargs["resource_id"] == _BACKEND_ID
+    payload = kwargs["payload_json"]
+    assert payload["name"] == "Test Backend"
+    assert payload["provider"] == "openai"
+    assert payload["model_id"] == "gpt-4"
+    assert payload["has_credentials"] is True
+
+
+def test_create_model_backend_audit_failure_does_not_block_creation(client: TestClient) -> None:
+    """A broken audit append must not fail a successful backend registration."""
+    backend = _make_backend()
+
+    async def _raise_audit(*_a: object, **_k: object) -> object:
+        raise RuntimeError("audit boom")
+
+    with (
+        patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.core.audit_logger.append_audit_event", side_effect=_raise_audit),
+    ):
+        resp = client.post("/api/v1/model-backends", json=_CREATE_BODY)
+    assert resp.status_code == 201
+    assert resp.json()["name"] == "Test Backend"
+
+
+def test_update_model_backend_emits_model_backend_updated_audit(client: TestClient) -> None:
+    """A non-credential edit fires ``model_backend.updated`` with the changed fields."""
+    backend = _make_backend()
+    audit = AsyncMock(return_value=MagicMock())
+    with (
+        patch("modulo.api.routes.model_backends.update_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.core.audit_logger.append_audit_event", new=audit),
+    ):
+        resp = client.patch(f"/api/v1/model-backends/{_BACKEND_ID}", json={"display_name": "GPT-4o"})
+    assert resp.status_code == 200
+    audit.assert_awaited_once()
+    kwargs = audit.await_args.kwargs
+    assert kwargs["event_type"] == "model_backend.updated"
+    assert kwargs["resource_id"] == _BACKEND_ID
+    assert kwargs["payload_json"]["changed_fields"] == {"display_name": "GPT-4o"}
+
+
+def test_update_model_backend_credentials_emits_prd_credentials_audit(client: TestClient) -> None:
+    """Credential rotation fires the PRD-named ``model_backend_credentials_updated`` event."""
+    backend = _make_backend()
+    audit = AsyncMock(return_value=MagicMock())
+    with (
+        patch("modulo.api.routes.model_backends.update_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.core.audit_logger.append_audit_event", new=audit),
+    ):
+        resp = client.patch(f"/api/v1/model-backends/{_BACKEND_ID}", json={"api_key": "sk-new"})
+    assert resp.status_code == 200
+    audit.assert_awaited_once()
+    kwargs = audit.await_args.kwargs
+    assert kwargs["event_type"] == "model_backend_credentials_updated"
+    assert kwargs["resource_id"] == _BACKEND_ID
+    assert kwargs["payload_json"]["backend_id"] == str(_BACKEND_ID)
+    assert kwargs["payload_json"]["provider"] == "openai"
+    # The raw credential must never leak into the audit payload.
+    assert "sk-new" not in str(kwargs["payload_json"])
+
+
+def test_update_model_backend_audit_failure_does_not_block_update(client: TestClient) -> None:
+    """A broken audit append must not fail a successful backend update."""
+    backend = _make_backend()
+
+    async def _raise_audit(*_a: object, **_k: object) -> object:
+        raise RuntimeError("audit boom")
+
+    with (
+        patch("modulo.api.routes.model_backends.update_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.core.audit_logger.append_audit_event", side_effect=_raise_audit),
+    ):
+        resp = client.patch(f"/api/v1/model-backends/{_BACKEND_ID}", json={"display_name": "GPT-4o"})
+    assert resp.status_code == 200
+
+
+def test_update_model_backend_404_does_not_emit_audit(client: TestClient) -> None:
+    """An unknown-backend update returns 404 without firing an audit event."""
+    audit = AsyncMock(return_value=MagicMock())
+    with (
+        patch("modulo.api.routes.model_backends.update_model_backend", return_value=None),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.core.audit_logger.append_audit_event", new=audit),
+    ):
+        resp = client.patch(f"/api/v1/model-backends/{uuid.uuid4()}", json={"display_name": "GPT-4o"})
+    assert resp.status_code == 404
+    audit.assert_not_awaited()
+
+
+def test_delete_model_backend_emits_model_backend_deleted_audit(client: TestClient) -> None:
+    """Deletion fires ``model_backend.deleted`` carrying the pre-delete entity details."""
+    backend = _make_backend()
+    audit = AsyncMock(return_value=MagicMock())
+    with (
+        patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.delete_model_backend", return_value=True),
+        patch(
+            "modulo.api.routes.model_backends.list_backends_referencing_fallback",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.core.audit_logger.append_audit_event", new=audit),
+    ):
+        resp = client.delete(f"/api/v1/model-backends/{_BACKEND_ID}")
+    assert resp.status_code == 204
+    audit.assert_awaited_once()
+    kwargs = audit.await_args.kwargs
+    assert kwargs["event_type"] == "model_backend.deleted"
+    assert kwargs["resource_id"] == _BACKEND_ID
+    payload = kwargs["payload_json"]
+    assert payload["name"] == "Test Backend"
+    assert payload["provider"] == "openai"
+    assert payload["model_id"] == "gpt-4"
+
+
+def test_delete_model_backend_audit_failure_does_not_block_delete(client: TestClient) -> None:
+    """A broken audit append must not fail a completed backend deletion."""
+    backend = _make_backend()
+
+    async def _raise_audit(*_a: object, **_k: object) -> object:
+        raise RuntimeError("audit boom")
+
+    with (
+        patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.delete_model_backend", return_value=True),
+        patch(
+            "modulo.api.routes.model_backends.list_backends_referencing_fallback",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.core.audit_logger.append_audit_event", side_effect=_raise_audit),
+    ):
+        resp = client.delete(f"/api/v1/model-backends/{_BACKEND_ID}")
+    assert resp.status_code == 204
+
+
+def test_delete_model_backend_404_does_not_emit_audit(client: TestClient) -> None:
+    """An unknown-backend delete returns 404 without firing an audit event."""
+    audit = AsyncMock(return_value=MagicMock())
+    with (
+        patch("modulo.api.routes.model_backends.delete_model_backend", return_value=False),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.core.audit_logger.append_audit_event", new=audit),
+    ):
+        resp = client.delete(f"/api/v1/model-backends/{uuid.uuid4()}")
+    assert resp.status_code == 404
+    audit.assert_not_awaited()
+
+
 def test_model_backend_no_credentials_shows_false(client: TestClient) -> None:
     backend = _make_backend(credentials_ciphertext=b"")
     with (
