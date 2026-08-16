@@ -92,7 +92,7 @@ async def test_timeout_fails_closed_for_block_guardrail():
     assert outcome.blocked is True
     assert "mechanism error" in outcome.block_message
     assert outcome.blocking_eval_name == "slow-block"
-    assert outcome.results == []
+    assert not outcome.results
 
 
 async def test_timeout_fails_closed_for_redact_guardrail():
@@ -194,7 +194,7 @@ async def test_timeout_log_and_continue_for_warn_guardrail():
     assert outcome.results[0].passed is False
 
 
-async def test_resolve_timeout_defaults_and_declared():
+def test_resolve_timeout_defaults_and_declared():
     assert resolve_guardrail_timeout([_def("a", "observe")]) == DEFAULT_GUARDRAIL_TIMEOUT_SECONDS
     assert resolve_guardrail_timeout([_def("a", "observe", timeout=0.5)]) == 0.5
     assert resolve_guardrail_timeout([_def("a", "observe", timeout=0.5), _def("b", "observe", timeout=1.5)]) == 1.5
@@ -324,7 +324,7 @@ async def test_async_pass_zero_definitions_returns_empty_with_skipped():
     skip = GuardrailSkip(name="ghost", reason="soft_deleted")
     outcome = await run_interception_pass_async(EvalEngine(), [], {"body": "x"}, skipped=[skip])
     assert outcome.skipped == [skip]
-    assert outcome.results == []
+    assert not outcome.results
 
 
 async def test_async_pass_replay_is_detection_only():
@@ -398,7 +398,7 @@ def test_serialize_and_rebuild_pin_round_trip():
     assert rebuilt.pipeline_id == _PIPELINE
 
 
-async def test_malformed_pin_entry_is_skippable_not_crashy():
+def test_malformed_pin_entry_is_skippable_not_crashy():
     pin = serialize_guardrail_pin(_FakeRow())
     pin["id"] = "not-a-uuid"
     with pytest.raises(ValueError):
