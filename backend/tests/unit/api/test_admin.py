@@ -12,6 +12,7 @@ from modulo.api.dependencies import _get_engine, get_db_session, get_plan_contex
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.db.crud.team import TeamUpdateOutcome
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -515,6 +516,371 @@ class TestDeleteOrgImmediate:
         ):
             resp = client.delete(self.URL)
         assert resp.status_code == 409
+
+
+class TestAdminListTeamsOwnedResourceCount:
+    """GET /api/v1/admin/teams includes owned_resource_count (PRD §9.3)."""
+
+    URL = "/api/v1/admin/teams"
+
+    def _mock_team(self, team_id: uuid.UUID, name: str) -> MagicMock:
+        t = MagicMock()
+        t.id = team_id
+        t.organisation_id = _ORG_ID
+        t.name = name
+        t.description = None
+        t.account_id = _USER_ID
+        t.created_at = _NOW
+        t.updated_at = _NOW
+        return t
+
+    def test_includes_owned_resource_count(self, admin_rls_client: TestClient) -> None:
+        team_a = self._mock_team(uuid.uuid4(), "Team A")
+        team_b = self._mock_team(uuid.uuid4(), "Team B")
+        page_result = MagicMock(items=[team_a, team_b], total=2, page=1, page_size=20)
+
+        # Configure the RLS mock session so the member-count GROUP BY query returns [team_a:3].
+        from modulo.api.dependencies import get_db_session
+
+        session = _make_mock_session()
+        member_row = MagicMock()
+        member_row.team_id = team_a.id
+        member_row.cnt = 3
+        member_count_result = MagicMock()
+        member_count_result.all = MagicMock(return_value=[member_row])
+        session.execute = AsyncMock(return_value=member_count_result)
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        admin_rls_client.app.dependency_overrides[get_db_session] = override_session
+        try:
+            with (
+                patch("modulo.api.routes.admin.list_teams", new=AsyncMock(return_value=page_result)),
+                patch("modulo.api.routes.admin.set_rls_org", new=AsyncMock()),
+                patch("modulo.api.routes.admin.set_rls_user_context", new=AsyncMock()),
+                patch(
+                    "modulo.api.routes.admin.count_owned_resources",
+                    new=AsyncMock(return_value={team_a.id: 4, team_b.id: 2}),
+                ),
+            ):
+                resp = admin_rls_client.get(self.URL)
+        finally:
+            admin_rls_client.app.dependency_overrides[get_db_session] = None
+        assert resp.status_code == 200
+        data = resp.json()
+        by_name = {item["name"]: item for item in data["items"]}
+        assert by_name["Team A"]["member_count"] == 3
+        assert by_name["Team A"]["owned_resource_count"] == 4
+        assert by_name["Team B"]["owned_resource_count"] == 2
+        assert by_name["Team A"]["updated_at"]
+
+    def test_operator_returns_403(self, operator_rls_client: TestClient) -> None:
+        resp = operator_rls_client.get(self.URL)
+        assert resp.status_code == 403
+
+    def test_unauthorized_returns_4xx(self, unauth_client: TestClient) -> None:
+        resp = unauth_client.get(self.URL)
+        assert resp.status_code in (401, 403)
+
+
+class TestAdminUpdateTeamOptimisticLock:
+    """PUT /api/v1/admin/teams/{id} with expected_updated_at — optimistic concurrency."""
+
+    URL = "/api/v1/admin/teams"
+
+    def _mock_team(self, team_id: uuid.UUID, name: str) -> MagicMock:
+        t = MagicMock()
+        t.id = team_id
+        t.organisation_id = _ORG_ID
+        t.name = name
+        t.description = None
+        t.account_id = _USER_ID
+        t.created_at = _NOW
+        t.updated_at = _NOW
+        return t
+
+    def test_stale_expected_updated_at_returns_409(self, admin_rls_client: TestClient) -> None:
+        team = self._mock_team(uuid.uuid4(), "Current")
+
+        with (
+            patch(
+                "modulo.api.routes.admin.update_team_if_unchanged",
+                new=AsyncMock(return_value=(TeamUpdateOutcome.STALE, None)),
+            ),
+            patch("modulo.api.routes.admin.get_team_by_name", new=AsyncMock(return_value=None)),
+            patch("modulo.api.routes.admin.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.admin.set_rls_user_context", new=AsyncMock()),
+        ):
+            resp = admin_rls_client.put(
+                f"{self.URL}/{team.id}",
+                json={"name": "Renamed", "expected_updated_at": "2024-01-01T00:00:00+00:00"},
+            )
+        assert resp.status_code == 409
+        assert "optimistic lock" in resp.json()["detail"].lower()
+
+    def test_stale_expected_updated_at_does_not_update(self, admin_rls_client: TestClient) -> None:
+        team = self._mock_team(uuid.uuid4(), "Current")
+
+        with (
+            patch(
+                "modulo.api.routes.admin.update_team_if_unchanged",
+                new=AsyncMock(return_value=(TeamUpdateOutcome.STALE, None)),
+            ),
+            patch("modulo.api.routes.admin.get_team_by_name", new=AsyncMock(return_value=None)),
+            patch(
+                "modulo.api.routes.admin.crud_update_team",
+                new=AsyncMock(),
+            ) as crud_update_mock,
+            patch("modulo.api.routes.admin.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.admin.set_rls_user_context", new=AsyncMock()),
+        ):
+            resp = admin_rls_client.put(
+                f"{self.URL}/{team.id}",
+                json={"name": "Renamed", "expected_updated_at": "2024-01-01T00:00:00+00:00"},
+            )
+        assert resp.status_code == 409
+        crud_update_mock.assert_not_awaited()
+
+    def test_missing_team_with_expected_updated_at_returns_404(self, admin_rls_client: TestClient) -> None:
+        team = self._mock_team(uuid.uuid4(), "Current")
+
+        with (
+            patch(
+                "modulo.api.routes.admin.update_team_if_unchanged",
+                new=AsyncMock(return_value=(TeamUpdateOutcome.NOT_FOUND, None)),
+            ),
+            patch("modulo.api.routes.admin.get_team_by_name", new=AsyncMock(return_value=None)),
+            patch("modulo.api.routes.admin.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.admin.set_rls_user_context", new=AsyncMock()),
+        ):
+            resp = admin_rls_client.put(
+                f"{self.URL}/{team.id}",
+                json={"name": "Renamed", "expected_updated_at": "2024-01-01T00:00:00+00:00"},
+            )
+        assert resp.status_code == 404
+
+    def test_matching_expected_updated_at_succeeds(self, admin_rls_client: TestClient) -> None:
+        team = self._mock_team(uuid.uuid4(), "Updated")
+        expected = team.updated_at.isoformat()
+        with (
+            patch("modulo.api.routes.admin.get_team_by_name", new=AsyncMock(return_value=None)),
+            patch(
+                "modulo.api.routes.admin.update_team_if_unchanged",
+                new=AsyncMock(return_value=(TeamUpdateOutcome.UPDATED, team)),
+            ),
+            patch("modulo.api.routes.admin.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.admin.set_rls_user_context", new=AsyncMock()),
+            patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock()),
+        ):
+            resp = admin_rls_client.put(
+                f"{self.URL}/{team.id}",
+                json={"name": "Updated", "expected_updated_at": expected},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "Updated"
+
+
+class TestUpdateTeamIfUnchanged:
+    """Direct CRUD tests of the atomic optimistic-lock update."""
+
+    @pytest.mark.asyncio
+    async def test_matching_timestamp_updates_and_returns_team(self) -> None:
+        team = MagicMock()
+        team.id = uuid.uuid4()
+        team.updated_at = _NOW
+
+        session = _make_mock_session()
+        result = MagicMock()
+        result.scalar_one_or_none = MagicMock(return_value=team)
+        session.execute = AsyncMock(return_value=result)
+
+        from modulo.db.crud.team import update_team_if_unchanged
+
+        outcome, returned = await update_team_if_unchanged(
+            session,
+            team.id,
+            {"name": "Renamed"},
+            _NOW.isoformat(),
+        )
+        assert outcome is TeamUpdateOutcome.UPDATED
+        assert returned is team
+
+    @pytest.mark.asyncio
+    async def test_stale_timestamp_returns_stale_without_update(self) -> None:
+        team = MagicMock()
+        team.id = uuid.uuid4()
+        team.updated_at = _NOW
+
+        session = _make_mock_session()
+        update_result = MagicMock()
+        update_result.scalar_one_or_none = MagicMock(return_value=None)
+        exists_result = MagicMock()
+        exists_result.scalar_one_or_none = MagicMock(return_value=team.id)
+        session.execute = AsyncMock(side_effect=[update_result, exists_result])
+
+        from modulo.db.crud.team import update_team_if_unchanged
+
+        outcome, returned = await update_team_if_unchanged(
+            session,
+            team.id,
+            {"name": "Renamed"},
+            "2024-01-01T00:00:00+00:00",
+        )
+        assert outcome is TeamUpdateOutcome.STALE
+        assert returned is None
+
+    @pytest.mark.asyncio
+    async def test_missing_team_returns_not_found(self) -> None:
+        team = MagicMock()
+        team.id = uuid.uuid4()
+        team.updated_at = _NOW
+
+        session = _make_mock_session()
+        update_result = MagicMock()
+        update_result.scalar_one_or_none = MagicMock(return_value=None)
+        exists_result = MagicMock()
+        exists_result.scalar_one_or_none = MagicMock(return_value=None)
+        session.execute = AsyncMock(side_effect=[update_result, exists_result])
+
+        from modulo.db.crud.team import update_team_if_unchanged
+
+        outcome, returned = await update_team_if_unchanged(
+            session,
+            uuid.uuid4(),
+            {"name": "Renamed"},
+            _NOW.isoformat(),
+        )
+        assert outcome is TeamUpdateOutcome.NOT_FOUND
+        assert returned is None
+
+    @pytest.mark.asyncio
+    async def test_unparseable_expected_timestamp_returns_stale(self) -> None:
+        session = _make_mock_session()
+
+        from modulo.db.crud.team import update_team_if_unchanged
+
+        outcome, returned = await update_team_if_unchanged(
+            session,
+            uuid.uuid4(),
+            {"name": "Renamed"},
+            "not-a-timestamp",
+        )
+        assert outcome is TeamUpdateOutcome.STALE
+        assert returned is None
+        session.execute.assert_not_awaited()
+
+
+@pytest.fixture
+def admin_client_and_session() -> Generator[tuple[TestClient, AsyncMock], None, None]:
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="admin",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app), mock_session
+    app.dependency_overrides.clear()
+
+
+class TestAdminReassignAllTeamResources:
+    """POST /api/v1/admin/teams/{id}/reassign-all (PRD 9.3 bulk reassignment)."""
+
+    URL = f"/api/v1/admin/teams/{_ORG_ID}/reassign-all"
+
+    def test_reassign_all_reports_per_resource_counts(
+        self, admin_client_and_session: tuple[TestClient, AsyncMock]
+    ) -> None:
+        client, session = admin_client_and_session
+        counts = iter([3, 1, 0, 2])
+
+        def _execute(*args: object, **_kwargs: object) -> MagicMock:
+            # The require_permission authz kill-switch read must not consume a
+            # handler-side rowcount slot.
+            stmt = args[0] if args else None
+            if stmt is not None and "authz_enforce" in str(stmt):
+                result = MagicMock()
+                result.scalar_one_or_none.return_value = True
+                return result
+            # Extra calls beyond the four per-resource updates return rowcount 0.
+            return MagicMock(rowcount=next(counts, 0))
+
+        session.execute.side_effect = _execute
+        team = MagicMock()
+        team.id = _ORG_ID
+        team.organisation_id = _ORG_ID
+        with (
+            patch("modulo.api.routes.admin.get_team", return_value=team),
+            patch("modulo.api.routes.admin.set_rls_org"),
+            patch("modulo.api.routes.admin.set_rls_user_context"),
+        ):
+            resp = client.post(self.URL)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["reassigned"] == 6
+        assert data["resource_types"] == ["pipeline", "connector", "library primitive"]
+
+    def test_reassign_all_idempotent_when_team_has_no_resources(
+        self, admin_client_and_session: tuple[TestClient, AsyncMock]
+    ) -> None:
+        client, session = admin_client_and_session
+        session.execute.side_effect = lambda *_a, **_k: MagicMock(rowcount=0)
+        team = MagicMock()
+        team.id = _ORG_ID
+        team.organisation_id = _ORG_ID
+        with (
+            patch("modulo.api.routes.admin.get_team", return_value=team),
+            patch("modulo.api.routes.admin.set_rls_org"),
+            patch("modulo.api.routes.admin.set_rls_user_context"),
+        ):
+            resp = client.post(self.URL)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["reassigned"] == 0
+        assert not data["resource_types"]
+
+    def test_reassign_all_missing_team_returns_404(
+        self, admin_client_and_session: tuple[TestClient, AsyncMock]
+    ) -> None:
+        client, _session = admin_client_and_session
+        with (
+            patch("modulo.api.routes.admin.get_team", return_value=None),
+            patch("modulo.api.routes.admin.set_rls_org"),
+            patch("modulo.api.routes.admin.set_rls_user_context"),
+        ):
+            resp = client.post(self.URL)
+        assert resp.status_code == 404
+
+    def test_reassign_all_foreign_org_team_returns_404(
+        self, admin_client_and_session: tuple[TestClient, AsyncMock]
+    ) -> None:
+        client, session = admin_client_and_session
+        session.execute.side_effect = lambda *_a, **_k: MagicMock(rowcount=0)
+        team = MagicMock()
+        team.id = uuid.uuid4()
+        team.organisation_id = uuid.uuid4()
+        with (
+            patch("modulo.api.routes.admin.get_team", return_value=team),
+            patch("modulo.api.routes.admin.set_rls_org"),
+            patch("modulo.api.routes.admin.set_rls_user_context"),
+        ):
+            resp = client.post(self.URL)
+        assert resp.status_code == 404
+
+    def test_reassign_all_non_admin_returns_403(self, operator_client: TestClient) -> None:
+        resp = operator_client.post(self.URL)
+        assert resp.status_code == 403
 
 
 class TestBillingOverviewAggregation:

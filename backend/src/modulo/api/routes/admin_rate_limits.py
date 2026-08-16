@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from modulo.api.dependencies import require_feature, require_permission
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware, redis_available
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.rate_limiter import RateLimitRule
 
 _log = logging.getLogger(__name__)
 
@@ -45,7 +46,10 @@ def _require_admin(principal: TenantPrincipal) -> None:
 async def get_rate_limits(
     current_user: TenantPrincipal = require_permission("admin.rate_limit.manage"),
 ) -> RateLimitStatusResponse:
-    rules = [RateLimitRuleResponse(path_prefix=p, max_requests=m, window_s=w) for p, m, w in RateLimitMiddleware.RULES]
+    rules = [
+        RateLimitRuleResponse(path_prefix=r.path_prefix, max_requests=r.max_requests, window_s=r.window_s)
+        for r in RateLimitMiddleware.RULES
+    ]
     return RateLimitStatusResponse(
         mode="redis" if redis_available else "in_memory",
         rules=rules,
@@ -57,7 +61,9 @@ async def update_rate_limits(
     req: RateLimitUpdateRequest,
     current_user: TenantPrincipal = require_permission("admin.rate_limit.manage"),
 ) -> RateLimitStatusResponse:
-    new_rules = [(r.path_prefix, r.max_requests, r.window_s) for r in req.rules]
+    new_rules = [
+        RateLimitRule(path_prefix=r.path_prefix, max_requests=r.max_requests, window_s=r.window_s) for r in req.rules
+    ]
     if not new_rules:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -65,7 +71,10 @@ async def update_rate_limits(
         )
     RateLimitMiddleware.set_rules(new_rules)
     _log.info("ratelimit.rules_updated", extra={"rules": new_rules})
-    rules = [RateLimitRuleResponse(path_prefix=p, max_requests=m, window_s=w) for p, m, w in RateLimitMiddleware.RULES]
+    rules = [
+        RateLimitRuleResponse(path_prefix=r.path_prefix, max_requests=r.max_requests, window_s=r.window_s)
+        for r in RateLimitMiddleware.RULES
+    ]
     return RateLimitStatusResponse(
         mode="redis" if redis_available else "in_memory",
         rules=rules,

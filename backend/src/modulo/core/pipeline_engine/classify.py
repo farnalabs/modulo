@@ -106,6 +106,7 @@ _SOURCE_ERROR_CLASSES: frozenset[str] = frozenset(
         "harness",
         "node",
         "connector",
+        "provider",
         "capacity",
         "config",
         "contract",
@@ -320,7 +321,8 @@ def _derive_no_delivery_reason(
     """
     if _any_marker_parse_error(raw_output_markers):
         return REASON_PARSE_ERROR
-    code = (error_code or "").strip().lower()
+    raw_code = (error_code or "").strip()
+    code = raw_code.lower()
     if not code:
         return REASON_NO_DELIVERY
     if code in _NEEDS_HUMAN_CODES or any(marker in code for marker in _NEEDS_HUMAN_CODE_SUBSTRINGS):
@@ -328,7 +330,7 @@ def _derive_no_delivery_reason(
     try:
         from modulo.core.pipeline_engine.error_codes import class_for
 
-        error_class = class_for(code)
+        error_class = class_for(raw_code)
     except Exception:
         error_class = None
     if error_class in _SOURCE_ERROR_CLASSES:

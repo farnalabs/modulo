@@ -137,7 +137,7 @@ path defined in `docs/security/incident-response-playbook.md` §2.3.
 
 ```bash
 # Application health
-curl -s https://modulo.example.com/api/v1/health | python3 -m json.tool
+curl -s https://modulo.example.com/healthz | python3 -m json.tool
 
 # Full health check (runs DB, Redis, migration checks)
 uv run modulo health --full

@@ -22,7 +22,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import expression
 from sqlalchemy.sql.compiler import SQLCompiler
 
-from modulo.db.models.base import Base, OrgScoped
+from modulo.db.models.base import OrgScoped
 
 if TYPE_CHECKING:
     from modulo.db.models.organisation import Organisation
@@ -215,29 +215,3 @@ class Run(OrgScoped):
     pipeline: Mapped["Pipeline"] = relationship()
     snapshot: Mapped["PipelineSnapshot"] = relationship()
     owner_team: Mapped[Optional["Team"]] = relationship()
-
-
-class RunNumberCounter(Base):
-    """Per-organisation atomic run-number counter (FAR-168).
-
-    Replaces the racy ``SELECT MAX(run_number)+1`` allocation in
-    ``db.crud.run.create_run``: one row per org, bumped via
-    ``INSERT ... ON CONFLICT (organisation_id) DO UPDATE SET
-    next_run_number = next_run_number + 1 RETURNING next_run_number`` so
-    concurrent creates in the same org serialize on the row and can never
-    collide on ``uq_runs_org_run_number``.
-
-    Deliberately NOT ``OrgScoped`` (no ``id`` / timestamps): the organisation_id
-    IS the primary key, and rows are seeded by migration 0093 from the current
-    ``MAX(run_number)`` per org so new runs continue the sequence. RLS follows
-    the org-scoped convention (``rls_org_isolation``, migration 0093).
-    """
-
-    __tablename__ = "run_number_counters"
-
-    organisation_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(),
-        ForeignKey("organisations.id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-    next_run_number: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")

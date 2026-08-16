@@ -77,15 +77,16 @@ class TokenBucket:
     an ``asyncio.Lock``) and never goes below zero tokens.
     """
 
-    def __init__(self, rate: float, burst: int) -> None:
+    def __init__(self, rate: float, burst: int, clock: Callable[[], float] = time.monotonic) -> None:
         if rate <= 0:
             raise ValueError("rate must be > 0")
         if burst <= 0:
             raise ValueError("burst must be > 0")
         self.rate = float(rate)
         self.burst = int(burst)
+        self._clock = clock
         self._tokens = float(burst)
-        self._last = time.monotonic()
+        self._last = clock()
         self._lock = asyncio.Lock()
 
     async def consume(self, tokens: float = 1.0) -> bool:
@@ -97,7 +98,7 @@ class TokenBucket:
         if tokens <= 0:
             raise ValueError("tokens must be > 0")
         async with self._lock:
-            now = time.monotonic()
+            now = self._clock()
             self._tokens = min(self.burst, self._tokens + (now - self._last) * self.rate)
             self._last = now
             if self._tokens < tokens:
@@ -108,7 +109,7 @@ class TokenBucket:
     def reset(self) -> None:
         """Refill the bucket back to full capacity."""
         self._tokens = float(self.burst)
-        self._last = time.monotonic()
+        self._last = self._clock()
 
 
 class TokenBucketRegistry:

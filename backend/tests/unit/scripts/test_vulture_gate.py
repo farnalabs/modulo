@@ -187,5 +187,5 @@ def test_gate_blocks_unused_import_and_unreachable() -> None:
 def test_whitelist_exists_and_names_framework_symbols() -> None:
     assert WHITELIST.is_file(), f"whitelist missing at {WHITELIST}"
     content = WHITELIST.read_text(encoding="utf-8")
-    for symbol in ("CursorResult", "Dialect", "compiler", "element", "version_id", "get_plan_for_org"):
+    for symbol in ("CursorResult", "Dialect", "compiler", "element", "version_id", "circuit_state"):
         assert f'"{symbol}"' in content, f"whitelist does not name framework-contract symbol {symbol!r}"

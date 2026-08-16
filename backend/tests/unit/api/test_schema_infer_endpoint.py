@@ -262,6 +262,42 @@ def test_infer_schema_sampling_failure_returns_502(client: TestClient) -> None:
     assert "failed to sample" in resp.json()["detail"].lower()
 
 
+def test_infer_schema_sampling_timeout_returns_504_problem(client: TestClient) -> None:
+    ci = _make_mock_connector_instance()
+    mb = _make_mock_model_backend()
+    page_result = MagicMock(items=[mb], total=1, page=1, page_size=1)
+    backend_id = uuid.uuid4()
+
+    with (
+        patch("modulo.api.routes.schemas.get_connector_instance", return_value=ci),
+        patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("modulo.api.routes.schemas.create_secrets_backend"),
+        patch("modulo.api.routes.schemas.ConnectorHub.sample", side_effect=TimeoutError),
+        patch("modulo.api.routes.schemas.ConnectorHub.initialise"),
+        patch("modulo.api.routes.schemas.ModelBackendHub.initialise"),
+        patch(
+            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            new_callable=PropertyMock(return_value=frozenset({backend_id})),
+        ),
+        patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
+    ):
+        resp = client.post(
+            "/api/v1/schemas/infer",
+            json={
+                "connector_instance_id": str(_CONNECTOR_ID),
+                "sample_query": {"resource": "issues"},
+            },
+        )
+
+    assert resp.status_code == 504
+    body = resp.json()
+    assert body["type"] == "urn:problem:modulo:gateway_timeout"
+    assert body["title"] == "Gateway Timeout"
+    assert body["status"] == 504
+    assert "timed out" in body["detail"].lower()
+
+
 def test_infer_schema_inference_failure_returns_502(client: TestClient) -> None:
     ci = _make_mock_connector_instance()
     mb = _make_mock_model_backend()

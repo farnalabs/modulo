@@ -1097,7 +1097,6 @@ _SAQ_SETTINGS_ENV = (
     "SAQ_AUTH_USERNAME",
     "SAQ_RUN_RETRIES",
     "SAQ_RETRY_DELAY",
-    "SAQ_E2B_IDEMPOTENCY",
     "SAQ_TEST_PAUSE",
     "SAQ_REENQUEUE_WINDOW",
     "SAQ_NEVER_DISPATCHED_WINDOW",
@@ -1130,7 +1129,6 @@ class TestSaqSettingsDefaults:
         assert s.saq_auth_username is None
         assert s.saq_run_retries == 5
         assert s.saq_retry_delay == 60
-        assert s.saq_e2b_idempotency is True
         assert s.saq_test_pause is False
         assert s.saq_reenqueue_window == 600
         assert s.saq_never_dispatched_window == 300

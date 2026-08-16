@@ -5,7 +5,7 @@ Covers the plan-context adapters (``CommunityTier`` / ``LicenseKeyTier`` /
 in-memory license > env-var license > org plan_id > community fallback), the
 per-entity flag override resolution (``resolve_flag`` precedence plus the
 org/team/user DB lookups and their failure paths), the process-global registry
-singleton, ``get_plan_for_org``, the ``load_from_db`` transaction entry paths,
+singleton, the ``load_from_db`` transaction entry paths,
 and golden-value pins for the tier contract that must never regress.
 """
 
@@ -27,7 +27,6 @@ from modulo.core.feature_flags import (
     DbPlanContext,
     FeatureFlagRegistry,
     LicenseKeyTier,
-    get_plan_for_org,
     get_registry,
     resolve_plan_context,
 )
@@ -635,40 +634,6 @@ class TestGetRegistry:
         r = get_registry()
         assert r.current_tier == "community"
         assert r.has_license_key is False
-
-
-class TestGetPlanForOrg:
-    async def test_org_plan_id_wins(self) -> None:
-        org = SimpleNamespace(plan_id="team")
-        with (
-            _fake_crud_module("modulo.db.crud.organisation", get_organisation=AsyncMock(return_value=org)),
-            _fake_crud_module("modulo.db.crud.system_config", get_config=AsyncMock(return_value=None)),
-        ):
-            assert await get_plan_for_org(MagicMock(), _ORG_ID) == "team"
-
-    async def test_org_without_plan_uses_config_default(self) -> None:
-        org = SimpleNamespace(plan_id=None)
-        config = SimpleNamespace(value="team")
-        with (
-            _fake_crud_module("modulo.db.crud.organisation", get_organisation=AsyncMock(return_value=org)),
-            _fake_crud_module("modulo.db.crud.system_config", get_config=AsyncMock(return_value=config)),
-        ):
-            assert await get_plan_for_org(MagicMock(), _ORG_ID) == "team"
-
-    async def test_no_org_uses_config_default(self) -> None:
-        config = SimpleNamespace(value="pro")
-        with (
-            _fake_crud_module("modulo.db.crud.organisation", get_organisation=AsyncMock(return_value=None)),
-            _fake_crud_module("modulo.db.crud.system_config", get_config=AsyncMock(return_value=config)),
-        ):
-            assert await get_plan_for_org(MagicMock(), None) == "pro"
-
-    async def test_no_org_no_config_community(self) -> None:
-        with (
-            _fake_crud_module("modulo.db.crud.organisation", get_organisation=AsyncMock(return_value=None)),
-            _fake_crud_module("modulo.db.crud.system_config", get_config=AsyncMock(return_value=None)),
-        ):
-            assert await get_plan_for_org(MagicMock(), None) == "community"
 
 
 class TestLoadFromDbTransactionPaths:

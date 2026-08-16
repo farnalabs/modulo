@@ -213,6 +213,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/teams/{team_id}/reassign-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Reassign All Team Resources
+         * @description Bulk-reassign every resource owned by ``team_id`` to org-wide.
+         *
+         *     PRD §9.3 team-deletion flow: before deleting a team, the admin reassigns
+         *     all team-owned resources to org-wide (``owner_team_id -> NULL``,
+         *     ``visibility -> 'org'``), after which deletion is no longer blocked by
+         *     ``team_has_resources``. Idempotent: a team with no owned resources returns
+         *     ``reassigned=0``; reassigning already-org resources succeeds.
+         */
+        post: operations["admin_reassign_all_team_resources_api_v1_admin_teams__team_id__reassign_all_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/dashboard/summary": {
         parameters: {
             query?: never;
@@ -1589,6 +1615,26 @@ export interface paths {
         post?: never;
         /** Delete Component */
         delete: operations["delete_component_api_v1_admin_costs_components__component_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/teams/my": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * My Teams Endpoint
+         * @description List the current user's team memberships with team names (profile "My Teams").
+         */
+        get: operations["my_teams_endpoint_api_v1_teams_my_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -7519,8 +7565,18 @@ export interface components {
              * @default 0
              */
             member_count: number;
+            /**
+             * Owned Resource Count
+             * @default 0
+             */
+            owned_resource_count: number;
             /** Created At */
             created_at: string;
+            /**
+             * Updated At
+             * @default
+             */
+            updated_at: string;
         };
         /** AdminTeamListResponse */
         AdminTeamListResponse: {
@@ -7539,6 +7595,8 @@ export interface components {
             name?: string | null;
             /** Description */
             description?: string | null;
+            /** Expected Updated At */
+            expected_updated_at?: string | null;
         };
         /** AgentCreate */
         AgentCreate: {
@@ -8063,6 +8121,13 @@ export interface components {
         Body_upload_zip_and_analyse_endpoint_api_v1_libraries_import_upload_zip_post: {
             /** File */
             file: string;
+        };
+        /** BulkReassignResponse */
+        BulkReassignResponse: {
+            /** Reassigned */
+            reassigned: number;
+            /** Resource Types */
+            resource_types?: string[];
         };
         /** CancelDeletionResponse */
         CancelDeletionResponse: {
@@ -10966,6 +11031,15 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** MyTeamResponse */
+        MyTeamResponse: {
+            /** Team Id */
+            team_id: string;
+            /** Team Name */
+            team_name: string;
+            /** Role */
+            role: string;
+        };
         /** NodeCategoryCreate */
         NodeCategoryCreate: {
             /** Name */
@@ -11898,6 +11972,11 @@ export interface components {
             owner_team_id?: string | null;
             /** Folder Id */
             folder_id?: string | null;
+            /**
+             * Connector Rebind Required
+             * @default false
+             */
+            connector_rebind_required: boolean;
             /**
              * Created By
              * Format: uuid
@@ -14291,6 +14370,8 @@ export interface components {
             name?: string | null;
             /** Description */
             description?: string | null;
+            /** Expected Updated At */
+            expected_updated_at?: string | null;
         };
         /** UpdateUserRequest */
         UpdateUserRequest: {
@@ -15721,6 +15802,39 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_reassign_all_team_resources_api_v1_admin_teams__team_id__reassign_all_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkReassignResponse"];
+                };
             };
             /** @description Validation Error */
             422: {
@@ -18915,6 +19029,37 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    my_teams_endpoint_api_v1_teams_my_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MyTeamResponse"][];
+                };
             };
             /** @description Validation Error */
             422: {

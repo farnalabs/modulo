@@ -17,4 +17,5 @@ Feature: Credential Store
   Scenario: Wrong FERNET_KEY cannot decrypt
     Given a credential encrypted with key A
     When the service restarts with key B
+    When attempting to decrypt
     Then attempting to decrypt raises InvalidToken
