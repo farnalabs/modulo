@@ -645,3 +645,44 @@ class TestAdminUpdateTeamOptimisticLock:
             )
         assert resp.status_code == 200
         assert resp.json()["name"] == "Updated"
+
+
+class TestAssertTeamNotStale:
+    """Direct tests of the _assert_team_not_stale optimistic-lock helper."""
+
+    async def test_matching_timestamp_passes(self) -> None:
+        team = MagicMock()
+        team.id = uuid.uuid4()
+        team.updated_at = _NOW
+
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=team)))
+
+        from modulo.api.routes.admin import _assert_team_not_stale
+
+        await _assert_team_not_stale(session, team.id, _NOW.isoformat())
+
+    async def test_stale_timestamp_raises_409(self) -> None:
+        team = MagicMock()
+        team.id = uuid.uuid4()
+        team.updated_at = _NOW
+
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=team)))
+
+        from modulo.api.routes.admin import _assert_team_not_stale
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _assert_team_not_stale(session, team.id, "2024-01-01T00:00:00+00:00")
+        assert exc_info.value.status_code == 409
+        assert "optimistic lock" in exc_info.value.detail.lower()
+
+    async def test_missing_team_raises_404(self) -> None:
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
+
+        from modulo.api.routes.admin import _assert_team_not_stale
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _assert_team_not_stale(session, uuid.uuid4(), _NOW.isoformat())
+        assert exc_info.value.status_code == 404
