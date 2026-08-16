@@ -19,6 +19,9 @@ from modulo.connectors.base import (
 
 _BUILDKITE_API = "https://api.buildkite.com/v2"
 
+# Forward-ref type string used in ``cast`` for response payloads (S1192).
+_LIST_DICT_STR_ANY = "list[dict[str, Any]]"
+
 _STATUS_MAP: dict[str, CIRunStatus] = {
     "scheduled": CIRunStatus.QUEUED,
     "running": CIRunStatus.IN_PROGRESS,
@@ -120,14 +123,14 @@ class BuildkiteConnector(ConnectorBase):
                 async with self._client() as client:
                     r = await client.get("/organizations")
                     r.raise_for_status()
-                    records = cast("list[dict[str, Any]]", r.json())
+                    records = cast(_LIST_DICT_STR_ANY, r.json())
                     return ConnectorResult(records=records, total=len(records))
             case "pipelines":
                 org = q.filters.get("organization", "")
                 async with self._client() as client:
                     r = await client.get(f"/organizations/{org}/pipelines")
                     r.raise_for_status()
-                    records = cast("list[dict[str, Any]]", r.json())
+                    records = cast(_LIST_DICT_STR_ANY, r.json())
                     return ConnectorResult(records=records, total=len(records))
             case "builds":
                 org = q.filters.get("organization", "")
@@ -141,7 +144,7 @@ class BuildkiteConnector(ConnectorBase):
                         params=params,
                     )
                     r.raise_for_status()
-                    records = cast("list[dict[str, Any]]", r.json())
+                    records = cast(_LIST_DICT_STR_ANY, r.json())
                     return ConnectorResult(records=records, total=len(records))
             case "jobs":
                 org = q.filters.get("organization", "")
@@ -152,7 +155,7 @@ class BuildkiteConnector(ConnectorBase):
                         f"/organizations/{org}/pipelines/{pipeline}/builds/{build_number}/jobs",
                     )
                     r.raise_for_status()
-                    records = cast("list[dict[str, Any]]", r.json())
+                    records = cast(_LIST_DICT_STR_ANY, r.json())
                     return ConnectorResult(records=records, total=len(records))
             case _:
                 raise ValueError(f"Unsupported query resource: {q.resource!r}")

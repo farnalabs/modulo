@@ -10,6 +10,9 @@ from modulo.db.models.base import OrgScoped
 if TYPE_CHECKING:
     from modulo.db.models.account import Account
 
+# FK target for the owning account (repeated across the schema tables).
+_FK_ACCOUNTS_ID = "accounts.id"
+
 
 class SchemaFolder(OrgScoped):
     __tablename__ = "schema_folders"
@@ -18,7 +21,7 @@ class SchemaFolder(OrgScoped):
     parent_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("schema_folders.id", ondelete="CASCADE"))
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
+        Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete="RESTRICT"), nullable=False
     )
 
     parent: Mapped[Optional["SchemaFolder"]] = relationship(
@@ -38,7 +41,7 @@ class Schema(OrgScoped):
     description: Mapped[str | None] = mapped_column(String(2000))
     abstract_name: Mapped[str | None] = mapped_column(String(255))
     account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
+        Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete="RESTRICT"), nullable=False
     )
     folder_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("schema_folders.id", ondelete="SET NULL"), nullable=True, index=True
@@ -70,5 +73,5 @@ class SchemaVersion(OrgScoped):
     published: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     deprecated: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
+        Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete="RESTRICT"), nullable=False
     )

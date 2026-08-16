@@ -18,6 +18,10 @@ from modulo.connectors.base import (
 
 _BASE = "https://api.opsgenie.com/v2"
 
+# Repeated REST path and forward-ref cast type string (S1192).
+_ALERTS_PATH = "/alerts"
+_DICT_STR_ANY = "dict[str, Any]"
+
 
 def _paging_total_count(body: object) -> int | None:
     """Extract Opsgenie's ``totalCount`` as a safe int.
@@ -71,7 +75,7 @@ class OpsgenieConnector(ConnectorBase):
     async def health_check(self) -> HealthResult:
         try:
             async with self._client() as c:
-                resp = await c.get("/alerts", params={"limit": 1})
+                resp = await c.get(_ALERTS_PATH, params={"limit": 1})
                 if resp.status_code == 200:
                     return HealthResult(ok=True, detail="Opsgenie API key validated")
                 if resp.status_code in (401, 403):
@@ -129,7 +133,7 @@ class OpsgenieConnector(ConnectorBase):
             params["limit"] = q.limit
         if q.cursor:
             params["offset"] = q.cursor
-        resp = await c.get("/alerts", params=params)
+        resp = await c.get(_ALERTS_PATH, params=params)
         resp.raise_for_status()
         body = resp.json()
         records = _safe_records(body, "data")
@@ -284,10 +288,10 @@ class OpsgenieConnector(ConnectorBase):
             body["actions"] = data["actions"]
         if data.get("note"):
             body["note"] = data["note"]
-        resp = await c.post("/alerts", json=body)
+        resp = await c.post(_ALERTS_PATH, json=body)
         resp.raise_for_status()
-        result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("data", {}))
+        result = cast(_DICT_STR_ANY, resp.json())
+        return cast(_DICT_STR_ANY, result.get("data", {}))
 
     async def _acknowledge_alert(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         alert_id = data.get("id")
@@ -302,8 +306,8 @@ class OpsgenieConnector(ConnectorBase):
             body["source"] = data["source"]
         resp = await c.post(f"/alerts/{alert_id}/acknowledge", json=body)
         resp.raise_for_status()
-        result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("data", {}))
+        result = cast(_DICT_STR_ANY, resp.json())
+        return cast(_DICT_STR_ANY, result.get("data", {}))
 
     async def _close_alert(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         alert_id = data.get("id")
@@ -316,8 +320,8 @@ class OpsgenieConnector(ConnectorBase):
             body["source"] = data["source"]
         resp = await c.post(f"/alerts/{alert_id}/close", json=body)
         resp.raise_for_status()
-        result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("data", {}))
+        result = cast(_DICT_STR_ANY, resp.json())
+        return cast(_DICT_STR_ANY, result.get("data", {}))
 
     async def _add_alert_note(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         alert_id = data.get("id")
@@ -331,8 +335,8 @@ class OpsgenieConnector(ConnectorBase):
             body["source"] = data["source"]
         resp = await c.post(f"/alerts/{alert_id}/notes", json=body)
         resp.raise_for_status()
-        result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("data", {}))
+        result = cast(_DICT_STR_ANY, resp.json())
+        return cast(_DICT_STR_ANY, result.get("data", {}))
 
     async def _snooze_alert(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         alert_id = data.get("id")
@@ -348,5 +352,5 @@ class OpsgenieConnector(ConnectorBase):
             body["source"] = data["source"]
         resp = await c.post(f"/alerts/{alert_id}/snooze", json=body)
         resp.raise_for_status()
-        result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("data", {}))
+        result = cast(_DICT_STR_ANY, resp.json())
+        return cast(_DICT_STR_ANY, result.get("data", {}))

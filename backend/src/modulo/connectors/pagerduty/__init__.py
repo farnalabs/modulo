@@ -19,6 +19,9 @@ from modulo.connectors.base import (
 
 _BASE = "https://api.pagerduty.com"
 
+# Forward-ref type string used in ``cast`` for response payloads (S1192).
+_DICT_STR_ANY = "dict[str, Any]"
+
 
 def _paging_total(body: object) -> int | None:
     """Extract PagerDuty's ``total`` as a safe int.
@@ -292,8 +295,8 @@ class PagerDutyConnector(ConnectorBase):
         body: dict[str, Any] = {"incident": incident}
         resp = await c.post("/incidents", json=body)
         resp.raise_for_status()
-        result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("incident", {}))
+        result = cast(_DICT_STR_ANY, resp.json())
+        return cast(_DICT_STR_ANY, result.get("incident", {}))
 
     async def _acknowledge_incident(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         incident_id = data.get("incident_id")
@@ -307,8 +310,8 @@ class PagerDutyConnector(ConnectorBase):
         }
         resp = await c.put(f"/incidents/{incident_id}", json=body)
         resp.raise_for_status()
-        result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("incident", {}))
+        result = cast(_DICT_STR_ANY, resp.json())
+        return cast(_DICT_STR_ANY, result.get("incident", {}))
 
     async def _resolve_incident(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         incident_id = data.get("incident_id")
@@ -322,8 +325,8 @@ class PagerDutyConnector(ConnectorBase):
         }
         resp = await c.put(f"/incidents/{incident_id}", json=body)
         resp.raise_for_status()
-        result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("incident", {}))
+        result = cast(_DICT_STR_ANY, resp.json())
+        return cast(_DICT_STR_ANY, result.get("incident", {}))
 
     async def _add_note(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         incident_id = data.get("incident_id")
@@ -333,5 +336,5 @@ class PagerDutyConnector(ConnectorBase):
         body: dict[str, Any] = {"note": {"content": content}}
         resp = await c.post(f"/incidents/{incident_id}/notes", json=body)
         resp.raise_for_status()
-        result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("note", {}))
+        result = cast(_DICT_STR_ANY, resp.json())
+        return cast(_DICT_STR_ANY, result.get("note", {}))

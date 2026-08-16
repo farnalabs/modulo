@@ -16,6 +16,10 @@ from modulo.connectors.base import (
 
 _DISCORD_API = "https://discord.com/api/v10"
 
+# Forward-ref type strings used in ``cast`` for response payloads (S1192).
+_DICT_STR_ANY = "dict[str, Any]"
+_LIST_DICT_STR_ANY = "list[dict[str, Any]]"
+
 
 class DiscordConnector(ConnectorBase):
     def __init__(self, token: str) -> None:
@@ -64,7 +68,7 @@ class DiscordConnector(ConnectorBase):
                         raise ValueError("Discord channels query requires 'guild_id' in filters")
                     resp = await c.get(f"/guilds/{guild_id}/channels")
                     resp.raise_for_status()
-                    data = cast("list[dict[str, Any]]", resp.json())
+                    data = cast(_LIST_DICT_STR_ANY, resp.json())
                     return ConnectorResult(records=data[: q.limit] if q.limit else data, total=len(data))
                 case "messages":
                     channel_id = q.filters.get("channel_id", "")
@@ -76,7 +80,7 @@ class DiscordConnector(ConnectorBase):
                             params[key] = q.filters[key]
                     resp = await c.get(f"/channels/{channel_id}/messages", params=params)
                     resp.raise_for_status()
-                    data = cast("list[dict[str, Any]]", resp.json())
+                    data = cast(_LIST_DICT_STR_ANY, resp.json())
                     return ConnectorResult(records=data, total=len(data))
                 case "guild_members":
                     guild_id = q.filters.get("guild_id", "")
@@ -84,7 +88,7 @@ class DiscordConnector(ConnectorBase):
                         raise ValueError("Discord guild_members query requires 'guild_id' in filters")
                     resp = await c.get(f"/guilds/{guild_id}/members", params={"limit": min(q.limit, 100)})
                     resp.raise_for_status()
-                    data = cast("list[dict[str, Any]]", resp.json())
+                    data = cast(_LIST_DICT_STR_ANY, resp.json())
                     return ConnectorResult(records=data, total=len(data))
                 case "roles":
                     guild_id = q.filters.get("guild_id", "")
@@ -92,7 +96,7 @@ class DiscordConnector(ConnectorBase):
                         raise ValueError("Discord roles query requires 'guild_id' in filters")
                     resp = await c.get(f"/guilds/{guild_id}/roles")
                     resp.raise_for_status()
-                    data = cast("list[dict[str, Any]]", resp.json())
+                    data = cast(_LIST_DICT_STR_ANY, resp.json())
                     return ConnectorResult(records=data, total=len(data))
                 case "guild":
                     guild_id = q.filters.get("guild_id", "")
@@ -100,7 +104,7 @@ class DiscordConnector(ConnectorBase):
                         raise ValueError("Discord guild query requires 'guild_id' in filters")
                     resp = await c.get(f"/guilds/{guild_id}")
                     resp.raise_for_status()
-                    return ConnectorResult(records=[cast("dict[str, Any]", resp.json())])
+                    return ConnectorResult(records=[cast(_DICT_STR_ANY, resp.json())])
                 case _:
                     raise ValueError(f"Unsupported Discord resource: {q.resource!r}")
 
@@ -117,7 +121,7 @@ class DiscordConnector(ConnectorBase):
                         body["embed"] = payload.data["embed"]
                     resp = await c.post(f"/channels/{channel_id}/messages", json=body)
                     resp.raise_for_status()
-                    return cast("dict[str, Any]", resp.json())
+                    return cast(_DICT_STR_ANY, resp.json())
                 case "reaction":
                     channel_id = payload.data.get("channel_id", "")
                     message_id = payload.data.get("message_id", "")
@@ -139,6 +143,6 @@ class DiscordConnector(ConnectorBase):
                         channel_body["topic"] = payload.data["topic"]
                     resp = await c.post(f"/guilds/{guild_id}/channels", json=channel_body)
                     resp.raise_for_status()
-                    return cast("dict[str, Any]", resp.json())
+                    return cast(_DICT_STR_ANY, resp.json())
                 case _:
                     raise ValueError(f"Unsupported Discord write resource: {payload.resource!r}")

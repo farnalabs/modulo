@@ -17,6 +17,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import Base
 
+# FK target for the owning organisation (repeated across the OAuth tables).
+_FK_ORGANISATIONS_ID = "organisations.id"
+
 
 class OAuthAuthorizationCode(Base):
     __tablename__ = "oauth_authorization_codes"
@@ -26,7 +29,7 @@ class OAuthAuthorizationCode(Base):
     client_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     organisation_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),
-        ForeignKey("organisations.id", ondelete="CASCADE"),
+        ForeignKey(_FK_ORGANISATIONS_ID, ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -72,7 +75,7 @@ class OAuthConsentState(Base):
     code_challenge: Mapped[str] = mapped_column(String(128), nullable=False, comment="PKCE S256 challenge")
     organisation_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),
-        ForeignKey("organisations.id", ondelete="CASCADE"),
+        ForeignKey(_FK_ORGANISATIONS_ID, ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -103,7 +106,7 @@ class OAuthTokenFamily(Base):
     client_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     organisation_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),
-        ForeignKey("organisations.id", ondelete="CASCADE"),
+        ForeignKey(_FK_ORGANISATIONS_ID, ondelete="CASCADE"),
         nullable=False,
         index=True,
     )

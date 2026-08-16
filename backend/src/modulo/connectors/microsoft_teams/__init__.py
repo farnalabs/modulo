@@ -19,6 +19,13 @@ from modulo.connectors.base import (
 
 GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
 
+# Repeated OData query parameter names (S1192).
+_ODATA_SELECT = "$select"
+_ODATA_FILTER = "$filter"
+_ODATA_ORDERBY = "$orderby"
+# Forward-ref type string used in ``cast`` for response payloads (S1192).
+_DICT_STR_ANY = "dict[str, Any]"
+
 
 class MicrosoftTeamsConnector(ConnectorBase):
     def __init__(self, token: str) -> None:
@@ -41,7 +48,7 @@ class MicrosoftTeamsConnector(ConnectorBase):
     async def health_check(self) -> HealthResult:
         try:
             async with self._client() as c:
-                resp = await c.get("/users", params={"$top": 1, "$select": "id"})
+                resp = await c.get("/users", params={"$top": 1, _ODATA_SELECT: "id"})
                 if resp.status_code == 200:
                     return HealthResult(ok=True, detail="Microsoft Graph API token validated")
                 if resp.status_code == 401:
@@ -87,9 +94,9 @@ class MicrosoftTeamsConnector(ConnectorBase):
                     raise ValueError(f"Unsupported Microsoft Teams write resource: {payload.resource!r}")
 
     async def _list_teams(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
-        params: dict[str, Any] = {"$select": "id,displayName,description"}
-        if q.filters.get("$filter"):
-            params["$filter"] = q.filters["$filter"]
+        params: dict[str, Any] = {_ODATA_SELECT: "id,displayName,description"}
+        if q.filters.get(_ODATA_FILTER):
+            params[_ODATA_FILTER] = q.filters[_ODATA_FILTER]
         if q.limit:
             params["$top"] = q.limit
         if q.cursor:
@@ -117,7 +124,7 @@ class MicrosoftTeamsConnector(ConnectorBase):
         resp = await c.get(f"/teams/{team_id}")
         resp.raise_for_status()
         body = resp.json()
-        return ConnectorResult(records=[cast("dict[str, Any]", body)])
+        return ConnectorResult(records=[cast(_DICT_STR_ANY, body)])
 
     async def _list_channels(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
         team_id = q.filters.get("team_id", "")
@@ -143,7 +150,7 @@ class MicrosoftTeamsConnector(ConnectorBase):
         resp = await c.get(f"/teams/{team_id}/channels/{channel_id}")
         resp.raise_for_status()
         body = resp.json()
-        return ConnectorResult(records=[cast("dict[str, Any]", body)])
+        return ConnectorResult(records=[cast(_DICT_STR_ANY, body)])
 
     async def _list_messages(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
         team_id = q.filters.get("team_id", "")
@@ -153,8 +160,8 @@ class MicrosoftTeamsConnector(ConnectorBase):
         params: dict[str, Any] = {}
         if q.limit:
             params["$top"] = q.limit
-        if q.filters.get("$orderby"):
-            params["$orderby"] = q.filters["$orderby"]
+        if q.filters.get(_ODATA_ORDERBY):
+            params[_ODATA_ORDERBY] = q.filters[_ODATA_ORDERBY]
         resp = await c.get(f"/teams/{team_id}/channels/{channel_id}/messages", params=params)
         resp.raise_for_status()
         body = resp.json()
@@ -180,9 +187,9 @@ class MicrosoftTeamsConnector(ConnectorBase):
         )
 
     async def _list_users(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
-        params: dict[str, Any] = {"$select": "id,displayName,mail,userPrincipalName"}
-        if q.filters.get("$filter"):
-            params["$filter"] = q.filters["$filter"]
+        params: dict[str, Any] = {_ODATA_SELECT: "id,displayName,mail,userPrincipalName"}
+        if q.filters.get(_ODATA_FILTER):
+            params[_ODATA_FILTER] = q.filters[_ODATA_FILTER]
         if q.limit:
             params["$top"] = q.limit
         resp = await c.get("/users", params=params)
@@ -195,9 +202,9 @@ class MicrosoftTeamsConnector(ConnectorBase):
         )
 
     async def _list_groups(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
-        params: dict[str, Any] = {"$select": "id,displayName,description"}
-        if q.filters.get("$filter"):
-            params["$filter"] = q.filters["$filter"]
+        params: dict[str, Any] = {_ODATA_SELECT: "id,displayName,description"}
+        if q.filters.get(_ODATA_FILTER):
+            params[_ODATA_FILTER] = q.filters[_ODATA_FILTER]
         if q.limit:
             params["$top"] = q.limit
         resp = await c.get("/groups", params=params)
@@ -223,7 +230,7 @@ class MicrosoftTeamsConnector(ConnectorBase):
         }
         resp = await c.post(f"/teams/{team_id}/channels/{channel_id}/messages", json=body)
         resp.raise_for_status()
-        return cast("dict[str, Any]", resp.json())
+        return cast(_DICT_STR_ANY, resp.json())
 
     async def _create_channel(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         team_id = data.get("team_id", "")
@@ -239,4 +246,4 @@ class MicrosoftTeamsConnector(ConnectorBase):
             body["membershipType"] = data["membershipType"]
         resp = await c.post(f"/teams/{team_id}/channels", json=body)
         resp.raise_for_status()
-        return cast("dict[str, Any]", resp.json())
+        return cast(_DICT_STR_ANY, resp.json())

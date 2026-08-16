@@ -55,6 +55,12 @@ MODULO_ORG_ID: uuid.UUID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 _EPOCH = datetime(2024, 1, 1, tzinfo=UTC)
 
+# Repeated seed/label values (S1192). Pure aliases — the strings are part of
+# the seeded primitive content and the log-name contract.
+_SYSTEM_PROMPT_LABEL = "System Prompt"
+_LOG_COMPONENT = "core.library_service"
+_EGRESS_GITHUB = "egress:github.com"
+
 
 class CommunityPrimitiveReadOnlyError(Exception):
     """Raised when a modulo/community primitive is adapted via MCP — browser UI only."""
@@ -354,7 +360,7 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
             "parameter_ports": [
                 {
                     "name": "system_prompt",
-                    "label": "System Prompt",
+                    "label": _SYSTEM_PROMPT_LABEL,
                     "type": "string",
                     "required": True,
                     "description": "Instructions for what to approve/reject",
@@ -406,7 +412,7 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
             "parameter_ports": [
                 {
                     "name": "system_prompt",
-                    "label": "System Prompt",
+                    "label": _SYSTEM_PROMPT_LABEL,
                     "type": "string",
                     "required": True,
                     "description": "Instructions for what to evaluate as true or false",
@@ -553,7 +559,7 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
             "parameter_ports": [
                 {
                     "name": "system_prompt",
-                    "label": "System Prompt",
+                    "label": _SYSTEM_PROMPT_LABEL,
                     "type": "string",
                     "required": True,
                     "description": "Instructions for the triage classification",
@@ -688,7 +694,7 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
             "parameter_ports": [
                 {
                     "name": "system_prompt",
-                    "label": "System Prompt",
+                    "label": _SYSTEM_PROMPT_LABEL,
                     "type": "string",
                     "required": True,
                     "description": "Instructions describing how to structure the output",
@@ -752,7 +758,7 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
             "parameter_ports": [
                 {
                     "name": "system_prompt",
-                    "label": "System Prompt",
+                    "label": _SYSTEM_PROMPT_LABEL,
                     "type": "string",
                     "required": True,
                     "description": "Instructions describing what to estimate complexity for",
@@ -1126,7 +1132,7 @@ async def copy_to_adapt(
             )
 
     except ProgrammingError:
-        logger.exception("core.library_service")
+        logger.exception(_LOG_COMPONENT)
 
         raise
 
@@ -1140,7 +1146,7 @@ _PR_TEMPLATE_AGENTS = [
             "\n\nIssue:\n{{ input }}"
         ),
         "connector_type_refs": [{"connector_type": "github", "capabilities": ["issue_read"]}],
-        "required_environment_capabilities": ["egress:github.com"],
+        "required_environment_capabilities": [_EGRESS_GITHUB],
     },
     {
         "name": "Code Diff Analyzer",
@@ -1169,7 +1175,7 @@ _PR_TEMPLATE_AGENTS = [
         "description": "Posts the compiled review to the GitHub PR as a review comment.",
         "prompt_template": "Post the following review as a GitHub PR review comment.\n\nReview:\n{{ input }}",
         "connector_type_refs": [{"connector_type": "github", "capabilities": ["create_pr"]}],
-        "required_environment_capabilities": ["egress:github.com"],
+        "required_environment_capabilities": [_EGRESS_GITHUB],
     },
 ]
 
@@ -1182,7 +1188,7 @@ _RELEASE_TEMPLATE_AGENTS = [
             "\n\nChanges:\n{{ input }}"
         ),
         "connector_type_refs": [{"connector_type": "github", "capabilities": ["issue_read"]}],
-        "required_environment_capabilities": ["egress:github.com"],
+        "required_environment_capabilities": [_EGRESS_GITHUB],
     },
     {
         "name": "Changelog Generator",
@@ -1206,7 +1212,7 @@ _RELEASE_TEMPLATE_AGENTS = [
             "\n\nRelease notes:\n{{ input }}"
         ),
         "connector_type_refs": [{"connector_type": "github", "capabilities": ["create_pr"]}],
-        "required_environment_capabilities": ["egress:github.com"],
+        "required_environment_capabilities": [_EGRESS_GITHUB],
     },
 ]
 
@@ -1754,7 +1760,7 @@ async def contribute_fixture(
             if update is None:
                 raise ContributionNotFoundError(f"Contribution {prim.id} not found after creation")
     except ProgrammingError:
-        logger.exception("core.library_service")
+        logger.exception(_LOG_COMPONENT)
 
         raise
 
@@ -1815,7 +1821,7 @@ async def contribute_primitive(
             if update is None:
                 raise ContributionNotFoundError(f"Contribution {prim.id} not found after creation")
     except ProgrammingError:
-        logger.exception("core.library_service")
+        logger.exception(_LOG_COMPONENT)
 
         raise
 
@@ -1856,7 +1862,7 @@ async def submit_contribution_for_review(
             if updated is None:
                 raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
     except ProgrammingError:
-        logger.exception("core.library_service")
+        logger.exception(_LOG_COMPONENT)
 
         raise
 
@@ -1903,7 +1909,7 @@ async def publish_contribution(
 
         # Add to in-memory community cache so it appears in community listings immediately.
     except ProgrammingError:
-        logger.exception("core.library_service")
+        logger.exception(_LOG_COMPONENT)
 
         raise
 
@@ -1938,7 +1944,7 @@ async def list_contributions(
                 primitive_type="test_fixture",
             )
     except ProgrammingError:
-        logger.exception("core.library_service")
+        logger.exception(_LOG_COMPONENT)
 
         raise
 
@@ -1966,7 +1972,7 @@ async def list_org_contributions(
                 page_size=page_size,
             )
     except ProgrammingError:
-        logger.exception("core.library_service")
+        logger.exception(_LOG_COMPONENT)
 
         raise
 
@@ -2069,7 +2075,7 @@ async def submit_contribution_version(
             if update is None:
                 raise ContributionNotFoundError(f"Contribution version {prim.id} not found after creation")
     except ProgrammingError:
-        logger.exception("core.library_service")
+        logger.exception(_LOG_COMPONENT)
 
         raise
 
@@ -2099,7 +2105,7 @@ async def list_contribution_versions(
         # its own id) — it won't appear in the version-group query because it
         # may not yet have the version_group_id set if it predates the feature.
     except ProgrammingError:
-        logger.exception("core.library_service")
+        logger.exception(_LOG_COMPONENT)
 
         raise
 

@@ -51,6 +51,9 @@ _log = logging.getLogger(__name__)
 #: Bounded async probe budget — code-constant, ≤3s per probe (§15.13).
 EVIDENCE_PROBE_TIMEOUT_SECONDS: float = 3.0
 
+#: Forward-ref type string used in ``cast`` for raw output JSON (S1192).
+_DICT_STR_ANY = "dict[str, Any]"
+
 #: Run statuses eligible for the reconciliation sweep. Only genuinely
 #: terminalized ``complete`` runs (not all terminal statuses) are no-op
 #: eligible — a failed/cancelled run is already a declared failure (§13.3).
@@ -256,12 +259,12 @@ def extract_output_json(node_output: Any) -> dict[str, Any] | None:
         if isinstance(inner, dict):
             output_json = inner.get("output_json")
             if isinstance(output_json, dict):
-                return cast("dict[str, Any]", output_json)
+                return cast(_DICT_STR_ANY, output_json)
     out = node_output.get("output")
     if isinstance(out, dict):
         output_json = out.get("output_json")
         if isinstance(output_json, dict):
-            return cast("dict[str, Any]", output_json)
+            return cast(_DICT_STR_ANY, output_json)
     return None
 
 
@@ -285,7 +288,7 @@ def extract_stored_output_json(
         if isinstance(inner, dict):
             output_json = inner.get("output_json")
             if isinstance(output_json, dict):
-                return cast("dict[str, Any]", output_json)
+                return cast(_DICT_STR_ANY, output_json)
     if "artifacts" not in value and "output" not in value:
         return value
     return None
