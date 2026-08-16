@@ -374,6 +374,47 @@ def test_receive_webhook_duplicate_returns_400(client: TestClient) -> None:
     assert "Duplicate" in resp.json()["detail"]
 
 
+def test_receive_webhook_guardrail_blocked_returns_400_and_commits(client: TestClient) -> None:
+    """A block-action guardrail at the trigger boundary maps to a 400 AND the
+    transaction commits (the ``guardrail_blocked`` TriggerEvent + stored raw
+    payload written by the engine survive the 4xx — reject-and-retry, not
+    acked). The engine never returns a run, so no background dispatch fires."""
+    from modulo.core.trigger_engine.pre_guardrail import GuardrailBlockedAtIntakeError
+
+    session = _make_mock_session()
+    begin_cm = session.begin.return_value
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    app.dependency_overrides[get_db_session] = override_session
+    try:
+        with (
+            patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.webhooks._dispatch_webhook_run", new_callable=AsyncMock) as dispatch,
+            patch("modulo.api.routes.webhooks.set_rls_org"),
+        ):
+            m.side_effect = GuardrailBlockedAtIntakeError("no-secrets: blocked payload", guardrail_name="no-secrets")
+            resp = client.post(
+                f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+                json={"event": "test"},
+                headers={"X-Modulo-Timestamp": "1700000000"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "no-secrets: blocked payload"
+    # The engine wrote the guardrail_blocked event + stored raw payload INSIDE
+    # the transaction; the route catches in-transaction (paused pattern) so the
+    # transaction COMMITS (aexit called with no exception → commit, not rollback).
+    aexit = begin_cm.__aexit__
+    assert aexit.await_count == 1
+    exc_tuple = aexit.await_args.args
+    assert exc_tuple == (None, None, None)
+    dispatch.assert_not_called()
+
+
 def test_receive_webhook_concurrent_limit_returns_429(client: TestClient) -> None:
     from modulo.core.trigger_engine import ConcurrentRunLimitError
 

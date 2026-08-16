@@ -277,6 +277,28 @@ regression that silently weakens the suite:
   too (``assert row['x'] and not row['x']``); complementary comparisons
   written with mirrored operators (``x == y or x != y``) are left alone
   because they need operator algebra rather than syntax to prove
+- wall-clock sleeps with a *computed* duration — ``time.sleep(<name>)`` /
+  ``asyncio.sleep(<name>)`` where the argument is a bare name rather than a
+  literal constant. A duration computed from other values (a refill rate, a
+  delay variable, a backoff) is a timing-contract check that depends on real
+  wall-clock passage: it is slower than necessary and flakes under load, while
+  the ``sleep(<literal>)`` forms are either deliberate hang-simulation
+  (timeout/cancellation tests) or deliberate tiny event-loop yields
+  (``sleep(0)``) and are left alone. The fix is to inject the time source the
+  code under test reads — e.g. a monotonic ``clock`` callable — and advance it
+  deterministically instead of sleeping
+- a ``pytest.raises(...)`` / ``pytest.warns(...)`` call standing as its own
+  bare expression statement — the ``RaisesContext``/``WarningsChecker``
+  context manager is constructed but never entered with ``with``, so the
+  exception (or warning) it claims to expect is never actually checked: the
+  test passes whether the code under test raises it, raises the *wrong*
+  exception, or raises nothing at all. This is the missing-``with`` twin of
+  the broad-exception lens — ``pytest.raises(X)`` as a statement is a silent
+  false green that the broad lens only incidentally catches when ``X`` is
+  ``Exception``/``BaseException``. The deprecated functional form
+  ``pytest.raises(X, func, *args)`` actually runs the check and is
+  deliberately left alone; the ``with``-entered and decorator spellings are
+  naturally excluded because they never appear as a bare expression statement
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -3999,6 +4021,110 @@ def test_broad_exception_catch_lens_flags_broad_catches():
         assert not _broad_exception_catch_violations(tree), f"lens should NOT flag:\n{source}"
 
 
+def _unentered_raises_context_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``pytest.raises`` /
+    ``pytest.warns`` call that stands as a bare expression statement.
+
+    The call constructs the ``RaisesContext``/``WarningsChecker`` context
+    manager but never enters it, so the exception (or warning) it claims to
+    expect is never actually checked — the test passes whether the code under
+    test raises the expected error, raises the *wrong* error, or raises
+    nothing at all. It is the missing-``with`` twin of the broad-exception
+    lens: ``pytest.raises(X)`` as a statement is a silent false green that the
+    broad lens only happens to catch when ``X`` is ``Exception``/
+    ``BaseException``. The deprecated functional form ``pytest.raises(X, func,
+    *args)`` (two or more positional arguments) actually executes the check
+    and is deliberately left alone, as are the ``with``-entered and decorator
+    spellings — those never appear as a bare expression statement.
+    """
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Expr):
+            continue
+        value = node.value
+        if not isinstance(value, ast.Call):
+            continue
+        f = value.func
+        name = f.attr if isinstance(f, ast.Attribute) else (f.id if isinstance(f, ast.Name) else None)
+        if name not in _RAISES_CONTEXT_FUNCS:
+            continue
+        if len(value.args) > 1:
+            continue
+        found.append(
+            (
+                node.lineno,
+                f"pytest.{name}(...) as a bare statement — the raises/warns context manager is "
+                "never entered with 'with', so no exception/warning is ever checked and the test "
+                "passes whether or not the code under test raises it; wrap the call in "
+                f"'with {name}(...):'",
+            )
+        )
+    return found
+
+
+def test_no_unentered_raises_contexts():
+    """A ``pytest.raises``/``pytest.warns`` call that stands as its own bare
+    expression statement constructs the context manager but never enters it,
+    so the exception (or warning) it claims to expect is never actually
+    checked. The test passes whether the code under test raises the expected
+    error, raises the *wrong* error, or raises nothing at all — the call is
+    dead code that looks like a verification. Wrap it in ``with ...:`` so the
+    expected exception or warning actually fails the test when it does not
+    occur."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _unentered_raises_context_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} bare pytest.raises/pytest.warns statement(s) whose context "
+        "manager is never entered.\n"
+        "pytest.raises(...)/pytest.warns(...) must be wrapped in 'with ...:' — as a bare statement "
+        "the exception/warning it expects is never checked and the test passes regardless of "
+        "whether the code under test raises it.\n" + "\n".join(violations)
+    )
+
+
+def test_unentered_raises_context_lens_flags_dead_statements():
+    """Synthetic positive/negative control for the unentered-raises-context
+    lens: it must flag ``pytest.raises``/``pytest.warns`` standing as bare
+    expression statements (any expected-exception spelling, attribute or
+    imported-name form, with or without ``match=``), and ignore the
+    ``with``-entered and decorator spellings, the deprecated functional form
+    (which actually executes), and calls that are assigned or passed as
+    arguments instead of being statements."""
+    positive_sources = [
+        "def test_foo():\n    pytest.raises(ValueError)\n    assert foo() == 1\n",
+        "def test_foo():\n    pytest.raises(KeyError, match='boom')\n",
+        "def test_foo():\n    pytest.raises(expected_exception=RuntimeError)\n",
+        "def test_foo():\n    pytest.warns(UserWarning)\n",
+        "def test_foo():\n    pytest.warns()\n",
+        "def test_foo():\n    from pytest import raises\n    raises(ValueError)\n",
+        "def test_foo():\n    pytest.raises(asyncio.CancelledError)\n    assert True\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _unentered_raises_context_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    with pytest.raises(ValueError):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(ValueError) as exc_info:\n        foo()\n",
+        "def test_foo():\n    with pytest.warns(UserWarning):\n        foo()\n",
+        "def test_foo():\n    pytest.raises(ValueError, foo)\n",
+        "def test_foo():\n    pytest.raises(ValueError, foo, 1, key=2)\n",
+        "@pytest.raises(ValueError)\ndef test_foo():\n    foo()\n",
+        "def test_foo():\n    cm = pytest.raises(ValueError)\n    with cm:\n        foo()\n",
+        "def test_foo():\n    mock.assert_called_with(pytest.raises(ValueError))\n",
+        "def test_foo():\n    result = pytest.raises(ValueError)\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _unentered_raises_context_violations(tree), f"lens should NOT flag:\n{source}"
+
+
 _MOCK_CONSTRUCTOR_NAMES = frozenset(
     {"Mock", "MagicMock", "AsyncMock", "NonCallableMock", "NonCallableMagicMock", "PropertyMock"}
 )
@@ -4544,3 +4670,113 @@ def test_complementary_boolean_lens_flags_fixed_outcomes():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _complementary_boolean_assert_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _computed_wall_clock_sleep_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``time.sleep(<name>)`` /
+    ``asyncio.sleep(<name>)`` whose duration is a bare name rather than a
+    literal constant.
+
+    A sleep whose duration is computed from other values (a refill interval,
+    a delay variable, a backoff counter) is a timing-contract check that
+    depends on real wall-clock passage: it is slower than needed and flakes
+    under load. Literal durations are deliberately NOT flagged — ``sleep(0)``
+    is a deterministic event-loop yield and ``sleep(60)`` is deliberate
+    hang-simulation in timeout/cancellation tests. Attribute paths, subscripts
+    and binary expressions are left alone too (``sleep(wait / 50)`` bounds a
+    computed yield, ``sleep(cfg.delay)`` may be an override). Only sleeps in
+    the body of a ``test_*`` function count: a helper that builds a slow node
+    or a hanging double takes a ``delay`` parameter by design and is the
+    legitimate way to simulate latency, so flagging it would force the tests
+    back onto literals for no coverage gain.
+    """
+    found: list[tuple[int, str]] = []
+
+    def _is_sleep_call(node: ast.AST) -> bool:
+        if not isinstance(node, ast.Call):
+            return False
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and func.attr == "sleep"):
+            return False
+        if not isinstance(func.value, ast.Name):
+            return False
+        return func.value.id in ("time", "asyncio")
+
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not fn.name.startswith("test_"):
+            continue
+        for node in ast.walk(fn):
+            if not _is_sleep_call(node):
+                continue
+            if len(node.args) != 1:
+                continue
+            arg = node.args[0]
+            if not isinstance(arg, ast.Name):
+                continue
+            found.append(
+                (
+                    node.lineno,
+                    f"{ast.unparse(node.func.value)}.sleep({arg.id}) — duration is a computed name; "
+                    "inject the time source the code under test reads and advance it deterministically",
+                )
+            )
+    return found
+
+
+def test_no_computed_wall_clock_sleep():
+    """``asyncio.sleep(refill)`` / ``time.sleep(delay)`` — a sleep whose
+    duration is a bare name — turns the test into a real wall-clock wait whose
+    outcome depends on machine load and timing luck. The suite keeps such
+    tests green only by being generous with the duration, and flakes when it is
+    not. The deterministic fix is to inject the time source the code under
+    test reads (a ``clock`` callable) and advance it in the test instead of
+    sleeping. Literal durations are the deliberate hang/yield forms and are
+    left alone."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _computed_wall_clock_sleep_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} wall-clock sleep(s) with a computed duration.\n"
+        "A sleep whose duration is a name depends on real wall-clock passage and can flake "
+        "under load. Inject the time source the code under test reads (e.g. a monotonic "
+        "clock callable) and advance it deterministically instead.\n" + "\n".join(violations)
+    )
+
+
+def test_computed_wall_clock_sleep_lens_flags_computed_durations():
+    """Synthetic positive/negative control for the computed-wall-clock-sleep
+    lens: it must flag ``time.sleep(<name>)``/``asyncio.sleep(<name>)`` with a
+    bare-name duration in a ``test_*`` body and ignore literal durations,
+    attribute/subscript/expression durations, unrelated calls, and the same
+    sleep shape inside a non-test helper (where a ``delay`` parameter is the
+    legitimate way to simulate latency)."""
+    positive_sources = [
+        "def test_foo():\n    asyncio.sleep(refill)\n",
+        "def test_foo():\n    time.sleep(delay)\n",
+        "async def test_foo():\n    await asyncio.sleep(backoff)\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _computed_wall_clock_sleep_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    asyncio.sleep(0)\n",
+        "def test_foo():\n    asyncio.sleep(0.05)\n",
+        "def test_foo():\n    time.sleep(60)\n",
+        "def test_foo():\n    asyncio.sleep(wait / 50)\n",
+        "def test_foo():\n    asyncio.sleep(cfg.delay)\n",
+        "def test_foo():\n    asyncio.sleep(delays[attempt])\n",
+        "def test_foo():\n    random_sleep()\n",
+        "def test_foo():\n    await asyncio.wait_for(coro(), 1)\n",
+        "def _make_slow_node(delay):\n    async def _fn():\n        await asyncio.sleep(delay)\n    return _fn\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _computed_wall_clock_sleep_violations(tree), f"lens should NOT flag:\n{source}"

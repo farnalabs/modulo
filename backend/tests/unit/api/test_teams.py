@@ -16,6 +16,7 @@ from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.team_visibility import find_model_backend_team_mismatches, model_backend_team_mismatch
 from modulo.db.crud.pipeline import PipelineHasActiveRunsError, update_pipeline
+from modulo.db.crud.team import TeamUpdateOutcome
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -295,6 +296,25 @@ class TestDeleteTeam:
         ):
             resp = client.delete(f"/api/v1/teams/{uuid.uuid4()}")
         assert resp.status_code == 404
+
+    def test_emits_team_deleted_audit(self, client: TestClient) -> None:
+        audit = AsyncMock(return_value=MagicMock())
+        with (
+            patch("modulo.api.routes.teams.delete_team", return_value=True),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+            patch("modulo.core.audit_logger.append_audit_event", new=audit),
+        ):
+            resp = client.delete(f"/api/v1/teams/{_TEAM_ID}")
+        assert resp.status_code == 204
+        audit.assert_awaited_once()
+        kwargs = audit.await_args.kwargs
+        assert kwargs["event_type"] == "team_deleted"
+        assert kwargs["org_id"] == _ORG_ID
+        assert kwargs["actor_user_id"] == _USER_ID
+        assert kwargs["resource_type"] == "team"
+        assert kwargs["resource_id"] == _TEAM_ID
+        assert kwargs["payload_json"] == {"team_id": str(_TEAM_ID)}
 
 
 class TestAddMember:
@@ -728,6 +748,292 @@ class TestAdminCreateTeam:
     def test_empty_name_returns_422(self, client: TestClient) -> None:
         resp = client.post("/api/v1/admin/teams", json={"name": ""})
         assert resp.status_code == 422
+
+
+class TestMyTeams:
+    """GET /api/v1/teams/my — profile panel "My Teams" section."""
+
+    def test_returns_memberships_with_team_names(self, client: TestClient) -> None:
+        memberships = [
+            MagicMock(team_id=_TEAM_ID, account_id=_USER_ID, role="operator"),
+            MagicMock(team_id=uuid.uuid4(), account_id=_USER_ID, role="viewer"),
+        ]
+        team_ids = [m.team_id for m in memberships]
+        team_rows = [(team_ids[0], "Engineering"), (team_ids[1], "Design")]
+
+        mock_session = _make_mock_session()
+        row_result = MagicMock()
+        row_result.all = MagicMock(return_value=team_rows)
+        mock_session.execute = AsyncMock(return_value=row_result)
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        from modulo.api.dependencies import get_db_session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        try:
+            with (
+                patch(
+                    "modulo.api.routes.teams.list_team_memberships_for_account",
+                    new=AsyncMock(return_value=memberships),
+                ),
+                patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+                patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+            ):
+                resp = client.get("/api/v1/teams/my")
+        finally:
+            client.app.dependency_overrides[get_db_session] = None
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 2
+        assert data[0]["team_id"] == str(team_ids[0])
+        assert data[0]["team_name"] == "Engineering"
+        assert data[0]["role"] == "operator"
+        assert data[1]["team_name"] == "Design"
+
+    def test_unauthorized_returns_4xx(self, unauth_client: TestClient) -> None:
+        resp = unauth_client.get("/api/v1/teams/my")
+        assert resp.status_code in (401, 403)
+
+
+class TestUpdateTeamOptimisticLock:
+    """PATCH /api/v1/teams/{id} with expected_updated_at — optimistic concurrency."""
+
+    def test_stale_expected_updated_at_returns_409(self, client: TestClient) -> None:
+        with (
+            patch(
+                "modulo.api.routes.teams.update_team_if_unchanged",
+                new=AsyncMock(return_value=(TeamUpdateOutcome.STALE, None)),
+            ),
+            patch("modulo.api.routes.teams.get_team_by_name", new=AsyncMock(return_value=None)),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+        ):
+            resp = client.patch(
+                f"/api/v1/teams/{_TEAM_ID}",
+                json={"name": "Renamed", "expected_updated_at": "2024-01-01T00:00:00+00:00"},
+            )
+        assert resp.status_code == 409
+        assert "optimistic lock" in resp.json()["detail"].lower()
+
+    def test_stale_expected_updated_at_does_not_update(self, client: TestClient) -> None:
+        with (
+            patch(
+                "modulo.api.routes.teams.update_team_if_unchanged",
+                new=AsyncMock(return_value=(TeamUpdateOutcome.STALE, None)),
+            ),
+            patch("modulo.api.routes.teams.get_team_by_name", new=AsyncMock(return_value=None)),
+            patch("modulo.api.routes.teams.update_team", new=AsyncMock()) as update_team_mock,
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+        ):
+            resp = client.patch(
+                f"/api/v1/teams/{_TEAM_ID}",
+                json={"name": "Renamed", "expected_updated_at": "2024-01-01T00:00:00+00:00"},
+            )
+        assert resp.status_code == 409
+        update_team_mock.assert_not_awaited()
+
+    def test_missing_team_with_expected_updated_at_returns_404(self, client: TestClient) -> None:
+        with (
+            patch(
+                "modulo.api.routes.teams.update_team_if_unchanged",
+                new=AsyncMock(return_value=(TeamUpdateOutcome.NOT_FOUND, None)),
+            ),
+            patch("modulo.api.routes.teams.get_team_by_name", new=AsyncMock(return_value=None)),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+        ):
+            resp = client.patch(
+                f"/api/v1/teams/{_TEAM_ID}",
+                json={"name": "Renamed", "expected_updated_at": "2024-01-01T00:00:00+00:00"},
+            )
+        assert resp.status_code == 404
+
+    def test_matching_expected_updated_at_succeeds(self, client: TestClient) -> None:
+        team = _make_team(name="Updated")
+        expected = team.updated_at.isoformat()
+        with (
+            patch(
+                "modulo.api.routes.teams.update_team_if_unchanged",
+                new=AsyncMock(return_value=(TeamUpdateOutcome.UPDATED, team)),
+            ),
+            patch("modulo.api.routes.teams.get_team_by_name", return_value=None),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+        ):
+            resp = client.patch(
+                f"/api/v1/teams/{_TEAM_ID}",
+                json={"name": "Updated", "expected_updated_at": expected},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "Updated"
+
+    def test_no_expected_updated_at_still_succeeds(self, client: TestClient) -> None:
+        team = _make_team(name="Renamed")
+        with (
+            patch("modulo.api.routes.teams.update_team", return_value=team),
+            patch("modulo.api.routes.teams.get_team_by_name", return_value=None),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+        ):
+            resp = client.patch(f"/api/v1/teams/{_TEAM_ID}", json={"name": "Renamed"})
+        assert resp.status_code == 200
+
+
+class TestRemoveMemberLastOperatorGuard:
+    """Cannot remove the last operator while other members remain."""
+
+    def test_removing_last_operator_returns_409(self, client: TestClient) -> None:
+        # session.execute returns 0 for other operators (count scalar).
+        mock_session = _make_mock_session()
+        count_result = MagicMock()
+        count_result.scalar_one = MagicMock(side_effect=[1, 0])  # other members=1, other operators=0
+        mock_session.execute = AsyncMock(return_value=count_result)
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        from modulo.api.dependencies import get_db_session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        try:
+            with (
+                patch(
+                    "modulo.api.routes.teams.get_membership",
+                    return_value=_make_membership(role="operator"),
+                ),
+                patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+                patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+            ):
+                resp = client.delete(f"/api/v1/teams/{_TEAM_ID}/members/{_MEMBERSHIP_ID}")
+        finally:
+            client.app.dependency_overrides[get_db_session] = None
+        assert resp.status_code == 409
+        assert "last operator" in resp.json()["detail"].lower()
+
+    def test_removing_operator_with_another_operator_succeeds(self, client: TestClient) -> None:
+        mock_session = _make_mock_session()
+        count_result = MagicMock()
+        count_result.scalar_one = MagicMock(side_effect=[2, 1])  # other members=2, other operators=1
+        mock_session.execute = AsyncMock(return_value=count_result)
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        from modulo.api.dependencies import get_db_session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        try:
+            with (
+                patch(
+                    "modulo.api.routes.teams.get_membership",
+                    return_value=_make_membership(role="operator"),
+                ),
+                patch("modulo.api.routes.teams.remove_team_member", return_value=True),
+                patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+                patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+            ):
+                resp = client.delete(f"/api/v1/teams/{_TEAM_ID}/members/{_MEMBERSHIP_ID}")
+        finally:
+            client.app.dependency_overrides[get_db_session] = None
+        assert resp.status_code == 204
+
+    def test_self_removal_of_non_last_operator_succeeds(self, client: TestClient) -> None:
+        """A team operator removing their own membership succeeds when another operator remains."""
+        mock_session = _make_mock_session()
+        count_result = MagicMock()
+        count_result.scalar_one = MagicMock(side_effect=[2, 1])
+        mock_session.execute = AsyncMock(return_value=count_result)
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        from modulo.api.dependencies import get_db_session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        try:
+            with (
+                patch(
+                    "modulo.api.routes.teams.get_membership",
+                    return_value=_make_membership(role="operator", account_id=_USER_ID),
+                ),
+                patch("modulo.api.routes.teams.remove_team_member", return_value=True),
+                patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+                patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+            ):
+                resp = client.delete(f"/api/v1/teams/{_TEAM_ID}/members/{_MEMBERSHIP_ID}")
+        finally:
+            client.app.dependency_overrides[get_db_session] = None
+        assert resp.status_code == 204
+
+
+class TestChangeMemberRoleLastOperatorGuard:
+    def test_demoting_last_operator_returns_409(self, client: TestClient) -> None:
+        mock_session = _make_mock_session()
+        count_result = MagicMock()
+        count_result.scalar_one = MagicMock(side_effect=[1, 0])
+        mock_session.execute = AsyncMock(return_value=count_result)
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        from modulo.api.dependencies import get_db_session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        try:
+            with (
+                patch("modulo.api.routes.teams.get_team", return_value=_make_team()),
+                patch(
+                    "modulo.api.routes.teams.get_membership",
+                    return_value=_make_membership(role="operator"),
+                ),
+                patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+                patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+            ):
+                resp = client.patch(
+                    f"/api/v1/teams/{_TEAM_ID}/members/{_MEMBERSHIP_ID}",
+                    json={"role": "viewer"},
+                )
+        finally:
+            client.app.dependency_overrides[get_db_session] = None
+        assert resp.status_code == 409
+        assert "last operator" in resp.json()["detail"].lower()
+
+    def test_role_change_race_membership_removed_returns_404(self, client: TestClient) -> None:
+        """Role change racing a concurrent removal: update_member_role returns None -> 404."""
+        with (
+            patch("modulo.api.routes.teams.get_team", return_value=_make_team()),
+            patch(
+                "modulo.api.routes.teams.get_membership",
+                return_value=_make_membership(role="viewer"),
+            ),
+            patch("modulo.api.routes.teams.update_member_role", return_value=None),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+        ):
+            resp = client.patch(
+                f"/api/v1/teams/{_TEAM_ID}/members/{_MEMBERSHIP_ID}",
+                json={"role": "viewer"},
+            )
+        assert resp.status_code == 404
+
+
+class TestAddMemberDeletedTeam:
+    def test_add_member_to_soft_deleted_team_returns_404(self, client: TestClient) -> None:
+        """Adding a member during/after team deletion is rejected (team gone)."""
+        with (
+            patch("modulo.api.routes.teams.get_team", return_value=None),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+        ):
+            resp = client.post(
+                f"/api/v1/teams/{_TEAM_ID}/members",
+                json={"user_id": str(_USER_ID), "role": "viewer"},
+            )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Team not found"
 
 
 def _make_owned_pipeline_mock(owner_team_id: uuid.UUID | None) -> MagicMock:

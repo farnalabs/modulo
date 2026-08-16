@@ -88,7 +88,7 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 
 - [x] `ConnectorType.GITLAB` defined in `base.py` enum
 - [x] `GitLabConnector.connector_type` returns `ConnectorType.GITLAB`
-- [x] `ConnectorType.GITLAB.capabilities` returns `{read, write, git_push, create_pr, issue_read, issue_write, issue_search, trigger_run}` in `base.py`
+- [x] `ConnectorType.GITLAB.capabilities` returns `{read, write, git_push, create_pr, ticket_read, ticket_write, ticket_search, trigger_run}` in `base.py`
 
 ### Health Check — connectivity and credential validation
 

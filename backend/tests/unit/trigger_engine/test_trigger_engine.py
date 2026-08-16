@@ -149,9 +149,14 @@ def _make_session(
     recent_count_result = MagicMock()
     recent_count_result.scalar_one.return_value = recent_run_count
 
+    # Pre-trigger guardrail pass (FAR-214) queries guardrail rows BEFORE the
+    # dedup insert — return none by default so the pass is a no-op.
+    guardrail_result = MagicMock()
+    guardrail_result.scalars.return_value.all.return_value = []
+
     call_count = 0
 
-    # Pipeline lookup for rate-limit config (call 6+). No rate limit by default.
+    # Pipeline lookup for rate-limit config (call 7+). No rate limit by default.
     pipeline_result = MagicMock()
     pipeline_result.scalar_one_or_none.return_value = MagicMock() if pipeline_found else None
     if pipeline_found:
@@ -160,21 +165,24 @@ def _make_session(
     async def _execute(stmt: Any, *args: Any, **kwargs: Any) -> Any:
         nonlocal call_count
         call_count += 1
-        # Order: 1=advisory lock, 2=trigger lookup, 3=dedup SELECT, 4=dedup DELETE, 5=count active runs,
-        #        6=pipeline lookup (rate limit), 7=recent rate-limited count, 8+=other
+        # Order: 1=advisory lock, 2=trigger lookup, 3=guardrail rows (FAR-214),
+        #        4=dedup SELECT, 5=dedup DELETE, 6=count active runs,
+        #        7=pipeline lookup (rate limit), 8=recent rate-limited count, 9+=other
         if call_count == 1:
             return lock_result
         if call_count == 2:
             return trigger_result
         if call_count == 3:
-            return dedup_result
+            return guardrail_result
         if call_count == 4:
-            return generic_result
+            return dedup_result
         if call_count == 5:
-            return count_result
+            return generic_result
         if call_count == 6:
-            return pipeline_result
+            return count_result
         if call_count == 7:
+            return pipeline_result
+        if call_count == 8:
             return recent_count_result
         return pipeline_result
 
@@ -1340,8 +1348,8 @@ def _make_replay_session(
     """Build a mocked session for replay_event's query order.
 
     Query order: 1=TriggerEvent lookup, 2=advisory lock, 3=Trigger lookup,
-    4=WebhookPayload lookup, 5=active-run count, 6=pipeline lookup,
-    7=recent rate-limited count, 8+=other.
+    4=WebhookPayload lookup, 5=guardrail rows (FAR-214, detection-only),
+    6=active-run count, 7=pipeline lookup, 8=recent rate-limited count, 9+=other.
     """
     session = AsyncMock()
 
@@ -1356,6 +1364,10 @@ def _make_replay_session(
 
     payload_result = MagicMock()
     payload_result.scalar_one_or_none.return_value = stored_payload
+
+    # Pre-trigger guardrail pass on replay (FAR-214) — none bound by default.
+    guardrail_result = MagicMock()
+    guardrail_result.scalars.return_value.all.return_value = []
 
     count_result = MagicMock()
     count_result.scalar_one.return_value = active_run_count
@@ -1382,10 +1394,12 @@ def _make_replay_session(
         if call_count == 4:
             return payload_result
         if call_count == 5:
-            return count_result
+            return guardrail_result
         if call_count == 6:
-            return pipeline_result
+            return count_result
         if call_count == 7:
+            return pipeline_result
+        if call_count == 8:
             return recent_count_result
         return pipeline_result
 

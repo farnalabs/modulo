@@ -332,12 +332,64 @@ async def load_node_guardrails(
     return [to_engine_definition(row) for row in rows]
 
 
+async def load_claimed_guardrails(
+    session_factory: Any,
+    *,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+) -> tuple[list[Any], bool]:
+    """Hoisted run-start claim discovery for the conformance re-check (FAR-215).
+
+    Loads ALL guardrail rows bound to the pipeline (org-level AND node-bound)
+    ONCE per run and returns only those carrying a conformance claim (a
+    non-empty ``required_capabilities`` config). The executor seeds the result
+    into the run-scoped conformance context, so the per-node check pays zero
+    DB round-trips when there are no claims and one query per run when there
+    are.
+
+    Returns ``(claimed, load_failed)``. ``load_failed`` is True when the load
+    could not be completed — the caller MUST fail CLOSED (treat as unknown for
+    block-action claims), never silently skip claims.
+    """
+    from modulo.core.guardrails import to_engine_definition
+    from modulo.db.models.eval_definition import EvalDefinition
+
+    try:
+        async with session_factory() as session, session.begin():
+            await _set_rls(session, org_id)
+            stmt = select(EvalDefinition).where(
+                EvalDefinition.pipeline_id == pipeline_id,
+                EvalDefinition.organisation_id == org_id,
+                EvalDefinition.eval_type == "guardrail",
+            )
+            rows = (await session.execute(stmt)).scalars().all()
+        guardrails = [to_engine_definition(row) for row in rows]
+    except Exception:
+        _log.exception("guardrail.conformance.run_start_load_failed", extra={"org_id": str(org_id)})
+        return [], True
+    claimed = [g for g in guardrails if _required_of(g.config if hasattr(g, "config") else {})]
+    return claimed, False
+
+
 def _is_uuid(value: str) -> bool:
     try:
         uuid.UUID(value)
     except (ValueError, TypeError):
         return False
     return True
+
+
+def _claims_for_node(claimed_guardrails: list[Any], node_id: str | None) -> list[Any]:
+    """Filter hoisted claimed guardrail DTOs down to THIS node's bindings.
+
+    Mirrors ``load_node_guardrails``'s node scoping in memory: org-level rows
+    (``node_id IS NULL``) apply to every node; node-bound rows apply only when
+    the node id is a UUID equal to the row's bound node.
+    """
+    org_level = [g for g in claimed_guardrails if getattr(g, "node_id", None) is None]
+    if node_id is None or not _is_uuid(node_id):
+        return org_level
+    return org_level + [g for g in claimed_guardrails if getattr(g, "node_id", None) == node_id]
 
 
 async def check_node_start(
@@ -349,6 +401,8 @@ async def check_node_start(
     connector_instance_ids: list[uuid.UUID],
     environment_profile_id: uuid.UUID | None,
     agent_id: uuid.UUID | None,
+    claimed_guardrails: list[Any] | None = None,
+    claims_load_failed: bool = False,
 ) -> ConformanceRecheckResult:
     """Full node-start re-check: load guardrails, build live manifest, decide.
 
@@ -361,34 +415,61 @@ async def check_node_start(
     blocked with state ``unknown`` (deny on error) rather than silently
     continuing. The reader never raises — the node decision is what matters,
     and a broken reader must not crash the node into a terminal error.
+
+    *claimed_guardrails* is the hoisted list of claimed guardrail DTOs the
+    executor precomputed ONCE at run start (one query per run). When provided,
+    the per-node guardrail-load query is skipped entirely — the node scoping
+    (org-level + node-bound) happens in memory. ``claims_load_failed`` marks a
+    run-start claim-discovery failure and fails CLOSED (unknown blocks). When
+    *claimed_guardrails* is ``None`` the legacy per-node DB load is used.
     """
+    if claims_load_failed:
+        # Fail CLOSED on run-start claim-discovery failure: cannot confirm
+        # whether a block claim exists, so the node is blocked with state
+        # unknown (never fail open).
+        return ConformanceRecheckResult(
+            blocked=True,
+            gate_id="guardrail_conformance_check_failed",
+            detail="mid-run capability re-check could not load bound guardrails; failing closed",
+            state="unknown",
+            warned=False,
+            claimed=True,
+        )
+
+    if claimed_guardrails is not None:
+        # Hoisted path: the executor precomputed the claimed DTOs at run start.
+        # Filter to THIS node's bindings in memory — no per-node DB round-trip.
+        claimed = _claims_for_node(claimed_guardrails, node_id)
+    else:
+        async with session_factory() as session, session.begin():
+            await _set_rls(session, org_id)
+            try:
+                guardrails = await load_node_guardrails(
+                    session,
+                    org_id=org_id,
+                    pipeline_id=pipeline_id,
+                    node_id=node_id,
+                )
+            except Exception:
+                _log.exception("guardrail.conformance.load_failed", extra={"org_id": str(org_id)})
+                # Fail CLOSED on load failure: cannot confirm conformance, so
+                # the node is blocked with state unknown (never fail open).
+                return ConformanceRecheckResult(
+                    blocked=True,
+                    gate_id="guardrail_conformance_check_failed",
+                    detail="mid-run capability re-check could not load bound guardrails; failing closed",
+                    state="unknown",
+                    warned=False,
+                    claimed=True,
+                )
+            claimed = [g for g in guardrails if _required_of(g.config if hasattr(g, "config") else {})]
+
+    if not claimed:
+        # Zero-claim fast path — no manifest round-trip needed.
+        return ConformanceRecheckResult(blocked=False, gate_id=None, detail="", state="present", warned=False)
+
     async with session_factory() as session, session.begin():
         await _set_rls(session, org_id)
-        try:
-            guardrails = await load_node_guardrails(
-                session,
-                org_id=org_id,
-                pipeline_id=pipeline_id,
-                node_id=node_id,
-            )
-        except Exception:
-            _log.exception("guardrail.conformance.load_failed", extra={"org_id": str(org_id)})
-            # Fail CLOSED on load failure: cannot confirm conformance, so the
-            # node is blocked with state unknown (never fail open).
-            return ConformanceRecheckResult(
-                blocked=True,
-                gate_id="guardrail_conformance_check_failed",
-                detail="mid-run capability re-check could not load bound guardrails; failing closed",
-                state="unknown",
-                warned=False,
-                claimed=True,
-            )
-
-        claimed = [g for g in guardrails if _required_of(g.config if hasattr(g, "config") else {})]
-        if not claimed:
-            # Zero-claim fast path — no manifest round-trip needed.
-            return ConformanceRecheckResult(blocked=False, gate_id=None, detail="", state="present", warned=False)
-
         registered = await build_live_manifest(
             session,
             org_id=org_id,
@@ -396,7 +477,7 @@ async def check_node_start(
             environment_profile_id=environment_profile_id,
             agent_id=agent_id,
         )
-        return evaluate_conformance(claimed, registered)
+    return evaluate_conformance(claimed, registered)
 
 
 async def _set_rls(session: Any, org_id: uuid.UUID) -> None:
@@ -411,6 +492,7 @@ __all__ = [
     "check_node_start",
     "decide_conformance",
     "evaluate_conformance",
+    "load_claimed_guardrails",
     "load_node_guardrails",
     "worst_state",
 ]

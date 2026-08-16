@@ -21,8 +21,12 @@ No live Postgres here (integration territory) — instead:
   ``0102_ongoing_streak_epoch`` sit on top of that; main's
   ``0103_lifecycle_map_version_actor`` sits on top of the epoch; this branch's
   FAR-192 ``0104_trigger_event_auto_deactivated`` migration (renumbered from
-  ``0103`` to sit on main's new head) sits on top of that; the chain head is
-  this branch's FAR-223 ``0106_guardrail_t1_remainder`` migration.
+  ``0103`` to sit on main's new head) sits on top of that, followed by main's
+  FAR-219 ``0105_guardrail_pins`` and FAR-214 ``0106_trigger_event_guardrail_blocked``
+  (which widens the ``trigger_events`` validation_result vocabulary with
+  ``guardrail_blocked``); the chain head is this branch's FAR-223
+  ``0107_guardrail_t1_remainder`` migration (renumbered from ``0106`` to clear
+  the numeric-prefix collision with FAR-214's ``0106_trigger_event_guardrail_blocked``).
 """
 
 from __future__ import annotations
@@ -45,7 +49,9 @@ _MIGRATION_0099 = "0099_run_raw_output_markers"
 _MIGRATION_0101 = "0101_guardrails"
 _MIGRATION_0102 = "0102_ongoing_streak_epoch"
 _MIGRATION_0104 = "0104_trigger_event_auto_deactivated"
-_MIGRATION_HEAD = "0106_guardrail_t1_remainder"
+_MIGRATION_0105 = "0105_guardrail_pins"
+_MIGRATION_0106 = "0106_trigger_event_guardrail_blocked"
+_MIGRATION_HEAD = "0107_guardrail_t1_remainder"
 
 _VERSIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 
@@ -161,8 +167,10 @@ class TestMigration0095OngoingFlag:
         # which is itself superseded by 0098_slack_app_mention_trigger_type,
         # which is superseded by 0099_run_raw_output_markers, which is
         # superseded by 0100_run_classification, which is superseded by this
-        # branch's FAR-208 head 0101_guardrails, then on to the FAR-219 head
-        # 0106_guardrail_t1_remainder.
+        # branch's FAR-208 head 0101_guardrails, then on through the FAR-219
+        # head 0105_guardrail_pins, the FAR-214 head
+        # 0106_trigger_event_guardrail_blocked, and this branch's FAR-223 head
+        # 0107_guardrail_t1_remainder.
         heads = script.get_heads()
         assert migration_0095.revision not in heads
         assert migration_0096.revision not in heads
@@ -188,8 +196,10 @@ class TestMigration0097OngoingFlagEnabled:
         heads = script.get_heads()
         # 0097 is superseded as the head by 0099_run_raw_output_markers,
         # which is superseded by 0100_run_classification, which is superseded
-        # by this branch's FAR-208 head 0101_guardrails, on to the FAR-219 head
-        # 0106_guardrail_t1_remainder.
+        # by this branch's FAR-208 head 0101_guardrails, on through the FAR-219
+        # head 0105_guardrail_pins, the FAR-214 head
+        # 0106_trigger_event_guardrail_blocked, and this branch's FAR-223 head
+        # 0107_guardrail_t1_remainder.
         assert migration_0097.revision not in heads
         assert heads == [_MIGRATION_HEAD], f"expected a single head, got {heads}"
 
@@ -218,8 +228,10 @@ class TestMigration0098SlackAppMention:
         heads = script.get_heads()
         # 0098 is superseded as the head by 0099_run_raw_output_markers, which
         # is superseded by 0100_run_classification, which is superseded by this
-        # branch's FAR-208 migration 0101_guardrails, on to the FAR-219 head
-        # 0106_guardrail_t1_remainder.
+        # branch's FAR-208 migration 0101_guardrails, on through the FAR-219
+        # head 0105_guardrail_pins, the FAR-214 head
+        # 0106_trigger_event_guardrail_blocked, and this branch's FAR-223 head
+        # 0107_guardrail_t1_remainder.
         assert migration_0098.revision not in heads
         assert _MIGRATION_HEAD in heads
         assert heads == [_MIGRATION_HEAD], f"expected a single head, got {heads}"

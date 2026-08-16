@@ -47,7 +47,7 @@ status: partial
 ### Seeding
 
 - [x] run_context seeded from PipelineSnapshot.run_context_defaults at run start
-- [ ] Trigger run_context_overrides merge over pipeline defaults (later wins)
+- [ ] Trigger run_context_overrides merge over pipeline defaults (later wins) — PRD §8.18 seeding item 2 requires the triggering event to pass `run_context_overrides` that override pipeline defaults for that run only. NOT implemented: `_seed_state` merges only `snapshot.run_context_defaults` + `input_payload`; no `run_context_overrides` column exists on `runs`, so trigger/variant fire paths have nowhere to carry them (variant_group merges them into `input_payload`, which lands under `run_context.input`, not top-level `run_context`). Requires a migration + `create_run` + fire-path wiring — outside this delivery's scope (Known Gap).
 - [x] Empty defaults produce empty run_context dict
 - [x] Pipeline snapshot captures run_context_defaults at snapshot time (not live pipeline)
 - [x] HITL-paused resume uses snapshot's run_context_defaults, not current pipeline defaults
@@ -55,8 +55,8 @@ status: partial
 ### Reading
 
 - [x] All agent nodes can read run_context fields
-- [ ] run_context accessible in prompt templates as {{ run_context.key }}
-- [ ] run_context state shown in run detail view per-node
+- [x] run_context accessible in prompt templates as {{ run_context.key }} — `make_node_fn` exposes `run_context` as a first-class Jinja template variable (alongside `state`), both in the LLM-node path and the sandbox path (test added 2026-08-15: `test_run_context_key_renders_in_prompt_template` in `tests/unit/core/test_pipeline_engine.py`)
+- [ ] run_context state shown in run detail view per-node (frontend gap — see Known Gaps)
 
 ### Context-setter writes
 
@@ -131,8 +131,8 @@ status: partial
 - [x] DB cancellation check has 5s `asyncio.wait_for` timeout — timeout treated as not-cancelled (resolved 2026-07-09)
 - [x] Frontend RunDetailView error handler uses `formatApiError(e)` — no `[object Object]` on API errors (resolved 2026-07-09)
 - [x] Frontend RunDetailView `formatTimestamp` uses `locale.value` from `useI18n()` — not hardcoded `en-US` (resolved 2026-07-09)
-- [ ] Invalid run_context_overrides type (non-dict) raises validation error
-- [ ] Retry with run_context_overrides merges correctly
+- [x] Invalid run_context_overrides type (non-dict) raises validation error — the variants API `VariantDef.run_context_overrides: dict[str, Any]` rejects non-dict values with a Pydantic 422 at the API edge (verified in `api/routes/variants.py`)
+- [ ] Retry with run_context_overrides merges correctly — no retry path accepts `run_context_overrides`; run retries re-execute against the run's original snapshot/state without a new overrides merge (not implemented — Known Gap)
 - [x] Audit event emitted on context_write_by_non_setter violation with node_id and attempted_keys — non-context-setter violations now dispatch a `context_write_by_non_setter` audit event (org-scoped, `resource_type="run"`) carrying `node_id`, `role`, and `attempted_keys` via a ContextVar-based hook plumbed through the executor (§8.18 audit_warning)
 
 ### Security
@@ -149,16 +149,17 @@ status: partial
 
 ### Variant group integration
 
-- [ ] Variant group creates N runs with different run_context_overrides
-- [ ] Pre-flight check rejects entire group if quota would be exceeded (no partial firing)
-- [ ] Each variant run counted individually against org/team/trigger limits
+- [x] Variant group creates N runs with different run_context_overrides — `run_variant_batch`/`select_variant_and_create_run` fire one run per variant with the variant's `run_context_overrides` merged (landing in `input_payload`, which seeds `run_context.input`); tested in `unit/db/crud/test_variant_group.py` + BDD `run_variants.feature`/`variant_groups.feature`
+- [x] Pre-flight check rejects entire group if quota would be exceeded (no partial firing) — `run_variant_batch` pre-flights `active + N <= max_concurrent_runs` before creating any run; tested (`test_raises_429_with_quota_code_when_batch_rejected`, CRUD pre-flight tests)
+- [x] Each variant run counted individually against org/team/trigger limits — `run_variant_batch` calls `create_run` once per variant, so each run is counted by the same per-run quota/cost machinery
+- Note: variant `run_context_overrides` merge into `input_payload` (→ `run_context.input`), not top-level `run_context` — a divergence from PRD §8.19's "differ only in their run_context_overrides"; see Known Gaps.
 
 ### Feedback system integration
 
 - [x] feedback_correction promoted from input_payload to top-level run_context
-- [ ] Correction run inherits run_context from original checkpoint
+- [x] Correction run inherits run_context from original checkpoint — `FeedbackManager.spawn_correction_run` reuses the original run's `pipeline_id`, `snapshot_id` (so `run_context_defaults` are identical) and `input_payload`, plus the `feedback_correction` block promoted to `run_context` (inherits by construction via the shared snapshot + seeded payload, not by copying the live checkpoint state)
 - [x] feedback_correction removed from input_payload to hide from agents
-- [ ] run_context_overrides merged into feedback_correction during correction run
+- [x] run_context_overrides merged into feedback_correction during correction run — `spawn_correction_run(record_id, run_context_overrides=...)` merges overrides into the `feedback_correction` block before `create_run` (verified in `core/feedback_manager/__init__.py`)
 
 ### Forward/backward compatibility
 
@@ -170,9 +171,10 @@ status: partial
 ## Known Gaps
 - **Non-context-setter guard strategy mismatch**: PRD 8.18 specifies silent discard + audit_warning event for non-context-setter writes to run_context. Current decorator code raises ContextSetterViolationError instead — a hard error, not silent discard. The PRD's non-breaking intent is deferred to v1. The product map now reflects the current code behaviour (hard error). Code path: `backend/src/modulo/core/pipeline_engine/decorator.py:129-142`.
 - ~~**Missing audit event dispatch on violation**: When a non-context-setter violation occurs, only `_log.warning()` is emitted. PRD specifies an `audit_warning` event with node_id and attempted_keys. The decorator lacks DB session access to dispatch to the `audit_events` table. Needs a ContextVar-based callback pattern (similar to the cancellation check) plumbed through the executor.~~ **RESOLVED 2026-08-12**: the decorator now invokes a ContextVar-based audit hook (`set_audit_hook`, mirroring `set_cancellation_check`) with `{node_id, role, attempted_keys}` on every non-context-setter run_context write; the executor wires it (`_dispatch_context_write_audit`/`_do_context_write_audit`) to append a `context_write_by_non_setter` audit event (org-scoped via RLS, `resource_type="run"`, 5s timeout, failures logged + swallowed so they never mask the violation). Decorator unit tests (TestAuditHookDispatch ×6) + executor hook tests (`test_executor_audit_hook.py` ×4) + 1 BDD scenario in `run_context.feature`.
-- **Trigger override merging not wired through executor**: `run_context_overrides` from trigger events are not merged in `_seed_state` — only `snapshot.run_context_defaults` is used. The trigger override code path is not yet connected to the executor. Code path: `backend/src/modulo/core/pipeline_engine/executor.py:95-119`.
+- **Trigger override merging not wired through executor**: `run_context_overrides` from trigger events are not merged in `_seed_state` — only `snapshot.run_context_defaults` is used. The `runs` table has no `run_context_overrides` column, so trigger/variant fire paths have nowhere to carry a top-level override; variant_group merges overrides into `input_payload` (landing under `run_context.input`, not top-level `run_context`). Closing this gap requires a migration + `create_run` + fire-path wiring. Code path: `backend/src/modulo/core/pipeline_engine/executor.py:325-357`.
 - **No frontend UI for run_context inspection per-node**: The run detail view does not surface run_context state before/after each node, nor display the write-log. This is a frontend gap tracked separately from the backend implementation.
-- **No template rendering test for run_context**: The product map entry lists `{{ run_context.key }}` access as a behaviour, but there is no test verifying that run_context fields are interpolated in prompt templates.
+- ~~**No template rendering test for run_context**: The product map entry lists `{{ run_context.key }}` access as a behaviour, but there is no test verifying that run_context fields are interpolated in prompt templates.~~ **RESOLVED 2026-08-15** — `make_node_fn` exposes `run_context` as a first-class Jinja variable; added `test_run_context_key_renders_in_prompt_template` (`tests/unit/core/test_pipeline_engine.py`).
+- **Retry does not accept run_context_overrides**: run retries re-execute against the run's original snapshot/state; there is no merge of new `run_context_overrides` into the retried run.
 - **Parallel context-setter conflict warning**: PRD specifies a pipeline validation warning when parallel context-setters write the same key (v1). Not yet implemented.
 - **Complexity-reviewer end-to-end test**: No integration test verifying the canonical library primitive writes correct fields and downstream agents can consume them.
 - **No frontend i18n for RunDetailView**: The RunDetailView previously had ~25 hardcoded English strings. As of 2026-07-09 (QA index 298), all template and script strings are wrapped in `$t()`. RunDetailView strings are now fully internationalized.
@@ -189,6 +191,12 @@ status: partial
 - **No test for type coercion**: No test verifies behaviour when a run_context value is a different type than expected (e.g. number instead of string).
 
 ## QA History
+### 2026-08-15 — dist/partial-core2 (behaviour verification)
+- Marked [x] with code/test verification: **`{{ run_context.key }}` prompt-template rendering** (implemented in `make_node_fn` — `run_context` is a first-class Jinja variable; added `test_run_context_key_renders_in_prompt_template` in `tests/unit/core/test_pipeline_engine.py`, which runs a real node through a stub model backend and asserts the interpolated prompt reaches the model), **invalid `run_context_overrides` type → 422** (Pydantic `VariantDef` in `variants.py`), **variant group behaviours** (N runs with per-variant overrides, all-or-nothing pre-flight quota check, per-run counting — all tested in `test_variant_group.py`/`test_variants.py` + BDD), and **feedback correction overrides** (`run_context_overrides` merged into `feedback_correction` in `spawn_correction_run`; correction inherits run_context by construction via the shared snapshot + input payload + `feedback_correction` promotion).
+- Kept unchecked with Known-Gap notes: trigger `run_context_overrides` merge over pipeline defaults (requires a `runs.run_context_overrides` column + migration + `create_run` + fire-path wiring — outside this delivery's scope) and retry-with-overrides (no retry path accepts overrides).
+- Run-inspection rows remain unchecked (frontend UI gap, tracked in Known Gaps).
+- Status: partial (trigger-override merging, retry merge, run-inspection UI, size-limit/type-coercion tests remain).
+
 ### 2026-08-12 — improve-architecture: audit event dispatch on context-write violation RESOLVED
 - **RESOLVED "Missing audit event dispatch on violation"** — non-context-setter writes to run_context now emit a `context_write_by_non_setter` audit event, closing the §8.18 `audit_warning` gap (previously only a `_log.warning()`).
 - `decorator.py`: new `set_audit_hook()`/`_get_audit_hook()` ContextVar hook (mirrors `set_cancellation_check`) + `_dispatch_audit_warning()` invoked on every violation with `{node_id, role, attempted_keys}`; hook failures are logged and swallowed so they can never mask `ContextSetterViolationError`.

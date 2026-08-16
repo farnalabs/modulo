@@ -19,6 +19,28 @@
       </div>
     </div>
 
+    <FeatureGate feature-name="team_rbac" required-tier="team" show-disabled>
+      <div class="card p-6">
+        <h2 class="text-base font-semibold mb-4">{{ $t('views.MyProfileView.my_teams') }}</h2>
+        <div v-if="myTeamsLoading" class="flex items-center justify-center py-4">
+          <div class="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent"></div>
+        </div>
+        <div v-else-if="myTeamsError" class="py-2 text-sm text-destructive">
+          {{ myTeamsError }}
+          <button class="ml-2 underline" data-testid="my-profile-my-teams-retry" @click="loadMyTeams">{{ $t('views.SettingsTeamsView.retry') }}</button>
+        </div>
+        <div v-else-if="myTeams.length === 0" class="py-2 text-sm text-muted-foreground">
+          {{ $t('views.MyProfileView.not_a_member_of_any_team') }}
+        </div>
+        <div v-else class="space-y-2">
+          <div v-for="team in myTeams" :key="team.team_id" class="flex items-center justify-between rounded-lg border bg-muted/30 px-3 py-2" data-testid="my-profile-my-team">
+            <span class="font-medium">{{ team.team_name }}</span>
+            <span class="inline-flex items-center rounded-md border border-primary/20 bg-primary/5 px-2 py-0.5 text-xs font-medium text-primary">{{ $t('views.SettingsTeamsView.' + team.role) }}</span>
+          </div>
+        </div>
+      </div>
+    </FeatureGate>
+
     <div class="card p-6">
       <h2 class="text-base font-semibold mb-4">{{ $t('views.MyProfileView.change_password') }}</h2>
       <form @submit.prevent="changePassword" class="space-y-4">
@@ -74,6 +96,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import PageHeader from '../components/shared/PageHeader.vue'
+import FeatureGate from '../components/FeatureGate.vue'
 import { Button } from '@/components/ui/button'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
@@ -83,6 +106,7 @@ import { formatDateShort } from '../lib/formatDate'
 const { t } = useI18n()
 
 type Profile = components['schemas']['modulo__api__routes__auth__MeResponse']
+type MyTeam = components['schemas']['MyTeamResponse']
 
 const EMPTY_PROFILE: Profile = { id: '', email: '', display_name: '', org_role: '', active: true, created_at: '', is_system_admin: false }
 
@@ -93,6 +117,31 @@ const confirmPassword = ref('')
 const passError = ref('')
 const passSuccess = ref('')
 const passSaving = ref(false)
+
+const myTeams = ref<MyTeam[]>([])
+const myTeamsLoading = ref(false)
+const myTeamsError = ref('')
+
+async function loadMyTeams() {
+  myTeamsLoading.value = true
+  myTeamsError.value = ''
+  try {
+    const { data, error } = await api.GET('/api/v1/teams/my')
+    if (error) {
+      myTeamsError.value = formatApiError(error)
+      myTeams.value = []
+      return
+    }
+    if (data) {
+      myTeams.value = data
+    }
+  } catch (e) {
+    myTeamsError.value = formatApiError(e)
+    myTeams.value = []
+  } finally {
+    myTeamsLoading.value = false
+  }
+}
 
 const userInitial = computed(() => {
   const email = profile.value.email
@@ -161,5 +210,8 @@ async function changePassword() {
   }
 }
 
-onMounted(loadProfile)
+onMounted(() => {
+  loadProfile()
+  loadMyTeams()
+})
 </script>

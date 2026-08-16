@@ -1,7 +1,7 @@
 """Guardrails T1-remainder columns — org kill-switch + snapshot pins (FAR-223).
 
-Revision ID: 0106_guardrail_t1_remainder
-Revises: 0105_guardrail_pins
+Revision ID: 0107_guardrail_t1_remainder
+Revises: 0106_trigger_event_guardrail_blocked
 Create Date: 2026-08-16
 
 FAR-223 PR A adds the shipped-engine residuals:
@@ -27,8 +27,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0106_guardrail_t1_remainder"
-down_revision: str | None = "0105_guardrail_pins"
+revision: str = "0107_guardrail_t1_remainder"
+down_revision: str | None = "0106_trigger_event_guardrail_blocked"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

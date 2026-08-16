@@ -283,9 +283,7 @@ async function reloadConfig() {
   try {
     const { data, error: err } = await api.POST('/api/v1/admin/runtime-config/reload')
     if (err) {
-      formError.value = err && typeof err === 'object' && 'detail' in err
-        ? `${t('views.SettingsRuntimeConfigView.failed_to_reload_config')} ${formatApiError(err)}`
-        : `${t('views.SettingsRuntimeConfigView.failed_to_reload_config')} ${formatApiError(err)}`
+      formError.value = `${t('views.SettingsRuntimeConfigView.failed_to_reload_config')} ${formatApiError(err)}`
     } else if (data) {
       applyResponse(data as unknown as ConfigResponse)
     }
@@ -303,9 +301,7 @@ async function applyOverride(key: string) {
       body: { overrides: { [key]: editedValues[key] } },
     })
     if (err) {
-      formError.value = err && typeof err === 'object' && 'detail' in err
-        ? `${t('views.SettingsRuntimeConfigView.failed_to_apply_override')} ${formatApiError(err)}`
-        : `${t('views.SettingsRuntimeConfigView.failed_to_apply_override')} ${formatApiError(err)}`
+      formError.value = `${t('views.SettingsRuntimeConfigView.failed_to_apply_override')} ${formatApiError(err)}`
     } else if (data) {
       applyResponse(data as unknown as ConfigResponse)
       formSuccess.value = t('views.SettingsRuntimeConfigView.override_applied_for', { key })
@@ -328,9 +324,7 @@ async function clearOverride(key: string) {
       body: { clear: [key] },
     })
     if (err) {
-      formError.value = err && typeof err === 'object' && 'detail' in err
-        ? `${t('views.SettingsRuntimeConfigView.failed_to_clear_override')} ${formatApiError(err)}`
-        : `${t('views.SettingsRuntimeConfigView.failed_to_clear_override')} ${formatApiError(err)}`
+      formError.value = `${t('views.SettingsRuntimeConfigView.failed_to_clear_override')} ${formatApiError(err)}`
     } else if (data) {
       applyResponse(data as unknown as ConfigResponse)
       formSuccess.value = t('views.SettingsRuntimeConfigView.override_cleared_for', { key })

@@ -189,6 +189,60 @@ class TestGetTeamByName:
         assert result is None
 
 
+class TestCountOwnedResources:
+    async def test_sums_across_all_four_resource_types(self, mock_session: AsyncMock) -> None:
+        """count_owned_resources sums pipelines, connectors, model backends, and library primitives."""
+        from modulo.db.crud.team import count_owned_resources
+
+        team_a = uuid.uuid4()
+        team_b = uuid.uuid4()
+
+        def _result(pairs: list[tuple[uuid.UUID, int]]):
+            r = MagicMock()
+            r.all = MagicMock(return_value=pairs)
+            return r
+
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                _result([(team_a, 2), (team_b, 1)]),  # pipelines
+                _result([(team_a, 1)]),  # connectors
+                _result([(team_a, 3)]),  # model backends
+                _result([(team_b, 4)]),  # library primitives
+            ]
+        )
+
+        counts = await count_owned_resources(mock_session, team_ids=[team_a, team_b])
+        assert counts[team_a] == 6
+        assert counts[team_b] == 5
+
+    async def test_returns_empty_dict_for_no_teams(self, mock_session: AsyncMock) -> None:
+        from modulo.db.crud.team import count_owned_resources
+
+        counts = await count_owned_resources(mock_session, team_ids=[])
+        assert counts == {}
+        mock_session.execute.assert_not_awaited()
+
+    async def test_ignores_null_owner_rows(self, mock_session: AsyncMock) -> None:
+        from modulo.db.crud.team import count_owned_resources
+
+        def _result(pairs: list[tuple[uuid.UUID | None, int]]):
+            r = MagicMock()
+            r.all = MagicMock(return_value=pairs)
+            return r
+
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                _result([(None, 99)]),  # pipelines with null owner
+                _result([]),
+                _result([]),
+                _result([]),
+            ]
+        )
+
+        counts = await count_owned_resources(mock_session, team_ids=[uuid.uuid4()])
+        assert counts == {}
+
+
 class TestScimListGroups:
     async def test_excludes_soft_deleted_teams(self, mock_session: AsyncMock) -> None:
         """scim_list_groups must filter deleted_at IS NULL on both the count and page query."""
