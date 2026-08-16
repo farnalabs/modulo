@@ -34,7 +34,7 @@ For every change, BEFORE reporting done:
 ## 3. Self-review checklist (implementers — run before reporting done)
 
 - [ ] Files exist on disk; footprint matches the task scope; no deletions of tests, features, or docs outside the task
-- [ ] Lint clean: ruff / mypy / bandit / semgrep where runnable in this environment
+- [ ] Lint clean: ruff / mypy / bandit / semgrep / vulture where runnable in this environment
 - [ ] No secrets committed
 - [ ] PRD accurate: docs/prd.md describes what was actually built (update if drifted)
 - [ ] Manifest updated if routes/features changed (frontend/src/manifest.yaml)

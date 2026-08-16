@@ -33,7 +33,7 @@ depends-on:
   - feat-core-db-abstraction-core
   - feat-core-run-context
   - feat-core-feature-flag-ui
-status: partial
+status: covered
 ---
 
 # Teams Org Entity
@@ -144,20 +144,19 @@ The Organisation entity is the root tenant entity in Modulo's multi-tenant archi
 
 ## Edge Cases
 
-- [ ] `created_by` UUID is nullable and NOT an FK — first org must be created with a null `created_by` since no user exists yet
-- [ ] `slug` is immutable once set — no PATCH endpoint to change slug
-- [ ] Deletion token is single-use — confirm or cancel invalidates it
-- [ ] Export bundle is cached in `export_bundle_json` after deletion request
-- [ ] Cascade delete skips `organisations` table itself (root entity — RLS doesn't apply)
-- [ ] Runs with terminal status are batch-deleted before FK cascade to avoid deadlocks
-- [ ] Billing overview endpoint aggregates across org (users, teams, pipelines, runs)
-- [ ] Org-level daily spend limit enforced for the entire org aggregate
+- [x] `created_by` UUID is nullable and NOT an FK — first org must be created with a null `created_by` since no user exists yet
+- [x] `slug` is immutable once set — no PATCH endpoint to change slug
+- [x] Deletion token is single-use — confirm or cancel invalidates it
+- [x] Export bundle is cached in `export_bundle_json` after deletion request
+- [x] Cascade delete skips `organisations` table itself (root entity — RLS doesn't apply)
+- [x] Runs with terminal status are batch-deleted before FK cascade to avoid deadlocks
+- [x] Billing overview endpoint aggregates across org (users, teams, pipelines, runs)
+- [x] Org-level daily spend limit enforced for the entire org aggregate
 
 ## Known Gaps
 
 - **Stale `created_by` FK design**: `created_by` is deliberately not an FK to allow bootstrap, but this means no referential integrity on the creator field. A deleted user's UUID remains in `created_by` indefinitely.
 - **No org CRUD BDD feature file**: There is no `.feature` file testing the system admin org CRUD endpoints (`POST/GET/DELETE /api/v1/admin/orgs`). Only deletion workflow, scoping, and RLS have BDD coverage.
-- **Integration tests skipped**: All tests in `backend/tests/integration/crud/test_org_deletion.py` (14 tests) are marked `@pytest.mark.skip(reason="awaiting-implementation")` due to schema alignment issues.
 - **No `organisation exists` shared BDD step**: The step is only defined in library feature tests' conftest, not as a reusable fixture.
 - **No system admin orgs frontend page**: The nav link at `/admin/system/orgs` exists but no corresponding view is implemented.
 - **ProgrammingError→501 test coverage**: The org programming-error tests (previously `test_org_programming_error.py`) were collapsed into parametrized patterns in `test_admin.py` during the test-suite reduction — they cover all route handlers but use mocking, not real DB interaction.
@@ -167,8 +166,28 @@ The Organisation entity is the root tenant entity in Modulo's multi-tenant archi
 - **No Frontend smoke test for AdminOrgSettingsView**: The view has vitest tests but no Playwright E2E coverage.
 - **Website docs**: `Website/modulo-website/src/docs/organisation.md` exists but is only a stub (title only, no content).
 - **Export summary key mismatch**: The `request_org_deletion` route in `admin.py` now uses `export.get("memberships", [])` for `user_count`, matching the CRUD export key. Fixed in 2026-07-06 QA pass.
+- **BDD org_scoping/rls_isolation step drift**: 5 scenarios in `org_scoping.feature`/`rls_isolation.feature` fail on main — `test_alpha_organisation.py` patches `modulo.core.pipeline_engine.run_crud.*`, a module path that no longer exists after the pipeline_engine refactor. Pre-existing on main, unrelated to this feature's implementation.
 
 ## QA History
+
+### 2026-08-15 — improve-architecture (product-map walk) — edge cases driven to covered
+
+Closed all 8 Edge Case behaviours (partial → covered). Each verified against code and a test that exercises it:
+
+| Edge case | Verdict | Evidence |
+|---|---|---|
+| `created_by` nullable, NOT FK, first org null | Verified + tested | `organisation.py` column is `Mapped[UUID \| None]` with no FK; `_ensure_default_org` builds the bootstrap org without a creator. New `TestOrganisationRootEntityModel` in `test_multi_backend_bdd.py` (4 tests: nullable-not-FK, defaults-to-none, no `organisation_id` column, tenant filter skips the entity). |
+| `slug` immutable | Verified + tested | `UpdateOrgRequest` exposes only `name`/`logo_url`/`plan_id`; no route accepts a slug change. New `TestOrgSlugImmutability` in `test_admin.py` (PUT with a `slug` field is ignored; model has no slug field). |
+| Deletion token single-use | Verified + tested | `cancel_org_deletion` clears `deletion_token`; confirm hard-deletes the row so a replayed token fails. New integration tests `test_confirm_invalidates_token_single_use` / `test_cancel_invalidates_token_single_use` in `test_org_deletion.py`. |
+| Export bundle cached | Verified + tested | `request_org_deletion` writes `export_bundle_json`; `export_org_data` returns the cache when present. Existing integration tests cover the cache write + read-back. |
+| Cascade skips `organisations` table (RLS excluded) | Verified + tested | `test_rls_coverage.py::test_organisations_table_is_the_only_exclusion`; new model test asserts no `organisation_id` column. |
+| Terminal runs batch-deleted before cascade | Verified + tested | `confirm_org_deletion` calls `batch_delete_old_terminal_runs` before `session.delete(org)`. New integration test `test_terminal_runs_batch_deleted_before_fk_cascade` ages a run 31 days and asserts `hard_deleted_runs == 1`. |
+| Billing overview aggregates across org | Verified + tested | `admin_billing_overview` counts memberships/teams/pipelines/runs-this-month. New `TestBillingOverviewAggregation` in `test_admin.py` (2 tests: populated counts + zero counts). |
+| Org-level daily spend limit enforced | Verified + tested | `check_and_record_spend` enforces `Organisation.daily_spend_limit` for the whole-org aggregate; unit (`test_cost_controller.py`) + integration (`test_cost_attribution.py`) coverage exists. |
+
+**Stale Known Gap removed**: the "Integration tests skipped (`@pytest.mark.skip`)" line was stale — `backend/tests/integration/crud/test_org_deletion.py` (22 tests) runs against testcontainers and passes (the skips were resolved by the schema-alignment work). Replaced with the current state.
+
+**Pre-existing failure noted (not fixed — outside allowlist)**: 5 `org_scoping`/`rls_isolation` BDD scenarios fail on main because `test_alpha_organisation.py` patches the retired `modulo.core.pipeline_engine.run_crud` module path. Left as a Known Gap with a pointer to the fix.
 
 ### 2026-07-08 — Cross-cutting QA (improve-architecture index 263)
 

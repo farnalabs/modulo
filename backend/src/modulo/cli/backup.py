@@ -2,7 +2,7 @@
 
 Usage:
   modulo backup [--db-url <url>] [--output-dir <path>]
-  modulo restore <backup-dir> [--db-url <url>] [--yes] [--previous-fernet-key <key>]
+  modulo restore <backup-dir> [--db-url <url>] [--yes] [--previous-fernet-key <key>] [--dry-run]
 """
 
 from __future__ import annotations
@@ -385,6 +385,68 @@ def _human_size(size: float) -> str:
     return f"{size:.1f} TB"
 
 
+# ── Dry-run preview ──────────────────────────────────────────────────────────
+
+
+def _preview_restore(
+    backup_dir: Path,
+    manifest: dict[str, Any],
+    settings: Any,
+    previous_fernet_key: str | None,
+) -> None:
+    """Preview every restore step without touching the database.
+
+    Integrity checks (checksums, JSON shape) are assumed to have already run.
+    Raises the same ClickExceptions the real restore would raise for missing
+    inputs, so a dry run surfaces any blocking problem before the operator
+    commits to an irreversible restore.
+    """
+    click.echo("DRY RUN — no changes will be made.")
+
+    db_sql = backup_dir / "database.sql"
+    if db_sql.exists():
+        click.echo(f"  WOULD restore database schema and data via psql from {db_sql.name}")
+    else:
+        click.echo("  No database.sql found — WOULD skip full DB restore")
+
+    for json_name, label in (
+        ("checkpoint_blobs.json", "checkpoint blob records"),
+        ("checkpoints.json", "checkpoint records"),
+        ("checkpoint_writes.json", "checkpoint write records"),
+    ):
+        json_path = backup_dir / json_name
+        if json_path.exists():
+            records = json.loads(json_path.read_text(encoding="utf-8"))
+            click.echo(f"  WOULD restore {len(records)} {label} from {json_name}")
+        else:
+            click.echo(f"  No {json_name} found — WOULD skip")
+
+    creds_json = backup_dir / "credentials_references.json"
+    if creds_json.exists():
+        creds: dict[str, list[dict[str, Any]]] = json.loads(creds_json.read_text(encoding="utf-8"))
+        current_key_hash = _fernet_key_hash(settings.fernet_key)
+        backup_key_hash = manifest.get("fernet_key_hash", "")
+        if current_key_hash == backup_key_hash:
+            click.echo("  FERNET_KEY unchanged — WOULD skip credential re-encryption")
+        else:
+            if not previous_fernet_key:
+                raise click.ClickException(
+                    "FERNET_KEY has changed since backup. Provide --previous-fernet-key to re-encrypt credentials."
+                )
+            total = 0
+            for table, rows in creds.items():
+                count = sum(1 for row in rows if row.get("credentials_ciphertext"))
+                total += count
+                if count:
+                    click.echo(f"  WOULD re-encrypt {count} {table} credentials")
+            if not total:
+                click.echo("  FERNET_KEY changed but no credentials carry ciphertext — nothing to re-encrypt")
+    else:
+        click.echo("  No credentials_references.json found — WOULD skip credential restore")
+
+    click.echo("\nDry run complete — no changes were made.")
+
+
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
 
@@ -502,12 +564,19 @@ def backup(db_url: str | None, output_dir: Path | None) -> None:
     default=None,
     help="Previous FERNET_KEY if it changed since backup (required for credential re-encryption)",
 )
-def restore(backup_dir: Path, db_url: str | None, yes: bool, previous_fernet_key: str | None) -> None:
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Preview the restore without making any database changes",
+)
+def restore(backup_dir: Path, db_url: str | None, yes: bool, previous_fernet_key: str | None, dry_run: bool) -> None:
     """Restore a Modulo database from a backup directory.
 
     Validates the backup manifest, restores the database via psql, re-inserts
     checkpoint_blobs from the JSON export, and re-encrypts credentials if the
-    FERNET_KEY has changed.
+    FERNET_KEY has changed.  With --dry-run, validates integrity and previews
+    every step without touching the database.
     """
     raw_url = _resolve_url(db_url)
     settings = get_settings()
@@ -522,7 +591,7 @@ def restore(backup_dir: Path, db_url: str | None, yes: bool, previous_fernet_key
     click.echo(f"DB version at backup: {manifest.get('db_version', 'unknown')}")
     click.echo(f"Schema versions: {', '.join(manifest.get('schema_versions', ['unknown']))}")
 
-    if not yes:
+    if not dry_run and not yes:
         click.confirm("\nThis will OVERWRITE the current database. Continue?", abort=True)
 
     try:
@@ -552,6 +621,10 @@ def restore(backup_dir: Path, db_url: str | None, yes: bool, previous_fernet_key
                     json.loads(json_path.read_text(encoding="utf-8"))
                 except json.JSONDecodeError as exc:
                     raise click.ClickException(f"Corrupt JSON file {json_name}: {exc}") from exc
+
+        if dry_run:
+            _preview_restore(backup_dir, manifest, settings, previous_fernet_key)
+            return
 
         db_sql = backup_dir / "database.sql"
         if db_sql.exists():

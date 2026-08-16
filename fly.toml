@@ -107,6 +107,10 @@ primary_region = 'lhr'
   # REQUIRED: Upstash Redis instance. Create with:
   #   fly redis create --name modulo-app-redis -r lhr,ams --enable-eviction
   # Then store its connection string with `fly secrets set REDIS_URL=...`.
+  # Plan: Fixed 250MB ($10/mo + $5 per read region = $15/mo) — NOT pay-as-you-go.
+  # (2026-08: PAYG projected ~$87/mo at ~46M commands; Fixed 250MB is flat $15/mo
+  # with 250MB data + 50GB bandwidth. Enable auto-upgrade on the add-on as a
+  # safety net: `flyctl redis update <name>` → select plan, then enable auto-upgrade.)
   CORS_ORIGINS = "https://modulo.run,https://app.modulo.run,http://localhost:5173"
 
 [[vm]]

@@ -197,6 +197,31 @@ regression that silently weakens the suite:
   (after ``ast.literal_eval``), so ``1`` and ``True`` are deliberately treated
   as distinct and only byte-identical values are flagged — an unambiguous
   duplicate
+- ``@pytest.mark.skipif``/``@pytest.mark.xfail`` whose *condition* is a
+  statically-foldable literal (``True``, ``0``, ``[]``, a string, ...) — the
+  skip outcome is decided at source time. ``skipif(True, ...)`` permanently
+  deselects the test from every run (the same coverage loss as a ``@skip``
+  marker, but hiding behind a "conditional" spelling that reads as
+  deliberate), and ``skipif(False, ...)`` is a dead marker that never
+  triggers. Both are almost always leftovers from temporarily disabling a
+  test while debugging, and a reader — or a mutation-testing run — believes
+  the test participates when it silently does not. The module-level
+  ``pytestmark = pytest.mark.skipif(...)`` form is covered too. Dynamic
+  conditions (names, calls, comparisons, attributes) are left alone: those
+  evaluate at collection time and are the legitimate form, and the
+  skip-without-reason lens already owns the missing-``reason`` half of the
+  marker
+- ``pytest.raises(Exception)`` / ``pytest.raises(BaseException)`` — the
+  catch-all form of an exception assertion. Naming the top of the exception
+  hierarchy verifies only that *something* went wrong: any exception
+  satisfies it, including the ``AssertionError`` of a misbehaving assertion
+  inside the block or an unrelated ``KeyError`` from a bug, so the test
+  reports green when the code under test raised the wrong error type. A
+  ``match=`` narrows the message, not the type, so it does not rescue the
+  call. The same catch-all applies to ``@pytest.mark.xfail(raises=...)``
+  markers, which then xfail on *any* exception. Attribute-qualified classes
+  (``pytest.skip.Exception``) and concrete named exceptions are left alone —
+  they are the specific form this lens exists to force
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -3573,3 +3598,421 @@ def test_duplicate_parametrize_lens_flags_repeated_cases():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _duplicate_parametrize_case_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _skip_condition_truthiness(node: ast.AST) -> bool | None:
+    """Return the truthiness of a *literal* skip condition expression, or
+    ``None`` when the expression is not statically foldable (a name, call,
+    attribute, comparison, binary op, ...). Folding is deliberately shallow:
+    constants, container literals, and a ``not`` wrapper are the shapes a
+    leftover literal condition takes in practice."""
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, complex):
+            return None
+        return bool(node.value)
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return bool(node.elts)
+    if isinstance(node, ast.Dict):
+        return bool(node.keys)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        inner = _skip_condition_truthiness(node.operand)
+        return None if inner is None else (not inner)
+    return None
+
+
+def _constant_condition_skip_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``@pytest.mark.skipif`` /
+    ``@pytest.mark.xfail`` marker whose condition is a statically-foldable
+    literal, including the module-level ``pytestmark = pytest.mark.skipif(...)``
+    form. A literal condition decides the skip at source time: ``skipif(True)``
+    permanently deselects the test from every run and ``skipif(False)`` is a
+    dead marker that never triggers — both are almost always leftovers from
+    temporarily disabling a test during debugging. Dynamic conditions (names,
+    calls, comparisons, attributes) are left alone: they evaluate at collection
+    time and are the legitimate form. The skip-without-reason lens already
+    owns the missing-``reason`` half of these markers, so only the condition
+    is checked here."""
+
+    def _marker_condition(marker: ast.AST) -> tuple[str, ast.expr] | None:
+        """Return ``(marker_name, condition_expr)`` for a
+        ``pytest.mark.skipif/xfail`` marker application, or ``None``. For
+        ``skipif`` the condition is the first positional arg or the
+        ``condition=`` keyword; for ``xfail`` only the unambiguous
+        ``condition=`` keyword is considered (its positional slot historically
+        doubled as ``reason``)."""
+        if not isinstance(marker, ast.Call):
+            return None
+        func = marker.func
+        name = func.attr if isinstance(func, ast.Attribute) else (func.id if isinstance(func, ast.Name) else None)
+        if name not in ("skipif", "xfail"):
+            return None
+        for kw in marker.keywords:
+            if kw.arg == "condition":
+                return name, kw.value
+        if name == "skipif" and marker.args:
+            return name, marker.args[0]
+        return None
+
+    found = []
+
+    def _report(marker: ast.AST, context: str, lineno: int) -> None:
+        hit = _marker_condition(marker)
+        if hit is None:
+            return
+        name, condition = hit
+        truthy = _skip_condition_truthiness(condition)
+        if truthy is None:
+            return
+        if truthy:
+            found.append(
+                (
+                    lineno,
+                    f"{context}pytest.mark.{name} with a constant condition {ast.unparse(condition)} — "
+                    "always skips, so the item never runs (replace with a real condition or "
+                    "delete the marker entirely)",
+                )
+            )
+        else:
+            found.append(
+                (
+                    lineno,
+                    f"{context}pytest.mark.{name} with a constant condition {ast.unparse(condition)} — "
+                    "never skips, so the marker is dead code (delete it)",
+                )
+            )
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            for dec in node.decorator_list:
+                _report(dec, "@", node.lineno)
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "pytestmark" for t in node.targets):
+            _report(node.value, "pytestmark = ", node.lineno)
+    return found
+
+
+def test_no_constant_condition_skips():
+    """A ``@pytest.mark.skipif``/``@pytest.mark.xfail`` (or module-level
+    ``pytestmark = ...``) whose condition is a literal constant decides the skip
+    at source time and silently weakens the run set. ``skipif(True, ...)``
+    permanently deselects the test — the same coverage loss as a plain ``@skip``
+    marker, but spelled "conditionally" so it reads as deliberate — and
+    ``skipif(False, ...)`` is a dead marker that never triggers while readers
+    believe it does. Both are almost always leftovers from temporarily disabling
+    a test during debugging. Dynamic conditions (``sys.platform == ...``,
+    ``not openssl_available``, an env lookup, ...) are legitimate — they
+    evaluate at collection time — and the skip-without-reason lens already
+    guards the missing-``reason`` half of these markers, so this lens only
+    checks the condition."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _constant_condition_skip_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} skip marker(s) with a literal constant condition.\n"
+        "A constant condition decides the skip at source time: always-skip silently deselects "
+        "the test from every run, and never-skip is a dead marker. Replace it with a real "
+        "condition or delete the marker.\n" + "\n".join(violations)
+    )
+
+
+def test_constant_condition_skip_lens_flags_deterministic_skips():
+    """Synthetic positive/negative control for the constant-condition skip lens:
+    it must flag ``skipif``/``xfail`` markers whose condition is foldable
+    (``True``/``False``, numeric, an empty container, a ``not``-wrapped
+    literal, positional or ``condition=``, on a function, class, or module-level
+    ``pytestmark``) and ignore dynamic conditions (names, calls, comparisons,
+    attribute lookups) plus non-skipif markers."""
+    positive_sources = [
+        "@pytest.mark.skipif(True, reason='temp')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skipif(False, reason='legacy')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skipif(1, reason='x')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skipif('', reason='x')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skipif([], reason='x')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skipif(condition=True, reason='x')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skipif(not 0, reason='x')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.xfail(condition=False, reason='known bug')\ndef test_foo():\n    assert x\n",
+        "class TestFoo:\n    @pytest.mark.skipif(True, reason='x')\n    def test_bar(self):\n        assert x\n",
+        "pytestmark = pytest.mark.skipif(True, reason='x')\ndef test_foo():\n    assert x\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _constant_condition_skip_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "@pytest.mark.skipif(sys.version_info < (3, 9), reason='py')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skipif(not openssl_available, reason='openssl')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skipif(sys.platform == 'win32', reason='win')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skipif(platform.system() == 'Windows', reason='win')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skipif(condition=some_flag(), reason='x')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skipif(FLAG, reason='x')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.skip(reason='x')\ndef test_foo():\n    assert x\n",
+        "@pytest.mark.xfail(reason='known bug')\ndef test_foo():\n    assert x\n",
+        "pytestmark = pytest.mark.skipif(_redis_reachable(), reason='redis')\ndef test_foo():\n    assert x\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _constant_condition_skip_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _broad_exception_raises_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every catch-all exception spec in
+    a test module: ``pytest.raises(Exception)`` / ``pytest.raises(BaseException)``
+    calls and ``@pytest.mark.xfail(raises=...)`` markers naming the top of the
+    exception hierarchy.
+
+    ``pytest.raises(Exception)`` verifies only that *something* went wrong:
+    any exception satisfies it — including the ``AssertionError`` of a
+    misbehaving assertion inside the block or an unrelated ``KeyError`` from a
+    bug — so the test reports green when the code under test raised the wrong
+    error type. A ``match=`` keyword narrows the message, not the type, so it
+    does not rescue the call. ``@pytest.mark.xfail(raises=Exception)`` is the
+    marker twin: the test then xfails on any exception, so it stays green no
+    matter which error the code raises. Attribute-qualified names
+    (``pytest.skip.Exception``) and any concrete named exception are left
+    alone — they are the specific form this lens exists to force."""
+
+    def _is_broad(expr: ast.AST) -> bool:
+        return isinstance(expr, ast.Name) and expr.id in {"Exception", "BaseException"}
+
+    found = []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr != "raises":
+            continue
+        if not node.args or not _is_broad(node.args[0]):
+            continue
+        found.append(
+            (
+                node.lineno,
+                f"pytest.raises({ast.unparse(node.args[0])}) — the top of the exception hierarchy "
+                "matches any failure, so the test only proves *something* went wrong; name the "
+                "concrete exception type (a match= narrows the message, not the type)",
+            )
+        )
+
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        for dec in node.decorator_list:
+            if not isinstance(dec, ast.Call):
+                continue
+            func = dec.func
+            name = func.attr if isinstance(func, ast.Attribute) else (func.id if isinstance(func, ast.Name) else None)
+            if name != "xfail":
+                continue
+            for kw in dec.keywords:
+                if kw.arg == "raises" and _is_broad(kw.value):
+                    found.append(
+                        (
+                            dec.lineno,
+                            f"@pytest.mark.xfail(raises={ast.unparse(kw.value)}) — xfails on any "
+                            "exception, so the test stays green no matter which error the code "
+                            "raises; name the concrete exception type",
+                        )
+                    )
+    return found
+
+
+def test_no_broad_exception_raises():
+    """``pytest.raises`` (or ``@pytest.mark.xfail(raises=...)``) naming
+    ``Exception`` or ``BaseException`` verifies only that *something* went
+    wrong: any exception satisfies the assertion, so the test reports green
+    even when the code under test raised the wrong error type — an unrelated
+    ``KeyError`` from a bug, or the ``AssertionError`` of a misbehaving
+    assertion inside the block. A ``match=`` narrows the message, not the
+    type, so it does not rescue the call. Name the concrete exception the
+    behaviour promises to raise, and add ``match=`` to pin the message, so a
+    regression that swaps one error for another fails loudly instead of
+    passing silently."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _broad_exception_raises_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} catch-all exception spec(s) in pytest.raises/xfail.\n"
+        "pytest.raises(Exception)/BaseException accepts any exception, so the test only proves "
+        "*something* failed. Name the concrete exception type (and add match= to pin the message).\n"
+        + "\n".join(violations)
+    )
+
+
+def test_broad_exception_raises_lens_flags_catch_alls():
+    """Synthetic positive/negative control for the catch-all-raises lens: it
+    must flag ``pytest.raises(Exception)``/``BaseException`` in any call shape
+    (context manager, plain call, keyword-arg ``match=``), plus
+    ``@pytest.mark.xfail(raises=...)`` markers, and ignore concrete exception
+    classes, attribute-qualified names (``pytest.skip.Exception``), and
+    non-``raises``/non-``xfail`` calls."""
+    positive_sources = [
+        "def test_foo():\n    with pytest.raises(Exception):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(BaseException):\n        foo()\n",
+        "def test_foo():\n    pytest.raises(Exception)\n",
+        "def test_foo():\n    with pytest.raises(Exception, match='boom'):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(BaseException) as exc_info:\n        foo()\n",
+        "class TestFoo:\n    def test_bar(self):\n        with pytest.raises(Exception):\n            foo()\n",
+        "@pytest.mark.xfail(raises=Exception, reason='known')\ndef test_foo():\n    foo()\n",
+        "@pytest.mark.xfail(raises=BaseException, reason='known')\ndef test_foo():\n    foo()\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _broad_exception_raises_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    with pytest.raises(ValueError, match='boom'):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(KeyError):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(pytest.skip.Exception):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(asyncio.CancelledError):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(HTTPException):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises((ValueError, KeyError)):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(EXC):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(ExceptionGroup('e', [])):\n        foo()\n",
+        "@pytest.mark.xfail(raises=ValueError, reason='known')\ndef test_foo():\n    foo()\n",
+        "@pytest.mark.xfail(reason='known')\ndef test_foo():\n    foo()\n",
+        "def test_foo():\n    with pytest.warns(Exception):\n        foo()\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _broad_exception_raises_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+_MOCK_CONSTRUCTOR_NAMES = frozenset(
+    {"Mock", "MagicMock", "AsyncMock", "NonCallableMock", "NonCallableMagicMock", "PropertyMock"}
+)
+
+
+def _is_mock_constructor_call(node: ast.AST) -> bool:
+    """True when ``node`` is a direct call to a ``unittest.mock`` / pytest-mock
+    Mock constructor — ``Mock()``, ``MagicMock()``, ``AsyncMock()``, ... — in
+    any of its spellings (bare ``Mock``, ``mock.Mock``, ``mocker.MagicMock``,
+    ``unittest.mock.AsyncMock``). ``PropertyMock`` is included even though it
+    is only valid as a ``return_value``/``side_effect`` spec: it is still a
+    Mock instance and has no business appearing in an ``assert`` expression."""
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id in _MOCK_CONSTRUCTOR_NAMES
+    if isinstance(func, ast.Attribute):
+        return func.attr in _MOCK_CONSTRUCTOR_NAMES
+    return False
+
+
+def _mock_constructor_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert`` whose test
+    expression — or a direct operand of it — *is* a freshly-constructed Mock.
+
+    Only direct constructor-call positions are checked: the assertion whose
+    test *is* the call, a ``not``-wrapped call, and the operands of a
+    single-operator comparison. No name resolution is involved, so a mock
+    bound to a variable elsewhere in the file is never implicated and the
+    lens has no false positives from mocking assignments or ``patch``
+    bindings."""
+    found: list[tuple[int, str]] = []
+
+    def _report(lineno: int, detail: str) -> None:
+        found.append(
+            (
+                lineno,
+                f"assert {detail} — a fresh Mock instance is always truthy and compares by "
+                "identity, so the outcome is fixed at source time",
+            )
+        )
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if _is_mock_constructor_call(test):
+            _report(node.lineno, ast.unparse(test))
+            continue
+        if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not) and _is_mock_constructor_call(test.operand):
+            _report(node.lineno, ast.unparse(test))
+            continue
+        if isinstance(test, ast.Compare) and len(test.ops) == 1:
+            for operand in (test.left, test.comparators[0]):
+                if _is_mock_constructor_call(operand):
+                    _report(node.lineno, ast.unparse(test))
+                    break
+    return found
+
+
+def test_no_mock_constructor_in_asserts():
+    """An ``assert`` that constructs a Mock object directly in its test
+    expression is dead code with a fixed outcome, so it reports green — or
+    red — regardless of the behaviour under test. Mock instances are always
+    truthy, so ``assert Mock()`` is a silent-false-green and ``assert not
+    Mock()`` can never pass; two fresh Mock instances also compare by
+    identity (``__eq__`` defaults to ``is``), so ``assert x == Mock()``
+    always fails and ``assert x != Mock()`` always passes no matter what ``x``
+    evaluates to. These are almost always a leftover from inlining a double
+    while debugging, where the intended comparison target was accidentally
+    replaced by the constructor call. The double should be *configured*
+    (``return_value``/``side_effect``) and asserted through
+    ``assert_called*``/attribute checks, never compared to directly. The
+    identity-with-container-literal and literal-constant lenses own the
+    neighbouring shapes; this lens owns the Mock-constructor position."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _mock_constructor_assert_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} assertion(s) against a freshly-constructed Mock.\n"
+        "A Mock instance is always truthy and compares by identity, so the outcome is "
+        "fixed at source time. Configure the double (return_value/side_effect) and assert "
+        "through assert_called* instead of comparing to a constructor call.\n" + "\n".join(violations)
+    )
+
+
+def test_mock_constructor_lens_flags_dead_asserts():
+    """Synthetic positive/negative control for the Mock-constructor lens: it
+    must flag an ``assert`` that constructs a Mock directly in the test
+    expression (bare, ``not``-wrapped, or as a comparison operand, in any
+    constructor spelling) and ignore asserts over already-bound names, mocks
+    assigned earlier in the same test, ``assert_called*`` double-verification
+    calls, and ``patch``/``with ... as mock`` bindings."""
+    positive_sources = [
+        "def test_foo():\n    assert Mock()\n",
+        "def test_foo():\n    assert MagicMock()\n",
+        "def test_foo():\n    assert AsyncMock()\n",
+        "def test_foo():\n    assert not MagicMock()\n",
+        "def test_foo():\n    assert result == Mock()\n",
+        "def test_foo():\n    assert result != MagicMock()\n",
+        "def test_foo():\n    assert Mock(spec=int)\n",
+        "def test_foo():\n    assert mock.Mock()\n",
+        "def test_foo():\n    assert mocker.MagicMock()\n",
+        "def test_foo():\n    assert unittest.mock.AsyncMock()\n",
+        "def test_foo():\n    assert result == mock.Mock(return_value=3)\n",
+        "def test_foo():\n    assert Mock() == Mock()\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _mock_constructor_assert_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    mock = Mock()\n    assert mock\n",
+        "def test_foo():\n    m = MagicMock()\n    assert not m\n",
+        "def test_foo():\n    assert x == mock\n",
+        "def test_foo():\n    assert x != mock_var\n",
+        "def test_foo():\n    assert result == expected\n",
+        "def test_foo():\n    with patch('x') as m:\n        m.assert_called_once()\n",
+        "def test_foo():\n    m.assert_called_with(1)\n",
+        "def test_foo():\n    assert result is not None\n",
+        "def test_foo():\n    assert len(items) == 0\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _mock_constructor_assert_violations(tree), f"lens should NOT flag:\n{source}"

@@ -5,18 +5,18 @@
     <!-- Filters -->
     <FilterBar
       :filters="[
-        { key: 'level', label: $t('views.AdminErrorsView.all_levels'), options: [
+        { key: 'level', label: $t('views.NotificationsPage.level'), options: [
           { value: 'error', label: $t('views.NotificationsPage.level_error') },
           { value: 'warning', label: $t('views.NotificationsPage.level_warning') },
           { value: 'info', label: $t('views.NotificationsPage.level_info') },
           { value: 'debug', label: $t('views.NotificationsPage.level_debug') },
         ]},
-        { key: 'scope', label: $t('views.NotificationsPage.all_scopes'), options: [
+        { key: 'scope', label: $t('views.NotificationsPage.scope'), options: [
           { value: 'user', label: $t('views.NotificationsPage.scope_personal') },
           { value: 'org', label: $t('components.OwnershipPicker.orgwide') },
           { value: 'admin', label: $t('views.NotificationsPage.scope_admin') },
         ]},
-        { key: 'status', label: $t('views.NotificationsPage.all_status'), options: [
+        { key: 'status', label: $t('views.NotificationsPage.status'), options: [
           { value: 'active', label: $t('common.active') },
           { value: 'dismissed_self', label: $t('views.NotificationsPage.dismissed_self') },
           { value: 'dismissed_scope', label: $t('views.NotificationsPage.dismissed_scope') },

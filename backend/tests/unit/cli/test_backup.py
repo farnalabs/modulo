@@ -1772,6 +1772,248 @@ class TestRestoreIntegrity:
         assert result.exit_code != 0
         assert "Corrupt JSON" in result.output
 
+    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
+    @patch("modulo.cli.backup._restore_checkpoints_sync")
+    @patch("modulo.cli.backup._re_encrypt_credentials_sync")
+    @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
+    @patch("modulo.cli.backup._run_psql")
+    @patch("modulo.cli.backup.get_settings")
+    def test_restore_dry_run_previews_steps_without_db_changes(
+        self,
+        mock_settings: MagicMock,
+        mock_psql: MagicMock,
+        mock_restore_blobs: MagicMock,
+        mock_re_encrypt: MagicMock,
+        mock_restore_cp: MagicMock,
+        mock_restore_cw: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        mock_settings.return_value.fernet_key = fernet_key
+
+        manifest = {
+            "timestamp": "2024-01-01T00:00:00+00:00",
+            "backup_type": "full",
+            "db_version": "PostgreSQL 16.0",
+            "schema_versions": ["rev1"],
+            "fernet_key_hash": _fernet_key_hash(fernet_key),
+        }
+        (tmp_path / "backup-info.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (tmp_path / "database.sql").write_text("-- SQL dump", encoding="utf-8")
+        (tmp_path / "checkpoint_blobs.json").write_text(json.dumps([{"id": "b1"}, {"id": "b2"}]), encoding="utf-8")
+        (tmp_path / "checkpoints.json").write_text(json.dumps([{"id": "c1"}]), encoding="utf-8")
+        (tmp_path / "checkpoint_writes.json").write_text(json.dumps([]), encoding="utf-8")
+        (tmp_path / "credentials_references.json").write_text(
+            '{"connector_instances": [], "model_backends": []}', encoding="utf-8"
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["restore", str(tmp_path), "--dry-run"])
+
+        assert result.exit_code == 0, f"CLI failed: {result.output}"
+        assert "DRY RUN" in result.output
+        assert "WOULD restore database schema and data via psql" in result.output
+        assert "WOULD restore 2 checkpoint blob records" in result.output
+        assert "WOULD restore 1 checkpoint records" in result.output
+        assert "WOULD restore 0 checkpoint write records" in result.output
+        assert "FERNET_KEY unchanged" in result.output
+        assert "Dry run complete" in result.output
+
+        mock_psql.assert_not_called()
+        mock_restore_blobs.assert_not_called()
+        mock_restore_cp.assert_not_called()
+        mock_restore_cw.assert_not_called()
+        mock_re_encrypt.assert_not_called()
+
+    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
+    @patch("modulo.cli.backup._restore_checkpoints_sync")
+    @patch("modulo.cli.backup._re_encrypt_credentials_sync")
+    @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
+    @patch("modulo.cli.backup._run_psql")
+    @patch("modulo.cli.backup.get_settings")
+    def test_restore_dry_run_skips_full_db_restore_when_no_sql(
+        self,
+        mock_settings: MagicMock,
+        mock_psql: MagicMock,
+        mock_restore_blobs: MagicMock,
+        mock_re_encrypt: MagicMock,
+        mock_restore_cp: MagicMock,
+        mock_restore_cw: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        mock_settings.return_value.fernet_key = fernet_key
+
+        manifest = {
+            "timestamp": "2024-01-01T00:00:00+00:00",
+            "backup_type": "full",
+            "fernet_key_hash": _fernet_key_hash(fernet_key),
+        }
+        (tmp_path / "backup-info.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["restore", str(tmp_path), "--dry-run"])
+
+        assert result.exit_code == 0, f"CLI failed: {result.output}"
+        assert "No database.sql found — WOULD skip full DB restore" in result.output
+        assert "No checkpoint_blobs.json found — WOULD skip" in result.output
+        assert "No credentials_references.json found — WOULD skip credential restore" in result.output
+        mock_psql.assert_not_called()
+
+    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
+    @patch("modulo.cli.backup._restore_checkpoints_sync")
+    @patch("modulo.cli.backup._re_encrypt_credentials_sync")
+    @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
+    @patch("modulo.cli.backup._run_psql")
+    @patch("modulo.cli.backup.get_settings")
+    def test_restore_dry_run_requires_previous_fernet_key_when_key_changed(
+        self,
+        mock_settings: MagicMock,
+        mock_psql: MagicMock,
+        mock_restore_blobs: MagicMock,
+        mock_re_encrypt: MagicMock,
+        mock_restore_cp: MagicMock,
+        mock_restore_cw: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        new_fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        old_fernet_key = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        mock_settings.return_value.fernet_key = new_fernet_key
+
+        manifest = {
+            "timestamp": "2024-01-01T00:00:00+00:00",
+            "backup_type": "full",
+            "fernet_key_hash": _fernet_key_hash(old_fernet_key),
+        }
+        (tmp_path / "backup-info.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (tmp_path / "credentials_references.json").write_text(
+            '{"connector_instances": [{"id": "r1", "credentials_ciphertext": "abcd"}]}',
+            encoding="utf-8",
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["restore", str(tmp_path), "--dry-run"])
+
+        assert result.exit_code != 0
+        assert "--previous-fernet-key" in result.output
+        assert "WOULD re-encrypt" not in result.output
+        mock_re_encrypt.assert_not_called()
+
+    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
+    @patch("modulo.cli.backup._restore_checkpoints_sync")
+    @patch("modulo.cli.backup._re_encrypt_credentials_sync")
+    @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
+    @patch("modulo.cli.backup._run_psql")
+    @patch("modulo.cli.backup.get_settings")
+    def test_restore_dry_run_previews_re_encryption(
+        self,
+        mock_settings: MagicMock,
+        mock_psql: MagicMock,
+        mock_restore_blobs: MagicMock,
+        mock_re_encrypt: MagicMock,
+        mock_restore_cp: MagicMock,
+        mock_restore_cw: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        new_fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        old_fernet_key = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        mock_settings.return_value.fernet_key = new_fernet_key
+
+        manifest = {
+            "timestamp": "2024-01-01T00:00:00+00:00",
+            "backup_type": "full",
+            "fernet_key_hash": _fernet_key_hash(old_fernet_key),
+        }
+        (tmp_path / "backup-info.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (tmp_path / "credentials_references.json").write_text(
+            json.dumps(
+                {
+                    "connector_instances": [
+                        {"id": "r1", "credentials_ciphertext": "abcd"},
+                        {"id": "r2", "credentials_ciphertext": ""},
+                    ],
+                    "model_backends": [{"id": "m1", "credentials_ciphertext": "abcd"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["restore", str(tmp_path), "--dry-run", "--previous-fernet-key", old_fernet_key])
+
+        assert result.exit_code == 0, f"CLI failed: {result.output}"
+        assert "WOULD re-encrypt 1 connector_instances credentials" in result.output
+        assert "WOULD re-encrypt 1 model_backends credentials" in result.output
+        assert "Dry run complete" in result.output
+        mock_re_encrypt.assert_not_called()
+
+    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
+    @patch("modulo.cli.backup._restore_checkpoints_sync")
+    @patch("modulo.cli.backup._re_encrypt_credentials_sync")
+    @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
+    @patch("modulo.cli.backup._run_psql")
+    @patch("modulo.cli.backup.get_settings")
+    def test_restore_dry_run_still_fails_on_corrupt_json(
+        self,
+        mock_settings: MagicMock,
+        mock_psql: MagicMock,
+        mock_restore_blobs: MagicMock,
+        mock_re_encrypt: MagicMock,
+        mock_restore_cp: MagicMock,
+        mock_restore_cw: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        mock_settings.return_value.fernet_key = fernet_key
+
+        manifest = {
+            "timestamp": "2024-01-01T00:00:00+00:00",
+            "backup_type": "full",
+            "fernet_key_hash": _fernet_key_hash(fernet_key),
+        }
+        (tmp_path / "backup-info.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (tmp_path / "checkpoints.json").write_text("{bad json}", encoding="utf-8")
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["restore", str(tmp_path), "--dry-run"])
+
+        assert result.exit_code != 0
+        assert "Corrupt JSON" in result.output
+        mock_psql.assert_not_called()
+
+    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
+    @patch("modulo.cli.backup._restore_checkpoints_sync")
+    @patch("modulo.cli.backup._re_encrypt_credentials_sync")
+    @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
+    @patch("modulo.cli.backup._run_psql")
+    @patch("modulo.cli.backup.get_settings")
+    def test_restore_dry_run_skips_confirmation_prompt(
+        self,
+        mock_settings: MagicMock,
+        mock_psql: MagicMock,
+        mock_restore_blobs: MagicMock,
+        mock_re_encrypt: MagicMock,
+        mock_restore_cp: MagicMock,
+        mock_restore_cw: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        mock_settings.return_value.fernet_key = fernet_key
+
+        manifest = {
+            "timestamp": "2024-01-01T00:00:00+00:00",
+            "backup_type": "full",
+            "fernet_key_hash": _fernet_key_hash(fernet_key),
+        }
+        (tmp_path / "backup-info.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["restore", str(tmp_path), "--dry-run"])
+
+        assert result.exit_code == 0, f"CLI failed: {result.output}"
+        assert "OVERWRITE the current database" not in result.output
+        assert "Dry run complete" in result.output
+
 
 # ── _restore_checkpoints_sync: invalid UUID handling ──────────────────────────
 

@@ -146,7 +146,7 @@
               :aria-label="$t('views.PipelineListView.folders')"
             >
               <SelectTrigger class="w-full" :aria-label="$t('views.PipelineListView.folders')" data-testid="pipeline-list-mobile-folder-select">
-                <SelectValue :placeholder="$t('views.PipelineListView.all_pipelines')" />
+                <SelectValue :placeholder="$t('views.PipelineListView.folders')" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="__all__">{{ $t('views.PipelineListView.all_pipelines') }}</SelectItem>

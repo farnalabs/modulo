@@ -33,7 +33,7 @@
               <SelectValue :placeholder="$t('views.ABTestModelsView.new_group')" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="__all__">{{ $t('views.ABTestModelsView.new_group') }}</SelectItem>
+              <SelectItem value="__all__">{{ $t('views.ABTestModelsView.new_variant_group') }}</SelectItem>
               <SelectItem v-for="g in filteredGroups" :key="g.id" :value="g.id">
                 {{ g.name }}
               </SelectItem>

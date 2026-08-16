@@ -64,6 +64,13 @@
         language: system
         files: ^backend/src/
         pass_filenames: false
+      - id: vulture
+        name: vulture (dead code gate)
+        entry: uv run --project backend --no-sync python scripts/run_vulture.py
+        language: system
+        types: [python]
+        files: ^backend/src/
+        pass_filenames: false
 
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.18.3

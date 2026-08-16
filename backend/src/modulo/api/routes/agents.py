@@ -1,6 +1,5 @@
 """Agent CRUD REST API."""
 
-import difflib
 import json
 import logging
 import uuid
@@ -17,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.line_diff import iter_line_diffs
 from modulo.core.prompt_optimizer import OptimizationFailedError, PromptOptimizer
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.agent import (
@@ -868,72 +868,15 @@ async def diff_prompt_versions(
     lines_a = template_a.splitlines(keepends=True)
     lines_b = template_b.splitlines(keepends=True)
 
-    differ = difflib.SequenceMatcher(None, lines_a, lines_b)
-    diff_lines: list[DiffLine] = []
-    line_a = 1
-    line_b = 1
-
-    for op, i1, i2, j1, j2 in differ.get_opcodes():
-        if op == "equal":
-            for _ in range(i2 - i1):
-                diff_lines.append(
-                    DiffLine(
-                        type="unchanged",
-                        content=lines_a[i1].rstrip("\n"),
-                        line_number_a=line_a,
-                        line_number_b=line_b,
-                    )
-                )
-                line_a += 1
-                line_b += 1
-            i1, j1 = i2, j2
-        elif op == "replace":
-            for _ in range(i2 - i1):
-                diff_lines.append(
-                    DiffLine(
-                        type="removed",
-                        content=lines_a[i1].rstrip("\n"),
-                        line_number_a=line_a,
-                        line_number_b=None,
-                    )
-                )
-                line_a += 1
-                i1 += 1
-            for _ in range(j2 - j1):
-                diff_lines.append(
-                    DiffLine(
-                        type="added",
-                        content=lines_b[j1].rstrip("\n"),
-                        line_number_a=None,
-                        line_number_b=line_b,
-                    )
-                )
-                line_b += 1
-                j1 += 1
-        elif op == "delete":
-            for _ in range(i2 - i1):
-                diff_lines.append(
-                    DiffLine(
-                        type="removed",
-                        content=lines_a[i1].rstrip("\n"),
-                        line_number_a=line_a,
-                        line_number_b=None,
-                    )
-                )
-                line_a += 1
-                i1 += 1
-        elif op == "insert":
-            for _ in range(j2 - j1):
-                diff_lines.append(
-                    DiffLine(
-                        type="added",
-                        content=lines_b[j1].rstrip("\n"),
-                        line_number_a=None,
-                        line_number_b=line_b,
-                    )
-                )
-                line_b += 1
-                j1 += 1
+    diff_lines = [
+        DiffLine(
+            type=kind,
+            content=content,
+            line_number_a=line_a,
+            line_number_b=line_b,
+        )
+        for kind, content, line_a, line_b in iter_line_diffs(lines_a, lines_b)
+    ]
 
     return PromptDiffResponse(version_a=req.version_a, version_b=req.version_b, lines=diff_lines)
 
