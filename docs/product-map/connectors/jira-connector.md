@@ -77,7 +77,7 @@ Async Jira REST API connector implementing `ConnectorBase`. Provides read/write 
 ### Capability Declaration
 
 - [x] `ConnectorType.JIRA` defined in `base.py` enum
-- [x] `ConnectorType.JIRA.capabilities` returns `{ISSUE_READ, ISSUE_WRITE, ISSUE_SEARCH}` in `base.py`
+- [x] `ConnectorType.JIRA.capabilities` returns `{TICKET_READ, TICKET_WRITE, TICKET_SEARCH}` in `base.py`
 - [x] `JiraConnector.connector_type` returns `ConnectorType.JIRA`
 
 ### Health Check — connectivity and credential validation
@@ -149,7 +149,7 @@ Async Jira REST API connector implementing `ConnectorBase`. Provides read/write 
 
 **Behaviour audit:** re-verified the unchecked behaviours against code, tests, and PRD §8.6.
 
-1. **Connector type abstraction handles API operations — `[ ]`→`[x]`**: the `ConnectorType` abstraction (read/write/health_check) is implemented and exercised — `JiraConnector.connector_type` returns `ConnectorType.JIRA` (tested in `test_jira.py::test_connector_type`), `ConnectorType.JIRA.capabilities` returns `{ISSUE_READ, ISSUE_WRITE, ISSUE_SEARCH}` (base.py), and `_build_connector()` constructs Jira via the hub from `instance`/`base_url`/`api_version` config (tested in `test_build_connector.py`).
+1. **Connector type abstraction handles API operations — `[ ]`→`[x]`**: the `ConnectorType` abstraction (read/write/health_check) is implemented and exercised — `JiraConnector.connector_type` returns `ConnectorType.JIRA` (tested in `test_jira.py::test_connector_type`), `ConnectorType.JIRA.capabilities` returns `{TICKET_READ, TICKET_WRITE, TICKET_SEARCH}` (base.py), and `_build_connector()` constructs Jira via the hub from `instance`/`base_url`/`api_version` config (tested in `test_build_connector.py`).
 2. **Agent prompt templates may use Jira-specific terminology — `[ ]`→`[x]`** and **Prompt portability is user's responsibility — `[ ]`→`[x]`**: PRD §8.6 states verbatim: "connector type abstraction handles API operations. Agent prompt templates may use platform-specific terminology... Prompt portability is the user's responsibility — a known limitation of shareable workflows." Both are documented design facts, not code gaps.
 3. **Detect expired tokens vs invalid instance URL vs network errors — confirmed genuine gap (stays `[ ]`)**: Jira Cloud returns HTTP 401 from `GET /myself` for both an expired token and a reachable-but-wrong instance; only the HTTP-error vs network-error classes are distinguishable. Tracked in Known Gaps.
 4. **Per-operation permission check before write operations — confirmed genuine gap (stays `[ ]`)**: would require new functionality (Jira exposes no token-scope-declaration endpoint analogous to GitLab's `/oauth/token/info`). Added to Known Gaps.

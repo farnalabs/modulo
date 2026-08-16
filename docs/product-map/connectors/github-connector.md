@@ -115,10 +115,10 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 
 ### ConnectorType Capability Declaration
 
-- [x] `ConnectorType.GITHUB.capabilities` returns `{READ, WRITE, GIT_PUSH, CREATE_PR, ISSUE_READ, ISSUE_WRITE}` in `base.py`
+- [x] `ConnectorType.GITHUB.capabilities` returns `{READ, WRITE, GIT_PUSH, CREATE_PR, CODE_REVIEW, TICKET_READ, TICKET_WRITE}` in `base.py`
 - [x] `GitHubConnector.connector_type` returns `ConnectorType.GITHUB`
 - [x] `CREATE_PR` capability is implemented via `write("pr")` — creates PRs with title, head, base, optional body/draft/maintainer_can_modify
-- [x] `ISSUE_READ` and `ISSUE_WRITE` assigned to `ConnectorType.GITHUB` in `base.py`
+- [x] `TICKET_READ` and `TICKET_WRITE` (issue/ticket access) plus `CODE_REVIEW` assigned to `ConnectorType.GITHUB` in `base.py`
 
 ## Error Handling
 

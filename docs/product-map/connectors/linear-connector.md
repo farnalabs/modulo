@@ -85,7 +85,7 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 2
 ### Capability Declaration
 
 - [x] `ConnectorType.LINEAR` defined in `base.py` enum
-- [x] `ConnectorType.LINEAR.capabilities` returns `{ISSUE_READ, ISSUE_WRITE, ISSUE_SEARCH}` in `base.py`
+- [x] `ConnectorType.LINEAR.capabilities` returns `{TICKET_READ, TICKET_WRITE, TICKET_SEARCH}` in `base.py`
 - [x] `LinearConnector.connector_type` returns `ConnectorType.LINEAR`
 
 ### Health Check — connectivity and credential validation
