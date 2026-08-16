@@ -865,6 +865,18 @@ async def run_interception_pass_async(
     if not check_payload_within_budget(payload, max_payload_bytes):
         any_guarding = any(_resolve_action(d) in (GuardrailAction.BLOCK, GuardrailAction.REDACT) for d in definitions)
         reason = f"payload exceeds {max_payload_bytes}-byte guardrail budget"
+        if detection_only:
+            # Detection-only replays never act (item 10): the over-budget
+            # mechanism error is ALWAYS recorded as an errored result for every
+            # bound guardrail — never a block — so the replay keeps the evidence
+            # (guardrail_summary errored bucket). Mirrors the in-loop
+            # detection-only mechanism-error handling below.
+            _log.warning("guardrails.payload_over_budget", extra={"reason": reason})
+            return GuardrailInterceptionOutcome(
+                payload=copy.deepcopy(payload),
+                results=[_mechanism_fail_result(d, reason) for d in definitions],
+                skipped=list(skipped),
+            )
         if any_guarding:
             _log.warning("guardrails.payload_over_budget", extra={"reason": reason})
             return GuardrailInterceptionOutcome(
