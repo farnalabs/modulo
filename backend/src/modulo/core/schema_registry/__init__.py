@@ -9,6 +9,7 @@ from modulo.core.schema_registry.generation import (
 from modulo.core.schema_registry.inference import (
     SchemaInferenceError,
     SchemaInferenceService,
+    flag_rare_fields,
 )
 from modulo.core.schema_registry.migration import (
     FieldChange,
@@ -49,6 +50,7 @@ __all__ = [
     "apply_migration",
     "convert_field",
     "create_migration",
+    "flag_rare_fields",
     "remove_field",
     "rename_field",
     "set_default",

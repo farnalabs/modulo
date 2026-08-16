@@ -22,7 +22,7 @@ code:
   - backend/src/modulo/core/hitl_manager/expiry_job.py
   - backend/src/modulo/core/hitl_manager/overdue_warning.py
   - backend/src/modulo/core/saq_worker.py
-  - backend/src/modulo/db/migrations/versions/0096_hitl_claims_overdue_notified.py
+  - backend/src/modulo/db/migrations/versions/0110_schema_pipeline_runtime.py
 depends-on: [feat-teams-team-crud]
 status: partial
 ---

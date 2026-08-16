@@ -98,6 +98,7 @@ PERMISSIONS: dict[str, str] = {
     "org.license.manage": "admin",
     "org.authz_enforce.manage": "admin",
     "org.triggers.pause.manage": "admin",
+    "org.guardrails.kill_switch.manage": "admin",
     "org.delete": "admin",
     # agents
     "agent.create": "operator",

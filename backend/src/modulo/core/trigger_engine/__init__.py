@@ -8,13 +8,22 @@ Webhook processing pipeline:
      value check (dotted payload path → allowed values); a non-matching payload
      is logged, records an ``event_type_not_accepted`` TriggerEvent, and raises
      without creating a run
-  5. Deduplication (WebhookDedupHash - payload hash, 5-min TTL)
-  6. Flood protection (concurrent run count vs. trigger.max_concurrent_runs)
-  7. Payload mapping (dot-notation path → input_payload key)
-  8. Create Run + TriggerEvent in one transaction
-  9. Dedup hash committed with run (single atomic unit)
+  5. Pre-trigger guardrail pass (FAR-214) — at the trigger boundary, BEFORE the
+     dedup insert. A ``block``-action guardrail reject-and-retries: a
+     ``guardrail_blocked`` TriggerEvent is recorded, the raw payload is stored
+     for replay, and ``GuardrailBlockedAtIntakeError`` is raised (maps to a 4xx
+     at the route boundary) — no run, no dedup slot consumed. A ``redact``-action
+     guardrail applies its masks at intake so the payload that proceeds is
+     post-redaction. ``warn``/``observe`` are advisory (logged, delivery
+     proceeds). Replays re-run the pass detection-only.
+  6. Deduplication (WebhookDedupHash - canonical POST-guardrail payload hash,
+     5-min TTL)
+  7. Flood protection (concurrent run count vs. trigger.max_concurrent_runs)
+  8. Payload mapping (dot-notation path → input_payload key)
+  9. Create Run + TriggerEvent in one transaction
+ 10. Dedup hash committed with run (single atomic unit)
 
-All outcomes (pass and fail) are recorded as a TriggerEvent row, with two
+All outcomes (pass and fail) are recorded as a TriggerEvent row, with three
 exceptions documented here for accuracy:
   * Paused deliveries (org-wide kill-switch) do NOT write a TriggerEvent in the
     engine — the route's in-transaction catch is the single writer and commits
@@ -23,6 +32,10 @@ exceptions documented here for accuracy:
     the engine, but the caller's transaction may roll them back when it maps
     the typed exception to an HTTP response (a documented pre-existing
     limitation, out of scope for the pause feature).
+  * Guardrail-blocked deliveries (``guardrail_blocked``) are written by the
+    engine and COMMIT: the route catches ``GuardrailBlockedAtIntakeError``
+    inside its transaction (mirroring the paused pattern), so the event and the
+    stored raw payload survive the 4xx response.
 The caller is responsible for background execution of the created run.
 """
 
@@ -314,6 +327,9 @@ class TriggerEngine:
 
         All validation failures are raised as typed exceptions. A TriggerEvent is
         always written (pass or fail) so every delivery attempt is audited.
+        A block-action guardrail rejection raises ``GuardrailBlockedAtIntakeError``
+        (a ``guardrail_blocked`` TriggerEvent + stored raw payload are written
+        first — the caller must keep the transaction so they survive the 4xx).
         The caller must have already set RLS context on the session.
         """
         key1, key2 = _uuid_to_lock_keys(trigger_id)
@@ -325,6 +341,10 @@ class TriggerEngine:
             raise TriggerBusyError(trigger_id)
         try:
             trigger = await self._load_trigger(session, trigger_id, org_id)
+            # Pre-guardrail failure events (timestamp, HMAC, event filters) are
+            # about the RAW delivery — they record the raw-body hash. The DEDUP
+            # hash is computed after the pre-trigger guardrail pass below
+            # (canonical POST-guardrail payload hash, FAR-214).
             payload_hash = sha256_hex(raw_body)
 
             # X-Modulo-Timestamp replay window check
@@ -410,18 +430,77 @@ class TriggerEngine:
                     f"not satisfied by webhook payload (keys: {list(raw_payload.keys())})"
                 )
 
-            # Deduplication
-            is_new = await self._try_insert_dedup(session, trigger_id, org_id, payload_hash)
-            if not is_new:
-                _log.warning("Webhook deduplicated for trigger %s (hash=%s)", trigger_id, payload_hash[:16])
-                await self._log_event(
+            # Pre-trigger guardrail pass (FAR-214) — at the trigger boundary,
+            # BEFORE the dedup insert so a guardrail-blocked delivery never
+            # consumes a dedup slot. Reuses the T1 run-creation seam's engine
+            # and row-loading semantics; detection is never reimplemented.
+            #   * block  → reject-and-retry: guardrail_blocked TriggerEvent +
+            #              raw payload stored for replay; no run, no dedup slot.
+            #   * redact → masks applied at intake; the payload that proceeds
+            #              to dedup + run creation is POST-redaction.
+            #   * warn/observe → advisory; the delivery proceeds.
+            from modulo.core.trigger_engine.pre_guardrail import (
+                GuardrailBlockedAtIntakeError,
+                canonical_payload_hash,
+                run_pre_trigger_guardrail_pass,
+            )
+
+            guardrail_outcome = await run_pre_trigger_guardrail_pass(
+                session,
+                org_id=org_id,
+                pipeline_id=trigger.pipeline_id,
+                raw_payload=raw_payload,
+            )
+            if guardrail_outcome.blocked:
+                block_event = await self._log_event(
                     session,
                     trigger=trigger,
                     org_id=org_id,
                     payload_hash=payload_hash,
+                    result="guardrail_blocked",
+                    error_detail=guardrail_outcome.block_message[:2000],
+                )
+                # Store the raw payload for replay so the sender/provider can
+                # retry after fixing — the delivery is reject-and-retry, NOT
+                # acked-as-accepted.
+                await self._store_raw_payload(
+                    session,
+                    trigger_event_id=block_event.id,
+                    raw_body=raw_body,
+                    raw_payload=raw_payload,
+                    org_id=org_id,
+                )
+                raise GuardrailBlockedAtIntakeError(
+                    guardrail_outcome.block_message,
+                    guardrail_name=guardrail_outcome.blocking_eval_name,
+                )
+            post_guardrail_payload = guardrail_outcome.payload
+            _log.info(
+                "guardrails.pre_trigger evaluated=%d redactions=%d for trigger %s pipeline %s",
+                guardrail_outcome.evaluated_count,
+                len(guardrail_outcome.redactions),
+                trigger_id,
+                trigger.pipeline_id,
+            )
+            # Post-guardrail dedup hashing: the dedup key is the canonical hash
+            # of the POST-guardrail payload (after redaction). Pre-guardrail
+            # failure events keep the raw-body hash above (they describe the
+            # raw delivery); the dedup key is canonical so logically identical
+            # payloads dedup regardless of encoding.
+            dedup_hash = canonical_payload_hash(post_guardrail_payload)
+
+            # Deduplication
+            is_new = await self._try_insert_dedup(session, trigger_id, org_id, dedup_hash)
+            if not is_new:
+                _log.warning("Webhook deduplicated for trigger %s (hash=%s)", trigger_id, dedup_hash[:16])
+                await self._log_event(
+                    session,
+                    trigger=trigger,
+                    org_id=org_id,
+                    payload_hash=dedup_hash,
                     result="deduplicated",
                 )
-                raise DuplicateWebhookError(payload_hash)
+                raise DuplicateWebhookError(dedup_hash)
 
             # Flood / concurrency protection � accept and queue instead of rejecting.
             # The run is created as pending and the executor queues it via
@@ -438,13 +517,14 @@ class TriggerEngine:
                     session,
                     trigger=trigger,
                     org_id=org_id,
-                    payload_hash=payload_hash,
+                    payload_hash=dedup_hash,
                     result="concurrency_limit_reached",
                 )
 
-            # Payload mapping
+            # Payload mapping — derived from the POST-guardrail payload so a
+            # redact-action guardrail's masks are reflected in the mapped input.
             mapping: dict[str, str] = cfg.get("payload_mapping", {})
-            input_payload = _apply_payload_mapping(raw_payload, mapping)
+            input_payload = _apply_payload_mapping(post_guardrail_payload, mapping)
 
             # Rate limit check
             pipeline_rate_limit = cfg.get("rate_limit")
@@ -501,7 +581,7 @@ class TriggerEngine:
                 session,
                 trigger=trigger,
                 org_id=org_id,
-                payload_hash=payload_hash,
+                payload_hash=dedup_hash,
                 result="accepted",
                 run_id=run.id,
             )
@@ -587,8 +667,11 @@ class TriggerEngine:
             raw_payload = stored.raw_payload
             raw_body = stored.raw_body
 
-            # Run the rest of the pipeline (skip HMAC + timestamp validation)
-            payload_hash = sha256_hex(raw_body)
+            # Run the rest of the pipeline (skip HMAC + timestamp validation).
+            # Pre-guardrail failure events below record the raw-body hash; the
+            # canonical POST-guardrail hash is computed after the detection-only
+            # guardrail pass for the downstream (post-guardrail) events.
+            raw_body_hash = sha256_hex(raw_body)
 
             # No dedup check for replays - this is an intentional re-fire.
             # The original event already went through dedup validation.
@@ -611,7 +694,7 @@ class TriggerEngine:
                         session,
                         trigger=trigger,
                         org_id=org_id,
-                        payload_hash=payload_hash,
+                        payload_hash=raw_body_hash,
                         result="event_type_not_accepted",
                     )
                     raise RuntimeError(
@@ -633,13 +716,40 @@ class TriggerEngine:
                     session,
                     trigger=trigger,
                     org_id=org_id,
-                    payload_hash=payload_hash,
+                    payload_hash=raw_body_hash,
                     result="event_type_not_accepted",
                 )
                 raise RuntimeError(
                     f"Trigger {trigger.id}: event value filters {event_filters} "
                     f"not satisfied by replayed webhook payload (keys: {list(raw_payload.keys())})"
                 )
+
+            # Pre-trigger guardrail pass on replay — re-runs the pass
+            # DETECTION-ONLY (consistent with the run-creation seam's
+            # ``is_replay=True`` handling): no block decision, no redaction act.
+            # A replay bypasses dedup but must still be guardrail-checked (the
+            # payload may have been fixed since the original delivery). The
+            # canonical POST-guardrail hash feeds the post-guardrail events.
+            from modulo.core.trigger_engine.pre_guardrail import (
+                canonical_payload_hash,
+                run_pre_trigger_guardrail_pass,
+            )
+
+            guardrail_outcome = await run_pre_trigger_guardrail_pass(
+                session,
+                org_id=org_id,
+                pipeline_id=trigger.pipeline_id,
+                raw_payload=raw_payload,
+                detection_only=True,
+            )
+            _log.info(
+                "guardrails.pre_trigger replay detection evaluated=%d for trigger %s pipeline %s",
+                guardrail_outcome.evaluated_count,
+                trigger.id,
+                trigger.pipeline_id,
+            )
+            post_guardrail_payload = guardrail_outcome.payload
+            payload_hash = canonical_payload_hash(post_guardrail_payload)
 
             # Flood protection
             active_count = await self._count_active_runs(session, trigger.id)
@@ -653,9 +763,11 @@ class TriggerEngine:
                 )
                 raise ConcurrentRunLimitError(trigger.id, trigger.max_concurrent_runs)
 
-            # Payload mapping
+            # Payload mapping — derived from the POST-guardrail payload (a
+            # detection-only replay leaves the payload unchanged, but the
+            # mapping source is kept consistent with handle_webhook).
             mapping: dict[str, str] = cfg.get("payload_mapping", {})
-            input_payload = _apply_payload_mapping(raw_payload, mapping)
+            input_payload = _apply_payload_mapping(post_guardrail_payload, mapping)
 
             # Rate limit check
             pipeline_rate_limit = cfg.get("rate_limit")

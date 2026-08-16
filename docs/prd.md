@@ -1691,12 +1691,21 @@ The eval system above is **output-side** (post-node). Guardrails are the **input
 | `config_json.action` | `observe` \| `warn` \| `block` \| `redact` |
 | `config_json.redaction` | static field-path policies `{path, mode: transform\|drop\|block}` |
 | `config_json.required_capabilities` | optional conformance claim (empty = no claim) |
+| `config_json.max_guardrails_per_node` | per-node guardrail binding cap (default 8, `0` = feature off; FAR-223) |
+| `config_json.guardrail_timeout_seconds` | per-guardrail hard detection timeout (default 2.0; FAR-223) |
 | `detection` | deterministic pure evals ONLY: `regex` \| `json_schema` |
 
 Behaviour:
 
 - **Detection** is deterministic and pure. A guardrail is a *sibling* of the Eval Engine — routing a guardrail through `EvalEngine.evaluate` raises `GuardrailMisroutedError`.
 - **Interception** runs at run-creation (webhook trigger, manual, replay) inside `create_run` **before** `runs.input_payload` is persisted — persisted state is post-redaction. Two-phase pass: evaluate ALL bound guardrails against an immutable pre-act copy, then apply redaction masks in deterministic order. Zero-guardrail fast path.
+- **Pre-trigger boundary pass (webhook intake, FAR-214)** — webhook intake additionally runs a guardrail pass at the trigger boundary in `TriggerEngine.handle_webhook`, AFTER the event-type/value filters and BEFORE the dedup insert, so the delivery's ack semantics are decided per guardrail BEFORE any run-creation work:
+  - **block** → reject-and-retry at the boundary: the delivery is NOT acked-as-accepted — a `guardrail_blocked` TriggerEvent is recorded, the raw payload is stored for replay (the sender/provider can retry after fixing), and the route returns 400. No run is created and no dedup slot is consumed.
+  - **redact** → masks are applied at intake so the payload that proceeds to dedup + run creation is POST-redaction (persisted state is post-redaction, consistent with the T1 contract).
+  - **warn/observe** → advisory at the boundary (logged, never a raw payload); the delivery proceeds and the advisory evidence is persisted by the run-creation seam.
+  - **Replays** re-run the pass DETECTION-ONLY (no block decision, no redaction act), consistent with `create_run`'s `is_replay=True` handling.
+  - The boundary pass reuses the T1 engine (`run_interception_pass`, `to_engine_definition`, `EvalEngine`) and the run-creation seam's row-loading semantics — detection and validation are never reimplemented. Mechanism errors FAIL CLOSED when any bound guardrail carries a block/redact action; observe/warn-only guardrails log-and-continue.
+  - **Post-guardrail dedup hashing (FAR-214)** — the dedup key is a canonical SHA-256 over the canonical JSON serialization (sorted keys, compact separators) of the POST-guardrail payload, so logically identical payloads dedup regardless of encoding (key order, whitespace, unicode escapes). This CLOSES the raw-body-hash encoding-bypass residual exposure for the dedup key. Pre-guardrail failure events (timestamp, HMAC, event filters) still record the raw-body hash — those rows describe the raw delivery, not dedup.
 - **Redaction** is masks-only (fixed mask token, never payload-derived), static field paths with EXACT/ANCHOR matching (substring matching forbidden), and an allowlist of never-touch system fields.
 - **Block** is TERMINAL `eval_failed` (error_code `eval_blocked`); the run is never dispatched, never retried, and has no HITL gate. `failure_behaviour='retry'` is forbidden on guardrails (rejected at the API edge and the DB CHECK).
 - **Observe/warn** never block; observe-mode results stamp `eval_results.observed` so the guardrail_summary observed bucket counts once.
@@ -1713,7 +1722,18 @@ The boundary philosophy: the agent definition is the driver's manual; boundary c
 
 What guardrails do NOT cover (known failure classes, follow-on work): free-text PII embedded in otherwise-valid field values, content-based detection (semantic, not structural), the interior of an agent loop (e.g. a long-running agent's intermediate steps), and output-side effects (already specified in the §8.17 output-side gates above).
 
-Planned (not shipped): conformance enforcement wiring at run-creation time (the ingestion edge derives conformance and rejects the run before it is created — node-start re-validation IS shipped, see above), kill-switch rollout flag, guardrail_summary telemetry on run detail, canary guardrails, and the guardrail management UI.
+Planned (not shipped): guardrail_summary telemetry on run detail, canary guardrails, and the guardrail management UI.
+
+#### Guardrail T1 remainder (shipped — FAR-223 PR A)
+
+The engine's T1 residual controls are **shipped** (FAR-223 PR A, backend core):
+
+- **Per-node cap enforcement** — a single pipeline node may bind at most `max_guardrails_per_node` guardrail eval definitions (default 8, `0` = feature off). Enforced at graph-save (reject with 422) AND at the `create_run` interception seam (fail-closed mechanism error). The cap is org-configurable via guardrail config-as-code (`GuardrailConfigSet.max_guardrails_per_node`).
+- **Per-guardrail hard timeout + bounded payload** — each guardrail's detection is bounded with `asyncio.wait_for` (default `guardrail_timeout_seconds` 2.0) over a bounded payload budget (default 1 MB). A timeout/over-budget is a mechanism error: fail-closed for block/redact guardrails, log-and-continue for observe/warn. Never a raw payload in any log line.
+- **Guardrail latency metric** — total guardrail interception wall-clock is recorded on the run (structured log `guardrails.interception_latency_ms`) BEFORE the first node starts, so it is accounted separately and never silently eats the first node's timeout budget.
+- **Org kill-switch (downgrade-to-observe-with-alert)** — `organisations.guardrails_kill_switch` (admin endpoint under `/api/v1/admin/orgs/{org}/guardrails/kill-switch`). When ON, every bound guardrail downgrades to `observe` at run start (shadow-only — never block, never redact); never a full disable. Pinned at run start, never re-read mid-run. Enabling fires an audit event AND a paging Notification (`guardrail_kill_switch`).
+- **Snapshot & replay pinning** — `pipeline_snapshots.guardrail_pins_json` pins the guardrail set at snapshot creation. Replays evaluate the PINNED set (the ORIGINAL conditions), never the live rows. A pinned guardrail whose live row is soft-deleted is SKIPPED (never a run failure) with a `guardrail.skipped` audit event + enforcement-gap alert (`guardrail_enforcement_gap`).
+- **Conformance enforcement wiring at dispatch time** — a block-action guardrail carrying `required_capabilities` that the org cannot satisfy (confirmed-absent OR unknown) blocks the run fail-closed and fires a paging Notification. observe/warn guardrails are advisory and never fail-closed on conformance.
 
 #### Guardrail config-as-code (shipped — T3, FAR-219)
 
@@ -1732,13 +1752,13 @@ The Eval System (§8.17) must ship before the Feedback System (§8.20). The Feed
 
 #### Guardrails — phase history
 
-Guardrails are boundary enforcement for agent safety: the same eval primitives as §8.17 extended to the input side, with interception points, transform actions (redaction), and remediation wiring. T1 (the input-side engine, described above under "Guardrails — the input-side seam (FAR-208)") and T3 (snapshot-pinned, PR-gated config-as-code) are **shipped**. The original T1 planned-capability list is retained for traceability; every listed item is now shipped, with the caveats noted.
+Guardrails are boundary enforcement for agent safety: the same eval primitives as §8.17 extended to the input side, with interception points, transform actions (redaction), and remediation wiring. T1 (the input-side engine, described above under "Guardrails — the input-side seam (FAR-208)"), the T2 pre-trigger boundary pass at webhook intake (above), and T3 (snapshot-pinned, PR-gated config-as-code) are **shipped**. The original T1 planned-capability list is retained for traceability; every listed item is now shipped, with the caveats noted.
 
 T1 planned capability — all **shipped**:
 - **Input-side interception** at run creation — evaluated before the run's first node executes.
 - **Actions**: `observe` | `warn` | `block` | `redact` (masks-only; redaction replaces matched field values with a placeholder, never logs the raw value).
 - **Deterministic detection** — the same `regex` / `json_schema` primitives as §8.17; no LLM judge on the input side.
-- **Conformance** for the `block` action — the three-state derivation is shipped as a pure helper; enforcement wiring at dispatch time is planned.
+- **Conformance** for the `block` action — the three-state derivation ships as a pure helper AND the dispatch-time enforcement wiring is shipped (FAR-223 PR A): a block-action guardrail whose required capabilities are confirmed-absent or unknown blocks fail-closed and pages via the Notification channel.
 - **Audited override/recovery** — the guardrail-override endpoint re-runs the pass on operator-supplied input; any bypass is itself an auditable event.
 
 The boundary philosophy and the guardrails' non-coverage (known failure classes) are described in the §8.17 "Guardrails — the input-side seam (FAR-208)" section above.

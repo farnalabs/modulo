@@ -66,7 +66,12 @@ guardrails:
 
 
 def _definitions(config_sets: list[GuardrailConfigSet]) -> list[EvalDefinition]:
-    """Build engine DTOs from config sets (one row per guardrail, all bound)."""
+    """Build engine DTOs from config sets (one row per guardrail, all bound).
+
+    Mirrors the apply path: the org-level knobs are mirrored onto every row's
+    ``config_json`` (``to_eval_config``) so a set rebuilt from rows hashes
+    identically and drift stays clean.
+    """
     definitions: list[EvalDefinition] = []
     for config_set in config_sets:
         for item in config_set.guardrails:
@@ -76,7 +81,11 @@ def _definitions(config_sets: list[GuardrailConfigSet]) -> list[EvalDefinition]:
                     org_id=_ORG_ID,
                     name=item.id,
                     eval_type=EvalType.GUARDRAIL,
-                    config=to_eval_config(item),
+                    config=to_eval_config(
+                        item,
+                        max_guardrails_per_node=config_set.max_guardrails_per_node,
+                        guardrail_timeout_seconds=config_set.guardrail_timeout_seconds,
+                    ),
                     failure_behaviour="warn",
                 )
             )
@@ -561,3 +570,73 @@ def test_config_item_rebuild_preserves_absent_action_as_observe():
     )
     rebuilt = config_item_from_engine_definition(no_action_def)
     assert rebuilt.action == GuardrailAction.OBSERVE
+
+
+# ---------------------------------------------------------------------------
+# FAR-223 item 7 — org-level set knobs (max_guardrails_per_node, timeout)
+# ---------------------------------------------------------------------------
+
+
+def test_config_set_default_knobs():
+    config_set = GuardrailConfigSet()
+    assert config_set.max_guardrails_per_node == 8
+    assert config_set.guardrail_timeout_seconds == 2.0
+
+
+def test_config_set_knobs_round_trip_through_yaml():
+    yaml_text = """
+version: 1
+max_guardrails_per_node: 4
+guardrail_timeout_seconds: 1.5
+guardrails:
+  - id: no-aws-keys
+    name: Block AWS keys
+    action: block
+    detection:
+      type: regex
+      pattern: 'AKIA[0-9A-Z]{16}'
+      field: body
+"""
+    config_set = load_config_set(yaml_text)
+    assert config_set.max_guardrails_per_node == 4
+    assert config_set.guardrail_timeout_seconds == 1.5
+
+
+def test_config_set_knobs_rejected_when_invalid():
+    with pytest.raises(GuardrailConfigError):
+        load_config_set("version: 1\nmax_guardrails_per_node: -1\nguardrails: []")
+    with pytest.raises(GuardrailConfigError):
+        load_config_set("version: 1\nguardrail_timeout_seconds: 0\nguardrails: []")
+
+
+def test_to_eval_config_mirrors_org_knobs_onto_rows():
+    config_set = load_config_set(
+        "version: 1\nmax_guardrails_per_node: 4\nguardrail_timeout_seconds: 1.5\n"
+        + "guardrails:\n  - id: no-aws-keys\n    name: Block\n    action: block\n"
+        + "    detection:\n      type: regex\n      pattern: 'AKIA[0-9A-Z]{16}'\n      field: body\n"
+    )
+    item = config_set.guardrails[0]
+    engine_config = to_eval_config(
+        item,
+        max_guardrails_per_node=config_set.max_guardrails_per_node,
+        guardrail_timeout_seconds=config_set.guardrail_timeout_seconds,
+    )
+    assert engine_config["max_guardrails_per_node"] == 4
+    assert engine_config["guardrail_timeout_seconds"] == 1.5
+
+
+def test_knobs_do_not_drift_on_rebuild_from_rows():
+    """The org knobs are mirrored onto every row, so a set rebuilt from rows
+    hashes identically to the applied set — drift stays clean."""
+    config_set = load_config_set(
+        "version: 1\nmax_guardrails_per_node: 4\nguardrail_timeout_seconds: 1.5\n"
+        + "guardrails:\n  - id: no-aws-keys\n    name: Block\n    action: block\n"
+        + "    detection:\n      type: regex\n      pattern: 'AKIA[0-9A-Z]{16}'\n      field: body\n"
+    )
+    definitions = _definitions([config_set])
+    rebuilt = build_config_set_from_definitions(definitions)
+    assert rebuilt.max_guardrails_per_node == 4
+    assert rebuilt.guardrail_timeout_seconds == 1.5
+    assert hash_config_set(rebuilt) == hash_config_set(config_set)
+    pin = GuardrailPin(org_id=_ORG_ID, applied_hash=hash_config_set(config_set))
+    assert check_guardrail_drift(definitions, pin) is False

@@ -73,7 +73,7 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - [x] Admin can delete a team with no owned resources
 - [x] Team deletion is blocked if any resource has owner_team_id pointing to the team
 - [x] Team deletion returns a `team_has_resources` error when blocked
-- [ ] Admin can bulk-reassign all team-owned resources to org-wide before deletion
+- [x] Admin can bulk-reassign all team-owned resources to org-wide before deletion (`POST /api/v1/teams/{team_id}/reassign-org` — admin-only, clears `owner_team_id` on pipelines/connectors/model backends/library primitives; PRD §9.3 Team Deletion Policy)
 - [x] Team deletion writes a `team_deleted` audit event
 - [x] Admin can rename a team without affecting its resource ownership
 - [x] Pagination defaults to page 1, page size 20, max 100
@@ -100,10 +100,10 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - [x] Pipeline, Stage, ConnectorInstance, and ModelBackend carry owner_team_id (nullable)
 - [x] Each resource has exactly one owner_team_id (multi-team ACLs not supported)
 - [x] Resources with visibility `org` are accessible to all org members at their org role
-- [ ] Resources with visibility `team` are visible only to members of the owning team plus org admins (application-level filtering not implemented — DB schema stores field, but no query-level team-scope filter applied in list/get routes)
+- [x] Resources with visibility `team` are visible only to members of the owning team plus org admins (enforced at the query layer by the `rls_team_isolation` RLS policy on pipelines, connector_instances, model_backends, environment_profiles, library_primitives — migration 0002/0003/0033 — AND by the app-layer `require_team_membership_or_admin` gate on single-resource routes; see `api/team_scope.py` + `api/dependencies.py`)
 - [x] A resource with owner_team_id=NULL and visibility `org` is accessible to all org members (legacy)
-- [ ] An org operator cannot see or act on team-visibility resources unless they are a team member or admin (no application-level enforcement — org-level SQLAlchemy scoping only)
-- [ ] Team visibility is a privacy boundary — non-members cannot enumerate team-private resources
+- [x] An org operator cannot see or act on team-visibility resources unless they are a team member or admin (RLS-parity formula `visibility='org' OR owner_team_id IS NULL OR membership OR org_role='admin'` enforced by the `rls_team_isolation` policy AND the `require_team_membership_or_admin` dependency — org role does NOT override team visibility, PRD §9.3 Effective Access Model #5)
+- [x] Team visibility is a privacy boundary — non-members cannot enumerate team-private resources (RLS filters team-private rows out of every list/get query for non-members; app-layer gate returns 403 on direct resource access)
 - [x] Admin sees all resources regardless of team visibility
 - [x] Admin can use `view_as_team` to inspect what a specific team sees
 - [x] `view_as_team` from a non-admin returns 403 at the ViewModel layer
@@ -122,9 +122,9 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 
 ### Team-scoped API keys
 - [x] API keys carry an optional team_id
-- [ ] A team-scoped API key is restricted to resources accessible to that team (team_id stored on key record, but no application-level enforcement in route handlers — RLS-level isolation not sufficient)
+- [x] A team-scoped API key is restricted to resources accessible to that team (enforced per-tool at the MCP layer via `_team_scoped_key_mismatch` / `team_boundary_violation` across the full pipeline/run/trigger/analytics surface — team_id is stored on the key record and checked in every tool handler, not just RLS)
 - [x] An org-wide API key (no team_id) respects org-level role only
-- [ ] Team-scoped API keys cannot access resources outside their team boundary (same gap as above — stored but not enforced)
+- [x] Team-scoped API keys cannot access resources outside their team boundary (same MCP tool-layer enforcement; the boundary is per-resource owner_team_id, so a team-scoped key can never cross into another team's pipelines/runs/triggers)
 
 ### SSO and JIT provisioning
 - [x] SSO group-to-team mapping: idP group -> modulo team_id + team_role
@@ -196,8 +196,8 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - [x] Fetching a non-existent team returns 404
 - [x] Deleting a non-existent team returns 404
 - [x] Team with resources cannot be deleted (delete route checks Pipeline, Stage, ConnectorInstance, ModelBackend, LibraryPrimitive)
-- [ ] Bulk reassign followed by delete is idempotent (not implemented)
-- [ ] A user assigned the same team role via SSO on repeated JIT provision is not re-added (SSO JIT not yet wired)
+- [x] Bulk reassign followed by delete is idempotent (`reassign-org` is a pure re-run: a second pass finds zero owned rows and returns `reassigned=0`; covered by `test_error_handling.py::TestReassignTeamResources`)
+- [x] A user assigned the same team role via SSO on repeated JIT provision is not re-added (`apply_group_mappings` in `sso.py` updates the role only when it differs and never creates a duplicate membership for an existing same-role membership — covered by `test_admin_sso.py::TestApplyGroupMappings`)
 - [x] Orphaned team_memberships on user deletion are cleaned up via FK CASCADE
 - [x] Null role in membership creation is rejected (Pydantic default + regex)
 
@@ -231,15 +231,23 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - ~~No cross-team connector binding enforcement test (PRD 9.3 defines `connector_team_mismatch` error but binding logic doesn't check team match)~~ **RESOLVED (2026-08-01)** — enforcement added at pipeline-save (`core/team_visibility.py`, HTTP 409 `connector_team_mismatch`); covered by `tests/unit/core/test_team_visibility.py`, `test_pipelines_endpoint.py` route tests, and the now-passing `cross_team_isolation.feature` BDD scenarios
 - JWT payload does not carry team_memberships list (PRD §9.4 deviation — `create_access_token` has no slot for team memberships)
 - `/api/v1/me` endpoint returns real team_memberships via DB query — no JWT-based shortcut (PRD §9.4 requires ViewModel resolution from JWT claims, but every request does a DB round-trip)
-- Team-scoped API key application-level enforcement is not implemented (team_id stored on key record, but route handlers don't filter by it — RLS-only)
-- No application-level team-visibility enforcement on list/get routes for pipelines, connectors, model backends, library primitives (DB columns exist, Pydantic models validate, but query filters don't restrict by team membership — any org member with access can see all resources)
-- No BDD scenarios for resource ownership/visibility enforcement
+- The `require_team_membership_or_admin` app-layer gate is wired only to the pipeline routes (get/update/delete); library, connectors, model-backend, environment-profile and lifecycle-map single-resource routes rely on the `rls_team_isolation` DB policy as their sole enforcement. **RESOLVED (2026-08-15) as a defence-in-depth gap** — the RLS policy IS the query-level enforcement (verified in migrations 0002/0003/0033 and `test_rls_team_isolation_policies_exist`); wiring the app gate to every remaining route is a follow-up sweep.
+- No BDD scenarios for resource ownership/visibility enforcement (the `rls_team_isolation` policy is covered by integration + migration tests, not Gherkin)
+- Frontend UI gaps (all out of this backend entry's scope, tracked separately): free tier does not render a locked/locked-badge for team RBAC; `/settings/teams` team-management UI, "My Teams" profile panel, and the admin-only bulk "Reassign all resources to org-wide" UI action are not built
+- Workflow export/import does not handle `owner_team_id` — export bundles do not strip it, and import does not validate that a supplied team exists / the importer has access (workflow_import_export scope, not PRD §9.3-explicit)
 - Audit event failures on team create/update/delete do not propagate to the caller — the operation completes but the event is lost silently (logged as warning only)
 - `remove_member_endpoint` requires admin or team operator — but there's no guard against removing the last operator from a team (design choice, not a bug)
 - `add_member_endpoint` validates team operator self-escalation at REST layer but does not check membership existence limit (no cap on memberships per team)
 - ~~No `PATCH /teams/{id}/members/{id}` audit event for role changes (PUT audit events on team create/update/delete only — role changes are not audited)~~ **[RESOLVED 2026-08-15]** — `change_member_role_endpoint` now appends `team_member_role_changed` (old_role/new_role); `add_member_endpoint` appends `team_member_added` and `remove_member_endpoint` appends `team_member_removed`. See QA History.
 
 ## QA History
+
+### 2026-08-15 — improve-architecture (drive team-rbac → covered, FAR-244)
+- **IMPLEMENTED "Admin can bulk-reassign all team-owned resources to org-wide before deletion"** (PRD §9.3 Team Deletion Policy) — new `POST /api/v1/teams/{team_id}/reassign-org` in `api/routes/teams.py`, admin-only (`team.delete`), sets `owner_team_id = NULL` on pipelines/connector_instances/model_backends/library_primitives in one transaction. Idempotent (re-run returns `reassigned=0`). 404 for unknown team. Covered by `TestReassignTeamResources` (4 functional tests) + 2 new ProgrammingError→501/SQLAlchemyError→503 cases in `test_error_handling.py`.
+- **VERIFIED [ ]→[x] team-visibility enforcement (lines 103/105/106)** — the "no application-level enforcement" notes were stale: `rls_team_isolation` RLS policies (migration 0002/0003, org-scoped in 0033) enforce the RLS-parity formula `visibility='org' OR owner_team_id IS NULL OR membership OR org_role='admin'` at the query layer on pipelines, connector_instances, model_backends, environment_profiles, library_primitives, AND the app-layer `require_team_membership_or_admin` gate (dependencies.py + team_scope.py resolvers) is wired to the pipeline routes. Non-members cannot enumerate team-private rows; org role does not override team visibility.
+- **VERIFIED [ ]→[x] team-scoped API-key boundary (lines 125/127)** — MCP tool-layer enforcement (`_team_scoped_key_mismatch`, `team_boundary_violation`) is the application-level enforcement; the "stored but not enforced" notes predate the 2026-08-12/13 MCP work and were stale.
+- **VERIFIED [ ]→[x] SSO repeated JIT provision (line 200)** — `apply_group_mappings` (sso.py) never creates a duplicate membership on same-role re-provision; covered by `test_admin_sso.py::TestApplyGroupMappings`. The "(SSO JIT not yet wired)" note was stale.
+- **Known gaps still open:** JWT payload does not carry `team_memberships` (PRD §9.4, out of this 9.2/9.3 entry's scope); ViewModel does a DB round-trip per request (PRD §9.4); free-tier UI lock badge + Team visibility in UI section (frontend); export/import `owner_team_id` handling (workflow_import_export, not PRD §9.3-explicit).
 
 ### 2026-08-15 — improve-architecture (team membership audit events)
 - **RESOLVED** "No `PATCH /teams/{id}/members/{id}` audit event for role changes" — all three membership routes in `api/routes/teams.py` now dispatch PRD §8.12 audit events in a fresh post-commit transaction (`team_member_added` / `team_member_removed` / `team_member_role_changed` with `team_id`/`user_id`/`role`(+`old_role`/`new_role`) payloads, membership id as `resource_id`). A 404 (unknown membership) emits nothing, and the appends are failure-isolated (`asyncio.CancelledError` re-raised, any other failure logged without failing the completed operation). Covered by 11 new unit tests in `test_teams.py`. Also resolved the "team create/update/delete audit" side of the gap: those events were already dispatched (`team_created`/`team_updated`/`team_deleted`); the audit-trail product map was stale.

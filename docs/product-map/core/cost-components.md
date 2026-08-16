@@ -9,7 +9,7 @@ code:
   - backend/src/modulo/core/cost_controller/breakdown/aggregate.py
   - backend/src/modulo/db/models/cost_component.py
   - backend/src/modulo/db/crud/cost_component.py
-  - backend/src/modulo/db/migrations/versions/0066_cost_components.py
+  - backend/src/modulo/db/migrations/versions/0110_schema_pipeline_runtime.py
   - backend/src/modulo/core/seed_data/cost_components.py
   - backend/src/modulo/core/pipeline_engine/node_runner.py
 depends-on: [feat-teams-team-crud]

@@ -43,11 +43,15 @@ from pydantic import BaseModel, Field, model_validator
 
 from modulo.core.eval_engine import EvalDefinition, EvalType
 from modulo.core.guardrails import (
+    DEFAULT_GUARDRAIL_TIMEOUT_SECONDS,
+    DEFAULT_MAX_GUARDRAILS_PER_NODE,
     GUARDRAIL_DETECTION_TYPES,
     FieldRedactionMode,
     GuardrailAction,
     GuardrailConfigError,
     _resolve_detection,
+    resolve_guardrail_cap,
+    resolve_guardrail_timeout,
 )
 
 GuardrailPinStatus = Literal["clean", "proposed", "drift"]
@@ -104,10 +108,20 @@ class GuardrailConfigItem(BaseModel):
 
 
 class GuardrailConfigSet(BaseModel):
-    """An org's full guardrail configuration as code."""
+    """An org's full guardrail configuration as code.
+
+    ``max_guardrails_per_node`` (item 7) caps how many guardrail eval
+    definitions may be bound to a single pipeline node; ``0`` disables the
+    cap. ``guardrail_timeout_seconds`` (item 7) is the per-guardrail hard
+    detection timeout applied at the ingestion edge. Both are ORG-LEVEL knobs
+    mirrored onto every applied row's ``config_json`` so the engine's seam
+    reads them from the rows it already loads.
+    """
 
     version: int = Field(default=1, ge=1)
     guardrails: list[GuardrailConfigItem] = Field(default_factory=list)
+    max_guardrails_per_node: int = Field(default=DEFAULT_MAX_GUARDRAILS_PER_NODE, ge=0)
+    guardrail_timeout_seconds: float = Field(default=DEFAULT_GUARDRAIL_TIMEOUT_SECONDS, gt=0)
 
 
 @dataclass
@@ -277,7 +291,12 @@ def _canonical_dict(config_set: GuardrailConfigSet) -> dict[str, Any]:
         ),
         key=lambda g: g["id"],
     )
-    return {"version": config_set.version, "guardrails": guardrails}
+    return {
+        "version": config_set.version,
+        "guardrails": guardrails,
+        "max_guardrails_per_node": config_set.max_guardrails_per_node,
+        "guardrail_timeout_seconds": config_set.guardrail_timeout_seconds,
+    }
 
 
 def hash_config_set(config_set: GuardrailConfigSet) -> str:
@@ -372,7 +391,12 @@ def _describe_item_delta(old_item: GuardrailConfigItem, new_item: GuardrailConfi
 # ---------------------------------------------------------------------------
 
 
-def to_eval_config(item: GuardrailConfigItem) -> dict[str, Any]:
+def to_eval_config(
+    item: GuardrailConfigItem,
+    *,
+    max_guardrails_per_node: int = DEFAULT_MAX_GUARDRAILS_PER_NODE,
+    guardrail_timeout_seconds: float = DEFAULT_GUARDRAIL_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
     """Build the engine's ``config_json`` from a config-set guardrail.
 
     The engine reads detection from either a flattened ``type``/``pattern``/
@@ -382,12 +406,20 @@ def to_eval_config(item: GuardrailConfigItem) -> dict[str, Any]:
     drift hashing. ``failure_behaviour`` is deliberately never written here —
     guardrail rows always use ``'warn'`` (block semantics are guardrail-owned
     via ``action``).
+
+    The ORG-LEVEL knobs (``max_guardrails_per_node`` / ``guardrail_timeout_seconds``,
+    item 7) are mirrored onto EVERY row's ``config_json`` so the interception
+    seam — which loads rows by pipeline, not by config-set — reads the same
+    effective cap/timeout the config-set declares, and so a set rebuilt from
+    rows hashes identically (drift stays ``clean``).
     """
     config: dict[str, Any] = {
         "interception_point": "input",
         "action": item.action.value,
         "redaction": [{"path": rule.path, "mode": rule.mode.value} for rule in item.redaction],
         "required_capabilities": list(item.required_capabilities),
+        "max_guardrails_per_node": max_guardrails_per_node,
+        "guardrail_timeout_seconds": guardrail_timeout_seconds,
     }
     if item.detection.type == "json_schema":
         config["type"] = "json_schema"
@@ -482,8 +514,21 @@ def build_config_set_from_definitions(definitions: list[EvalDefinition]) -> Guar
             continue
         by_id.setdefault(definition.name, definition)
     items = [config_item_from_engine_definition(by_id[key]) for key in sorted(by_id)]
+    # Recover the org-level knobs (item 7) from the applied rows so the rebuilt
+    # set hashes identically to the applied set. ``to_eval_config`` mirrors
+    # these onto every row; the effective value is resolved through the engine's
+    # own helpers (``resolve_guardrail_cap`` / ``resolve_guardrail_timeout``) so
+    # the rebuilt knobs can never drift from the engine's semantics (MAX
+    # declared, 0 = feature off for the cap).
+    defs = list(by_id.values())
+    cap = resolve_guardrail_cap(defs)
+    timeout = resolve_guardrail_timeout(defs)
     try:
-        return GuardrailConfigSet(guardrails=items)
+        return GuardrailConfigSet(
+            guardrails=items,
+            max_guardrails_per_node=cap,
+            guardrail_timeout_seconds=timeout,
+        )
     except pydantic.ValidationError as exc:
         # Same fail-closed guarantee as the per-item conversion: a set that the
         # DTOs cannot represent must raise a GuardrailConfigError, never leak a

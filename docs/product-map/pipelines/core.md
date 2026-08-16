@@ -12,7 +12,7 @@ code:
   - backend/src/modulo/db/models/pipeline_folder.py
   - backend/src/modulo/db/models/pipeline_edge.py
   - backend/src/modulo/db/crud/pipeline_folder.py
-  - backend/src/modulo/db/migrations/versions/0007_pipeline_folders.py
+  - backend/src/modulo/db/migrations/versions/0110_schema_pipeline_runtime.py
   - backend/src/modulo/core/graph_validator/__init__.py
   - backend/src/modulo/core/graph_validator/category_validator.py
   - frontend/src/views/PipelineEditorView.vue
@@ -67,8 +67,8 @@ copy-to-adapt (save-as-composite), node conversion, and ownership/visibility.
 - [x] Folder list UI renders a nested tree and supports create, rename, delete, selection, and move-to-folder workflows
 - [x] Pipeline editor renders folder breadcrumbs and links back to the filtered pipeline list
 - [x] Folder routes return 501 Not Implemented when the folder migration has not been applied
-- [ ] Folder CRUD and move endpoints do not yet have dedicated backend unit or BDD coverage
-- [ ] Folder parent updates do not yet reject self-parenting or longer ancestry cycles
+- [x] Folder CRUD, move, and cycle-rejection endpoints have dedicated backend unit coverage (`TestPipelineFolderEndpoints` + `TestPipelineFolderCyclePrevention` in `test_pipelines_endpoint.py`)
+- [x] Folder parent updates reject self-parenting and ancestry cycles via the shared folder-tree validator (`folder_tree.py`, used by `pipeline_folder.py`) — invalid parent assignments return 422
 
 ### Agent Picker — Convert Manual to Agent
 
@@ -177,8 +177,8 @@ copy-to-adapt (save-as-composite), node conversion, and ownership/visibility.
 - [x] Deep schema compatibility (field-level) — only used in validate_for_run, not on-save
 - [x] GraphValidator unit tests expanded since index 254 — test_graph_validator.py now covers topology (nodes, cycles, reachability), schema compatibility, connector bindings, model backend health, nesting depth, kickback edges, deep schema compatibility, input payload validation, and conditional edges (52 test functions)
 - [x] Category validator unit tests added — test_category_validator.py covers node category validation (12 test functions)
-- [ ] Composite validation still has no dedicated unit tests — only covered by BDD scenarios
-- [ ] Pre-run validation (validate_for_run) also checks input payload — covered in feat-pipelines-cicd-pipeline run lifecycle
+- [x] Composite validation has dedicated unit tests — `TestCompositeValidation` in `test_pipelines_endpoint.py` covers sub-graph structure (`COMPOSITE_SUBGRAPH_*`), duplicate ids, HITL-gate-on-sub-edge rejection, and output-validation config (`COMPOSITE_VALIDATION_*` retries range / eval type / regex compile)
+- [x] Pre-run validation (validate_for_run) also checks input payload against the entry node's input schema — covered by the `test_graph_validator.py` input-payload tests (match / missing field / type mismatch) and the run-lifecycle entry
 
 ### Real-Time Run Progress (WebSocket Events)
 
@@ -229,7 +229,7 @@ frontend-side integration:
 ## Known Gaps
 
 ### GraphValidator unit tests expanded (index 338)
-`backend/tests/unit/graph_validator/test_graph_validator.py` now has 52 test functions covering topology (nodes, cycles, reachability, nesting depth, kickback), schema compatibility (shallow + deep field-level), connector bindings (active, inactive, NotFound, missing operations), model backend health (active, inactive, unhealthy, empty pins), conditional edge expressions, input payload validation, and early short-circuit on topology errors. `test_category_validator.py` adds 12 tests for node category validation. The GraphValidator (~817 lines) also relies on BDD `pipeline_config_validation.feature` (4 scenarios) and endpoint-level tests. Composite validation remains the largest gap — no dedicated unit tests.
+`backend/tests/unit/graph_validator/test_graph_validator.py` now has 52 test functions covering topology (nodes, cycles, reachability, nesting depth, kickback), schema compatibility (shallow + deep field-level), connector bindings (active, inactive, NotFound, missing operations), model backend health (active, inactive, unhealthy, empty pins), conditional edge expressions, input payload validation, and early short-circuit on topology errors. `test_category_validator.py` adds 12 tests for node category validation. The GraphValidator (~817 lines) also relies on BDD `pipeline_config_validation.feature` (4 scenarios), endpoint-level tests, and — since 2026-08-15 — the `TestCompositeValidation` unit class in `test_pipelines_endpoint.py` covering composite sub-graph structure and output-validation config (previously the only composite validation gap).
 
 ### Canvas features missing
 - Undo/redo support for node/edge operations
@@ -268,6 +268,7 @@ frontend-side integration:
 
 ## QA History
 
+- 2026-08-15 (distribute): Drove from partial toward covered. IMPLEMENTED — folder parent updates now reject self-parenting and ancestry cycles (shared folder-tree validator in `folder_tree.py`, enforced on `PATCH /api/v1/pipeline-folders/{id}` with a 422 response; create/update folder routes now map `ValueError` → 422 instead of 500). ADDED COVERAGE — `TestPipelineFolderEndpoints` + `TestPipelineFolderCyclePrevention` (folder CRUD, reorder, move-pipeline-to-folder incl. missing-folder 422 and pipeline 404, self-parent 422, cycle 422, depth-overflow 422) and `TestCompositeValidation` (composite sub-graph structure + output-validation config checks) in `test_pipelines_endpoint.py`. VERIFIED — pre-run input payload validation (`validate_for_run` → `_check_input_schema_compatibility`) is implemented and tested in `test_graph_validator.py`. Marked folder CRUD/move coverage, folder cycle rejection, composite unit tests, and pre-run input payload `[x]`. Known Gaps unchanged for canvas features (undo/redo, minimap, keyboard shortcuts), agent theme, schema picker dropdown, standalone edges CRUD, manual-node canvas creation, and owner_team_id (all noted below).
 - 2026-08-14 (improve-architecture): Linked the already-wired `backend/tests/bdd/features/pipelines/create.feature` (5 executable scenarios: minimal pipeline, LLM/manual nodes, run_context defaults, duplicate name rejection) to the `feat-pipelines-core` `bdd:` field and added its wiring step file `backend/tests/bdd/steps/test_alpha_pipelines.py` to `unit-tests:`. The feature file was executable on disk but never listed in frontmatter.
 - 2026-07-08: Cross-cutting QA (index 254): Fixed CRITICAL — RLS leak in save_as_composite_endpoint (3 DB queries outside session.begin() — Agent lookup, PipelineEdge fetch, create_composite_template — missing RLS context on Postgres; all moved inside transaction). Fixed CRITICAL — added SQLAlchemyError→503 catches to 8 pipeline CRUD + clone routes. Fixed CRITICAL — combined `except (IntegrityError, ProgrammingError, SQLAlchemyError)` in convert-to-agent/revert-to-manual split into separate handlers with correct status codes (409/501/503). Fixed MAJOR — replaced 10 `e instanceof Error ? e.message : String(e)` handlers with `formatApiError(e)` in 4 frontend views (PipelineEditorView, PipelineListView, PipelineTemplateGallery). Fixed 2 pre-existing test failures (license tier assertion, AsyncMock for publish_primitive). Merged to main at v0.3.227. Status: partial.
 - 2026-07-05: Prodmap pipelines QA: Fixed depends-on direction (core → cicd was inverted). Fixed false Known Gap about missing `test_graph_validator.py`. Fixed website docs path prefix. Updated delivery-tasks note.

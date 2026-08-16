@@ -1,11 +1,12 @@
-"""Migration 0066 surface assertions — the FIVE pinned columns, the NULLS NOT
-DISTINCT unique index, the dropped constraint, RLS, and the MIGRATE-role owner.
+"""Cost-component surface assertions (final reconciliation-chain state) — the
+FIVE pinned columns, the NULLS NOT DISTINCT unique index, the dropped
+constraint, RLS, and the MIGRATE-role owner.
 
 Runs against the migrated testcontainer (test_initial_migration harness). The
-full alembic upgrade/downgrade round-trip with NOLOGIN-role provisioning is
-covered by the CI harness: conftest provisions ``modulo_migrate`` before
-``alembic upgrade heads`` and the migration runs ``SET ROLE modulo_migrate``
-around ``create_table``.
+full alembic upgrade round-trip with NOLOGIN-role provisioning is covered by
+the CI harness: conftest provisions ``modulo_migrate`` before
+``alembic upgrade heads`` and the reconciliation chain (0110_schema_pipeline_runtime)
+re-owns the table to ``modulo_migrate``.
 """
 
 from __future__ import annotations
