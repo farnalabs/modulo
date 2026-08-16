@@ -241,7 +241,10 @@ def test_infer_schema_default_limit_is_200(client: TestClient) -> None:
         patch("modulo.api.routes.schemas.get_connector_instance", return_value=ci),
         patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
         patch("modulo.api.routes.schemas.set_rls_org"),
-        patch("modulo.api.routes.schemas.ConnectorHub.sample", return_value=[{"id": "1"}]),
+        patch(
+            "modulo.api.routes.schemas.ConnectorHub.sample",
+            return_value=[{"id": "1"}],
+        ) as mock_sample,
         patch(
             "modulo.api.routes.schemas.SchemaInferenceService.infer",
             return_value={"type": "object", "properties": {}},
@@ -264,6 +267,8 @@ def test_infer_schema_default_limit_is_200(client: TestClient) -> None:
         )
 
     assert resp.status_code == 200
+    mock_sample.assert_awaited_once()
+    assert mock_sample.await_args.kwargs["limit"] == 200
     assert resp.json()["sample_count"] == 1
 
 
