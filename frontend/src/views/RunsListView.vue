@@ -175,7 +175,7 @@
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import { ref, computed, watch, onUnmounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter, type LocationQuery } from 'vue-router'
 import { fetchRuns, requestRunCancellation, type RunListItem, type FetchRunsParams } from '../lib/api/runs'
 import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
@@ -191,6 +191,7 @@ import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
 
 const route = useRoute()
+const router = useRouter()
 const { currencyCode, loadCurrency } = useOrgCurrency()
 const { t } = useI18n()
 
@@ -199,7 +200,7 @@ const cancellingIds = ref(new Set<string>())
 const cancelErrors = ref<Record<string, string>>({})
 
 const pageSize = 20
-const page = ref(1)
+const page = ref(parsePageParam(route.query.page))
 
 const FILTER_STORAGE_KEY = 'runs-list-filters'
 
@@ -207,6 +208,27 @@ const filterStatus = ref(route.query.status as string || localStorage.getItem(`$
 const filterTriggerType = ref(route.query.trigger_type as string || localStorage.getItem(`${FILTER_STORAGE_KEY}.trigger_type`) || '')
 const filterSearch = ref(route.query.search as string || localStorage.getItem(`${FILTER_STORAGE_KEY}.search`) || '')
 const filterPipelineId = ref(route.query.pipeline_id as string || '')
+
+function parsePageParam(raw: unknown): number {
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n < 1) return 1
+  return n
+}
+
+function syncQuery() {
+  const query: LocationQuery = { ...route.query }
+  if (page.value > 1) query.page = String(page.value)
+  else delete query.page
+  if (filterStatus.value) query.status = filterStatus.value
+  else delete query.status
+  if (filterTriggerType.value) query.trigger_type = filterTriggerType.value
+  else delete query.trigger_type
+  if (filterSearch.value) query.search = filterSearch.value
+  else delete query.search
+  if (filterPipelineId.value) query.pipeline_id = filterPipelineId.value
+  else delete query.pipeline_id
+  router.replace({ query })
+}
 
 function buildParams(): FetchRunsParams {
   const params: FetchRunsParams = { page: page.value, page_size: pageSize }
@@ -301,6 +323,7 @@ watch(filterSearch, () => {
   searchDebounceTimer = setTimeout(() => {
     page.value = 1
     loadRuns()
+    syncQuery()
   }, SEARCH_DEBOUNCE_MS)
 })
 
@@ -309,18 +332,21 @@ function handleFilterUpdate(key: string, value: string) {
   else if (key === 'trigger_type') filterTriggerType.value = value
   page.value = 1
   loadRuns()
+  syncQuery()
 }
 
 function nextPage() {
   if (page.value * pageSize >= total.value) return
   page.value++
   loadRuns()
+  syncQuery()
 }
 
 function prevPage() {
   if (page.value <= 1) return
   page.value--
   loadRuns()
+  syncQuery()
 }
 
 function cancelLabel(runId: string): string {
