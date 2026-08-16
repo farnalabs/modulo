@@ -19,8 +19,8 @@ from modulo.connectors.base import (
 
 _BASE = "https://api.pagerduty.com"
 
-# Forward-ref type string used in ``cast`` for response payloads (S1192).
-_DICT_STR_ANY = "dict[str, Any]"
+# Type alias used in ``cast`` for response payloads (S1192).
+type _DICT_STR_ANY = dict[str, Any]
 
 
 def _paging_total(body: object) -> int | None:

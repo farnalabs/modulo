@@ -14,8 +14,8 @@ from modulo.connectors.base import (
     HealthResult,
 )
 
-# Forward-ref type string used in ``cast`` for response payloads (S1192).
-_DICT_STR_ANY = "dict[str, Any]"
+# Type alias used in ``cast`` for response payloads (S1192).
+type _DICT_STR_ANY = dict[str, Any]
 
 
 class YouTrackConnector(ConnectorBase):

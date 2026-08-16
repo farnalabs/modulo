@@ -18,9 +18,9 @@ from modulo.connectors.base import (
 
 _BASE = "https://api.opsgenie.com/v2"
 
-# Repeated REST path and forward-ref cast type string (S1192).
+# Repeated REST path and cast type alias (S1192).
 _ALERTS_PATH = "/alerts"
-_DICT_STR_ANY = "dict[str, Any]"
+type _DICT_STR_ANY = dict[str, Any]
 
 
 def _paging_total_count(body: object) -> int | None:

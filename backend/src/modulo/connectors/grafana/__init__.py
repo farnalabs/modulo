@@ -14,9 +14,9 @@ from modulo.connectors.base import (
     HealthResult,
 )
 
-# Forward-ref type strings used in ``cast`` for response payloads (S1192).
-_DICT_STR_ANY = "dict[str, Any]"
-_LIST_DICT_STR_ANY = "list[dict[str, Any]]"
+# Type aliases used in ``cast`` for response payloads (S1192).
+type _DICT_STR_ANY = dict[str, Any]
+type _LIST_DICT_STR_ANY = list[dict[str, Any]]
 
 
 class GrafanaConnector(ConnectorBase):

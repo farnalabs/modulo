@@ -16,9 +16,9 @@ from modulo.connectors.base import (
     HealthResult,
 )
 
-# Repeated REST path and forward-ref cast type string (S1192).
+# Repeated REST path and cast type alias (S1192).
 _WORKFLOWS_PATH = "/rest/workflows"
-_DICT_STR_ANY = "dict[str, Any]"
+type _DICT_STR_ANY = dict[str, Any]
 
 
 class N8NConnector(ConnectorBase):

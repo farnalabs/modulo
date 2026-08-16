@@ -17,8 +17,8 @@ from modulo.connectors.base import (
 _NOTION_API = "https://api.notion.com/v1"
 _NOTION_VERSION = "2022-06-28"
 
-# Forward-ref type string used in ``cast`` for response payloads (S1192).
-_DICT_STR_ANY = "dict[str, Any]"
+# Type alias used in ``cast`` for response payloads (S1192).
+type _DICT_STR_ANY = dict[str, Any]
 
 
 class NotionConnector(ConnectorBase):

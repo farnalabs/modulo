@@ -19,8 +19,8 @@ from modulo.connectors.base import (
 
 _BUILDKITE_API = "https://api.buildkite.com/v2"
 
-# Forward-ref type string used in ``cast`` for response payloads (S1192).
-_LIST_DICT_STR_ANY = "list[dict[str, Any]]"
+# Type alias used in ``cast`` for response payloads (S1192).
+type _LIST_DICT_STR_ANY = list[dict[str, Any]]
 
 _STATUS_MAP: dict[str, CIRunStatus] = {
     "scheduled": CIRunStatus.QUEUED,
