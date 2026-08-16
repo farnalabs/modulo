@@ -23,6 +23,7 @@ from modulo.core.trigger_engine import (
     TimestampExpiredError,
     TriggerEngine,
 )
+from modulo.core.trigger_engine.pre_guardrail import canonical_payload_hash
 from modulo.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
@@ -93,7 +94,10 @@ class TestWebhookDeduplication:
         raw_payload = {"event": "push", "ref": "refs/heads/main"}
         ts = _valid_timestamp()
         sig = _hmac_sign(body, hmac_secret, int(ts))
-        payload_hash = hashlib.sha256(body).hexdigest()
+        # FAR-214: the dedup hash is the canonical POST-guardrail payload hash
+        # (not the raw-body hash), so logically identical payloads dedup across
+        # encodings. Event lookups key on that canonical hash.
+        payload_hash = canonical_payload_hash(raw_payload)
 
         engine = TriggerEngine()
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -495,8 +499,8 @@ class TestWebhookFullPipeline:
             assert event.trigger_id == trigger_id
             assert event.run_id == run.id
 
-            # Verify dedup hash was stored
-            payload_hash = hashlib.sha256(body).hexdigest()
+            # Verify dedup hash was stored (canonical POST-guardrail hash, FAR-214)
+            payload_hash = canonical_payload_hash({"action": "opened", "issue": {"number": 42}})
             result = await session.execute(
                 text(
                     "SELECT payload_hash, expires_at FROM webhook_dedup_hashes "
