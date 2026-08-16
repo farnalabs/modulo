@@ -60,9 +60,9 @@ describe('MyProfileView', () => {
     const teamRows = wrapper.findAll('[data-testid="my-profile-my-team"]')
     expect(teamRows.length).toBe(2)
     expect(teamRows[0].text()).toContain('Engineering')
-    expect(teamRows[0].text()).toContain('operator')
+    expect(teamRows[0].text()).toContain('Operator')
     expect(teamRows[1].text()).toContain('Design')
-    expect(teamRows[1].text()).toContain('viewer')
+    expect(teamRows[1].text()).toContain('Viewer')
   })
 
   it('shows empty state when the user belongs to no teams', async () => {
