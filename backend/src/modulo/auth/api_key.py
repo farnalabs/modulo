@@ -22,7 +22,7 @@ import logging
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -252,7 +252,7 @@ async def update_api_key(
     if role is not None:
         key.role = role
     if team_id is not _UNSET:
-        key.team_id = team_id
+        key.team_id = cast(uuid.UUID | None, team_id)
     if expires_at is not None:
         key.expires_at = expires_at
     await session.flush()

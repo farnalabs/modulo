@@ -83,6 +83,7 @@ from modulo.core.pipeline_engine.node_runner import (
     SupersededNodeError,
     _idempotency_gate_skipped_envelope,
     _marker_delivery_done_for_node,
+    set_conformance_ctx,
 )
 from modulo.core.pipeline_engine.output_filter import OutputRejectedError
 from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
@@ -912,6 +913,28 @@ class PipelineExecutor:
             f"Pipeline max_concurrent_runs reached: {active_count} active, limit {max_concurrent}",
         )
 
+    async def _load_claimed_conformance_guardrails(
+        self,
+        org_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+    ) -> tuple[list[Any], bool]:
+        """FAR-215: hoisted per-run claim discovery for the conformance re-check.
+
+        Computed ONCE at run start (both ``execute`` and ``resume``) and seeded
+        into the run-scoped conformance context, so the per-node check pays
+        zero DB round-trips when the pipeline has no conformance claims and one
+        query per run when it does. Returns ``(claimed, load_failed)`` — a
+        load failure sets ``load_failed=True`` so the node gate fails CLOSED
+        (unknown blocks) rather than silently skipping claims.
+        """
+        from modulo.core.guardrails.conformance import load_claimed_guardrails
+
+        return await load_claimed_guardrails(
+            self._session_factory,
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+        )
+
     async def _load_eval_defs_for_pipeline(
         self,
         session: AsyncSession,
@@ -1368,6 +1391,21 @@ class PipelineExecutor:
             str(n["id"]): n["token_budget"] for n in graph_json.get("nodes", []) if n.get("token_budget") is not None
         }
 
+        # FAR-215: seed the run-scoped conformance context on resume too, so a
+        # node re-check fires after the run pauses/reviews (the manifest may
+        # have changed between the original run and the resume). The claimed
+        # guardrail list is hoisted ONCE per run; the live capability manifest
+        # is still read per node at node start.
+        claimed, claims_load_failed = await self._load_claimed_conformance_guardrails(org_id, pipeline_id)
+        set_conformance_ctx(
+            self._session_factory,
+            org_id,
+            snapshot.environment_profile_id,
+            pipeline_id,
+            claimed,
+            claims_load_failed,
+        )
+
         final_status: str = "failed"
         error_code: str | None = None
         error_detail: str | None = None
@@ -1677,6 +1715,20 @@ class PipelineExecutor:
                 for n in graph_json.get("nodes", [])
                 if n.get("token_budget") is not None
             }
+
+            # FAR-215: seed the run-scoped conformance context so every node
+            # re-validates its bound guardrail conformance at node start. The
+            # claimed guardrail list is hoisted ONCE per run (one query); the
+            # live capability manifest is still read per node at node start.
+            claimed, claims_load_failed = await self._load_claimed_conformance_guardrails(org_id, pipeline_id)
+            set_conformance_ctx(
+                self._session_factory,
+                org_id,
+                snapshot.environment_profile_id,
+                pipeline_id,
+                claimed,
+                claims_load_failed,
+            )
 
             # Count this REAL node-execution attempt (post capacity-check,
             # post compile, pre-stream). The NodeCancelledError retry budget

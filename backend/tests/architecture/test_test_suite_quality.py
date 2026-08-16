@@ -211,17 +211,27 @@ regression that silently weakens the suite:
   evaluate at collection time and are the legitimate form, and the
   skip-without-reason lens already owns the missing-``reason`` half of the
   marker
-- ``pytest.raises(Exception)`` / ``pytest.raises(BaseException)`` — the
-  catch-all form of an exception assertion. Naming the top of the exception
-  hierarchy verifies only that *something* went wrong: any exception
-  satisfies it, including the ``AssertionError`` of a misbehaving assertion
-  inside the block or an unrelated ``KeyError`` from a bug, so the test
-  reports green when the code under test raised the wrong error type. A
-  ``match=`` narrows the message, not the type, so it does not rescue the
-  call. The same catch-all applies to ``@pytest.mark.xfail(raises=...)``
-  markers, which then xfail on *any* exception. Attribute-qualified classes
-  (``pytest.skip.Exception``) and concrete named exceptions are left alone —
-  they are the specific form this lens exists to force
+- ``pytest.raises``/``pytest.warns`` whose expected exception is a *broad*
+  class — ``Exception``, ``BaseException``, or ``AssertionError`` (for
+  ``raises``) without a ``match=`` narrow. ``pytest.raises(Exception)``
+  catches every failure — including a regression that raises the *wrong*
+  exception and the test's own assertion errors — so the test reports green
+  when the behaviour it guards silently changes to raise something else;
+  ``pytest.raises(BaseException)`` widens that mask to
+  ``KeyboardInterrupt``/``SystemExit``. ``pytest.raises(AssertionError)``
+  without ``match=`` is the sharpest form of the hazard: an *internal* assert
+  bug in the code under test is swallowed as the expected exception and the
+  test passes. A ``match=`` narrows the message, not the type, so it does not
+  rescue the call. The same catch-all applies to ``@pytest.mark.xfail(raises=...)``
+  markers, which then xfail on *any* exception. Name the specific exception
+  the code is documented to raise (``ValueError``, ``KeyError``, ...); when
+  the code under test is an assert-based validator that must trip, pin the
+  failure with ``match=`` so the check cannot silently absorb a different
+  error. Attribute-qualified classes (``pytest.skip.Exception`` /
+  ``pytest.xfail.Exception``) and concrete named exceptions are left alone —
+  they are the specific form this lens exists to force, and a union of
+  *specific* exceptions (``(ValueError, TypeError)``) is the intentional
+  "either of these" form
 - ``assert <mock>.assert_*()`` / ``assert not <mock>.assert_*()`` — using a
   unittest.mock verification method *as* the assertion's test expression.
   Every ``assert_called``/``assert_called_with``/``assert_awaited*``/
@@ -240,6 +250,33 @@ regression that silently weakens the suite:
   whole-expression position is flagged: a verification call appearing inside a
   larger expression (the negation of another operand, a function argument, ...)
   is not the assertion itself and is left alone
+- a freshly-constructed Mock passed as an *expected* argument to a mock
+  call-assertion — ``<mock>.assert_called_with(Mock())``,
+  ``assert_called_once_with(...)``, ``assert_any_call(...)``, and their awaited
+  twins, in any positional or keyword argument position. The recorded call is
+  whatever object the code under test actually passed, and a fresh Mock
+  compares by identity (``__eq__`` defaults to ``is``), so the expected tuple
+  can never equal the recorded one: the assertion always FAILS, and for
+  ``assert_any_call`` fresh mocks can never match any recorded call either.
+  This is the expected-argument twin of the assert-test-expression Mock lens:
+  it is almost always a leftover from inlining a double while debugging.
+  Configure the double and pass the configured instance (or use a bound
+  name), or assert on the real expected value
+- ``assert x and not x`` / ``assert x or not x`` (and the ``not``-wrapped
+  twins ``assert not (x and not x)`` / ``assert not (x or not x)``) — a
+  boolean assertion whose test expression joins a value with its own negation.
+  An ``and`` conjunction containing a complementary pair is a contradiction
+  that can never be true, so the assert ALWAYS FAILS (unconditionally red)
+  no matter what the code under test does; an ``or`` disjunction containing a
+  complementary pair is a tautology that is always true, so the assert ALWAYS
+  PASSES (a silent false green that a mutation-testing run believes verifies
+  behavior). Both shapes are dead code — the outcome is decided by the
+  expression itself, never by the behaviour under test. The lens flags only
+  the top-level ``BoolOp`` of the test expression (or one ``not``-wrapped),
+  comparing operands by syntax so it catches attribute paths and subscripts
+  too (``assert row['x'] and not row['x']``); complementary comparisons
+  written with mirrored operators (``x == y or x != y``) are left alone
+  because they need operator algebra rather than syntax to prove
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -3776,43 +3813,84 @@ def test_constant_condition_skip_lens_flags_deterministic_skips():
         assert not _constant_condition_skip_violations(tree), f"lens should NOT flag:\n{source}"
 
 
-def _broad_exception_raises_violations(tree: ast.AST) -> list[tuple[int, str]]:
-    """Return ``(lineno, detail)`` pairs for every catch-all exception spec in
-    a test module: ``pytest.raises(Exception)`` / ``pytest.raises(BaseException)``
-    calls and ``@pytest.mark.xfail(raises=...)`` markers naming the top of the
-    exception hierarchy.
+_RAISES_CONTEXT_FUNCS = frozenset({"raises", "warns"})
+"""``with`` context-manager names whose expected-exception argument is checked
+for broad classes. Custom helpers (``assert_raises``, ``rejects``, ...) are
+deliberately not matched: their signature does not necessarily take an
+exception class positionally, and only ``pytest.raises``/``pytest.warns``
+have the ``match=`` keyword that narrows an ``AssertionError`` expectation."""
 
-    ``pytest.raises(Exception)`` verifies only that *something* went wrong:
-    any exception satisfies it — including the ``AssertionError`` of a
-    misbehaving assertion inside the block or an unrelated ``KeyError`` from a
-    bug — so the test reports green when the code under test raised the wrong
-    error type. A ``match=`` keyword narrows the message, not the type, so it
-    does not rescue the call. ``@pytest.mark.xfail(raises=Exception)`` is the
+_BROAD_EXCEPTION_CLASSES = frozenset({"Exception", "BaseException"})
+"""Exception classes that can never be a *specific* expected error: ``Exception``
+catches every failure (including ``AssertionError`` and any unrelated bug in
+the code under test) and ``BaseException`` widens that to
+``KeyboardInterrupt``/``SystemExit``."""
+
+
+def _broad_exception_catch_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``pytest.raises`` /
+    ``pytest.warns`` whose expected exception is a broad class — ``Exception``,
+    ``BaseException``, or ``AssertionError`` (raises only) without a ``match=``
+    narrow — plus every ``@pytest.mark.xfail(raises=...)`` marker naming a
+    broad class.
+
+    For ``raises``/``warns`` the expected exception may be given positionally,
+    as an ``expected_exception=`` keyword, or inside a union tuple; any broad
+    class inside a union is flagged. ``@pytest.mark.xfail(raises=...)`` is the
     marker twin: the test then xfails on any exception, so it stays green no
-    matter which error the code raises. Attribute-qualified names
-    (``pytest.skip.Exception``) and any concrete named exception are left
-    alone — they are the specific form this lens exists to force."""
-
-    def _is_broad(expr: ast.AST) -> bool:
-        return isinstance(expr, ast.Name) and expr.id in {"Exception", "BaseException"}
-
+    matter which error the code raises. ``pytest.skip.Exception``/
+    ``pytest.xfail.Exception`` (attribute access) are skipped: those name the
+    precise internal exception ``pytest.skip()``/``pytest.xfail()`` raise and
+    are the deliberate assertion those calls happened. An ``AssertionError``
+    expectation is only flagged when the marker has no ``match=`` keyword —
+    ``match=`` pins the check to a specific message, which is the safe way to
+    test an assert-based validator's contract.
+    """
     found = []
 
+    def _is_broad(expr: ast.AST) -> bool:
+        return isinstance(expr, ast.Name) and expr.id in _BROAD_EXCEPTION_CLASSES
+
+    def _report(lineno: int, detail: str) -> None:
+        found.append((lineno, detail))
+
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+        if not isinstance(node, ast.Call):
             continue
-        if node.func.attr != "raises":
+        f = node.func
+        name = f.attr if isinstance(f, ast.Attribute) else (f.id if isinstance(f, ast.Name) else None)
+        if name not in _RAISES_CONTEXT_FUNCS:
             continue
-        if not node.args or not _is_broad(node.args[0]):
-            continue
-        found.append(
-            (
-                node.lineno,
-                f"pytest.raises({ast.unparse(node.args[0])}) — the top of the exception hierarchy "
-                "matches any failure, so the test only proves *something* went wrong; name the "
-                "concrete exception type (a match= narrows the message, not the type)",
-            )
-        )
+        has_match = any(kw.arg == "match" for kw in node.keywords)
+        exception_args = list(node.args)
+        for kw in node.keywords:
+            if kw.arg == "expected_exception":
+                exception_args.append(kw.value)
+        for arg in exception_args:
+            classes: list[str] = []
+            if isinstance(arg, ast.Name):
+                classes.append(arg.id)
+            elif isinstance(arg, ast.Tuple):
+                classes.extend(el.id for el in arg.elts if isinstance(el, ast.Name))
+            elif isinstance(arg, ast.Attribute):
+                continue
+            for cls in classes:
+                if cls in _BROAD_EXCEPTION_CLASSES:
+                    _report(
+                        node.lineno,
+                        f"pytest.{name}({cls}) catches any {cls} — a regression that raises a "
+                        "different exception (or the test's own assertion error) still reports "
+                        "green; name the specific exception the code is documented to raise",
+                    )
+                    break
+                if cls == "AssertionError" and name == "raises" and not has_match:
+                    _report(
+                        node.lineno,
+                        "pytest.raises(AssertionError) without match= — an internal assert bug in "
+                        "the code under test is swallowed as the expected exception; pin the message "
+                        "with match= or expect the specific error",
+                    )
+                    break
 
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -3821,59 +3899,72 @@ def _broad_exception_raises_violations(tree: ast.AST) -> list[tuple[int, str]]:
             if not isinstance(dec, ast.Call):
                 continue
             func = dec.func
-            name = func.attr if isinstance(func, ast.Attribute) else (func.id if isinstance(func, ast.Name) else None)
-            if name != "xfail":
+            dname = func.attr if isinstance(func, ast.Attribute) else (func.id if isinstance(func, ast.Name) else None)
+            if dname != "xfail":
                 continue
             for kw in dec.keywords:
                 if kw.arg == "raises" and _is_broad(kw.value):
-                    found.append(
-                        (
-                            dec.lineno,
-                            f"@pytest.mark.xfail(raises={ast.unparse(kw.value)}) — xfails on any "
-                            "exception, so the test stays green no matter which error the code "
-                            "raises; name the concrete exception type",
-                        )
+                    _report(
+                        dec.lineno,
+                        f"@pytest.mark.xfail(raises={ast.unparse(kw.value)}) — xfails on any "
+                        "exception, so the test stays green no matter which error the code raises; "
+                        "name the concrete exception type",
                     )
     return found
 
 
-def test_no_broad_exception_raises():
-    """``pytest.raises`` (or ``@pytest.mark.xfail(raises=...)``) naming
-    ``Exception`` or ``BaseException`` verifies only that *something* went
-    wrong: any exception satisfies the assertion, so the test reports green
-    even when the code under test raised the wrong error type — an unrelated
-    ``KeyError`` from a bug, or the ``AssertionError`` of a misbehaving
-    assertion inside the block. A ``match=`` narrows the message, not the
-    type, so it does not rescue the call. Name the concrete exception the
-    behaviour promises to raise, and add ``match=`` to pin the message, so a
-    regression that swaps one error for another fails loudly instead of
-    passing silently."""
+def test_no_broad_exception_catch_asserts():
+    """``pytest.raises``/``pytest.warns`` — and ``@pytest.mark.xfail(raises=...)``
+    markers — naming ``Exception``, ``BaseException``, or ``AssertionError``
+    (raises only, without a ``match=`` narrow) are catch-alls that silently
+    mask regressions. ``Exception`` catches every failure, so a bug that makes
+    the code under test raise the *wrong* exception (or an unrelated error
+    entirely) still reports green; pytest itself documents ``pytest.raises`` as
+    "strongly encouraged" to be used with a specific exception type, precisely
+    because a broad catch turns the test into a smoke test. ``BaseException``
+    widens the mask to ``KeyboardInterrupt``/``SystemExit``. ``AssertionError``
+    without ``match=`` is the sharpest hazard: an *internal* assert bug in the
+    code under test is swallowed as the expected exception, so a validator that
+    regresses to raise for the wrong reason passes. A ``match=`` narrows the
+    message, not the type, so it does not rescue the call. Name the specific
+    exception, and pin assert-based validator contracts with ``match=``
+    instead."""
     violations = []
     for path in _iter_test_modules():
         tree = _parse(path)
         if tree is None:
             continue
         rel = path.relative_to(TESTS)
-        for lineno, detail in _broad_exception_raises_violations(tree):
+        for lineno, detail in _broad_exception_catch_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
     assert not violations, (
-        f"Found {len(violations)} catch-all exception spec(s) in pytest.raises/xfail.\n"
-        "pytest.raises(Exception)/BaseException accepts any exception, so the test only proves "
-        "*something* failed. Name the concrete exception type (and add match= to pin the message).\n"
-        + "\n".join(violations)
+        f"Found {len(violations)} broad-exception pytest.raises/pytest.warns/xfail catch(es).\n"
+        "pytest.raises(Exception)/BaseException catches every failure — a regression that raises\n"
+        "the wrong exception, and the test's own assertion errors — so the test reports green instead\n"
+        "of failing. Name the specific exception the code is documented to raise, and pin assert-based\n"
+        "validators with match= instead of bare pytest.raises(AssertionError).\n" + "\n".join(violations)
     )
 
 
-def test_broad_exception_raises_lens_flags_catch_alls():
-    """Synthetic positive/negative control for the catch-all-raises lens: it
-    must flag ``pytest.raises(Exception)``/``BaseException`` in any call shape
-    (context manager, plain call, keyword-arg ``match=``), plus
-    ``@pytest.mark.xfail(raises=...)`` markers, and ignore concrete exception
-    classes, attribute-qualified names (``pytest.skip.Exception``), and
-    non-``raises``/non-``xfail`` calls."""
+def test_broad_exception_catch_lens_flags_broad_catches():
+    """Synthetic positive/negative control for the broad-exception-catch lens,
+    mirroring the constant-condition-skip lens pattern: it must flag
+    ``pytest.raises``/``pytest.warns`` whose expected exception is ``Exception``
+    or ``BaseException`` (positional, in a union tuple, or via
+    ``expected_exception=``), ``pytest.raises(AssertionError)`` without
+    ``match=``, and ``@pytest.mark.xfail(raises=...)`` markers naming a broad
+    class; and ignore specific exceptions, unioned specific exceptions,
+    ``AssertionError`` narrowed by ``match=``, ``pytest.skip.Exception`` /
+    ``pytest.xfail.Exception`` attribute forms, and arg-less ``pytest.warns()``."""
     positive_sources = [
         "def test_foo():\n    with pytest.raises(Exception):\n        foo()\n",
         "def test_foo():\n    with pytest.raises(BaseException):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(AssertionError):\n        _assert_valid(block)\n",
+        "def test_foo():\n    with pytest.raises(expected_exception=Exception):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises((Exception, ValueError)):\n        foo()\n",
+        "def test_foo():\n    with pytest.warns(Exception):\n        foo()\n",
+        "def test_foo():\n    with pytest.warns(BaseException):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(AssertionError):\n        _validate(record)\n",
         "def test_foo():\n    pytest.raises(Exception)\n",
         "def test_foo():\n    with pytest.raises(Exception, match='boom'):\n        foo()\n",
         "def test_foo():\n    with pytest.raises(BaseException) as exc_info:\n        foo()\n",
@@ -3883,24 +3974,29 @@ def test_broad_exception_raises_lens_flags_catch_alls():
     ]
     for source in positive_sources:
         tree = ast.parse(source)
-        assert _broad_exception_raises_violations(tree), f"lens should flag:\n{source}"
+        assert _broad_exception_catch_violations(tree), f"lens should flag:\n{source}"
 
     negative_sources = [
+        "def test_foo():\n    with pytest.raises(ValueError):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises((ValueError, TypeError)):\n        foo()\n",
         "def test_foo():\n    with pytest.raises(ValueError, match='boom'):\n        foo()\n",
         "def test_foo():\n    with pytest.raises(KeyError):\n        foo()\n",
-        "def test_foo():\n    with pytest.raises(pytest.skip.Exception):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(AssertionError, match='too many context elements'):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(CustomError):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(pytest.skip.Exception):\n        pytest.skip('not implemented')\n",
+        "def test_foo():\n    with pytest.raises(pytest.xfail.Exception):\n        pytest.xfail('known bug')\n",
         "def test_foo():\n    with pytest.raises(asyncio.CancelledError):\n        foo()\n",
         "def test_foo():\n    with pytest.raises(HTTPException):\n        foo()\n",
-        "def test_foo():\n    with pytest.raises((ValueError, KeyError)):\n        foo()\n",
         "def test_foo():\n    with pytest.raises(EXC):\n        foo()\n",
         "def test_foo():\n    with pytest.raises(ExceptionGroup('e', [])):\n        foo()\n",
+        "def test_foo():\n    with pytest.warns(UserWarning):\n        foo()\n",
+        "def test_foo():\n    with pytest.warns():\n        foo()\n",
         "@pytest.mark.xfail(raises=ValueError, reason='known')\ndef test_foo():\n    foo()\n",
         "@pytest.mark.xfail(reason='known')\ndef test_foo():\n    foo()\n",
-        "def test_foo():\n    with pytest.warns(Exception):\n        foo()\n",
     ]
     for source in negative_sources:
         tree = ast.parse(source)
-        assert not _broad_exception_raises_violations(tree), f"lens should NOT flag:\n{source}"
+        assert not _broad_exception_catch_violations(tree), f"lens should NOT flag:\n{source}"
 
 
 _MOCK_CONSTRUCTOR_NAMES = frozenset(
@@ -4183,3 +4279,268 @@ def test_mock_assert_lens_flags_none_returning_asserts():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _mock_assert_in_assert_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+_MOCK_CALL_VERIFY_METHODS = frozenset(
+    {
+        "assert_called_with",
+        "assert_called_once_with",
+        "assert_any_call",
+        "assert_awaited_with",
+        "assert_awaited_once_with",
+        "assert_awaited_any_call",
+    }
+)
+"""The mock call-assertion methods that compare recorded call arguments
+against *expected* arguments. ``assert_has_calls``/``assert_has_awaits`` are
+deliberately excluded: their expected argument is a list of ``call()``
+objects (nested a level down), so a Mock in that position is a different,
+less direct shape."""
+
+
+def _fresh_mock_in_call_assertions(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every freshly-constructed Mock
+    passed as an *expected* argument to a mock call-assertion
+    (``assert_called_with``, ``assert_called_once_with``, ``assert_any_call``,
+    and their awaited twins).
+
+    The recorded call is whatever object the code under test actually passed,
+    and a fresh Mock ``__eq__`` defaults to identity, so the expected tuple can
+    never equal the recorded one — the assertion is dead code that always
+    FAILS (and for ``assert_any_call`` no recorded call ever matches). Only
+    direct argument positions are checked (positional and keyword values), so
+    bound names, already-configured mocks, and mocks nested inside containers
+    or ``call(...)`` wrappers are never implicated. This is the
+    expected-argument twin of the ``assert``-position lens in
+    ``_mock_constructor_assert_violations``.
+    """
+    found: list[tuple[int, str]] = []
+
+    def _flag(arg: ast.AST, lineno: int, method: str) -> None:
+        found.append(
+            (
+                lineno,
+                f"{ast.unparse(arg)} passed as an expected-call argument to {method}() — "
+                "a fresh Mock compares by identity, so the recorded call can never equal it "
+                "and the assertion always FAILS; configure the double and pass the configured "
+                "instance, or assert on the real expected value",
+            )
+        )
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr not in _MOCK_CALL_VERIFY_METHODS:
+            continue
+        for arg in node.args:
+            if _is_mock_constructor_call(arg):
+                _flag(arg, arg.lineno, node.func.attr)
+        for kw in node.keywords:
+            if kw.arg and _is_mock_constructor_call(kw.value):
+                _flag(kw.value, kw.value.lineno, node.func.attr)
+    return found
+
+
+def test_no_fresh_mock_in_call_assertions():
+    """``<mock>.assert_called_with(Mock())`` (and ``assert_called_once_with``,
+    ``assert_any_call``, plus the awaited twins) declares a fresh Mock as the
+    *expected* call argument. The recorded call holds whatever object the code
+    under test actually passed, and a new Mock compares by identity (``__eq__``
+    defaults to ``is``), so the expected tuple can never equal the recorded
+    one: the assertion is dead code that always fails, and an ``assert_any_call``
+    with a fresh Mock can never match any recorded call either. This is the
+    expected-argument twin of the assert-``Mock()`` lens, and is almost always
+    a leftover from inlining a double while debugging — the intended comparison
+    target was replaced by the constructor call. Configure the double and pass
+    the configured instance (bound to a name), or assert on the real expected
+    value."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _fresh_mock_in_call_assertions(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} fresh Mock instance(s) in call-assertion expected arguments.\n"
+        "A fresh Mock compares by identity, so the recorded call can never equal it and the "
+        "assertion always FAILS. Configure the double (return_value/side_effect), bind it to "
+        "a name, and pass that — or assert on the real expected value.\n" + "\n".join(violations)
+    )
+
+
+def test_fresh_mock_in_call_assertions_lens_flags_impossible_expectations():
+    """Synthetic positive/negative control for the fresh-Mock-in-call-
+    assertion lens: it must flag a Mock constructor in any expected-argument
+    position (positional, keyword, sync or awaited method, any constructor
+    spelling) and ignore already-bound mock names, configured instances,
+    non-assertion mock calls, statements outside the verify methods, and mocks
+    nested inside container/call wrappers."""
+    positive_sources = [
+        "def test_foo():\n    mock.assert_called_with(Mock())\n",
+        "def test_foo():\n    mock.assert_called_once_with(MagicMock())\n",
+        "def test_foo():\n    mock.assert_any_call(mock.Mock())\n",
+        "def test_foo():\n    mock_async.assert_awaited_with(AsyncMock(call_count=2))\n",
+        "def test_foo():\n    mock_async.assert_awaited_once_with(return_value=MagicMock())\n",
+        "def test_foo():\n    mock_async.assert_awaited_any_call(unittest.mock.NonCallableMock())\n",
+        "def test_foo():\n    mocker.client.post.assert_called_once_with(Mock(spec=HTTPResponse))\n",
+        "def test_foo():\n    mock.assert_called_once_with(session, Mock(), user.org_id)\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _fresh_mock_in_call_assertions(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    mock.assert_called_with(mock_var)\n",
+        "def test_foo():\n    mock.assert_called_with(session, user.org_id, ANY)\n",
+        "def test_foo():\n    double = Mock()\n    mock.assert_called_once_with(double)\n",
+        "def test_foo():\n    mock.assert_called_with(mock.return_value)\n",
+        "def test_foo():\n    mock.assert_called_with([Mock()])\n",
+        "def test_foo():\n    mock.assert_called_with(call(Mock()))\n",
+        "def test_foo():\n    mock.assert_called()\n",
+        "def test_foo():\n    mock.call_count == 1\n",
+        "def test_foo():\n    mock.side_effect = Mock()\n",
+        "def test_foo():\n    mocker.patch('x', return_value=Mock())\n",
+        "def test_foo():\n    mock.assert_called_with(await fetch())\n",
+        "def test_foo():\n    with patch('x') as m:\n        m.assert_called_once()\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _fresh_mock_in_call_assertions(tree), f"lens should NOT flag:\n{source}"
+
+
+def _complementary_boolean_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every assert whose test expression
+    is a ``BoolOp`` (or a ``not``-wrapped ``BoolOp``) that joins a value with
+    its own syntactic negation.
+
+    An ``and`` conjunction containing a complementary pair is a contradiction
+    that always evaluates False (the whole assert ALWAYS FAILS), and an ``or``
+    disjunction containing a complementary pair is a tautology that always
+    evaluates True (the whole assert ALWAYS PASSES); the ``not``-wrapped twins
+    invert the verdict. Either way the outcome is fixed at source time, so the
+    assert is dead code that never exercises the code under test. Only direct
+    operands of the top-level ``BoolOp`` are compared: complementarity nested
+    inside an operand (``assert (x and not x) or y``) does not fix the whole
+    outcome and is deliberately left alone."""
+    found: list[tuple[int, str]] = []
+
+    def _is_negation(candidate: ast.AST, plain: ast.AST) -> bool:
+        return (
+            isinstance(candidate, ast.UnaryOp)
+            and isinstance(candidate.op, ast.Not)
+            and ast.dump(candidate.operand) == ast.dump(plain)
+        )
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        negated = isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not)
+        if negated:
+            test = test.operand
+        if not isinstance(test, ast.BoolOp):
+            continue
+        values = test.values
+        for i in range(len(values)):
+            for j in range(i + 1, len(values)):
+                a, b = values[i], values[j]
+                if not (_is_negation(a, b) or _is_negation(b, a)):
+                    continue
+                if isinstance(test.op, ast.And):
+                    kind = "contradiction"
+                    verdict = "always FAILS" if not negated else "always PASSES"
+                else:
+                    kind = "tautology"
+                    verdict = "always PASSES" if not negated else "always FAILS"
+                found.append(
+                    (
+                        node.lineno,
+                        f"assert {ast.unparse(node.test)} — operand {ast.unparse(a)} is the "
+                        f"negation of {ast.unparse(b)}, a {kind}: {verdict} regardless of the "
+                        "code under test",
+                    )
+                )
+                break
+            else:
+                continue
+            break
+    return found
+
+
+def test_no_complementary_boolean_assertions():
+    """An ``assert`` whose test expression joins a value with its own negation
+    is dead code with a fixed outcome. ``x and not x`` is a contradiction that
+    can never be true, so ``assert x and not x`` ALWAYS FAILS no matter what
+    the code under test does (the suite is unconditionally red — the same dead
+    class as ``assert mock.assert_called()``), and ``x or not x`` is a
+    tautology that is always true, so ``assert x or not x`` ALWAYS PASSES and a
+    mutation-testing run trusts the green as real verification — the silent
+    false green this lens exists to guard. The ``not``-wrapped twins
+    (``assert not (x and not x)``, ``assert not (x or not x)``) invert the
+    verdict. These are almost always a leftover from pasting a condition into
+    an assert while debugging: the code under test has no bearing on the
+    outcome, so the assertion either breaks CI unconditionally or reports green
+    with zero coverage. Operands are compared by syntax, so attribute paths and
+    subscripts are caught too (``assert row['x'] and not row['x']``), while
+    complementarity written with mirrored operators (``assert x == y or x !=
+    y``) needs operator algebra to prove and is deliberately left alone; the
+    literal-constant, self-comparison, and negated-comparison lenses own the
+    neighbouring shapes."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _complementary_boolean_assert_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} assertion(s) joining a value with its own negation.\n"
+        "x and not x is always False (ALWAYS FAILS) and x or not x is always True "
+        "(ALWAYS PASSES), so the outcome never depends on the code under test.\n"
+        "Assert the real condition, or drop the dead check.\n" + "\n".join(violations)
+    )
+
+
+def test_complementary_boolean_lens_flags_fixed_outcomes():
+    """Synthetic positive/negative control for the complementary-boolean lens:
+    must flag an ``assert`` whose top-level ``BoolOp`` joins a value with its
+    own syntactic negation (either operand order, ``and``/``or``, direct or
+    ``not``-wrapped, over names/attributes/subscripts) and ignore non-
+    complementary conjunctions/disjunctions, single operands, complementarity
+    that is nested inside an operand rather than fixing the whole outcome, and
+    value-complementarity expressed with mirrored operators."""
+    positive_sources = [
+        "def test_foo():\n    assert x and not x\n",
+        "def test_foo():\n    assert not x and x\n",
+        "def test_foo():\n    assert x or not x\n",
+        "def test_foo():\n    assert not x or x\n",
+        "def test_foo():\n    assert x and y and not x\n",
+        "def test_foo():\n    assert not (x and not x)\n",
+        "def test_foo():\n    assert not (x or not x)\n",
+        "def test_foo():\n    assert row['active'] and not row['active']\n",
+        "def test_foo():\n    assert result.enabled or not result.enabled\n",
+        "def test_foo():\n    assert not result.enabled and result.enabled\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _complementary_boolean_assert_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert x and not y\n",
+        "def test_foo():\n    assert x or not y\n",
+        "def test_foo():\n    assert x and y\n",
+        "def test_foo():\n    assert x or y\n",
+        "def test_foo():\n    assert not x\n",
+        "def test_foo():\n    assert not (a == 1 and b == 2)\n",
+        "def test_foo():\n    assert (x and not x) or y\n",
+        "def test_foo():\n    assert x == y or x != y\n",
+        "def test_foo():\n    assert x is y or x is not y\n",
+        "def test_foo():\n    assert x in y and x not in y\n",
+        "def test_foo():\n    assert enabled or not disabled\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _complementary_boolean_assert_violations(tree), f"lens should NOT flag:\n{source}"

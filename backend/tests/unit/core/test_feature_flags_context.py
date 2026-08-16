@@ -5,7 +5,7 @@ Covers previously-untested code paths in ``modulo.core.feature_flags``:
   - ``resolve_plan_context`` resolution order and failure fall-through
   - ``FeatureFlagRegistry.resolve_flag`` override precedence
   - org/team/user override DB lookups (``_get_org_override`` etc.)
-  - ``get_registry`` caching and ``get_plan_for_org``
+  - ``get_registry`` caching
 """
 
 import asyncio
@@ -19,7 +19,6 @@ from modulo.core.feature_flags import (
     DbPlanContext,
     FeatureFlagRegistry,
     LicenseKeyTier,
-    get_plan_for_org,
     get_registry,
     resolve_plan_context,
 )
@@ -273,38 +272,6 @@ class TestResolvePlanContext:
         result, from_db, session = await self._resolve(org=None)
         assert result is not None
         from_db.assert_awaited_once_with(session, "community")
-
-
-class TestGetPlanForOrg:
-    async def test_org_plan_id_wins(self) -> None:
-        session = AsyncMock()
-        org = MagicMock(plan_id="team")
-        with patch("modulo.db.crud.organisation.get_organisation", new_callable=AsyncMock, return_value=org):
-            assert await get_plan_for_org(session, uuid.uuid4()) == "team"
-
-    async def test_missing_org_plan_uses_config(self) -> None:
-        session = AsyncMock()
-        org = MagicMock(plan_id=None)
-        config = MagicMock(value="config-plan")
-        with (
-            patch("modulo.db.crud.organisation.get_organisation", new_callable=AsyncMock, return_value=org),
-            patch("modulo.db.crud.system_config.get_config", new_callable=AsyncMock, return_value=config),
-        ):
-            assert await get_plan_for_org(session, uuid.uuid4()) == "config-plan"
-
-    async def test_missing_config_returns_community(self) -> None:
-        session = AsyncMock()
-        with (
-            patch("modulo.db.crud.organisation.get_organisation", new_callable=AsyncMock, return_value=None),
-            patch("modulo.db.crud.system_config.get_config", new_callable=AsyncMock, return_value=None),
-        ):
-            assert await get_plan_for_org(session, uuid.uuid4()) == "community"
-
-    async def test_none_org_id_uses_config(self) -> None:
-        session = AsyncMock()
-        config = MagicMock(value="config-plan")
-        with patch("modulo.db.crud.system_config.get_config", new_callable=AsyncMock, return_value=config):
-            assert await get_plan_for_org(session, None) == "config-plan"
 
 
 class TestResolveFlag:

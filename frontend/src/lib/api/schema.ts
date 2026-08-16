@@ -213,6 +213,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/teams/{team_id}/reassign-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Reassign All Team Resources
+         * @description Bulk-reassign every resource owned by ``team_id`` to org-wide.
+         *
+         *     PRD §9.3 team-deletion flow: before deleting a team, the admin reassigns
+         *     all team-owned resources to org-wide (``owner_team_id -> NULL``,
+         *     ``visibility -> 'org'``), after which deletion is no longer blocked by
+         *     ``team_has_resources``. Idempotent: a team with no owned resources returns
+         *     ``reassigned=0``; reassigning already-org resources succeeds.
+         */
+        post: operations["admin_reassign_all_team_resources_api_v1_admin_teams__team_id__reassign_all_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/dashboard/summary": {
         parameters: {
             query?: never;
@@ -1629,6 +1655,32 @@ export interface paths {
         head?: never;
         /** Update Team Endpoint */
         patch: operations["update_team_endpoint_api_v1_teams__team_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/teams/{team_id}/reassign-org": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reassign Team Resources Endpoint
+         * @description Reassign every team-owned resource to org-wide (PRD §9.3 Team Deletion Policy).
+         *
+         *     Sets ``owner_team_id = NULL`` on every pipeline, connector instance, model
+         *     backend and library primitive currently owned by the team, so the team can
+         *     then be deleted (deletion is blocked while ``owner_team_id`` references the
+         *     team). Admin-only (``team.delete``). Idempotent: re-running after a
+         *     successful reassignment finds zero owned rows and returns ``reassigned=0``.
+         */
+        post: operations["reassign_team_resources_endpoint_api_v1_teams__team_id__reassign_org_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/teams/{team_id}/members": {
@@ -8037,6 +8089,13 @@ export interface components {
             /** File */
             file: string;
         };
+        /** BulkReassignResponse */
+        BulkReassignResponse: {
+            /** Reassigned */
+            reassigned: number;
+            /** Resource Types */
+            resource_types?: string[];
+        };
         /** CancelDeletionResponse */
         CancelDeletionResponse: {
             /** Status */
@@ -11860,6 +11919,11 @@ export interface components {
             /** Folder Id */
             folder_id?: string | null;
             /**
+             * Connector Rebind Required
+             * @default false
+             */
+            connector_rebind_required: boolean;
+            /**
              * Created By
              * Format: uuid
              */
@@ -13926,6 +13990,13 @@ export interface components {
             /** Team Role */
             team_role: string;
         };
+        /** TeamReassignResponse */
+        TeamReassignResponse: {
+            /** Team Id */
+            team_id: string;
+            /** Reassigned */
+            reassigned: number;
+        };
         /** TeamResponse */
         TeamResponse: {
             /** Id */
@@ -15682,6 +15753,39 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_reassign_all_team_resources_api_v1_admin_teams__team_id__reassign_all_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkReassignResponse"];
+                };
             };
             /** @description Validation Error */
             422: {
@@ -19044,6 +19148,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TeamResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reassign_team_resources_endpoint_api_v1_teams__team_id__reassign_org_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamReassignResponse"];
                 };
             };
             /** @description Validation Error */

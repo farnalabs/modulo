@@ -33,6 +33,7 @@ from modulo.db.crud.hitl_gate_guard import (
     resolve_effective_privilege,
 )
 from modulo.db.crud.pagination import CursorPaginator
+from modulo.db.crud.run import count_active_runs_for_pipeline
 from modulo.db.crud.team_scope import team_scope_clause
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
@@ -41,6 +42,19 @@ from modulo.db.models.snapshot_schema_pin import SnapshotSchemaPin
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _log = logging.getLogger(__name__)
+
+
+class PipelineHasActiveRunsError(Exception):
+    """Ownership transfer is blocked while the pipeline has non-terminal runs.
+
+    Raised by ``update_pipeline`` when ``owner_team_id`` changes while any run
+    is in a non-terminal state. The route maps this to a structured 409
+    ``pipeline_has_active_runs`` response (PRD §9.3 / ownership transfer).
+    """
+
+    def __init__(self, active_run_count: int) -> None:
+        self.active_run_count = active_run_count
+        super().__init__(f"{active_run_count} run(s) still in progress")
 
 
 async def create_pipeline(
@@ -187,11 +201,45 @@ async def update_pipeline(
     session: AsyncSession,
     pipeline_id: uuid.UUID,
     updates: dict[str, Any],
+    *,
+    org_id: uuid.UUID | None = None,
+    account_id: uuid.UUID | None = None,
+    request_id: str | None = None,
 ) -> Pipeline | None:
+    """Update a pipeline, applying the PRD §9.3 ownership-transfer rules.
+
+    When ``owner_team_id`` changes (reassign to a team, or clear back to
+    org-wide) AND audit context is supplied (the REST route path), the transfer
+    is blocked while any non-terminal run exists (``PipelineHasActiveRunsError``)
+    and a ``resource_team_ownership_changed`` audit event is recorded. Callers
+    that pass no audit context (internal tooling, MCP) are not affected.
+    """
     pipeline = await get_pipeline(session, pipeline_id)
     if pipeline is None:
         return None
+    old_team_id = pipeline.owner_team_id
     apply_updates(pipeline, updates)
+    new_team_id = pipeline.owner_team_id
+    if org_id is not None and account_id is not None and new_team_id != old_team_id:
+        active_runs = await count_active_runs_for_pipeline(session, pipeline_id, include_pending=True)
+        if active_runs:
+            raise PipelineHasActiveRunsError(active_runs)
+        await append_audit_event(
+            session,
+            org_id=org_id,
+            event_type="resource_team_ownership_changed",
+            actor_user_id=account_id,
+            resource_type="pipeline",
+            resource_id=pipeline_id,
+            payload_json={
+                "resource_type": "pipeline",
+                "resource_id": str(pipeline_id),
+                "old_team_id": str(old_team_id) if old_team_id is not None else None,
+                "new_team_id": str(new_team_id) if new_team_id is not None else None,
+                "changed_by": str(account_id),
+            },
+            request_id=request_id,
+        )
     await session.flush()
     return pipeline
 

@@ -538,7 +538,7 @@ async def reassign_team_resources_endpoint(
                     )
                     .values(owner_team_id=None)
                 )
-                total += int(result.rowcount or 0)
+                total += int(result.rowcount or 0)  # type: ignore[attr-defined]
     except IntegrityError as exc:
         _log.exception("teams.reassign_team_resources_endpoint")
         raise HTTPException(

@@ -9,7 +9,6 @@ import pytest
 from modulo.core.email_service import (
     EmailSendingError,
     EmailSendLimiter,
-    EmailTestSendRateError,
     _effective_timeout,
     _is_valid_recipient,
     _redact_credentials,
@@ -577,11 +576,15 @@ class TestRedactCredentials:
 
 
 def _await_acquire(limiter: EmailSendLimiter, org_id: int) -> int:
+    """Run ``acquire`` to completion and return the retry-after signal.
+
+    The real contract (and the admin test-send route's) is
+    ``acquire() -> int``: ``0`` means the send may proceed, a positive value
+    is the seconds until a slot frees.
+    """
+
     async def _run() -> int:
-        retry = await limiter.acquire(org_id)
-        if retry > 0:
-            raise EmailTestSendRateError(retry)
-        return retry
+        return await limiter.acquire(org_id)
 
     return asyncio.run(_run())
 
@@ -600,9 +603,8 @@ class TestEmailSendLimiter:
         limiter = EmailSendLimiter(limit=1, window_seconds=60, now_fn=lambda: clock[0])
         assert limiter._now() == 1000.0
         assert _await_acquire(limiter, 1) == 0
-        with pytest.raises(EmailTestSendRateError) as exc_info:
-            _await_acquire(limiter, 1)
-        assert exc_info.value.retry_after_seconds > 0
+        retry_after = _await_acquire(limiter, 1)
+        assert retry_after > 0
 
     async def test_window_rollover_refills_budget(self) -> None:
         clock = [1000.0]
