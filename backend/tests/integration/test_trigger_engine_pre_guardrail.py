@@ -253,7 +253,7 @@ class TestGuardrailBlockAtIntake:
         assert run_count == 0
 
         # No dedup slot was consumed.
-        assert await _dedup_rows(db_engine, intake_rig["trigger_id"]) == []
+        assert not await _dedup_rows(db_engine, intake_rig["trigger_id"])
 
         # The raw payload was stored for replay (the sender can retry after
         # fixing): a webhook_payloads row is bound to the blocked event.
