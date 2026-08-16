@@ -31,6 +31,7 @@ from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.dispatch import dispatch_run
 from modulo.core.exceptions import OrgDeletedError
+from modulo.core.guardrails import GuardrailSummary
 from modulo.core.line_diff import iter_line_diffs
 from modulo.core.node_output_split import node_return, node_telemetry
 from modulo.core.pipeline_engine.classify import REASON_DELIVERED_EMAIL, _any_marker_delivery_done
@@ -392,6 +393,11 @@ class RunResponse(BaseModel):
     # publish status, compensation outcomes). None for non-blocked / pre-column
     # runs.
     blocked_partial_summary: dict[str, Any] | None = None
+    # FAR-223 item 11 — per-run guardrail interception snapshot (bound /
+    # evaluated / passed / violated / observed / errored / redacted / skipped /
+    # expected_skips / unexpected_skips). NULL when the run had no guardrails
+    # bound, or on pre-migration runs.
+    guardrail_summary: dict[str, int] | None = None
 
 
 def _run_gate_fired(run: Any) -> bool:
@@ -401,8 +407,7 @@ def _run_gate_fired(run: Any) -> bool:
     suppression), (b) the stored classification reason is ``email_delivered``,
     or (c) any raw-output marker carries ``delivery_done is True`` (guard A /
     success-path stamp / cancelled-retention). Never raises on non-dict columns.
-    """
-    # The DB stores the RAW spelling for legacy rows (``idempotency_gate``) and
+    """  # The DB stores the RAW spelling for legacy rows (``idempotency_gate``) and
     # the dotted registry code (``harness.idempotency_gate``) for new writes, so
     # the read is routed through ``map_legacy_code`` to match both.
     if map_legacy_code(getattr(run, "error_code", None)) == "harness.idempotency_gate":
@@ -412,6 +417,23 @@ def _run_gate_fired(run: Any) -> bool:
         return True
     markers = getattr(run, "raw_output_markers", None)
     return bool(_any_marker_delivery_done(markers))
+
+
+def _guardrail_summary_from_run(run: Any) -> dict[str, int] | None:
+    """Parse the persisted ``guardrail_summary_json`` for run detail (item 11).
+
+    Defensive like ``run_classification``: the JSON column could hold any JSON
+    value (or a MagicMock in tests) — a non-dict/malformed value degrades to
+    None, never a 500.
+    """
+    raw = getattr(run, "guardrail_summary_json", None)
+    if not isinstance(raw, dict) or not raw:
+        return None
+    try:
+        return GuardrailSummary.from_mapping(raw).to_dict()
+    except (TypeError, ValueError):
+        _log.warning("runs.guardrail_summary_invalid", extra={"run_id": str(getattr(run, "id", ""))})
+        return None
 
 
 def _build_run_response(
@@ -473,6 +495,7 @@ def _build_run_response(
         run_classification=run_classification,
         gate_fired=_run_gate_fired(run),
         blocked_partial_summary=blocked_partial_summary,
+        guardrail_summary=_guardrail_summary_from_run(run),
     )
 
 

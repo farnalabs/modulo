@@ -30,7 +30,7 @@ import pytest
 from alembic.script import ScriptDirectory
 
 _MIGRATION_0008 = "0110_schema_pipeline_runtime"
-_HEAD_MIGRATION = "0112_feedback_correction_state"
+_HEAD_MIGRATION = "0113_guardrail_summary"
 
 _VERSIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 
@@ -51,6 +51,19 @@ def migration_0008() -> ModuleType:
     spec.loader.exec_module(module)
     return module
 
+@pytest.fixture(scope="module")
+def migration_0113() -> ModuleType:
+    path = _VERSIONS_DIR / f"{_HEAD_MIGRATION}.py"
+    assert path.exists(), f"Migration file missing: {path}"
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(f"migration_{_HEAD_MIGRATION}", path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
 
 def _script() -> ScriptDirectory:
     return ScriptDirectory(str(_VERSIONS_DIR.parent))
@@ -62,6 +75,13 @@ class TestReconciliationChain:
         assert script.get_heads() == [_HEAD_MIGRATION], (
             f"expected a single head {_HEAD_MIGRATION}, got {script.get_heads()}"
         )
+
+
+    def test_0113_adds_guardrail_summary_column(self, migration_0113: ModuleType) -> None:
+        source = _source(migration_0113)
+        assert "guardrail_summary_json" in source
+        assert "add_column" in source
+        assert "0112_feedback_correction_state" in source
 
     def test_0008_owns_trigger_and_run_vocabulary(self, migration_0008: ModuleType) -> None:
         source = _source(migration_0008)

@@ -423,16 +423,21 @@ async def create_run(
     # observe/warn-only guardrails log-and-continue on mechanism error.
     run_id = uuid.uuid4()
     guardrail_results: list[Any] = []
+    guardrail_redactions: list[Any] = []
     guardrail_blocked = False
     guardrail_block_message = ""
     guardrail_blocking_eval_name = ""
     guardrail_observed_by_eval: dict[uuid.UUID, bool] = {}
     from modulo.core.eval_engine import EvalEngine
     from modulo.core.guardrails import (
+        GUARDRAIL_SKIP_EXPECTED_REASONS,
         GuardrailAction,
         GuardrailSkip,
+        alert_unexpected_guardrail_skip,
         audit_guardrail_skip,
+        build_guardrail_summary,
         guardrail_cap_violation,
+        log_guardrail_fired_signatures,
         non_conformant_blocking_guardrails,
         notify_guardrail_event,
         run_interception_pass_async,
@@ -578,6 +583,7 @@ async def create_run(
                 else:
                     stored_payload = outcome.payload
                     guardrail_results = outcome.results
+                    guardrail_redactions = outcome.redactions
                     guardrail_blocked = outcome.blocked
                     guardrail_block_message = outcome.block_message
                     skipped_guardrails = outcome.skipped
@@ -606,8 +612,37 @@ async def create_run(
 
         # Item 10 — audit + alert skipped pinned guardrails (best-effort: the
         # skip is the policy; a failed audit/alert never breaks the run).
+        # Item 11 — a skip NOT explained by soft-deleted pin state is
+        # UNEXPECTED and pages an additional ``guardrail_unexpected_skip``
+        # alert (Notification Log + Error Forwarders).
         for skip in skipped_guardrails:
             await audit_guardrail_skip(session, org_id, run_id, skip)
+            if skip.reason not in GUARDRAIL_SKIP_EXPECTED_REASONS:
+                await alert_unexpected_guardrail_skip(org_id, run_id, skip)
+
+        # Item 11 — guardrail_summary telemetry snapshot + per-pattern
+        # fired-signature regression log. Computed BEFORE the run row exists so
+        # it can be persisted on the Run in one place. ``bound`` = the guardrail
+        # rows bound at run start (pinned set or live fallback) INCLUDING
+        # skipped pins, so ``evaluated + errored + skipped == bound`` holds by
+        # construction (build_guardrail_summary absorbs no-clean-detection
+        # guardrails into ``errored``).
+        guardrail_summary_dict: dict[str, int] | None = build_guardrail_summary(
+            bound=len(guardrail_defs) + len(skipped_guardrails),
+            definitions=guardrail_defs,
+            results=guardrail_results,
+            redactions=guardrail_redactions,
+            skipped=skipped_guardrails,
+            observed_by_eval=guardrail_observed_by_eval,
+        ).to_dict()
+        log_guardrail_fired_signatures(
+            org_id=org_id,
+            run_id=run_id,
+            definitions=guardrail_defs,
+            results=guardrail_results,
+        )
+    else:
+        guardrail_summary_dict = None
 
     # Engine-only feedback-correction context (FAR-142): the
     # ``_feedback_correction`` key is reserved and stripped above, so a user
@@ -666,6 +701,7 @@ async def create_run(
         work_item_refs=canonical_refs,
         is_replay=is_replay,
         variant_group_id=variant_group_id,
+        guardrail_summary_json=guardrail_summary_dict,
     )
     if guardrail_blocked:
         # A guardrail block at the ingestion edge is TERMINAL (eval_failed) —

@@ -30,6 +30,7 @@ from modulo.core.notifier import (
     EVENT_FEEDBACK_PENDING,
     EVENT_GUARDRAIL_ENFORCEMENT_GAP,
     EVENT_GUARDRAIL_KILL_SWITCH,
+    EVENT_GUARDRAIL_UNEXPECTED_SKIP,
     EVENT_HITL_AWAITING,
     EVENT_HITL_OVERDUE,
     EVENT_RUN_FAILED,
@@ -172,6 +173,14 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
         "dismissible_at_scope": True,
         "ttl_hours": 168,
     },
+    EVENT_GUARDRAIL_UNEXPECTED_SKIP: {
+        "level": "error",
+        "scope": "admin",
+        "category": "guardrails.unexpected_skip",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
 }
 
 _TITLE_TEMPLATES: dict[str, str] = {
@@ -190,6 +199,7 @@ _TITLE_TEMPLATES: dict[str, str] = {
     EVENT_TRIGGER_DEACTIVATED: "Ongoing trigger auto-deactivated — {pipeline_name}",
     EVENT_GUARDRAIL_ENFORCEMENT_GAP: "Guardrail enforcement gap — {guardrail}",
     EVENT_GUARDRAIL_KILL_SWITCH: "Guardrails downgraded to observe (kill-switch enabled)",
+    EVENT_GUARDRAIL_UNEXPECTED_SKIP: "Guardrail skipped unexpectedly — {guardrail}",
 }
 
 _BODY_TEMPLATES: dict[str, str] = {
@@ -218,6 +228,10 @@ _BODY_TEMPLATES: dict[str, str] = {
         "The org-wide guardrails kill-switch was enabled: every bound guardrail is now "
         "observe-only (shadow mode). Guardrails are computed and logged but never block or redact."
     ),
+    EVENT_GUARDRAIL_UNEXPECTED_SKIP: (
+        'Guardrail "{guardrail}" was skipped for an unexpected reason ({reason}) — not explained by '
+        "a soft-deleted pinned guardrail. See the run for details."
+    ),
 }
 
 _ACTION_URL_TEMPLATES: dict[str, str | None] = {
@@ -236,6 +250,7 @@ _ACTION_URL_TEMPLATES: dict[str, str | None] = {
     EVENT_TRIGGER_DEACTIVATED: None,
     EVENT_GUARDRAIL_ENFORCEMENT_GAP: "/runs/{run_id}",
     EVENT_GUARDRAIL_KILL_SWITCH: None,
+    EVENT_GUARDRAIL_UNEXPECTED_SKIP: "/runs/{run_id}",
 }
 
 

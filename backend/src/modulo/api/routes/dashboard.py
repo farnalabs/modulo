@@ -29,6 +29,7 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.core.analytics import compute_delta
 from modulo.core.remy.config_service import RemyConfigService
+from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.feedback_record import FeedbackRecord
@@ -236,6 +237,7 @@ async def _eval_rate_window(
                 EvalResult.organisation_id == org_id,
                 EvalResult.evaluated_at >= window_start,
                 EvalResult.evaluated_at < window_end,
+                non_guardrail_eval_results_clause(),
             )
         )
     ).one()
@@ -435,7 +437,10 @@ async def dashboard_summary(
                     func.sum(case((EvalResult.passed.is_(True), 1), else_=0)).label("passed"),
                 )
                 .select_from(EvalResult)
-                .where(EvalResult.organisation_id == org_id)
+                .where(
+                    EvalResult.organisation_id == org_id,
+                    non_guardrail_eval_results_clause(),
+                )
             )
             eval_totals_row = (await session.execute(eval_totals_query)).one()
             eval_total = int(eval_totals_row.total) if eval_totals_row.total is not None else 0
@@ -454,6 +459,7 @@ async def dashboard_summary(
                 .where(
                     EvalResult.organisation_id == org_id,
                     Run.owner_team_id.is_not(None),
+                    non_guardrail_eval_results_clause(),
                 )
                 .group_by(Run.owner_team_id, Run.pipeline_id)
             )
