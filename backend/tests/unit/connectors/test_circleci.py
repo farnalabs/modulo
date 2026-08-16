@@ -248,7 +248,7 @@ async def test_get_run_logs_corrupt_body_no_crash(cc_runner):
         return_value=httpx.Response(200, json=["corrupt", "body"])
     )
     logs = await cc_runner.get_run_logs(pipeline_uuid)
-    assert logs.lines == []
+    assert not logs.lines
 
 
 @respx.mock
@@ -259,7 +259,7 @@ async def test_get_run_logs_non_list_items_no_crash(cc_runner):
         return_value=httpx.Response(200, json={"items": "corrupt"})
     )
     logs = await cc_runner.get_run_logs(pipeline_uuid)
-    assert logs.lines == []
+    assert not logs.lines
 
 
 # ---------------------------------------------------------------------------

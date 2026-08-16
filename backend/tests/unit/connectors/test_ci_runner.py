@@ -121,7 +121,7 @@ async def test_gh_trigger_run_corrupt_workflow_runs_no_crash(gh_runner):
         branch="main",
     )
     assert run.status == CIRunStatus.PENDING
-    assert run.id == ""
+    assert not run.id
 
 
 # ---------------------------------------------------------------------------
