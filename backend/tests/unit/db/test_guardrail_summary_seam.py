@@ -295,3 +295,20 @@ async def test_create_run_emits_fired_signature_log(session: AsyncSession, caplo
     assert records[0].guardrail == "no-secrets"
     assert records[0].fired is True
     assert len(records[0].pattern_hash) == 12
+
+
+async def test_create_run_summary_derive_failure_fails_open(session: AsyncSession, monkeypatch: pytest.MonkeyPatch):
+    """A summary-derivation failure must NEVER break run creation — the run is
+    created (enforcement intact) with no summary and the failure is logged."""
+    await _seed(session)
+    await _seed_guardrail(session, name="no-secrets", action="block")
+
+    def _boom(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("summary derivation exploded")
+
+    monkeypatch.setattr(guardrails_module, "build_guardrail_summary", _boom)
+    run = await _create(session, input_payload={"body": "leak SECRET_ABC12345"})
+    # The enforcement outcome is unaffected — the run is still blocked.
+    assert run.status == "eval_failed"
+    assert run.error_code == "eval_blocked"
+    assert run.guardrail_summary_json is None

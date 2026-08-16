@@ -626,21 +626,29 @@ async def create_run(
         # rows bound at run start (pinned set or live fallback) INCLUDING
         # skipped pins, so ``evaluated + errored + skipped == bound`` holds by
         # construction (build_guardrail_summary absorbs no-clean-detection
-        # guardrails into ``errored``).
-        guardrail_summary_dict: dict[str, int] | None = build_guardrail_summary(
-            bound=len(guardrail_defs) + len(skipped_guardrails),
-            definitions=guardrail_defs,
-            results=guardrail_results,
-            redactions=guardrail_redactions,
-            skipped=skipped_guardrails,
-            observed_by_eval=guardrail_observed_by_eval,
-        ).to_dict()
-        log_guardrail_fired_signatures(
-            org_id=org_id,
-            run_id=run_id,
-            definitions=guardrail_defs,
-            results=guardrail_results,
-        )
+        # guardrails into ``errored``). TELEMETRY: best-effort fail-open — a
+        # summary-derivation failure must never break run creation (the
+        # enforcement already happened); it degrades to no summary + a log.
+        guardrail_summary_dict: dict[str, int] | None = None
+        try:
+            guardrail_summary_dict = build_guardrail_summary(
+                bound=len(guardrail_defs) + len(skipped_guardrails),
+                definitions=guardrail_defs,
+                results=guardrail_results,
+                redactions=guardrail_redactions,
+                skipped=skipped_guardrails,
+                observed_by_eval=guardrail_observed_by_eval,
+            ).to_dict()
+            log_guardrail_fired_signatures(
+                org_id=org_id,
+                run_id=run_id,
+                definitions=guardrail_defs,
+                results=guardrail_results,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("guardrails.summary_derive_failed", extra={"run_id": str(run_id)})
     else:
         guardrail_summary_dict = None
 
