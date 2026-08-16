@@ -109,7 +109,6 @@ async def test_github_compensate_closes_pr():
     )
     assert result.outcome == CompensationOutcome.COMPENSATED
     assert result.resource_id == str(pr_number)
-    assert route.called
     assert route.calls.last.request.content == b'{"state":"closed"}'
 
 
@@ -179,7 +178,6 @@ async def test_linear_compensate_unassign():
     )
     assert result.outcome == CompensationOutcome.COMPENSATED
     assert result.resource_id == issue_id
-    assert route.called
     assert "assigneeId" in route.calls.last.request.content.decode()
 
 
@@ -306,8 +304,8 @@ async def test_compensate_blocked_run_no_hub_writes_summary(audit_patch: Any):
     )
     assert summary["blocked"] is True
     assert summary["blocking_eval_name"] == "secret"
-    assert summary["executed_nodes"] == []
-    assert summary["nodes"] == []
+    assert not summary["executed_nodes"]
+    assert not summary["nodes"]
     assert run.blocked_partial_summary == summary
     assert session.flushed
     audit_patch.assert_awaited_once()
