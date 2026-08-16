@@ -222,6 +222,18 @@ regression that silently weakens the suite:
   markers, which then xfail on *any* exception. Attribute-qualified classes
   (``pytest.skip.Exception``) and concrete named exceptions are left alone —
   they are the specific form this lens exists to force
+- a freshly-constructed Mock passed as an *expected* argument to a mock
+  call-assertion — ``<mock>.assert_called_with(Mock())``,
+  ``assert_called_once_with(...)``, ``assert_any_call(...)``, and their awaited
+  twins, in any positional or keyword argument position. The recorded call is
+  whatever object the code under test actually passed, and a fresh Mock
+  compares by identity (``__eq__`` defaults to ``is``), so the expected tuple
+  can never equal the recorded one: the assertion always FAILS, and for
+  ``assert_any_call`` fresh mocks can never match any recorded call either.
+  This is the expected-argument twin of the assert-test-expression Mock lens:
+  it is almost always a leftover from inlining a double while debugging.
+  Configure the double and pass the configured instance (or use a bound
+  name), or assert on the real expected value
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -4016,3 +4028,132 @@ def test_mock_constructor_lens_flags_dead_asserts():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _mock_constructor_assert_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+_MOCK_CALL_VERIFY_METHODS = frozenset(
+    {
+        "assert_called_with",
+        "assert_called_once_with",
+        "assert_any_call",
+        "assert_awaited_with",
+        "assert_awaited_once_with",
+        "assert_awaited_any_call",
+    }
+)
+"""The mock call-assertion methods that compare recorded call arguments
+against *expected* arguments. ``assert_has_calls``/``assert_has_awaits`` are
+deliberately excluded: their expected argument is a list of ``call()``
+objects (nested a level down), so a Mock in that position is a different,
+less direct shape."""
+
+
+def _fresh_mock_in_call_assertions(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every freshly-constructed Mock
+    passed as an *expected* argument to a mock call-assertion
+    (``assert_called_with``, ``assert_called_once_with``, ``assert_any_call``,
+    and their awaited twins).
+
+    The recorded call is whatever object the code under test actually passed,
+    and a fresh Mock ``__eq__`` defaults to identity, so the expected tuple can
+    never equal the recorded one — the assertion is dead code that always
+    FAILS (and for ``assert_any_call`` no recorded call ever matches). Only
+    direct argument positions are checked (positional and keyword values), so
+    bound names, already-configured mocks, and mocks nested inside containers
+    or ``call(...)`` wrappers are never implicated. This is the
+    expected-argument twin of the ``assert``-position lens in
+    ``_mock_constructor_assert_violations``.
+    """
+    found: list[tuple[int, str]] = []
+
+    def _flag(arg: ast.AST, lineno: int, method: str) -> None:
+        found.append(
+            (
+                lineno,
+                f"{ast.unparse(arg)} passed as an expected-call argument to {method}() — "
+                "a fresh Mock compares by identity, so the recorded call can never equal it "
+                "and the assertion always FAILS; configure the double and pass the configured "
+                "instance, or assert on the real expected value",
+            )
+        )
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr not in _MOCK_CALL_VERIFY_METHODS:
+            continue
+        for arg in node.args:
+            if _is_mock_constructor_call(arg):
+                _flag(arg, arg.lineno, node.func.attr)
+        for kw in node.keywords:
+            if kw.arg and _is_mock_constructor_call(kw.value):
+                _flag(kw.value, kw.value.lineno, node.func.attr)
+    return found
+
+
+def test_no_fresh_mock_in_call_assertions():
+    """``<mock>.assert_called_with(Mock())`` (and ``assert_called_once_with``,
+    ``assert_any_call``, plus the awaited twins) declares a fresh Mock as the
+    *expected* call argument. The recorded call holds whatever object the code
+    under test actually passed, and a new Mock compares by identity (``__eq__``
+    defaults to ``is``), so the expected tuple can never equal the recorded
+    one: the assertion is dead code that always fails, and an ``assert_any_call``
+    with a fresh Mock can never match any recorded call either. This is the
+    expected-argument twin of the assert-``Mock()`` lens, and is almost always
+    a leftover from inlining a double while debugging — the intended comparison
+    target was replaced by the constructor call. Configure the double and pass
+    the configured instance (bound to a name), or assert on the real expected
+    value."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _fresh_mock_in_call_assertions(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} fresh Mock instance(s) in call-assertion expected arguments.\n"
+        "A fresh Mock compares by identity, so the recorded call can never equal it and the "
+        "assertion always FAILS. Configure the double (return_value/side_effect), bind it to "
+        "a name, and pass that — or assert on the real expected value.\n" + "\n".join(violations)
+    )
+
+
+def test_fresh_mock_in_call_assertions_lens_flags_impossible_expectations():
+    """Synthetic positive/negative control for the fresh-Mock-in-call-
+    assertion lens: it must flag a Mock constructor in any expected-argument
+    position (positional, keyword, sync or awaited method, any constructor
+    spelling) and ignore already-bound mock names, configured instances,
+    non-assertion mock calls, statements outside the verify methods, and mocks
+    nested inside container/call wrappers."""
+    positive_sources = [
+        "def test_foo():\n    mock.assert_called_with(Mock())\n",
+        "def test_foo():\n    mock.assert_called_once_with(MagicMock())\n",
+        "def test_foo():\n    mock.assert_any_call(mock.Mock())\n",
+        "def test_foo():\n    mock_async.assert_awaited_with(AsyncMock(call_count=2))\n",
+        "def test_foo():\n    mock_async.assert_awaited_once_with(return_value=MagicMock())\n",
+        "def test_foo():\n    mock_async.assert_awaited_any_call(unittest.mock.NonCallableMock())\n",
+        "def test_foo():\n    mocker.client.post.assert_called_once_with(Mock(spec=HTTPResponse))\n",
+        "def test_foo():\n    mock.assert_called_once_with(session, Mock(), user.org_id)\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _fresh_mock_in_call_assertions(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    mock.assert_called_with(mock_var)\n",
+        "def test_foo():\n    mock.assert_called_with(session, user.org_id, ANY)\n",
+        "def test_foo():\n    double = Mock()\n    mock.assert_called_once_with(double)\n",
+        "def test_foo():\n    mock.assert_called_with(mock.return_value)\n",
+        "def test_foo():\n    mock.assert_called_with([Mock()])\n",
+        "def test_foo():\n    mock.assert_called_with(call(Mock()))\n",
+        "def test_foo():\n    mock.assert_called()\n",
+        "def test_foo():\n    mock.call_count == 1\n",
+        "def test_foo():\n    mock.side_effect = Mock()\n",
+        "def test_foo():\n    mocker.patch('x', return_value=Mock())\n",
+        "def test_foo():\n    mock.assert_called_with(await fetch())\n",
+        "def test_foo():\n    with patch('x') as m:\n        m.assert_called_once()\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _fresh_mock_in_call_assertions(tree), f"lens should NOT flag:\n{source}"
