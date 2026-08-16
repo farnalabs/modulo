@@ -1135,6 +1135,29 @@ async def create_pipeline(
     description="List pipeline runs with filtering and cursor-based pagination.",
 )
 @_RETRY_DB
+def _mcp_run_item(r: Any, child_rollup: dict) -> dict[str, Any]:
+    child_cost, child_count = child_rollup.get(r.id, (_MCP_COST_ROLLUP_ZERO, 0))
+    child_cost = _quantize_mcp_cost_rollup(child_cost)
+    own_cost = r.total_cost_usd if r.total_cost_usd is not None else _MCP_COST_ROLLUP_ZERO
+    _error_code, error_detail = present_error(r.error_code, r.error_detail, limit=200)
+    return {
+        "id": str(r.id),
+        "pipeline_id": str(r.pipeline_id),
+        "status": r.status,
+        "trigger_type": r.trigger_type,
+        "run_number": r.run_number,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+        "started_at": r.started_at.isoformat() if r.started_at else None,
+        "completed_at": r.completed_at.isoformat() if r.completed_at else None,
+        "error_code": _error_code,
+        "error_detail": error_detail,
+        "total_cost_usd": float(r.total_cost_usd) if r.total_cost_usd is not None else None,
+        "child_runs_cost_usd": float(child_cost),
+        "child_runs_count": child_count,
+        "aggregate_cost_usd": float(_quantize_mcp_cost_rollup(own_cost + child_cost)),
+    }
+
+
 async def list_runs(
     pipeline_id: str | None = None,
     status: str | None = None,
@@ -1168,30 +1191,7 @@ async def list_runs(
             # page, joined in Python — never a per-row aggregate (avoids N+1).
             run_ids = [r.id for r in result.items]
             child_rollup = await get_child_run_rollup(s, run_ids) if run_ids else {}
-        items = []
-        for r in result.items:
-            child_cost, child_count = child_rollup.get(r.id, (_MCP_COST_ROLLUP_ZERO, 0))
-            child_cost = _quantize_mcp_cost_rollup(child_cost)
-            own_cost = r.total_cost_usd if r.total_cost_usd is not None else _MCP_COST_ROLLUP_ZERO
-            _error_code, error_detail = present_error(r.error_code, r.error_detail, limit=200)
-            items.append(
-                {
-                    "id": str(r.id),
-                    "pipeline_id": str(r.pipeline_id),
-                    "status": r.status,
-                    "trigger_type": r.trigger_type,
-                    "run_number": r.run_number,
-                    "created_at": r.created_at.isoformat() if r.created_at else None,
-                    "started_at": r.started_at.isoformat() if r.started_at else None,
-                    "completed_at": r.completed_at.isoformat() if r.completed_at else None,
-                    "error_code": _error_code,
-                    "error_detail": error_detail,
-                    "total_cost_usd": float(r.total_cost_usd) if r.total_cost_usd is not None else None,
-                    "child_runs_cost_usd": float(child_cost),
-                    "child_runs_count": child_count,
-                    "aggregate_cost_usd": float(_quantize_mcp_cost_rollup(own_cost + child_cost)),
-                }
-            )
+        items = [_mcp_run_item(r, child_rollup) for r in result.items]
         return {
             "items": items,
             "total": result.total,
