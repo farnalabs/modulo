@@ -958,6 +958,22 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # the validator raises and the process exits before accepting requests.
     settings = get_settings()
 
+    _configure_license_and_otel(settings)
+    _discover_plugins(settings)
+
+    logger.info("startup.starting")
+    await _run_boot_guards_and_seeds(settings)
+    _register_shutdown_manager(settings)
+
+    tasks = await _start_background_tasks(settings)
+
+    yield
+
+    await _teardown_tasks(tasks)
+
+
+def _configure_license_and_otel(settings: Settings) -> None:
+    """Configure the license public key, OTel, and basic runtime warnings."""
     if settings.modulo_public_url in ("", "http://localhost:8000"):
         logger.warning("startup.default_public_url")
 
@@ -988,7 +1004,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         telemetry_enabled=settings.modulo_telemetry_enabled,
     )
 
-    # Discover installed plugins if plugin discovery is enabled.
+
+def _discover_plugins(settings: Settings) -> None:
+    """Discover installed plugins if plugin discovery is enabled."""
     if settings.modulo_plugin_discovery:
         from modulo.core.plugin_registry import get_plugin_registry
 
@@ -1004,8 +1022,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     else:
         logger.info("startup.plugin_discovery_disabled")
 
-    logger.info("startup.starting")
 
+async def _run_boot_guards_and_seeds(settings: Settings) -> None:
+    """Verify DB connectivity, run migrations, and execute all boot-time guards and seeds."""
     # Verify the database is reachable before accepting requests.
     await _verify_db_connectivity(settings)
 
@@ -1080,13 +1099,17 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Celery beat (removed in PR C). Running the in-process loop alongside SAQ would double-fire
     # cron triggers.
 
-    # Initialise the graceful shutdown manager with the configured timeout.
-    # Two session factories exist:
-    #   - modulo.db.session    (module-level, used by entrypoint.sh + ClaimExpiryJob)
-    #   - modulo.api.dependencies  (DI-injected, used by all route handlers)
-    # Both point to the same DB URL but have separate connection pools.  They
-    # are intentionally decoupled -- the entrypoint runs before FastAPI is
-    # initialised and can't use DI.  Dispose both so no connections leak.
+
+def _register_shutdown_manager(settings: Settings) -> None:
+    """Register graceful-shutdown callbacks for resources created during startup.
+
+    Two session factories exist:
+      - modulo.db.session    (module-level, used by entrypoint.sh + ClaimExpiryJob)
+      - modulo.api.dependencies  (DI-injected, used by all route handlers)
+    Both point to the same DB URL but have separate connection pools.  They
+    are intentionally decoupled -- the entrypoint runs before FastAPI is
+    initialised and can't use DI.  Dispose both so no connections leak.
+    """
     try:
         di_engine = get_or_create_engine(settings)
 
@@ -1100,6 +1123,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.warning("startup.shutdown_manager_init_failed", exc_info=True)
 
+
+async def _start_background_tasks(settings: Settings) -> dict[str, Any]:
+    """Start all lifespan background tasks/jobs and return handles for teardown."""
     # Start the run retention background loop.
     retention_task = asyncio.create_task(_run_retention_loop())
 
@@ -1144,7 +1170,22 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     session_manager = cast("_TaskGroupSessionManager", mcp.session_manager)
     session_manager._task_group = mcp_tg
 
-    yield
+    return {
+        "retention_task": retention_task,
+        "trigger_event_cleanup_task": trigger_event_cleanup_task,
+        "watchdog_task": watchdog_task,
+        "claim_expiry_job": claim_expiry_job,
+        "mcp_tg": mcp_tg,
+    }
+
+
+async def _teardown_tasks(tasks: dict[str, Any]) -> None:
+    """Cancel/stop all lifespan background tasks and shut down registered resources."""
+    mcp_tg = tasks["mcp_tg"]
+    retention_task = tasks["retention_task"]
+    trigger_event_cleanup_task = tasks["trigger_event_cleanup_task"]
+    watchdog_task = tasks["watchdog_task"]
+    claim_expiry_job = tasks["claim_expiry_job"]
 
     await mcp_tg.__aexit__(None, None, None)
     retention_task.cancel()
