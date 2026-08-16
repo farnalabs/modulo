@@ -1,8 +1,10 @@
 """Unit tests for /api/v1/pipelines endpoints."""
 
+import asyncio
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,6 +16,7 @@ from modulo.api.main import app
 from modulo.api.routes.pipelines import PipelineGraphNode, _resolve_graph_references
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.db.crud.pipeline_folder import update_folder
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -1211,3 +1214,344 @@ def test_clone_pipeline_not_found_returns_404(client: TestClient) -> None:
 def test_list_pipelines_unauthenticated_returns_4xx(unauth_client: TestClient) -> None:
     resp = unauth_client.get("/api/v1/pipelines")
     assert resp.status_code in (401, 403)
+
+
+# ---------------------------------------------------------------------------
+# Pipeline folders (PRD §8.4 — org-scoped nested folders)
+# ---------------------------------------------------------------------------
+
+
+def _make_folder(parent_id: uuid.UUID | None = None) -> MagicMock:
+    f = MagicMock()
+    f.id = uuid.uuid4()
+    f.organisation_id = _ORG_ID
+    f.name = "QA Folder"
+    f.parent_id = parent_id
+    f.sort_order = 0
+    f.account_id = _USER_ID
+    f.created_at = _NOW
+    f.updated_at = _NOW
+    return f
+
+
+def _folder_parent_chain_session(parent_chain: dict[uuid.UUID, uuid.UUID | None]) -> AsyncMock:
+    """A mock session whose `execute` resolves parent_id lookups from a chain map.
+
+    ``parent_chain`` maps folder_id -> parent_id (None for a top-level folder).
+    This lets the folder CRUD cycle/depth validation walk the real code path
+    without a database.
+    """
+    session = AsyncMock()
+
+    def _execute(stmt: object, *args: object, **kwargs: object) -> MagicMock:
+        params = stmt.compile().params  # type: ignore[attr-defined]
+        folder_id = next((v for v in params.values() if isinstance(v, uuid.UUID)), None)
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = parent_chain.get(folder_id)
+        return result
+
+    session.execute = AsyncMock(side_effect=_execute)
+    return session
+
+
+class TestPipelineFolderCyclePrevention:
+    """Self-parenting and ancestry-cycle rejection in folder parent updates."""
+
+    def _patch_folder(self, folder_id: uuid.UUID) -> MagicMock:
+        folder = MagicMock()
+        folder.id = folder_id
+        folder.parent_id = None
+        return folder
+
+    def test_update_folder_rejects_self_parenting(self) -> None:
+        folder_id = uuid.uuid4()
+        session = _folder_parent_chain_session({folder_id: None})
+
+        with (
+            patch("modulo.db.crud.pipeline_folder.get_folder", return_value=self._patch_folder(folder_id)),
+            pytest.raises(ValueError, match="cannot be its own parent"),
+        ):
+            asyncio.run(update_folder(session, folder_id, {"parent_id": folder_id}))
+
+    def test_update_folder_rejects_ancestry_cycle(self) -> None:
+        f1, f2, f3 = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+        # f2 -> f3 -> f1 ; moving f1 under f2 would create a cycle.
+        session = _folder_parent_chain_session({f2: f3, f3: f1, f1: None})
+
+        with (
+            patch("modulo.db.crud.pipeline_folder.get_folder", return_value=self._patch_folder(f1)),
+            pytest.raises(ValueError, match="ancestry cycle"),
+        ):
+            asyncio.run(update_folder(session, f1, {"parent_id": f2}))
+
+    def test_update_folder_rejects_depth_overflow(self) -> None:
+        # A chain of 9 ancestors under the new parent exceeds the depth cap of 8.
+        ids = [uuid.uuid4() for _ in range(9)]
+        chain = {ids[i]: ids[i + 1] for i in range(8)}
+        chain[ids[-1]] = None
+        target = uuid.uuid4()
+        session = _folder_parent_chain_session(chain)
+
+        with (
+            patch("modulo.db.crud.pipeline_folder.get_folder", return_value=self._patch_folder(target)),
+            pytest.raises(ValueError, match="nesting depth"),
+        ):
+            asyncio.run(update_folder(session, target, {"parent_id": ids[0]}))
+
+    def test_update_folder_allows_valid_parent_change(self) -> None:
+        folder_id = uuid.uuid4()
+        parent_id = uuid.uuid4()
+        session = _folder_parent_chain_session({parent_id: None})
+        folder = MagicMock()
+        folder.parent_id = None
+
+        with (
+            patch("modulo.db.crud.pipeline_folder.get_folder", return_value=folder),
+            patch("modulo.db.crud.pipeline_folder.apply_updates"),
+        ):
+            result = asyncio.run(update_folder(session, folder_id, {"parent_id": parent_id}))
+        assert result is folder
+
+
+class TestPipelineFolderEndpoints:
+    """Dedicated endpoint coverage for folder CRUD + pipeline move (PRD §8.4)."""
+
+    def test_list_folders_returns_200(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.pipeline_folders.list_folders", return_value=[_make_folder()]),
+            patch("modulo.api.routes.pipeline_folders.set_rls_org"),
+            patch("modulo.api.routes.pipeline_folders.set_rls_user_context"),
+        ):
+            resp = client.get("/api/v1/pipeline-folders")
+
+        assert resp.status_code == 200
+        assert len(resp.json()) == 1
+
+    def test_create_folder_returns_201(self, client: TestClient) -> None:
+        folder = _make_folder()
+        with (
+            patch("modulo.api.routes.pipeline_folders.create_folder", return_value=folder),
+            patch("modulo.api.routes.pipeline_folders.set_rls_org"),
+            patch("modulo.api.routes.pipeline_folders.set_rls_user_context"),
+        ):
+            resp = client.post("/api/v1/pipeline-folders", json={"name": "QA Folder"})
+
+        assert resp.status_code == 201
+        assert resp.json()["name"] == "QA Folder"
+
+    def test_create_folder_rejects_invalid_parent_returns_422(self, client: TestClient) -> None:
+        with (
+            patch(
+                "modulo.api.routes.pipeline_folders.create_folder",
+                side_effect=ValueError("Folder nesting depth would exceed 8 levels"),
+            ),
+            patch("modulo.api.routes.pipeline_folders.set_rls_org"),
+            patch("modulo.api.routes.pipeline_folders.set_rls_user_context"),
+        ):
+            resp = client.post(
+                "/api/v1/pipeline-folders",
+                json={"name": "Deep", "parent_id": str(uuid.uuid4())},
+            )
+
+        assert resp.status_code == 422
+
+    def test_update_folder_returns_200(self, client: TestClient) -> None:
+        folder = _make_folder()
+        folder.name = "Renamed"
+        with (
+            patch("modulo.api.routes.pipeline_folders.update_folder", return_value=folder),
+            patch("modulo.api.routes.pipeline_folders.set_rls_org"),
+            patch("modulo.api.routes.pipeline_folders.set_rls_user_context"),
+        ):
+            resp = client.patch(f"/api/v1/pipeline-folders/{folder.id}", json={"name": "Renamed"})
+
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "Renamed"
+
+    def test_update_folder_self_parent_returns_422(self, client: TestClient) -> None:
+        folder_id = uuid.uuid4()
+        with (
+            patch(
+                "modulo.api.routes.pipeline_folders.update_folder",
+                side_effect=ValueError("A folder cannot be its own parent"),
+            ),
+            patch("modulo.api.routes.pipeline_folders.set_rls_org"),
+            patch("modulo.api.routes.pipeline_folders.set_rls_user_context"),
+        ):
+            resp = client.patch(f"/api/v1/pipeline-folders/{folder_id}", json={"parent_id": str(folder_id)})
+
+        assert resp.status_code == 422
+
+    def test_update_folder_cycle_returns_422(self, client: TestClient) -> None:
+        folder_id = uuid.uuid4()
+        with (
+            patch(
+                "modulo.api.routes.pipeline_folders.update_folder",
+                side_effect=ValueError("Setting this parent would create a folder ancestry cycle"),
+            ),
+            patch("modulo.api.routes.pipeline_folders.set_rls_org"),
+            patch("modulo.api.routes.pipeline_folders.set_rls_user_context"),
+        ):
+            resp = client.patch(
+                f"/api/v1/pipeline-folders/{folder_id}",
+                json={"parent_id": str(uuid.uuid4())},
+            )
+
+        assert resp.status_code == 422
+
+    def test_update_folder_not_found_returns_404(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.pipeline_folders.update_folder", return_value=None),
+            patch("modulo.api.routes.pipeline_folders.set_rls_org"),
+            patch("modulo.api.routes.pipeline_folders.set_rls_user_context"),
+        ):
+            resp = client.patch(f"/api/v1/pipeline-folders/{uuid.uuid4()}", json={"name": "x"})
+
+        assert resp.status_code == 404
+
+    def test_reorder_folder_returns_200(self, client: TestClient) -> None:
+        folder = _make_folder()
+        folder.sort_order = 3
+        with (
+            patch("modulo.api.routes.pipeline_folders.update_folder", return_value=folder),
+            patch("modulo.api.routes.pipeline_folders.set_rls_org"),
+            patch("modulo.api.routes.pipeline_folders.set_rls_user_context"),
+        ):
+            resp = client.patch(f"/api/v1/pipeline-folders/{folder.id}/move", json={"sort_order": 3})
+
+        assert resp.status_code == 200
+        assert resp.json()["sort_order"] == 3
+
+    def test_delete_folder_returns_204(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.pipeline_folders.delete_folder", return_value=True),
+            patch("modulo.api.routes.pipeline_folders.set_rls_org"),
+            patch("modulo.api.routes.pipeline_folders.set_rls_user_context"),
+        ):
+            resp = client.delete(f"/api/v1/pipeline-folders/{uuid.uuid4()}")
+
+        assert resp.status_code == 204
+
+    def test_delete_folder_not_found_returns_404(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.pipeline_folders.delete_folder", return_value=False),
+            patch("modulo.api.routes.pipeline_folders.set_rls_org"),
+            patch("modulo.api.routes.pipeline_folders.set_rls_user_context"),
+        ):
+            resp = client.delete(f"/api/v1/pipeline-folders/{uuid.uuid4()}")
+
+        assert resp.status_code == 404
+
+    def test_move_pipeline_to_folder_returns_200(self, client: TestClient) -> None:
+        pipeline = _make_pipeline()
+        pipeline.folder_id = uuid.uuid4()
+        with (
+            patch("modulo.api.routes.pipelines.move_pipeline_to_folder", return_value=pipeline),
+            patch("modulo.api.routes.pipelines.set_rls_org"),
+            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        ):
+            resp = client.patch(f"/api/v1/pipelines/{_PIPELINE_ID}/folder", json={"folder_id": str(pipeline.folder_id)})
+
+        assert resp.status_code == 200
+        assert resp.json()["folder_id"] == str(pipeline.folder_id)
+
+    def test_move_pipeline_to_missing_folder_returns_422(self, client: TestClient) -> None:
+        with (
+            patch(
+                "modulo.api.routes.pipelines.move_pipeline_to_folder",
+                side_effect=ValueError("Folder not found"),
+            ),
+            patch("modulo.api.routes.pipelines.set_rls_org"),
+            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        ):
+            resp = client.patch(
+                f"/api/v1/pipelines/{_PIPELINE_ID}/folder",
+                json={"folder_id": str(uuid.uuid4())},
+            )
+
+        assert resp.status_code == 422
+
+    def test_move_pipeline_to_folder_pipeline_not_found_returns_404(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.pipelines.move_pipeline_to_folder", return_value=None),
+            patch("modulo.api.routes.pipelines.set_rls_org"),
+            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        ):
+            resp = client.patch(f"/api/v1/pipelines/{_PIPELINE_ID}/folder", json={"folder_id": None})
+
+        assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Composite node validation (PRD §8.4 Graph Validation — on-save soft checks)
+# ---------------------------------------------------------------------------
+
+
+class TestCompositeValidation:
+    """Unit coverage for composite node validation — previously only BDD."""
+
+    def _run_check(self, template_sub_graph: object, output_validation: dict | None = None) -> list[dict]:
+        from modulo.core.graph_validator import GraphValidator
+        from modulo.core.graph_validator._types import ValidationResult
+
+        validator = GraphValidator()
+        result = ValidationResult()
+        node_id = "composite-node-1"
+        template = SimpleNamespace(id=uuid.uuid4(), sub_pipeline_graph_json=template_sub_graph)
+        validator._check_composite_subgraph(template, node_id, result)
+        if output_validation:
+            validator._check_output_validation(node_id, output_validation, result)
+        return [{"code": i.code, "severity": i.severity, "message": i.message} for i in result.issues]
+
+    def test_empty_sub_graph_is_error(self) -> None:
+        issues = self._run_check({"nodes": [], "edges": []})
+        assert any(i["code"] == "COMPOSITE_SUBGRAPH_EMPTY" and i["severity"] == "error" for i in issues)
+
+    def test_non_dict_sub_graph_is_skipped(self) -> None:
+        issues = self._run_check(None)
+        assert issues == []
+
+    def test_invalid_sub_node_type_is_error(self) -> None:
+        graph = {"nodes": [{"id": "a", "node_type": "not-a-real-type"}], "edges": []}
+        issues = self._run_check(graph)
+        assert any(i["code"] == "COMPOSITE_SUBGRAPH_INVALID_TYPE" for i in issues)
+
+    def test_duplicate_sub_node_id_is_error(self) -> None:
+        graph = {"nodes": [{"id": "a"}, {"id": "a"}], "edges": []}
+        issues = self._run_check(graph)
+        assert any(i["code"] == "COMPOSITE_SUBGRAPH_DUPLICATE_NODE_ID" for i in issues)
+
+    def test_hitl_gate_on_sub_edge_is_error(self) -> None:
+        graph = {
+            "nodes": [{"id": "a"}, {"id": "b"}],
+            "edges": [{"source": "a", "target": "b", "hitl_gate_config": {"label": "x"}}],
+        }
+        issues = self._run_check(graph)
+        assert any(i["code"] == "COMPOSITE_SUBGRAPH_GATE_UNSUPPORTED" for i in issues)
+
+    def test_sub_edge_bad_source_is_error(self) -> None:
+        graph = {"nodes": [{"id": "a"}, {"id": "b"}], "edges": [{"source": "ghost", "target": "b"}]}
+        issues = self._run_check(graph)
+        assert any(i["code"] == "COMPOSITE_SUBGRAPH_EDGE_BAD_SOURCE" for i in issues)
+
+    def test_validation_retries_out_of_range_is_error(self) -> None:
+        issues = self._run_check(None, {"max_validation_retries": 9})
+        assert any(i["code"] == "COMPOSITE_VALIDATION_RETRIES_RANGE" for i in issues)
+
+    def test_invalid_eval_type_is_error(self) -> None:
+        issues = self._run_check(
+            None,
+            {"eval_definitions": [{"type": "made_up", "failure_behaviour": "block"}]},
+        )
+        assert any(i["code"] == "COMPOSITE_VALIDATION_INVALID_TYPE" for i in issues)
+
+    def test_invalid_regex_pattern_is_error(self) -> None:
+        issues = self._run_check(
+            None,
+            {
+                "eval_definitions": [
+                    {"type": "regex", "config": {"field": "x", "pattern": "("}, "failure_behaviour": "block"}
+                ]
+            },
+        )
+        assert any(i["code"] == "COMPOSITE_VALIDATION_REGEX_INVALID" for i in issues)

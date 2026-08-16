@@ -138,6 +138,16 @@ class SupersededNodeError(Exception):
     """
 
 
+class OutputSchemaValidationError(ValueError):
+    """A node's output failed validation against its output_schema_json.
+
+    Raised by ``_validate_against_schema`` for manual-node resume output and
+    agent-node output. The executor maps this to the domain-specific
+    ``schema_validation_failure`` error code (§8.9 error table — "The output
+    did not match the expected format.") instead of a raw ``ValueError``.
+    """
+
+
 _is_truthy = bool
 
 # Cap for the stored artifact stdout/stderr blobs. 512KB keeps storage bounded
@@ -2956,10 +2966,12 @@ def make_sandbox_agent_fn(
 def _validate_against_schema(data: dict[str, Any], schema: dict[str, Any]) -> None:
     """Lightweight field-presence validation against a JSON schema.
 
-    Raises ValueError on first missing required field.  Full JSON Schema
-    validation (via a library like `jsonschema`) is deferred to v1.
+    Raises :class:`OutputSchemaValidationError` on first missing required field
+    (a ValueError subclass the executor maps to the domain-specific
+    ``schema_validation_failure`` error code). Full JSON Schema validation (via
+    a library like `jsonschema`) is deferred to v1.
     """
     required: list[str] = schema.get("required", [])
     for field in required:
         if field not in data:
-            raise ValueError(f"Manual output missing required field {field!r} (required: {required})")
+            raise OutputSchemaValidationError(f"Manual output missing required field {field!r} (required: {required})")

@@ -1,10 +1,16 @@
 """Tests for pipeline execution core logic."""
 
+import uuid
 from datetime import UTC, datetime
 
 import pytest
 
+from modulo.core.pipeline_engine.event_broker import RunEventBroker
 from modulo.core.pipeline_engine.executor import _map_lg_event, _seed_state
+from modulo.core.pipeline_engine.node_runner import (
+    OutputSchemaValidationError,
+    _validate_against_schema,
+)
 from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
 
 
@@ -143,3 +149,71 @@ def _make_snapshot(
         run_context_defaults=run_context_defaults or {},
         default_autonomy_level=default_autonomy_level,
     )
+
+
+class TestRunEventBrokerReplay:
+    """WebSocket reconnect replay — ring-buffer ``replay_since`` coverage.
+
+    `replay_since()` is the reconnect-replay mechanism (100-event ring buffer
+    per run). Previously implemented but untested.
+    """
+
+    def test_replay_returns_events_after_seq(self) -> None:
+        broker = RunEventBroker(run_id=uuid.uuid4())
+        for i in range(3):
+            broker.publish(f"event_{i}", {"i": i})
+
+        replayed = broker.replay_since(1)
+
+        assert [e.event_type for e in replayed] == ["event_1", "event_2"]
+
+    def test_replay_with_zero_seq_returns_all(self) -> None:
+        broker = RunEventBroker(run_id=uuid.uuid4())
+        broker.publish("node_started", {})
+        broker.publish("node_completed", {})
+
+        replayed = broker.replay_since(0)
+
+        assert [e.event_type for e in replayed] == ["node_started", "node_completed"]
+
+    def test_replay_after_latest_returns_empty(self) -> None:
+        broker = RunEventBroker(run_id=uuid.uuid4())
+        broker.publish("run_completed", {})
+
+        assert broker.replay_since(1) == []
+
+    def test_replay_empty_buffer_returns_empty(self) -> None:
+        broker = RunEventBroker(run_id=uuid.uuid4())
+        assert broker.replay_since(0) == []
+
+    def test_replay_requested_seq_older_than_buffer_returns_empty(self) -> None:
+        from collections import deque
+
+        from modulo.core.pipeline_engine.event_broker import RunEvent
+
+        broker = RunEventBroker(run_id=uuid.uuid4())
+        # Simulate a ring buffer where seq 1..4 were evicted and the oldest
+        # retained event is seq 5 — replaying from seq 1 must return [].
+        broker._buffer = deque([RunEvent(seq=5, event_type="node_started", run_id=uuid.uuid4(), payload={})])
+        assert broker.replay_since(1) == []
+
+
+class TestOutputSchemaValidation:
+    """Manual/agent node output validation raises a domain-specific error."""
+
+    def test_missing_required_field_raises_domain_error(self) -> None:
+        with pytest.raises(OutputSchemaValidationError, match="missing required field 'name'"):
+            _validate_against_schema({"id": "1"}, {"required": ["name"]})
+
+    def test_valid_output_passes(self) -> None:
+        schema = {"required": ["name", "status"]}
+        _validate_against_schema({"name": "x", "status": "done"}, schema)
+
+    def test_error_is_a_value_error_subclass(self) -> None:
+        with pytest.raises(ValueError):
+            _validate_against_schema({}, {"required": ["x"]})
+
+    def test_schema_validation_failure_maps_to_contract_schema(self) -> None:
+        from modulo.core.pipeline_engine.error_codes import map_legacy_code
+
+        assert map_legacy_code("schema_validation_failure") == "contract.schema"

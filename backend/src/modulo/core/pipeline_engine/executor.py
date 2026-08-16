@@ -79,6 +79,7 @@ from modulo.core.pipeline_engine.evidence import (
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_or_compile
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 from modulo.core.pipeline_engine.node_runner import (
+    OutputSchemaValidationError,
     SandboxNodeFailedError,
     SupersededNodeError,
     _idempotency_gate_skipped_envelope,
@@ -2619,6 +2620,17 @@ class PipelineExecutor:
                 extra={"run_id": str(run_id), "detail": scrubbed[:500]},
             )
             return "failed", "executor_superseded", scrubbed, node_token_usage or None
+        except OutputSchemaValidationError as exc:
+            # Manual-node resume output (or agent output) failed validation
+            # against output_schema_json. Domain-specific error code per §8.9 —
+            # never a raw ``ValueError``.
+            scrubbed = _sanitize_detail(exc, limit=5000)
+            broker.publish("run_failed", {"error": "schema_validation_failure", "detail": scrubbed})
+            _log.warning(
+                "pipeline.output_schema_validation_failed",
+                extra={"run_id": str(run_id), "detail": scrubbed[:500]},
+            )
+            return "failed", "schema_validation_failure", scrubbed, node_token_usage or None
         except asyncio.CancelledError:
             raise
         except (NodeCancelledError, SandboxNodeFailedError):

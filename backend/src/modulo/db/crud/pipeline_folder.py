@@ -30,6 +30,41 @@ async def _compute_folder_depth(session: AsyncSession, folder_id: uuid.UUID | No
     return depth
 
 
+async def _assert_valid_parent(
+    session: AsyncSession,
+    folder_id: uuid.UUID,
+    parent_id: uuid.UUID,
+) -> None:
+    """Reject an invalid parent assignment for a folder update.
+
+    Enforces the folder-tree invariants that PRD §8.4 "Pipeline Folders"
+    implies for an organisation-scoped nested folder tree:
+    1. A folder cannot be its own parent.
+    2. A folder cannot be moved under one of its own descendants (which would
+       create an ancestry cycle).
+    3. Nesting depth cannot exceed ``_MAX_FOLDER_DEPTH``.
+
+    Raises ``ValueError`` on violation; the route layer maps it to 422.
+    """
+    if parent_id == folder_id:
+        raise ValueError("A folder cannot be its own parent")
+    depth = 0
+    current_id: uuid.UUID | None = parent_id
+    seen: set[uuid.UUID] = set()
+    while current_id is not None:
+        depth += 1
+        if depth > _MAX_FOLDER_DEPTH:
+            raise ValueError(f"Folder nesting depth would exceed {_MAX_FOLDER_DEPTH} levels")
+        if current_id == folder_id:
+            raise ValueError("Setting this parent would create a folder ancestry cycle")
+        if current_id in seen:
+            # A pre-existing cycle in the data — never silently extend it.
+            raise ValueError("Setting this parent would create a folder ancestry cycle")
+        seen.add(current_id)
+        result = await session.execute(select(PipelineFolder.parent_id).where(PipelineFolder.id == current_id))
+        current_id = result.scalar_one_or_none()
+
+
 async def create_folder(
     session: AsyncSession,
     *,
@@ -74,6 +109,8 @@ async def update_folder(
     folder = await get_folder(session, folder_id)
     if folder is None:
         return None
+    if updates.get("parent_id") is not None:
+        await _assert_valid_parent(session, folder_id, updates["parent_id"])
     apply_updates(folder, updates)
     await session.flush()
     return folder
