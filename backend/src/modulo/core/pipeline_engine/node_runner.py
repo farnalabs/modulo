@@ -1019,7 +1019,7 @@ async def _run_conformance_gate(
     An audit event is appended for the block before the interrupt. The audit
     write is best-effort (failure-isolated) and never carries raw payloads.
     """
-    ctx = _conformance_ctx_cv.get()
+    ctx = get_conformance_ctx()
     if ctx is None:
         return False
     session_factory, org_id_raw, environment_profile_id, pipeline_id_raw = ctx
