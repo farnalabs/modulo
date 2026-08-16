@@ -370,6 +370,11 @@ class RunResponse(BaseModel):
     # distinguishable from an ordinary complete run.
     run_classification: dict[str, Any] | None = None
     gate_fired: bool = False
+    # FAR-213 blocked-partial summary — structured record of run-termination
+    # compensation for a guardrail-blocked run (executed nodes, per-node
+    # publish status, compensation outcomes). None for non-blocked / pre-column
+    # runs.
+    blocked_partial_summary: dict[str, Any] | None = None
 
 
 def _run_gate_fired(run: Any) -> bool:
@@ -424,6 +429,9 @@ def _build_run_response(
     # None, never a 500. gate_fired is derived in _run_gate_fired (also guarded).
     run_classification = run.run_classification if isinstance(run.run_classification, dict) else None
 
+    # FAR-213: same defensive coercion for the blocked_partial_summary column.
+    blocked_partial_summary = run.blocked_partial_summary if isinstance(run.blocked_partial_summary, dict) else None
+
     return RunResponse(
         run_id=run.id,
         status=run.status,
@@ -447,6 +455,7 @@ def _build_run_response(
         completed_at=run.completed_at,
         run_classification=run_classification,
         gate_fired=_run_gate_fired(run),
+        blocked_partial_summary=blocked_partial_summary,
     )
 
 

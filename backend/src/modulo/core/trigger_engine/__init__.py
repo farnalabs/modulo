@@ -1153,3 +1153,55 @@ class TriggerEngine:
         session.add(event)
         await session.flush()
         return event
+
+
+# ---------------------------------------------------------------------------
+# Dependent-trigger suppression for guardrail-blocked runs (FAR-213)
+# ---------------------------------------------------------------------------
+
+
+async def is_guardrail_blocked_run(session: AsyncSession, run_id: uuid.UUID) -> bool:
+    """True when *run_id* is a guardrail-blocked terminal run.
+
+    A guardrail block is terminal ``eval_failed`` with ``error_code``
+    ``eval_blocked``. Dependent triggers (e.g. agent_signal children fired on a
+    source node's completion) must never fire as a consequence of such a run —
+    its side effects are compensated, not published. Read-only; org-scoped via
+    the caller's RLS context.
+    """
+    result = await session.execute(
+        select(func.count()).where(
+            Run.id == run_id,
+            Run.status == "eval_failed",
+            Run.error_code == "eval_blocked",
+        )
+    )
+    return int(result.scalar_one() or 0) > 0
+
+
+async def record_dependent_suppressed(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    trigger_count: int,
+) -> None:
+    """Audit a dependent-trigger suppression (best-effort, guard-the-guard).
+
+    Summary-only payload — never raw run/trigger content.
+    """
+    try:
+        from modulo.core.audit_logger import append_audit_event
+
+        await append_audit_event(
+            session,
+            org_id=org_id,
+            event_type="guardrail.dependent_suppressed",
+            resource_type="run",
+            resource_id=run_id,
+            payload_json={"trigger_count": trigger_count, "reason": "source_run_guardrail_blocked"},
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("trigger_engine.dependent_suppressed_audit_failed run=%s", run_id)

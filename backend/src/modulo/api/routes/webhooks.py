@@ -339,6 +339,19 @@ async def receive_webhook(
         )
 
     run_id = run.id
+    # FAR-213 webhook ack-after-validate semantics: the delivery is validated
+    # (including the ingestion guardrail pass) BEFORE a success ack. A
+    # guardrail-blocked run (terminal eval_failed / eval_blocked) is created
+    # only so the failure is visible in the run list — it is NEVER dispatched
+    # and must not get a false "accepted" ack, so ack with a non-success 422.
+    # The run + TriggerEvent rows stay committed (the trigger event records the
+    # delivery attempt against the blocked run id).
+    if run.error_code == "eval_blocked":
+        _log.info("webhooks.receive_webhook.guardrail_blocked run=%s", run_id)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Delivery rejected: payload violates a bound guardrail (run created as eval_failed for visibility)",
+        )
     background_tasks.add_task(_dispatch_webhook_run, str(run_id), str(org_id))
 
     return {"run_id": str(run_id), "status": "accepted"}
@@ -539,6 +552,15 @@ async def replay_webhook(
         ) from None
 
     run_id = run.id
+    # FAR-213 webhook ack-after-validate semantics (see receive_webhook): a
+    # guardrail-blocked replayed delivery is acked with a non-success 422, never
+    # a false "accepted" — the run + TriggerEvent rows stay committed.
+    if run.error_code == "eval_blocked":
+        _log.info("webhooks.replay_webhook.guardrail_blocked run=%s", run_id)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Delivery rejected: payload violates a bound guardrail (run created as eval_failed for visibility)",
+        )
     background_tasks.add_task(_dispatch_webhook_run, str(run_id), str(org_id))
 
     return {"run_id": str(run_id), "status": "accepted"}
