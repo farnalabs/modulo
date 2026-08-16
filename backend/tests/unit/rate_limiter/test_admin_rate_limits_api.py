@@ -85,8 +85,10 @@ def client() -> Generator[TestClient, None, None]:
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    original_redis_available = rl_mod.redis_available
     rl_mod.redis_available = False
     yield TestClient(app)
+    rl_mod.redis_available = original_redis_available
     app.dependency_overrides.clear()
 
 
