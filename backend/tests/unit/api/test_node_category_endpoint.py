@@ -1,5 +1,6 @@
 """Unit tests for /api/v1/node-categories endpoints."""
 
+import asyncio
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
@@ -191,6 +192,24 @@ class TestCreateNodeCategory:
         resp = client.post("/api/v1/node-categories", json={"name": "Test", "color": "red"})
         assert resp.status_code == 422
 
+    def test_color_without_hash_prefix_returns_422(self, client: TestClient) -> None:
+        resp = client.post("/api/v1/node-categories", json={"name": "Test", "color": "6366f1"})
+        assert resp.status_code == 422
+
+    def test_overlong_name_returns_422(self, client: TestClient) -> None:
+        resp = client.post("/api/v1/node-categories", json={"name": "x" * 101})
+        assert resp.status_code == 422
+
+    def test_name_at_max_length_accepted(self, client: TestClient) -> None:
+        category = _make_category(name="x" * 100)
+        with (
+            patch("modulo.api.routes.node_categories.create_node_category", return_value=category),
+            patch("modulo.api.routes.node_categories.set_rls_org"),
+            patch("modulo.api.routes.node_categories.set_rls_user_context"),
+        ):
+            resp = client.post("/api/v1/node-categories", json={"name": "x" * 100})
+        assert resp.status_code == 201
+
     def test_unauthorized_returns_4xx(self, unauth_client: TestClient) -> None:
         resp = unauth_client.post("/api/v1/node-categories", json={"name": "Test"})
         assert resp.status_code in (401, 403)
@@ -312,3 +331,75 @@ class TestDeleteNodeCategory:
         assert resp.status_code == 409
         assert "Onboarding flow" in resp.json()["detail"]
         assert "Daily report" in resp.json()["detail"]
+
+
+class TestCancelledErrorPropagation:
+    """Cancellation must propagate — never be wrapped as an HTTP 500."""
+
+    def _make_session(self) -> AsyncMock:
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=asyncio.CancelledError())
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin = MagicMock(return_value=begin_cm)
+        return session
+
+    def _principal(self) -> TenantPrincipal:
+        return TenantPrincipal(
+            username="tenant",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="admin",
+        )
+
+    @pytest.mark.anyio
+    async def test_list_propagates_cancelled_error(self) -> None:
+        from modulo.api.routes.node_categories import list_node_categories_endpoint
+
+        with (
+            pytest.raises(asyncio.CancelledError),
+            patch("modulo.api.routes.node_categories.set_rls_org", new_callable=AsyncMock),
+            patch("modulo.api.routes.node_categories.set_rls_user_context", new_callable=AsyncMock),
+        ):
+            await list_node_categories_endpoint(
+                page=1,
+                page_size=20,
+                session=self._make_session(),
+                principal=self._principal(),
+            )
+
+    @pytest.mark.anyio
+    async def test_create_propagates_cancelled_error(self) -> None:
+        from modulo.api.routes.node_categories import create_node_category_endpoint
+
+        with (
+            pytest.raises(asyncio.CancelledError),
+            patch(
+                "modulo.api.routes.node_categories.create_node_category",
+                new_callable=AsyncMock,
+                side_effect=asyncio.CancelledError(),
+            ),
+            patch("modulo.api.routes.node_categories.set_rls_org", new_callable=AsyncMock),
+            patch("modulo.api.routes.node_categories.set_rls_user_context", new_callable=AsyncMock),
+        ):
+            await create_node_category_endpoint(
+                req=MagicMock(name="X", description=None, color="#6366f1", icon=None, sort_order=0),
+                session=self._make_session(),
+                principal=self._principal(),
+            )
+
+    @pytest.mark.anyio
+    async def test_delete_propagates_cancelled_error(self) -> None:
+        from modulo.api.routes.node_categories import delete_node_category_endpoint
+
+        with (
+            pytest.raises(asyncio.CancelledError),
+            patch("modulo.api.routes.node_categories.set_rls_org", new_callable=AsyncMock),
+            patch("modulo.api.routes.node_categories.set_rls_user_context", new_callable=AsyncMock),
+        ):
+            await delete_node_category_endpoint(
+                category_id=_CATEGORY_ID,
+                session=self._make_session(),
+                principal=self._principal(),
+            )
