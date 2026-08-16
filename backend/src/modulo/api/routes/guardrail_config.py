@@ -52,6 +52,9 @@ from modulo.db.models.eval_definition import EvalDefinition as EvalDefinitionRow
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.rls import set_rls_org
 
+_CODE_EVAL_DEFINITION_CREATE = "eval.definition.create"
+
+
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/guardrails/config", tags=["guardrails"])
@@ -339,7 +342,7 @@ async def get_guardrail_config(
 async def propose_guardrail_config(
     req: ProposeGuardrailConfigRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("eval.definition.create"),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_DEFINITION_CREATE),
 ) -> GuardrailProposalResponse:
     """Validate + hash a proposed config set, diff it, and store the proposal."""
     try:
@@ -397,7 +400,7 @@ async def propose_guardrail_config(
 @handle_db_errors("guardrail_config.apply")
 async def apply_guardrail_config(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("eval.definition.create"),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_DEFINITION_CREATE),
 ) -> GuardrailApplyResponse:
     """Apply the pending proposal — the approve/merge step (admin only).
 
@@ -485,7 +488,7 @@ async def apply_guardrail_config(
 @handle_db_errors("guardrail_config.reject")
 async def reject_guardrail_config(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("eval.definition.create"),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_DEFINITION_CREATE),
 ) -> GuardrailRejectResponse:
     """Discard the pending proposal (admin only). 409 when none exists.
 

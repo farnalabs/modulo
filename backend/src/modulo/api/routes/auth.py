@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.api.middleware.rate_limiter import get_auth_rate_limiter
@@ -43,6 +44,11 @@ from modulo.db.crud.token_family import (
 )
 from modulo.db.models.account import Account
 from modulo.settings import Settings, get_settings
+
+_MSG_INCORRECT_EMAIL_PASSWORD = "Incorrect email or password"
+_CODE_AUTH_REFRESH = "auth.refresh"
+_CODE_AUTH_LOGOUT = "auth.logout"
+
 
 _log = logging.getLogger(__name__)
 
@@ -136,7 +142,7 @@ async def _enforce_break_glass(
                 await limiter.record_failure(ip)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect email or password",
+                detail=_MSG_INCORRECT_EMAIL_PASSWORD,
             )
     except asyncio.CancelledError:
         raise
@@ -148,7 +154,7 @@ async def _enforce_break_glass(
             await limiter.record_failure(ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
+            detail=_MSG_INCORRECT_EMAIL_PASSWORD,
         ) from None
     return True
 
@@ -182,14 +188,14 @@ async def _consume_break_glass_credential(
             await limiter.record_failure(ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
+            detail=_MSG_INCORRECT_EMAIL_PASSWORD,
         ) from None
     if consumed != 1:
         if limiter is not None:
             await limiter.record_failure(ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
+            detail=_MSG_INCORRECT_EMAIL_PASSWORD,
         )
 
 
@@ -212,7 +218,7 @@ async def login(
                     await limiter.record_failure(ip)
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Incorrect email or password",
+                    detail=_MSG_INCORRECT_EMAIL_PASSWORD,
                 )
 
             must_consume = await _enforce_break_glass(
@@ -261,7 +267,7 @@ async def login(
         _log.warning("login.programming_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("auth.login")
@@ -278,7 +284,7 @@ async def login(
         _log.exception("Unexpected error in login")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     access_token = create_access_token(
@@ -311,7 +317,7 @@ async def login(
 
 
 @router.post("/refresh")
-@handle_db_errors("auth.refresh")
+@handle_db_errors(_CODE_AUTH_REFRESH)
 async def refresh(
     req: RefreshRequest,
     settings: Settings = Depends(get_settings),
@@ -394,20 +400,20 @@ async def refresh(
                 )
             new_sequence, theft_detected = await advance_sequence(session, family_uuid, sequence, account_uuid)
     except IntegrityError:
-        _log.exception("auth.refresh")
+        _log.exception(_CODE_AUTH_REFRESH)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
-        _log.exception("auth.refresh")
+        _log.exception(_CODE_AUTH_REFRESH)
         _log.warning("refresh.programming_error")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("auth.refresh")
+        _log.exception(_CODE_AUTH_REFRESH)
         _log.warning("refresh.sqlalchemy_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -421,7 +427,7 @@ async def refresh(
         _log.exception("Unexpected error in refresh")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     if theft_detected:
         raise HTTPException(
@@ -453,7 +459,7 @@ async def refresh(
 
 
 @router.post("/logout")
-@handle_db_errors("auth.logout")
+@handle_db_errors(_CODE_AUTH_LOGOUT)
 async def logout(
     req: RefreshRequest,
     settings: Settings = Depends(get_settings),
@@ -479,20 +485,20 @@ async def logout(
                     if not blacklisted:
                         _log.warning("logout.family_not_found", extra={"family_id": family_id_val})
             except IntegrityError:
-                _log.exception("auth.logout")
+                _log.exception(_CODE_AUTH_LOGOUT)
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="A resource with this value already exists",
                 ) from None
             except ProgrammingError:
-                _log.exception("auth.logout")
+                _log.exception(_CODE_AUTH_LOGOUT)
                 _log.warning("logout.programming_error")
                 raise HTTPException(
                     status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                    detail="Feature is not available. Run database migrations to enable it.",
+                    detail=MSG_FEATURE_NOT_AVAILABLE,
                 ) from None
             except SQLAlchemyError:
-                _log.exception("auth.logout")
+                _log.exception(_CODE_AUTH_LOGOUT)
                 _log.warning("logout.sqlalchemy_error")
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -506,7 +512,7 @@ async def logout(
                 _log.exception("Unexpected error in logout (inner)")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Internal server error",
+                    detail=MSG_INTERNAL_SERVER_ERROR,
                 ) from None
         except ValueError:
             _log.warning("logout.invalid_token_family", extra={"token_family": family_id_val})
@@ -589,7 +595,7 @@ async def ws_token(
         _log.exception("Unexpected error in ws_token")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
 
@@ -607,7 +613,7 @@ async def me(
         _log.warning("me.programming_error")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("auth.me")
@@ -624,7 +630,7 @@ async def me(
         _log.exception("Unexpected error in me")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     if account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
@@ -695,7 +701,7 @@ async def csrf_token(
         _log.exception("Unexpected error in csrf_token")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
 

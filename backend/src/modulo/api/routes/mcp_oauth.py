@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
@@ -32,6 +33,9 @@ from modulo.auth.oauth import (
 )
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
+
+_MSG_DATABASE_ERROR_OCCURRED_PLEASE = "Database error occurred. Please try again."
+
 
 _log = logging.getLogger(__name__)
 
@@ -118,7 +122,7 @@ async def register_oauth_client(
         )
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("mcp_oauth.register_oauth_client")
@@ -127,7 +131,7 @@ async def register_oauth_client(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error occurred. Please try again.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except asyncio.CancelledError:
         raise
@@ -139,7 +143,7 @@ async def register_oauth_client(
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
 
     return CreateOAuthClientResponse(
@@ -165,14 +169,14 @@ async def list_oauth_clients_endpoint(
         _log.warning("mcp_oauth.list_oauth_clients.programming_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("mcp_oauth.list_oauth_clients_endpoint")
         _log.warning("mcp_oauth.list_oauth_clients.sqlalchemy_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error occurred. Please try again.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except asyncio.CancelledError:
         raise
@@ -184,7 +188,7 @@ async def list_oauth_clients_endpoint(
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
     return [OAuthClientItem(**c) for c in clients]
 
@@ -218,7 +222,7 @@ async def remove_oauth_client(
         )
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("mcp_oauth.remove_oauth_client")
@@ -228,7 +232,7 @@ async def remove_oauth_client(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error occurred. Please try again.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except asyncio.CancelledError:
         raise
@@ -241,7 +245,7 @@ async def remove_oauth_client(
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
 
     if not deleted:
@@ -321,14 +325,14 @@ async def approve_consent(
         _log.warning("mcp_oauth.approve_consent.programming_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("mcp_oauth.approve_consent")
         _log.warning("mcp_oauth.approve_consent.sqlalchemy_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error occurred. Please try again.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except asyncio.CancelledError:
         raise
@@ -338,7 +342,7 @@ async def approve_consent(
         _log.exception("mcp_oauth.approve_consent.unexpected_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
 
     redirect_url = f"{state_row.redirect_uri}?code={quote(code)}&state={quote(req.state)}"

@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_target_org_role
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -20,6 +21,11 @@ from modulo.core.email_service import (
     send_email,
 )
 from modulo.db.crud.organisation import get_organisation, update_organisation
+
+_MSG_ORGANISATION_NOT_FOUND = "Organisation not found"
+_CODE_ADMIN_EMAIL_ADMIN_UPDATE = "admin_email.admin_update_email_settings"
+_CODE_ADMIN_EMAIL_ADMIN_TEST = "admin_email.admin_test_email_settings"
+
 
 logger = logging.getLogger(__name__)
 
@@ -65,13 +71,13 @@ async def admin_get_email_settings(
         async with session.begin():
             org = await get_organisation(session, org_id)
             if org is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
             cfg = org.settings_json or {}
     except ProgrammingError:
         logger.exception("admin_email.admin_get_email_settings")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("admin_email.admin_get_email_settings")
@@ -90,7 +96,7 @@ async def admin_get_email_settings(
         logger.exception("Unexpected error in admin_get_email_settings")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     email_cfg = cfg.get("email", {})
@@ -116,13 +122,13 @@ async def admin_update_email_settings(
         async with session.begin():
             org = await get_organisation(session, org_id)
     except ProgrammingError:
-        logger.exception("admin_email.admin_update_email_settings")
+        logger.exception(_CODE_ADMIN_EMAIL_ADMIN_UPDATE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("admin_email.admin_update_email_settings")
+        logger.exception(_CODE_ADMIN_EMAIL_ADMIN_UPDATE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching org for email settings.",
@@ -135,11 +141,11 @@ async def admin_update_email_settings(
         logger.exception("Unexpected error in admin_update_email_settings (fetch)")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     if org is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
 
     settings_json = dict(org.settings_json or {})
     existing_email = dict(settings_json.get("email", {}))
@@ -160,13 +166,13 @@ async def admin_update_email_settings(
         async with session.begin():
             await update_organisation(session, org_id, {"settings_json": settings_json})
     except ProgrammingError:
-        logger.exception("admin_email.admin_update_email_settings")
+        logger.exception(_CODE_ADMIN_EMAIL_ADMIN_UPDATE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("admin_email.admin_update_email_settings")
+        logger.exception(_CODE_ADMIN_EMAIL_ADMIN_UPDATE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating email settings.",
@@ -179,7 +185,7 @@ async def admin_update_email_settings(
         logger.exception("Unexpected error in admin_update_email_settings (update)")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     return EmailSettingsResponse(
@@ -203,13 +209,13 @@ async def admin_test_email_settings(
         async with session.begin():
             org = await get_organisation(session, org_id)
     except ProgrammingError:
-        logger.exception("admin_email.admin_test_email_settings")
+        logger.exception(_CODE_ADMIN_EMAIL_ADMIN_TEST)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("admin_email.admin_test_email_settings")
+        logger.exception(_CODE_ADMIN_EMAIL_ADMIN_TEST)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching org for test-email.",
@@ -222,11 +228,11 @@ async def admin_test_email_settings(
         logger.exception("Unexpected error in admin_test_email_settings (fetch)")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     if org is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
 
     if not _is_valid_recipient(req.to):
         raise HTTPException(
@@ -285,5 +291,5 @@ async def admin_test_email_settings(
     except asyncio.CancelledError:
         raise
     except Exception:
-        logger.exception("admin_email.admin_test_email_settings")
+        logger.exception(_CODE_ADMIN_EMAIL_ADMIN_TEST)
         return {"ok": False, "message": "Unexpected error while sending the test email"}

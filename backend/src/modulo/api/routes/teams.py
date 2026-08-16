@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_RESOURCE_ALREADY_EXISTS
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.auth.dependencies import get_current_tenant_user
@@ -38,6 +39,13 @@ from modulo.db.crud.team_membership import (
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.rls import set_rls_org, set_rls_user_context
+
+_CODE_TEAM_LIST = "team.list"
+_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE = "Database temporarily unavailable. Please try again."
+_MSG_TEAM_NAME_ALREADY_EXISTS = "A team with this name already exists in your organisation"
+_MSG_TEAM_NOT_FOUND = "Team not found"
+_MSG_MEMBERSHIP_NOT_FOUND = "Membership not found"
+
 
 _log = logging.getLogger(__name__)
 
@@ -199,13 +207,13 @@ async def my_teams_endpoint(
         _log.exception("teams.my_teams_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("my_teams SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable. Please try again.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -232,7 +240,7 @@ async def my_teams_endpoint(
 async def list_teams_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: TenantPrincipal = require_permission("team.list"),
+    current_user: TenantPrincipal = require_permission(_CODE_TEAM_LIST),
     session: AsyncSession = Depends(get_db_session),
 ) -> TeamListResponse:
     try:
@@ -244,19 +252,19 @@ async def list_teams_endpoint(
         _log.exception("teams.list_teams_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from exc
     except ProgrammingError:
         _log.exception("teams.list_teams_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("list_teams SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable. Please try again.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except Exception:
         _log.exception("list_teams unexpected error", extra={"org_id": str(current_user.organisation_id)})
@@ -298,7 +306,7 @@ async def create_team_endpoint(
             if existing is not None:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail="A team with this name already exists in your organisation",
+                    detail=_MSG_TEAM_NAME_ALREADY_EXISTS,
                 )
             team = await create_team(
                 session,
@@ -311,19 +319,19 @@ async def create_team_endpoint(
         _log.exception("teams.create_team_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A team with this name already exists in your organisation",
+            detail=_MSG_TEAM_NAME_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         _log.exception("teams.create_team_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("create_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable. Please try again.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -369,7 +377,7 @@ async def create_team_endpoint(
 @handle_db_errors("teams.get_team_endpoint")
 async def get_team_endpoint(
     team_id: uuid.UUID,
-    current_user: TenantPrincipal = require_permission("team.list"),
+    current_user: TenantPrincipal = require_permission(_CODE_TEAM_LIST),
     session: AsyncSession = Depends(get_db_session),
 ) -> TeamResponse:
     try:
@@ -381,13 +389,13 @@ async def get_team_endpoint(
         _log.exception("teams.get_team_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from exc
     except ProgrammingError:
         _log.exception("teams.get_team_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception(
@@ -395,7 +403,7 @@ async def get_team_endpoint(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable. Please try again.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -409,7 +417,7 @@ async def get_team_endpoint(
         ) from None
 
     if team is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TEAM_NOT_FOUND)
 
     return TeamResponse(
         id=str(team.id),
@@ -442,7 +450,7 @@ async def update_team_endpoint(
                 if existing is not None and existing.id != team_id:
                     raise HTTPException(
                         status_code=status.HTTP_409_CONFLICT,
-                        detail="A team with this name already exists in your organisation",
+                        detail=_MSG_TEAM_NAME_ALREADY_EXISTS,
                     )
 
             if req.expected_updated_at is not None:
@@ -453,7 +461,7 @@ async def update_team_endpoint(
                     req.expected_updated_at,
                 )
                 if outcome is TeamUpdateOutcome.NOT_FOUND:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TEAM_NOT_FOUND)
                 if outcome is TeamUpdateOutcome.STALE:
                     raise HTTPException(
                         status_code=status.HTTP_409_CONFLICT,
@@ -467,13 +475,13 @@ async def update_team_endpoint(
         _log.exception("teams.update_team_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from exc
     except ProgrammingError:
         _log.exception("teams.update_team_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception(
@@ -481,7 +489,7 @@ async def update_team_endpoint(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable. Please try again.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -495,7 +503,7 @@ async def update_team_endpoint(
         ) from None
 
     if team is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TEAM_NOT_FOUND)
 
     from modulo.core.audit_logger import append_audit_event
 
@@ -576,13 +584,13 @@ async def delete_team_endpoint(
         _log.exception("teams.delete_team_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from exc
     except ProgrammingError:
         _log.exception("teams.delete_team_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception(
@@ -590,7 +598,7 @@ async def delete_team_endpoint(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable. Please try again.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -604,7 +612,7 @@ async def delete_team_endpoint(
         ) from None
 
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TEAM_NOT_FOUND)
 
     from modulo.core.audit_logger import append_audit_event
 
@@ -702,7 +710,7 @@ async def list_members_endpoint(
     team_id: uuid.UUID,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: TenantPrincipal = require_permission("team.list"),
+    current_user: TenantPrincipal = require_permission(_CODE_TEAM_LIST),
     session: AsyncSession = Depends(get_db_session),
 ) -> MembershipListResponse:
     try:
@@ -711,19 +719,19 @@ async def list_members_endpoint(
             await set_rls_user_context(session, current_user.account_id, current_user.org_role)
             team = await get_team(session, team_id)
             if team is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TEAM_NOT_FOUND)
             result = await list_team_members(session, team_id=team_id, page=page, page_size=page_size)
     except IntegrityError as exc:
         _log.exception("teams.list_members_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from exc
     except ProgrammingError:
         _log.exception("teams.list_members_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception(
@@ -731,7 +739,7 @@ async def list_members_endpoint(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable. Please try again.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -786,7 +794,7 @@ async def add_member_endpoint(
 
             team = await get_team(session, team_id)
             if team is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TEAM_NOT_FOUND)
 
             # Authorise: admin (all-powerful) OR team operator of this team
             is_admin = ORG_ROLE_HIERARCHY.get(current_user.org_role, -1) >= ORG_ROLE_HIERARCHY["admin"]
@@ -825,13 +833,13 @@ async def add_member_endpoint(
         _log.exception("teams.add_member_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from exc
     except ProgrammingError:
         _log.exception("teams.add_member_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception(
@@ -839,7 +847,7 @@ async def add_member_endpoint(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable. Please try again.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -914,7 +922,7 @@ async def remove_member_endpoint(
 
             membership = await get_membership(session, membership_id)
             if membership is None or membership.team_id != team_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_MEMBERSHIP_NOT_FOUND)
 
             if membership.role == "operator":
                 await _assert_not_last_operator(session, team_id, membership_id)
@@ -924,13 +932,13 @@ async def remove_member_endpoint(
         _log.exception("teams.remove_member_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from exc
     except ProgrammingError:
         _log.exception("teams.remove_member_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception(
@@ -943,7 +951,7 @@ async def remove_member_endpoint(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable. Please try again.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -1007,7 +1015,7 @@ async def change_member_role_endpoint(
 
             team = await get_team(session, team_id)
             if team is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TEAM_NOT_FOUND)
 
             is_admin = ORG_ROLE_HIERARCHY.get(current_user.org_role, -1) >= ORG_ROLE_HIERARCHY["admin"]
             if not is_admin:
@@ -1025,24 +1033,24 @@ async def change_member_role_endpoint(
 
             existing = await get_membership(session, membership_id)
             if existing is None or existing.team_id != team_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_MEMBERSHIP_NOT_FOUND)
             old_role = existing.role
             if old_role == "operator" and req.role != "operator":
                 await _assert_not_last_operator(session, team_id, membership_id)
             membership = await update_member_role(session, membership_id, req.role)
             if membership is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_MEMBERSHIP_NOT_FOUND)
     except IntegrityError as exc:
         _log.exception("teams.change_member_role_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from exc
     except ProgrammingError:
         _log.exception("teams.change_member_role_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception(
@@ -1055,7 +1063,7 @@ async def change_member_role_endpoint(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable. Please try again.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except HTTPException:
         raise

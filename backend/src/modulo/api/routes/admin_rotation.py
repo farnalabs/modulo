@@ -23,6 +23,10 @@ from modulo.core.audit_logger import append_audit_event
 from modulo.core.fernet_rotation import rotate_all_encrypted_data
 from modulo.settings import Settings, get_settings
 
+_CODE_ADMIN_ROTATION_ROTATE_KEY = "admin_rotation.rotate_key"
+_CODE_ADMIN_ROTATION_ROTATION_STATUS = "admin_rotation.rotation_status"
+
+
 _MIN_KEY_LEN = 32
 
 
@@ -145,16 +149,16 @@ async def rotate_key(
     except HTTPException:
         raise
     except IntegrityError as exc:
-        _log.exception("admin_rotation.rotate_key")
+        _log.exception(_CODE_ADMIN_ROTATION_ROTATE_KEY)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from exc
     except ProgrammingError as exc:
-        _log.exception("admin_rotation.rotate_key")
+        _log.exception(_CODE_ADMIN_ROTATION_ROTATE_KEY)
         raise HTTPException(status_code=503, detail="Database not available. Run migrations.") from exc
     except Exception as e:
-        _log.exception("admin_rotation.rotate_key")
+        _log.exception(_CODE_ADMIN_ROTATION_ROTATE_KEY)
         raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
@@ -178,16 +182,16 @@ async def rotation_status(
     except HTTPException:
         raise
     except IntegrityError as exc:
-        _log.exception("admin_rotation.rotation_status")
+        _log.exception(_CODE_ADMIN_ROTATION_ROTATION_STATUS)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from exc
     except ProgrammingError as exc:
-        _log.exception("admin_rotation.rotation_status")
+        _log.exception(_CODE_ADMIN_ROTATION_ROTATION_STATUS)
         raise HTTPException(status_code=503, detail="Database not available. Run migrations.") from exc
     except Exception as e:
-        _log.exception("admin_rotation.rotation_status")
+        _log.exception(_CODE_ADMIN_ROTATION_ROTATION_STATUS)
         raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
