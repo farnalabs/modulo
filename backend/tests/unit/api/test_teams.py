@@ -1,4 +1,4 @@
-"""Unit tests for /api/v1/teams endpoints."""
+"""Unit tests for /api/v1/teams endpoints and team-ownership transfer rules."""
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
@@ -6,12 +6,16 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.routes.pipelines import _assert_team_transition_allowed
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.team_visibility import find_model_backend_team_mismatches, model_backend_team_mismatch
+from modulo.db.crud.pipeline import PipelineHasActiveRunsError, update_pipeline
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -20,6 +24,8 @@ _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _TEAM_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
 _MEMBERSHIP_ID = uuid.UUID("00000000-0000-0000-0000-000000000004")
+_PIPELINE_ID = uuid.UUID("00000000-0000-0000-0000-000000000005")
+_MODEL_BACKEND_ID = uuid.UUID("00000000-0000-0000-0000-000000000006")
 _NOW = datetime(2025, 1, 1, tzinfo=UTC)
 
 
@@ -722,3 +728,360 @@ class TestAdminCreateTeam:
     def test_empty_name_returns_422(self, client: TestClient) -> None:
         resp = client.post("/api/v1/admin/teams", json={"name": ""})
         assert resp.status_code == 422
+
+
+def _make_owned_pipeline_mock(owner_team_id: uuid.UUID | None) -> MagicMock:
+    p = MagicMock()
+    p.id = _PIPELINE_ID
+    p.organisation_id = _ORG_ID
+    p.name = "Owned Pipeline"
+    p.description = None
+    p.visibility = "team" if owner_team_id is not None else "org"
+    p.owner_team_id = owner_team_id
+    p.folder_id = None
+    p.max_concurrent_runs = 5
+    p.lock_wait_timeout_seconds = 300
+    p.node_timeout_seconds = 300
+    p.run_context_defaults = {}
+    p.default_autonomy_level = "manual_approval"
+    p.rate_limit_config = None
+    p.max_duration_seconds = None
+    p.archived_at = None
+    p.snapshot_count = 0
+    p.retry_policy = {}
+    p.created_by = _USER_ID
+    p.account_id = _USER_ID
+    p.created_at = _NOW
+    p.updated_at = _NOW
+    return p
+
+
+class TestPipelineOwnershipTransfer:
+    """PATCH /api/v1/pipelines/{id} ownership-transfer route behaviour (PRD 9.3)."""
+
+    def test_ownership_change_returns_rebind_flag(self, client: TestClient) -> None:
+        pipeline = _make_owned_pipeline_mock(None)
+        with (
+            patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
+            patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline),
+            patch("modulo.api.routes.pipelines.set_rls_org"),
+            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        ):
+            resp = client.patch(
+                f"/api/v1/pipelines/{_PIPELINE_ID}",
+                json={"owner_team_id": str(_TEAM_ID)},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["connector_rebind_required"] is True
+
+    def test_ownership_change_blocked_by_active_runs(self, client: TestClient) -> None:
+        pipeline = _make_owned_pipeline_mock(None)
+        with (
+            patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
+            patch(
+                "modulo.api.routes.pipelines.update_pipeline",
+                side_effect=PipelineHasActiveRunsError(2),
+            ),
+            patch("modulo.api.routes.pipelines.set_rls_org"),
+            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        ):
+            resp = client.patch(
+                f"/api/v1/pipelines/{_PIPELINE_ID}",
+                json={"owner_team_id": str(_TEAM_ID)},
+            )
+        assert resp.status_code == 409
+        assert "pipeline_has_active_runs" in resp.json()["detail"]
+        assert "2 run(s)" in resp.json()["detail"]
+
+    def test_ownership_change_no_rebind_flag_when_team_unchanged(self, client: TestClient) -> None:
+        pipeline = _make_owned_pipeline_mock(_TEAM_ID)
+        with (
+            patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
+            patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline),
+            patch("modulo.api.routes.pipelines.set_rls_org"),
+            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        ):
+            resp = client.patch(
+                f"/api/v1/pipelines/{_PIPELINE_ID}",
+                json={"name": "renamed"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["connector_rebind_required"] is False
+
+
+class TestPipelineOwnershipTransferCrud:
+    """CRUD-level ownership-transfer rules (active-runs block + audit event)."""
+
+    def _make_crud_pipeline(self, owner_team_id: uuid.UUID | None) -> MagicMock:
+        p = MagicMock()
+        p.id = _PIPELINE_ID
+        p.owner_team_id = owner_team_id
+        return p
+
+    @pytest.mark.asyncio
+    async def test_ownership_change_blocked_while_active_runs(self) -> None:
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        count_result = MagicMock()
+        count_result.scalar_one_or_none.return_value = 3
+        session.execute.return_value = count_result
+        pipeline = self._make_crud_pipeline(_TEAM_ID)
+        with (
+            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            pytest.raises(PipelineHasActiveRunsError) as exc_info,
+        ):
+            await update_pipeline(
+                session,
+                pipeline.id,
+                {"owner_team_id": None, "visibility": "org"},
+                org_id=_ORG_ID,
+                account_id=_USER_ID,
+            )
+        assert exc_info.value.active_run_count == 3
+
+    @pytest.mark.asyncio
+    async def test_ownership_guard_uses_canonical_pipeline_active_run_counter(self) -> None:
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        pipeline = self._make_crud_pipeline(_TEAM_ID)
+        count = AsyncMock(return_value=0)
+        with (
+            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("modulo.db.crud.pipeline.count_active_runs_for_pipeline", new=count),
+            patch("modulo.db.crud.pipeline.append_audit_event", new=AsyncMock(return_value=MagicMock())),
+        ):
+            result = await update_pipeline(
+                session,
+                pipeline.id,
+                {"owner_team_id": None, "visibility": "org"},
+                org_id=_ORG_ID,
+                account_id=_USER_ID,
+            )
+        assert result is pipeline
+        count.assert_awaited_once_with(session, pipeline.id, include_pending=True)
+
+    @pytest.mark.asyncio
+    async def test_ownership_change_emits_resource_team_ownership_changed_audit(self) -> None:
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        pipeline = self._make_crud_pipeline(_TEAM_ID)
+        audit = AsyncMock(return_value=MagicMock())
+        with (
+            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("modulo.db.crud.pipeline.append_audit_event", new=audit),
+        ):
+            result = await update_pipeline(
+                session,
+                pipeline.id,
+                {"owner_team_id": None, "visibility": "org"},
+                org_id=_ORG_ID,
+                account_id=_USER_ID,
+                request_id="req-1",
+            )
+        assert result is pipeline
+        assert result.owner_team_id is None
+        audit.assert_awaited_once()
+        kwargs = audit.await_args.kwargs
+        assert kwargs["event_type"] == "resource_team_ownership_changed"
+        assert kwargs["org_id"] == _ORG_ID
+        assert kwargs["actor_user_id"] == _USER_ID
+        assert kwargs["resource_type"] == "pipeline"
+        assert kwargs["resource_id"] == _PIPELINE_ID
+        assert kwargs["request_id"] == "req-1"
+        payload = kwargs["payload_json"]
+        assert payload["resource_type"] == "pipeline"
+        assert payload["resource_id"] == str(_PIPELINE_ID)
+        assert payload["old_team_id"] == str(_TEAM_ID)
+        assert payload["new_team_id"] is None
+        assert payload["changed_by"] == str(_USER_ID)
+
+    @pytest.mark.asyncio
+    async def test_reassign_to_new_team_emits_audit_with_both_team_ids(self) -> None:
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        pipeline = self._make_crud_pipeline(_TEAM_ID)
+        new_team = uuid.uuid4()
+        audit = AsyncMock(return_value=MagicMock())
+        with (
+            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("modulo.db.crud.pipeline.append_audit_event", new=audit),
+        ):
+            result = await update_pipeline(
+                session,
+                pipeline.id,
+                {"owner_team_id": new_team},
+                org_id=_ORG_ID,
+                account_id=_USER_ID,
+            )
+        assert result.owner_team_id == new_team
+        payload = audit.await_args.kwargs["payload_json"]
+        assert payload["old_team_id"] == str(_TEAM_ID)
+        assert payload["new_team_id"] == str(new_team)
+
+    @pytest.mark.asyncio
+    async def test_internal_callers_without_audit_context_are_unaffected(self) -> None:
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        pipeline = self._make_crud_pipeline(_TEAM_ID)
+        audit = AsyncMock(return_value=MagicMock())
+        with (
+            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("modulo.db.crud.pipeline.append_audit_event", new=audit),
+        ):
+            result = await update_pipeline(session, pipeline.id, {"owner_team_id": None, "visibility": "org"})
+        assert result.owner_team_id is None
+        audit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_owner_change_does_not_query_runs_or_emit_audit(self) -> None:
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        pipeline = self._make_crud_pipeline(_TEAM_ID)
+        audit = AsyncMock(return_value=MagicMock())
+        with (
+            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("modulo.db.crud.pipeline.append_audit_event", new=audit),
+        ):
+            await update_pipeline(session, pipeline.id, {"name": "renamed"}, org_id=_ORG_ID, account_id=_USER_ID)
+        session.execute.assert_not_awaited()
+        audit.assert_not_awaited()
+
+
+class TestPipelineOwnershipTransitionGates:
+    """_assert_team_transition_allowed gates for ownership changes (PRD 9.3)."""
+
+    @pytest.mark.asyncio
+    async def test_non_member_operator_cannot_reassign_owner_team(self) -> None:
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        principal = AuthenticatedPrincipal(
+            username="operator",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="operator",
+        )
+        current = _make_owned_pipeline_mock(_TEAM_ID)
+        with (
+            patch(
+                "modulo.api.routes.pipelines.team_membership_exists",
+                new=AsyncMock(return_value=False),
+            ),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await _assert_team_transition_allowed(
+                session,
+                principal,
+                current,
+                {"owner_team_id": str(uuid.uuid4())},
+            )
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_org_admin_bypasses_current_team_gate(self) -> None:
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        principal = AuthenticatedPrincipal(
+            username="admin",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="admin",
+        )
+        current = _make_owned_pipeline_mock(_TEAM_ID)
+        await _assert_team_transition_allowed(session, principal, current, {"owner_team_id": str(uuid.uuid4())})
+        session.execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_unsetting_owner_team_without_org_visibility_rejected(self) -> None:
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        principal = AuthenticatedPrincipal(
+            username="operator",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="operator",
+        )
+        current = _make_owned_pipeline_mock(_TEAM_ID)
+        with pytest.raises(HTTPException) as exc_info:
+            await _assert_team_transition_allowed(
+                session,
+                principal,
+                current,
+                {"owner_team_id": None},
+            )
+        assert exc_info.value.status_code == 422
+        assert "owner_team_id is required" in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_clear_to_org_visibility_succeeds_for_member(self) -> None:
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        principal = AuthenticatedPrincipal(
+            username="operator",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="operator",
+        )
+        current = _make_owned_pipeline_mock(_TEAM_ID)
+        with patch(
+            "modulo.api.routes.pipelines.team_membership_exists",
+            new=AsyncMock(return_value=True),
+        ):
+            await _assert_team_transition_allowed(
+                session,
+                principal,
+                current,
+                {"owner_team_id": None, "visibility": "org"},
+            )
+
+
+class TestModelBackendTeamMismatch:
+    """Team-private model backends are usable only within same-team pipelines."""
+
+    def test_org_backend_never_mismatches(self) -> None:
+        assert model_backend_team_mismatch("org", None, None) is False
+        assert model_backend_team_mismatch("org", _TEAM_ID, None) is False
+        assert model_backend_team_mismatch("org", _TEAM_ID, uuid.uuid4()) is False
+
+    def test_same_team_backend_matches(self) -> None:
+        assert model_backend_team_mismatch("team", _TEAM_ID, _TEAM_ID) is False
+
+    def test_cross_team_backend_is_mismatch(self) -> None:
+        assert model_backend_team_mismatch("team", _TEAM_ID, uuid.uuid4()) is True
+        assert model_backend_team_mismatch("team", None, _TEAM_ID) is True
+
+    @pytest.mark.asyncio
+    async def test_finder_detects_cross_team_pin(self) -> None:
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        backend = MagicMock()
+        backend.id = _MODEL_BACKEND_ID
+        backend.name = "eng-llm"
+        backend.visibility = "team"
+        backend.owner_team_id = _TEAM_ID
+        query_result = MagicMock()
+        query_result.scalars.return_value.all.return_value = [backend]
+        session.execute.return_value = query_result
+        mismatches = await find_model_backend_team_mismatches(
+            session,
+            _ORG_ID,
+            uuid.uuid4(),
+            [{"node_id": "n1", "model_backend_id": str(_MODEL_BACKEND_ID)}],
+        )
+        assert len(mismatches) == 1
+        assert mismatches[0].model_backend_name == "eng-llm"
+        assert mismatches[0].pipeline_owner_team_id != _TEAM_ID
+
+    @pytest.mark.asyncio
+    async def test_finder_allows_same_team_pin(self) -> None:
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        backend = MagicMock()
+        backend.id = _MODEL_BACKEND_ID
+        backend.name = "eng-llm"
+        backend.visibility = "team"
+        backend.owner_team_id = _TEAM_ID
+        query_result = MagicMock()
+        query_result.scalars.return_value.all.return_value = [backend]
+        session.execute.return_value = query_result
+        mismatches = await find_model_backend_team_mismatches(
+            session,
+            _ORG_ID,
+            _TEAM_ID,
+            [{"node_id": "n1", "model_backend_id": str(_MODEL_BACKEND_ID)}],
+        )
+        assert mismatches == []
+
+    @pytest.mark.asyncio
+    async def test_finder_skips_empty_pins(self) -> None:
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        mismatches = await find_model_backend_team_mismatches(session, _ORG_ID, None, [])
+        assert mismatches == []
+        session.execute.assert_not_awaited()
