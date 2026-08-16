@@ -21,6 +21,7 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_in_dev_operator, require_permission
 from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.model_backend_hub import _build_backend
 from modulo.core.plugin_registry import get_plugin_registry
 from modulo.db.crud.model_backend import (
     create_model_backend,
@@ -65,8 +66,6 @@ async def _run_health_check_on_save(
     Returns ``(ok, detail)`` where *detail* is ``None`` on success.
     """
     try:
-        from modulo.core.model_backend_hub import _build_backend
-
         creds: dict[str, Any] = {"api_key": api_key} if api_key else {}
         backend = _build_backend(provider, model_id, creds, default_params)
     except Exception as exc:
