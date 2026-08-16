@@ -85,7 +85,7 @@ def _string_or_default(value: object, default: str = "?") -> str:
     return default if value is None else str(value)
 
 
-def _check_list_type_mismatch(path: str, out_type: object, in_type: object) -> list[str]:
+def _check_list_type_mismatch(path: str, out_type: object, in_type: list[object]) -> list[str]:
     """Input is a nullable type list: output must be a subset of the input types."""
     if isinstance(out_type, list):
         return [f"{path}: output type '{ot}' not in input types {in_type}" for ot in out_type if ot not in in_type]
@@ -445,7 +445,7 @@ def _check_sandbox_stall_timeout(node: dict[str, Any], nid: str, result: Validat
         )
 
 
-def _as_int_or_none(value: object) -> int | None:
+def _as_int_or_none(value: Any) -> int | None:
     try:
         return int(value) if not isinstance(value, int) else value
     except (ValueError, TypeError):
