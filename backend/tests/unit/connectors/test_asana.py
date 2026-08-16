@@ -31,7 +31,7 @@ async def test_query_projects_corrupt_body_no_crash(connector: AsanaConnector) -
     page instead of crashing with AttributeError on ``.get()``."""
     respx.get(f"{_BASE}/projects").mock(return_value=httpx.Response(200, json=["garbage"]))
     result = await connector.query(ConnectorQuery(resource="projects"))
-    assert result.records == []
+    assert not result.records
     assert result.total == 0
 
 
@@ -41,7 +41,7 @@ async def test_query_projects_non_list_data_value_no_crash(connector: AsanaConne
     empty page instead of returning a bare string as the records list."""
     respx.get(f"{_BASE}/projects").mock(return_value=httpx.Response(200, json={"data": "not-a-list"}))
     result = await connector.query(ConnectorQuery(resource="projects"))
-    assert result.records == []
+    assert not result.records
     assert result.total == 0
 
 
@@ -50,7 +50,7 @@ async def test_query_tasks_corrupt_body_no_crash(connector: AsanaConnector) -> N
     """A non-dict body from the tasks endpoint must degrade to an empty page."""
     respx.get(f"{_BASE}/tasks").mock(return_value=httpx.Response(200, json=["garbage"]))
     result = await connector.query(ConnectorQuery(resource="tasks", filters={"workspace": "w1"}))
-    assert result.records == []
+    assert not result.records
     assert result.total == 0
 
 
@@ -59,7 +59,7 @@ async def test_query_sections_corrupt_body_no_crash(connector: AsanaConnector) -
     """A non-dict body from the sections endpoint must degrade to an empty page."""
     respx.get(f"{_BASE}/projects/p1/sections").mock(return_value=httpx.Response(200, json=["garbage"]))
     result = await connector.query(ConnectorQuery(resource="sections", filters={"project_id": "p1"}))
-    assert result.records == []
+    assert not result.records
     assert result.total == 0
 
 
@@ -68,7 +68,7 @@ async def test_query_workspaces_corrupt_body_no_crash(connector: AsanaConnector)
     """A non-dict body from the workspaces endpoint must degrade to an empty page."""
     respx.get(f"{_BASE}/workspaces").mock(return_value=httpx.Response(200, json=["garbage"]))
     result = await connector.query(ConnectorQuery(resource="workspaces"))
-    assert result.records == []
+    assert not result.records
     assert result.total == 0
 
 
@@ -77,7 +77,7 @@ async def test_query_users_corrupt_body_no_crash(connector: AsanaConnector) -> N
     """A non-dict body from the users endpoint must degrade to an empty page."""
     respx.get(f"{_BASE}/users").mock(return_value=httpx.Response(200, json=["garbage"]))
     result = await connector.query(ConnectorQuery(resource="users"))
-    assert result.records == []
+    assert not result.records
     assert result.total == 0
 
 
@@ -87,4 +87,4 @@ async def test_query_single_project_corrupt_body_no_crash(connector: AsanaConnec
     empty result instead of crashing with AttributeError."""
     respx.get(f"{_BASE}/projects/p1").mock(return_value=httpx.Response(200, json=["garbage"]))
     result = await connector.query(ConnectorQuery(resource="project", filters={"project_id": "p1"}))
-    assert result.records == []
+    assert not result.records

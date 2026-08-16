@@ -352,7 +352,7 @@ async def test_query_repos_corrupt_body_no_crash(connector: CodeClimateConnector
     instead of crashing with AttributeError on ``.get()``."""
     respx.get(f"{_BASE}/repos").mock(return_value=httpx.Response(200, json=["garbage"]))
     result = await connector.query(ConnectorQuery(resource="repos"))
-    assert result.records == []
+    assert not result.records
     assert result.total == 0
 
 
@@ -362,7 +362,7 @@ async def test_query_repos_non_list_data_value_no_crash(connector: CodeClimateCo
     empty page instead of returning a bare string as the records list."""
     respx.get(f"{_BASE}/repos").mock(return_value=httpx.Response(200, json={"data": "not-a-list"}))
     result = await connector.query(ConnectorQuery(resource="repos"))
-    assert result.records == []
+    assert not result.records
     assert result.total == 0
 
 
@@ -371,7 +371,7 @@ async def test_query_snapshots_corrupt_body_no_crash(connector: CodeClimateConne
     """A non-dict body from the snapshots endpoint must degrade to an empty page."""
     respx.get(f"{_BASE}/repos/r1/snapshots").mock(return_value=httpx.Response(200, json=["garbage"]))
     result = await connector.query(ConnectorQuery(resource="snapshots", filters={"repo_id": "r1"}))
-    assert result.records == []
+    assert not result.records
     assert result.total == 0
 
 
@@ -380,7 +380,7 @@ async def test_query_test_reports_corrupt_body_no_crash(connector: CodeClimateCo
     """A non-dict body from the test_reports endpoint must degrade to an empty page."""
     respx.get(f"{_BASE}/repos/r1/test_reports").mock(return_value=httpx.Response(200, json=["garbage"]))
     result = await connector.query(ConnectorQuery(resource="test_reports", filters={"repo_id": "r1"}))
-    assert result.records == []
+    assert not result.records
     assert result.total == 0
 
 
