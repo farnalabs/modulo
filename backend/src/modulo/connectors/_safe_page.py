@@ -3,7 +3,7 @@
 The Azure Repos (``value``), Azure Pipelines (``value``), Azure Key Vault
 (``value``), Bitbucket (``values``), Microsoft Teams (``value``), SharePoint
 (``value``), TeamCity (``build``/``project``/``buildType``/``agent``),
-CircleCI (``items``), n8n (``data``), Opsgenie (``data``), Datadog
+CircleCI (``items``), GitHub Actions (``workflow_runs``), n8n (``data``), Opsgenie (``data``), Datadog
 (``data``), and PagerDuty (``incidents``/``services``/``teams``/``users``/
 ``escalation_policies``/``schedules``/``oncalls``) connectors each guard
 their list parsing against corrupt or hostile response bodies. A corrupt or hostile response may return

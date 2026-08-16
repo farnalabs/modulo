@@ -107,6 +107,23 @@ async def test_gh_trigger_run_workflow_dispatch(gh_runner):
     assert run.status == CIRunStatus.QUEUED
 
 
+@respx.mock
+async def test_gh_trigger_run_corrupt_workflow_runs_no_crash(gh_runner):
+    """A corrupt/hostile runs response must not crash trigger_run — fall back to pending."""
+    respx.post("https://api.github.com/repos/owner/repo/actions/workflows/ci.yml/dispatches").mock(
+        return_value=httpx.Response(204)
+    )
+    respx.get("https://api.github.com/repos/owner/repo/actions/runs").mock(
+        return_value=httpx.Response(200, json=["corrupt", "list"])
+    )
+    run = await gh_runner.trigger_run(
+        pipeline_id="owner/repo/ci.yml",
+        branch="main",
+    )
+    assert run.status == CIRunStatus.PENDING
+    assert run.id == ""
+
+
 # ---------------------------------------------------------------------------
 # GitHub Actions — get_run_status (respx)
 # ---------------------------------------------------------------------------
@@ -241,6 +258,26 @@ async def test_gh_list_runs(gh_runner):
     assert len(runs) == 2
     assert runs[0].status == CIRunStatus.SUCCESS
     assert runs[1].status == CIRunStatus.FAILURE
+
+
+@respx.mock
+async def test_gh_list_runs_corrupt_body_no_crash(gh_runner):
+    """A corrupt/hostile non-dict body must degrade to an empty run list."""
+    respx.get("https://api.github.com/repos/owner/repo/actions/runs").mock(
+        return_value=httpx.Response(200, json=["not-a-dict"])
+    )
+    runs = await gh_runner.list_runs(pipeline_id="owner/repo")
+    assert runs == []
+
+
+@respx.mock
+async def test_gh_list_runs_non_list_workflow_runs_no_crash(gh_runner):
+    """A corrupt body placing a non-list in ``workflow_runs`` must fall back to an empty list."""
+    respx.get("https://api.github.com/repos/owner/repo/actions/runs").mock(
+        return_value=httpx.Response(200, json={"workflow_runs": "corrupt"})
+    )
+    runs = await gh_runner.list_runs(pipeline_id="owner/repo")
+    assert runs == []
 
 
 # ---------------------------------------------------------------------------

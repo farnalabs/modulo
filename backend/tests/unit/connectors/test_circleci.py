@@ -240,6 +240,28 @@ async def test_get_run_logs(cc_runner):
     assert any("All tests passed!" in line for line in logs.lines)
 
 
+@respx.mock
+async def test_get_run_logs_corrupt_body_no_crash(cc_runner):
+    """A corrupt/hostile non-dict workflow body must not crash get_run_logs."""
+    pipeline_uuid = "pipe-uuid-123"
+    respx.get(f"{_CIRCLECI_API}/pipeline/{pipeline_uuid}/workflow").mock(
+        return_value=httpx.Response(200, json=["corrupt", "body"])
+    )
+    logs = await cc_runner.get_run_logs(pipeline_uuid)
+    assert logs.lines == []
+
+
+@respx.mock
+async def test_get_run_logs_non_list_items_no_crash(cc_runner):
+    """A corrupt body placing a non-list in ``items`` must fall back to no lines."""
+    pipeline_uuid = "pipe-uuid-123"
+    respx.get(f"{_CIRCLECI_API}/pipeline/{pipeline_uuid}/workflow").mock(
+        return_value=httpx.Response(200, json={"items": "corrupt"})
+    )
+    logs = await cc_runner.get_run_logs(pipeline_uuid)
+    assert logs.lines == []
+
+
 # ---------------------------------------------------------------------------
 # list_runs
 # ---------------------------------------------------------------------------
