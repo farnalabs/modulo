@@ -214,8 +214,8 @@ class TestBlockedPartialSummaryWrittenAtCreate:
         assert summary is not None
         assert summary["blocked"] is True
         assert summary["blocking_eval_name"] == "no-secrets"
-        assert summary["executed_nodes"] == []
-        assert summary["nodes"] == []
+        assert not summary["executed_nodes"]
+        assert not summary["nodes"]
 
 
 class TestCompensateBlockedRunAgainstRealDB:
@@ -309,7 +309,7 @@ class TestCompensateBlockedRunAgainstRealDB:
         summary = await _load_summary(db_engine, run_id)
         assert summary is not None
         assert summary["blocked"] is True
-        assert summary["executed_nodes"] == []
+        assert not summary["executed_nodes"]
 
 
 class TestDependentTriggerSuppression:
