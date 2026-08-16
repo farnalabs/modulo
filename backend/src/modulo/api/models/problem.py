@@ -26,6 +26,7 @@ class ProblemType(enum.StrEnum):
     MIGRATION_REQUIRED = "migration_required"
     BAD_GATEWAY = "bad_gateway"
     SERVICE_UNAVAILABLE = "service_unavailable"
+    GATEWAY_TIMEOUT = "gateway_timeout"
     INTERNAL_ERROR = "internal_error"
 
 
@@ -43,6 +44,7 @@ _PROBLEM_METADATA: dict[ProblemType, dict[str, Any]] = {
     ProblemType.MIGRATION_REQUIRED: {"status": 501, "title": "Migration Required"},
     ProblemType.BAD_GATEWAY: {"status": 502, "title": "Bad Gateway"},
     ProblemType.SERVICE_UNAVAILABLE: {"status": 503, "title": "Service Unavailable"},
+    ProblemType.GATEWAY_TIMEOUT: {"status": 504, "title": "Gateway Timeout"},
     ProblemType.INTERNAL_ERROR: {"status": 500, "title": "Internal Error"},
 }
 
@@ -147,6 +149,7 @@ def problem_from_http_exception(
         501: ProblemType.MIGRATION_REQUIRED,
         502: ProblemType.BAD_GATEWAY,
         503: ProblemType.SERVICE_UNAVAILABLE,
+        504: ProblemType.GATEWAY_TIMEOUT,
     }
     problem_type = lookup.get(status, ProblemType.INTERNAL_ERROR)
     return ProblemDetail.from_type(
