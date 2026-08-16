@@ -115,7 +115,8 @@ async def test_snapshot_with_composite_node_is_expanded_and_compiles() -> None:
         _scalars_result([_agent_mock(agent_id)]),  # 5 agents
         _scalars_result([]),  # 6 schemas (schema_ids contains None)
         _scalar_result(0),  # 7 snapshot version max
-        unlock_result,  # 8 pg_advisory_unlock
+        _scalars_result([]),  # 8 guardrail rows (EvalDefinition)
+        unlock_result,  # 9 pg_advisory_unlock
     ]
 
     snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
@@ -192,7 +193,8 @@ async def test_snapshot_sub_node_prompt_injection_survives_without_agent() -> No
         _scalars_result([]),  # 3 edges
         _scalar_result(template),  # 4 composite template (expander)
         _scalar_result(0),  # 5 snapshot version max
-        unlock_result,  # 6 pg_advisory_unlock
+        _scalars_result([]),  # 6 guardrail rows (EvalDefinition)
+        unlock_result,  # 7 pg_advisory_unlock
     ]
 
     snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)

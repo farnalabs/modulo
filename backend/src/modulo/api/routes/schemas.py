@@ -29,6 +29,7 @@ from modulo.core.schema_registry import (
     SchemaInferenceService,
     apply_migration,
     create_migration,
+    flag_rare_fields,
 )
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.connector_instance import get_connector_instance
@@ -786,6 +787,7 @@ class SchemaInferResponse(BaseModel):
     sample_count: int
     suggestion_name: str
     suggestion_description: str | None = None
+    rare_fields: list[str] = Field(default_factory=list)
 
 
 @router.post("/infer", response_model=SchemaInferResponse)
@@ -1004,6 +1006,7 @@ async def infer_schema_endpoint(
         sample_count=len(records),
         suggestion_name=suggestion_name,
         suggestion_description=suggestion_description,
+        rare_fields=flag_rare_fields(records),
     )
 
 

@@ -46,10 +46,10 @@ management described in `feat-model-backends-management`.
 
 ### Runtime Resolution — model_id pinning
 
-- [x] `model_id` resolved from `PipelineSnapshot.model_backend_pins_json` — `_resolve_graph_references()` in `pipelines.py` creates model_backend_pins; stored in snapshot at creation time; graph validator reads from pins at save and run time
-- [x] Not from current ModelBackend entity — ensures consistency across pauses/resumes
-- [x] Operator updates take effect only on future runs (new snapshots)
-- [ ] Pinned `model_id` that no longer exists in pricing config → cost falls back to zero with logged warning — no pricing config integration exists
+- [ ] Pinned `model_backend_id` validated at save/run time, but pinned `model_id` NOT applied at runtime — `_resolve_graph_references()` in `pipelines.py` creates model_backend_pins and the snapshot (`pipeline_snapshot.py`) stores `{agent_id, model_backend_id, model_id}`; the graph validator reads `model_backend_id` from pins at save/run time (existence/status/health), but the run-scoped hub (`executor._init_model_backend_hub`) builds each backend from the CURRENT entity row — the pinned `model_id` is never used to override the runtime backend (PRD §8.1 deviation, see Known Gaps)
+- [ ] Runtime reads the current ModelBackend entity (provider/model_id at run-start) — a paused→resumed run re-inits the hub from current rows, so an operator's `model_id` change between pause and resume DOES affect the resumed run (PRD §8.1 deviation)
+- [ ] Operator updates take effect only on future runs — PARTIAL: within a single run the run-scoped hub holds the run-start backend, so mid-run entity updates do not affect it; but a resume re-inits the hub from current rows and the pinned `model_id` is not enforced (PRD §8.1 deviation)
+- [ ] Pinned `model_id` that no longer exists in pricing config → cost falls back to zero with logged warning — `core/pricing.get_pricing()` exists (returns `None` for unknown models) but the cost controller never calls it; no pricing integration
 
 ### Pre-run Health Check — gate run start on backend health
 
@@ -108,8 +108,8 @@ management described in `feat-model-backends-management`.
 - [x] Double-invoke of `__aexit__` → dict `.clear()` on already-cleared dicts is a no-op
 - [x] `initialise([])` → no backends registered, no crash
 - [x] Invalid UUID in `fallback_backend_ids` → `uuid.UUID()` raises `ValueError`, caught and logged as warning, fallback skipped gracefully
-- [ ] Fallback list includes primary ID → primary already known unhealthy, would be skipped; no test
-- [ ] Fallback scan includes unrelated backends (different provider/model) when no fallbacks configured — documented in `get_with_rotation()` docstring
+- [x] Fallback list includes primary ID → primary already known unhealthy, skipped — tested in `test_get_skips_primary_in_own_fallback_list` (+ only-fallback-raises variant `test_get_skips_primary_in_own_fallback_list_when_only_fallback`)
+- [x] Fallback scan returns unrelated backends (different provider/model) when no fallbacks configured — documented in `get_with_rotation()` docstring; tested in `test_get_with_rotation_scans_all_backends_when_no_configured_fallback` + `test_get_with_rotation_scan_returns_unrelated_backend`
 - [ ] Concurrent unregistration during `get_with_rotation()` scan — iterates `_backends.items()` while another task could modify the dict; not thread-safe by design
 
 ## Known Gaps
@@ -120,11 +120,15 @@ management described in `feat-model-backends-management`.
 - [ ] **No health check result staleness bound**: health checks run each time; no 5-minute cache window.
 - [ ] **No retry with backoff**: health check runs once per call. No retry logic for transient failures.
 - [ ] **No mid-run monitoring**: no periodic health re-check during a run. `mark_unhealthy()` exists but is caller-driven; no automatic detection of unreachability.
-- [ ] **No pricing config integration**: pinned `model_id` cost tracking not implemented.
+- [ ] **No pricing config integration**: `core/pricing.get_pricing()` exists (returns `None` for unknown model IDs) but the cost controller never calls it — cost is not computed against the pinned `model_id`.
 - [ ] **`get_with_rotation()` fallback-scan returns unrelated backends**: when no fallbacks are configured and primary is unhealthy, any registered backend (different provider, different model) may be returned.
+- [ ] **`get_with_rotation()` scan-all path not thread-safe**: iterates `_backends.items()` with no lock; concurrent mutation during a scan is undefined (hub documented as not thread-safe — each run gets its own instance, so this is an accepted design limitation).
+- [ ] **Pinned `model_id` not applied at runtime (PRD §8.1 deviation)**: `PipelineSnapshot.model_backend_pins_json` stores `{agent_id, model_backend_id, model_id}`, but the run-scoped hub (`executor._init_model_backend_hub`) builds each backend from the CURRENT entity row. A paused→resumed run re-inits the hub from current rows, so an operator's `model_id` update between pause and resume DOES affect the resumed run, and re-runs from older snapshots use the current entity `model_id`, not the pinned one. The graph validator validates pinned backend existence/status/health but never enforces the pinned `model_id`.
 - [ ] **Legacy BDD feature files**: `configure.feature`, `rotation.feature`, and `health_check.feature` under `tests/bdd/features/model_backends/` still route through the legacy `test_alpha_model_backends.py` step file, which contains placeholder `pass` steps and stale patch paths — not part of the active suite.
 
 ## QA History
+
+- 2026-08-15 (distribute partial-model-backends): Coverage drive on the two model-backend entries. **Hub**: verified + checked off 2 edge-case behaviours — primary-in-own-fallback-list skipped (`test_get_skips_primary_in_own_fallback_list` + only-fallback variant raising `BackendUnavailableError`) and scan-all returning unrelated backends (`test_get_with_rotation_scan_returns_unrelated_backend`, distinct provider/model backend_ids). **CORRECTED 3 stale `[x]` claims** under Runtime Resolution: the pinned `model_id` is stored and validated but never applied at runtime — the run-scoped hub builds backends from the CURRENT entity row, so paused→resumed runs pick up operator `model_id`/provider changes and re-runs from older snapshots use the current entity (documented as a PRD §8.1 deviation in Known Gaps). Documented that `core/pricing.get_pricing()` exists but is unwired (cost not computed against pinned `model_id`). Status: partial.
 
 - 2026-08-13 (improve-tests): QA lens pass on the `model_backend_hub` test package — extended the canonical unit suite (`tests/unit/model_backend_hub/test_hub.py`). Covers `initialise` secret handling (fetch timeout, KeyError→Fernet `credentials_ciphertext` decrypt + decrypt failure, malformed secret JSON, non-object secret, per-row error isolation), fallback-id parsing (UUID/string accept, non-iterable/invalid-UUID/unexpected-type skip paths), `_build_backend` provider dispatch (bedrock/vertexai/azure/watsonx missing-field ValueErrors, custom stub, API-key-required providers, OpenAI-compatible base_url handling, plugin registry build/failure/cancellation, unknown provider), `health_check` (unregistered, healthy/unhealthy state sync, timeout, exception detail truncation, cancellation), `mark_unhealthy`, `backend_ids`, error classes (incl. `backend_id` attribute exposure), register-marked-healthy state, `_extract_fixture_map` precedence, lazy `_backend_class` import, `__aexit__` cleanup + error logging, register-overwrite warning, not-registered `get`/`get_with_rotation`, and `_emit_failover_event` cancellation propagation.
 

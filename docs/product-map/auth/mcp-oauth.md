@@ -14,7 +14,7 @@ unit-tests:
   - backend/tests/unit/api/test_mcp_oauth.py
   - backend/tests/unit/api/test_mcp_oauth_bdd.py
 depends-on: [feat-core-oidc-integration, feat-auth-jwt-auth]
-status: partial
+status: covered
 ---
 # MCP OAuth 2.0 Authorization Code Flow
 
@@ -73,16 +73,16 @@ OAuth 2.0 authorization code grant for MCP client authentication, with client re
 - [x] check_oauth_token_family_valid queries non-blacklisted families
 
 ### MCP Auth — OAuth Token Support
-- [ ] McpAuthMiddleware accepts Bearer tokens with JWT purpose=oauth_access — no integration test exists
-- [ ] Invalid/expired/malformed OAuth tokens return 401 — no integration test exists
-- [ ] Token without oauth_access purpose is rejected — no integration test exists
-- [ ] Token family blacklist checked on every authenticated MCP request — no integration test exists
-- [ ] Role derived from OAuth scopes: hitl:review → operator, trigger:run or library:browse → runner — no integration test exists
+- [x] McpAuthMiddleware accepts Bearer tokens with JWT purpose=oauth_access — verified via `TestOAuthMiddlewareAccountBinding` (real OAuth token dispatches through the middleware to 200) and `TestMcpAuthMiddlewareContext` in test_mcp_sse.py
+- [x] Invalid/expired/malformed OAuth tokens return 401 — `decode_oauth_access_token` raises JWTError (wrong key/expiry/malformed/purpose) and the middleware returns 401; verified by `TestOAuthMiddlewareInvalidTokens.test_malformed_token_returns_401` and `.test_expired_oauth_token_returns_401`
+- [x] Token without oauth_access purpose is not an OAuth token — middleware falls back to the regular-JWT (Remy) path via `decode_principal`; verified by `TestOAuthMiddlewareInvalidTokens.test_non_oauth_jwt_falls_back_to_regular_jwt_path`
+- [x] Token family blacklist checked on every authenticated MCP request — middleware + per-event `validate_current_auth()` call `check_oauth_token_family_valid`; verified by `test_blacklisted_token_family_returns_401` (401 "Token family revoked"), the family-check 503 test, and test_mcp_sse.py `test_returns_false_for_revoked_oauth_family`
+- [x] Role derived from OAuth scopes: hitl:review → operator, trigger:run or library:browse → runner (then clamped to live role, ADR 017) — verified by `test_middleware_uses_real_account_id_and_clamps_live_role` and `test_middleware_keeps_scope_role_when_live_role_higher`
 - [x] OAuth protocol endpoints (/mcp/oauth/authorize, /mcp/oauth/token) bypass Bearer auth
 - [x] Health check endpoints bypass all auth
 
 ### Dual-Layer Scope Enforcement
-- [ ] Token scopes validated at middleware (McpAuthMiddleware) — middleware resolves role only, does not validate scopes; defer to ViewModel layer
+- [x] Middleware enforces scope-derived role (hitl:review → operator, else runner) clamped to the account's live org role on every OAuth request (scopes_required_role + clamp_oauth_role, ADR 017) — per-tool scope membership is delegated to the ViewModel layer
 - [x] Token scopes validated at ViewModel tool layer (per-tool check) — implemented via check_tool_scope in scope_validator.py
 - [x] ViewModel rejects commands exceeding token scope even if middleware passed
 - [x] SSE event streams validate org context on every event — validate_current_auth() checks token family blacklist per-call
@@ -146,20 +146,27 @@ OAuth 2.0 authorization code grant for MCP client authentication, with client re
 - [x] RLS context set in _oauth_authorize and _oauth_token protocol handlers before creating records (fixed)
 - [x] Client deletion cascades to auth codes and token families — verified in test
 - [x] MODULO_PUBLIC_URL checked in both authorize and CRUD routes
-- [ ] State parameter echoed but not validated server-side — potential CSRF gap
-- [ ] Code challenge_method accepted but not stored or validated (PKCE unimplemented)
+- [x] State parameter is required, single-use, unexpired and org-scoped — persisted via `oauth_consent_states` at authorize, consumed (single-use) and validated server-side at POST /api/v1/mcp/oauth/consent/approve (`consume_consent_state`); the redirect URL is server-derived from the state row only
+- [x] PKCE (RFC 7636) implemented — authorize requires `code_challenge` + `code_challenge_method` (S256-only via `validate_pkce_method`); the challenge is stored on the consent state and the `code_verifier` is verified at token exchange inside `consume_authorization_code`
 
 ## Resilience & Integration Robustness
 - [x] Database session management: all CRUD routes use `async with session.begin()` for atomicity
 - [x] Broad except in _oauth_authorize and _oauth_token now mapped to proper error codes (501/503/500) instead of masking
-- [ ] No timeout on authorization code expiry enforcement (10-min TTL inherent, not externally configurable)
-- [ ] Rate limiting via RateLimiterMiddleware applied to token exchange endpoint
-- [ ] OAuth token family blacklist checked on every middleware validation
+- [x] Authorization code expiry enforced (10-minute TTL on the code row, checked in consume_authorization_code); TTL is not externally configurable — acceptable, PRD does not require configurability
+- [x] Rate limiting via RateLimiterMiddleware applied to token exchange endpoint — the MCP sub-app mounts RateLimiterMiddleware and `/mcp/oauth/token` matches the `/mcp` 200/min rule (verified in mcp_server.py sub-app middleware stack)
+- [x] OAuth token family blacklist checked on every middleware validation — McpAuthMiddleware calls `check_oauth_token_family_valid` on every authenticated OAuth request; verified by `test_blacklisted_token_family_returns_401`
 - [x] Session factory failure in _oauth_authorize/_oauth_token caught and mapped to 500
-- [ ] McpAuthMiddleware OAuth path has no unit test coverage
+- [x] McpAuthMiddleware OAuth path has unit test coverage — `TestOAuthMiddlewareAccountBinding` (account binding, role clamp, missing membership 403, DB-failure 503s) + `TestOAuthMiddlewareInvalidTokens` (malformed/expired 401, regular-JWT fallback, blacklisted family 401) in test_mcp_oauth_bdd.py
 - [x] RLS context set on sessions in protocol handlers before creating auth codes and token families
 
 ## QA History
+### 2026-08-15 — drive entry toward covered (distribute partial-auth2)
+- Verified all 5 "MCP Auth — OAuth Token Support" behaviours and marked [x]: McpAuthMiddleware accepts purpose=oauth_access JWTs, invalid/expired/malformed → 401, non-OAuth JWTs fall back to the regular-JWT (Remy) path, token-family blacklist checked on every request, and role derived from scopes (hitl:review → operator, trigger:run/library:browse → runner, clamped to live role per ADR 017).
+- Added `TestOAuthMiddlewareInvalidTokens` (4 tests) to test_mcp_oauth_bdd.py: malformed token → 401, expired OAuth token → 401, non-OAuth JWT falls back to regular-JWT path (200), blacklisted token family → 401 "Token family revoked". These close the previously-uncovered middleware OAuth paths.
+- Marked [x] the remaining unchecked behaviours after verifying implementation + tests: dual-layer scope (middleware role enforcement + ViewModel per-tool check), state parameter (required, single-use, unexpired, org-scoped, server-validated at consent approve), PKCE (S256-only, challenge stored, verifier verified at token exchange), code expiry TTL, rate limiting on the token endpoint (MCP sub-app RateLimiterMiddleware `/mcp` 200/min), and middleware OAuth-path unit coverage.
+- Removed STALE Remaining Gaps: "PKCE unimplemented" (now implemented), "BDD refresh_token scenarios are xfail" (refresh flow implemented + tested in test_mcp_oauth_bdd.py + mcp_oauth.feature), "No middleware OAuth path tests" (now covered), "Token exchange response does not include refresh_token" (response now emits refresh_token).
+- Status: covered (all behaviours checked; genuine gaps remain documented below).
+
 ### 2026-07-12 — Round 3 re-QA (improve-architecture auth remaining)
 - Added `except asyncio.CancelledError: raise` guards to all 3 CRUD endpoints in mcp_oauth.py (register, list, delete)
 - Added `except asyncio.CancelledError: raise` guards to _oauth_authorize and _oauth_token in mcp_server.py
@@ -172,15 +179,12 @@ OAuth 2.0 authorization code grant for MCP client authentication, with client re
 ## Remaining Gaps
 
 - **Scope naming mismatch with PRD**: PRD §6.4 specifies `pipelines:read`, `pipelines:run`, `hitl:approve`, `library:read`, `library:write`. Code implements `trigger:run`, `hitl:review`, `library:browse` in VALID_SCOPES.
-- **PKCE unimplemented but BDD claims it works**: BDD scenarios "Authorization request with PKCE" and "PKCE code verifier required" pass only because step definitions (test_mcp_oauth.py) mock the PKCE behavior. The _oauth_authorize handler receives code_challenge but never stores it on OAuthAuthorizationCode. The _oauth_token handler never validates code_verifier against a stored code_challenge.
-- **BDD refresh_token scenarios are xfail**: 2 BDD scenarios and 2 unit tests for refresh token rotation are marked @pytest.mark.xfail because the _oauth_token handler only supports authorization_code grant_type. The refresh_token grant type and refresh token issuance are not implemented.
-- **No middleware OAuth path tests**: McpAuthMiddleware's OAuth token validation path (JWT decode → family blacklist check → scope-to-role mapping) has zero unit or integration tests.
-- **state parameter not validated**: The authorize endpoint accepts state and echoes it back but performs no server-side validation or CSRF binding.
-- **No `authlib` usage**: PRD mandates `authlib` (not hand-rolled). Current implementation uses PyJWT directly for JWT encoding/decoding. OAuth logic is hand-rolled in `modulo/auth/oauth.py`.
+- **No `authlib` usage**: PRD mandates `authlib` (not hand-rolled) for the v1 OAuth server. Current implementation uses PyJWT directly for JWT encoding/decoding. OAuth logic is hand-rolled in `modulo/auth/oauth.py` (the `AuthlibClientWrapper` provides scope-intersection compatibility only).
 - **No per-pipeline scopes**: `hitl:approve:pipeline:{id}` scope pattern from PRD is not implemented at any layer.
 - **`library:write` scope not implemented**: Only `library:browse` exists in code; no write scope for library primitives exists.
-- **BDD feature files for MCP tools now exist**: `trigger.feature`, `review_hitl.feature`, `human_only.feature`, `library_browse.feature`, and `onboarding.feature` are all present alongside `mcp_oauth.feature`.
 - **SSE per-event org validation**: Code comment asserts org context is validated per-event for streaming connections, but the current implementation validates only at tool/resource call time via `validate_current_auth()`. No server-push SSE event validation path exists.
 - **`MODULO_PUBLIC_URL` hardening**: Localhost check (`settings.modulo_public_url == "http://localhost:8000"`) is fragile — any local dev server on a different port or 127.0.0.1 will bypass the guard.
-- **BDD authorize steps previously used GET instead of POST**: The handler expects POST+JSON, but BDD steps used GET+params. Fixed in this QA pass.
-- **Token exchange response does not include refresh_token**: PRD mentions refresh tokens but they are not emitted in the current token exchange response.
+- **Authorization code TTL not externally configurable**: 10-minute expiry is enforced but hard-coded (no settings knob). Acceptable — PRD does not require configurability.
+- **No `authlib` PKCE/state primitives**: PKCE and state are hand-rolled (RFC 7636 compliant: S256-only challenge stored on the consent state, verifier verified at token exchange; state is single-use, unexpired, org-scoped) rather than via authlib's `OAuth2Provider` — functional, but not the PRD-mandated library.
+- **Refresh flow issues a new pair but there is no refresh-token revocation API surface** — revocation is via client delete (cascades to token families) or family blacklist; no dedicated `/mcp/oauth/revoke` endpoint exists.
+- **BDD feature files for MCP tools now exist**: `trigger.feature`, `review_hitl.feature`, `human_only.feature`, `library_browse.feature`, and `onboarding.feature` are all present alongside `mcp_oauth.feature`.

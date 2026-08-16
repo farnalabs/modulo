@@ -39,6 +39,7 @@ from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.journey import Journey
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.models.team import Team
 from modulo.db.models.variant_group import VariantGroup
@@ -57,6 +58,7 @@ _TABLES: list[Table] = cast(
         Pipeline.__table__,
         Team.__table__,
         Run.__table__,
+        PipelineSnapshot.__table__,
         Journey.__table__,
         VariantGroup.__table__,
         EvalDefinition.__table__,
@@ -423,6 +425,12 @@ class TestVariantAndReplayWiring:
 
             def scalar_one(self) -> object:
                 return self._value
+
+            def scalars(self) -> object:
+                # FAR-214: the pre-trigger guardrail row query runs before
+                # create_run on replays; the fake session has no guardrail rows
+                # bound, so return an empty scalar result.
+                return SimpleNamespace(all=lambda: [])
 
         class _ReplaySession:
             def __init__(self) -> None:

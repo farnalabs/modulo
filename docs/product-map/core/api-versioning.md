@@ -46,6 +46,7 @@ URL-path versioning (`/api/v1/`, `/api/v2/`, etc.). Policy document at `backend/
 - No BDD feature files for API versioning behaviour
 - The "at most two major versions supported" policy cannot currently be enforced without a version routing mechanism
 - `DeprecationHeaderMiddleware.deprecate()` is called for `/api/v1/system-admin/config` with a future sunset date — the 410 Gone logic is tested but no endpoint has actually passed its sunset in production
+- The 90-day minimum deprecation period, 30-day grace-period-then-remove, and backward-compatible minor-version policies are **documented** in `api-versioning.md` but **not enforced** — the middleware applies whatever sunset date `deprecate()` is given, and nothing removes an endpoint after its grace period
 
 ## Resilience & Integration Robustness
 
@@ -58,3 +59,8 @@ Note: the API Changelog feature (endpoint and `ApiChangelogView.vue`) referenced
 
 - 2026-07-05: cross-cutting QA (index 157): Fixed MAJOR — added 5 unit tests for the now-removed changelog endpoints (list, latest, empty 404, model fields, migration_url). Fixed MAJOR — replaced 2 hardcoded error strings in the now-removed ApiChangelogView.vue with $t() wrappers, added 2 i18n keys to en-US. Added Error Handling, Edge Cases, Resilience sections to product map. Created website docs stub.
 - 2026-07-07: cross-cutting QA (index 323): Fixed CRITICAL — added 410 Gone behaviour to DeprecationHeaderMiddleware when sunset date has passed. Fixed MAJOR — registered `/api/v1/system-admin/config` as a deprecated endpoint with future sunset. Fixed MAJOR — added `POST /api/v1/changelog` for programmatic changelog entry creation (6 new unit tests: 4 deprecation/410, 2 changelog POST) — this changelog endpoint was removed in PR #1018. Created migration guide at `backend/docs/operations/migrations/v1-config-to-admin.md`. Updated product map to mark 4 previously-unchecked behaviours as [x].
+
+### 2026-08-15 — distribute (partial→covered sweep)
+
+- **Verified all 9 [x] behaviours** against current code: the middleware adds `Deprecation`/`Sunset`/`Link` headers (14 unit tests), `/api/v1/system-admin/config` is registered deprecated with a future sunset (`main.py:1208`), the migration guide exists, 410-on-past-sunset is tested, the breaking/non-breaking change definitions are documented in `api-versioning.md`, and the middleware tests + prefix-matching resilience hold.
+- **Confirmed all remaining unchecked boxes are genuine gaps** (no implementation exists): no shared/configurable version prefix, no parallel version routing, no post-grace-period endpoint removal, no enforcement of the 90-day/30-day/at-most-two-versions policies, no admin-UI deprecation announcement, and no BDD coverage. No new tests added this round — the existing `test_deprecation_headers.py` already exercises the middleware's full surface. Entry stays `partial`.

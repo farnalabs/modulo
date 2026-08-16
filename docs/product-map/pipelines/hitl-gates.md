@@ -85,12 +85,12 @@ to an intermediate LangGraph gate node at runtime.
 
 ### Conditional Gating (Eval-Reference — §8.17 v1)
 
-- [ ] `eval_condition` field on `hitl_gate_config` references an eval by name with threshold and operator
-- [ ] Eval-before-interrupt runs node-scoped eval definitions, captures results
-- [ ] Eval-reference condition checks eval score against threshold (operator lt/gt/lte/gte)
-- [ ] Condition true (score below threshold with lt) → NodeInterrupt raised
-- [ ] Condition false (score at/above threshold) → execution continues without interrupt
-- [ ] Eval results are logged and persisted for eval-before-interrupt
+- [x] `eval_condition` field on `hitl_gate_config` references an eval by name with threshold and operator
+- [x] Eval-before-interrupt runs node-scoped eval definitions, captures results
+- [x] Eval-reference condition checks eval score against threshold (operator lt/gt/lte/gte)
+- [x] Condition true (score below threshold with lt) → NodeInterrupt raised
+- [x] Condition false (score at/above threshold) → execution continues without interrupt
+- [x] Eval results are logged and persisted for eval-before-interrupt
 
 ### Eval-Before-Interrupt
 
@@ -115,11 +115,11 @@ to an intermediate LangGraph gate node at runtime.
 ### Frontend
 
 - [x] HITL Review view: list pending gates, claim, approve, reject — SettingsHitlReviewView.vue
-- [ ] Pipeline editor edge properties panel with HITL gate config toggle
-- [ ] Pipeline editor: gate condition expression (JMESPath) input field
-- [ ] Pipeline editor: eval-reference condition selector (eval, threshold, operator)
+- [x] Pipeline editor edge properties panel with HITL gate config toggle
+- [x] Pipeline editor: gate condition expression (JMESPath) input field
+- [x] Pipeline editor: eval-reference condition selector (eval, threshold, operator)
 - [ ] Pipeline editor: team selector for required_team_id
-- [ ] Pipeline editor: human_only toggle
+- [x] Pipeline editor: human_only toggle
 
 ### Error States
 
@@ -163,7 +163,7 @@ to an intermediate LangGraph gate node at runtime.
 - [x] Claim/approve/reject/deliver-manual/submit-manual routes: SQLAlchemyError (connection/deadlock) returns 503 SERVICE_UNAVAILABLE
 - [x] Non-team-member claim via HTTP returns 403 Forbidden
 - [x] Expired claim token on approve/reject/deliver-manual/submit-manual returns 410 Gone
-- [ ] Auth 401/403 documented and tested for HITL claim/approve/reject endpoints
+- [x] Auth 401/403 documented and tested for HITL claim/approve/reject endpoints
 
 ## Resilience & Integration Robustness
 
@@ -176,6 +176,7 @@ to an intermediate LangGraph gate node at runtime.
 
 ## QA History
 
+- 2026-08-15 (distribute / FAR-236): Drove `feat-pipelines-hitl-gates` from partial (70/88) toward covered by verifying and testing the eval-reference conditional-gating section. Verified the full eval-reference feature set was implemented in `make_hitl_gate_fn` (`eval_condition` + eval-before-interrupt + threshold operators lt/gt/lte/gte/eq/neq + condition-true→interrupt / condition-false→continue) and already exercised by `test_node_runner_hitl.py` (incl. `TestEvaluateEvalCondition`) and `test_conditional_transitions.py`. Added the missing unit coverage for the eval-before-interrupt **persistence** path (`session_factory` → `eval_results` `EvalResultModel` rows): `test_eval_before_interrupt_persists_results`, `test_eval_before_interrupt_persist_failure_does_not_block_interrupt` (persist failure logs, gate still interrupts), `test_eval_before_interrupt_skips_persist_without_run_id` — in `tests/unit/pipeline_engine/test_node_runner_hitl.py`. Verified the frontend edge-properties panel (HITL toggle, JMESPath condition input, eval-reference selector, human_only toggle) in `PipelineEditorView.vue` and marked those behaviours `[x]`. Added HITL auth coverage to `tests/unit/api/test_error_handling.py`: unauthenticated claim/approve/reject → 401 and viewer-role → 403 (`TestHitlAuth`), closing the "Auth 401/403 documented and tested" checkbox. Genuine gaps left unchecked: frontend team selector for `required_team_id`, no retry/backoff on HITL DB operations, and the PRD `condition`-vs-`eval_condition` field-name divergence — moved into Known Gaps.
 - 2026-08-14 (improve-architecture): Linked the already-wired `backend/tests/bdd/features/hitl/reject.feature` (3 executable scenarios: reject routes via reject edge, stop/expiry on reject, run marked rejected) to the `feat-pipelines-hitl-gates` `bdd:` field, and added the wiring step file `backend/tests/bdd/steps/test_alpha_hitl.py` to `unit-tests:`. The feature file existed on disk and was executable but was never listed in frontmatter.
 - 2026-08-13 (improve-tests): QA lens pass on the HITL expiry/overdue test package — extended the canonical unit suites (`tests/unit/hitl_manager/test_claim_expiry_job.py`, `tests/unit/hitl_manager/test_overdue_warning.py`) with direct `expire_stale_claims` / `get_overdue_claims` coverage. Locks the shared `expire_stale_claims` sweep: per-org advisory-lock guard (lock denied / lock query failure / CancelledError propagation), stale-claim reset + run `claimed→awaiting_human` reversion (compiled-SQL assertions on the `hitl_claims`/`runs` updates), `hitl.claim_expired` audit capture with savepoint failure isolation, `claim_expired` notification dispatch (and failure isolation), multi-org independence, and the `ClaimExpiryJob` polling loop (single-task start, tick-failure continuation, cancel handling, notifier forwarding). Locks `get_overdue_claims` validation gates (negative thresholds, escalation ≤ warning), warning vs escalated classification, age floor for future `claimed_at`, null-`claimed_at` filtering, the org-scoped undecided/claimed SQL predicate, and query-failure tolerance.
 
@@ -187,9 +188,14 @@ to an intermediate LangGraph gate node at runtime.
 
 ## Known Gaps
 
-- [ ] Eval-reference condition format (§8.17) not yet implemented — code uses JMESPath only
-- [ ] Eval results from eval-before-interrupt not logged/persisted
-- [ ] PRD specifies `condition` field as `{eval_id, threshold, operator}` but code
-  implements JMESPath `condition` and `eval_condition` as separate fields
+- [ ] PRD §8.17 specifies the eval-reference `condition` field as `{eval_id, threshold, operator}` but code
+  implements JMESPath `condition` and `eval_condition` (`{eval_name, threshold, operator}`) as separate fields —
+  the eval-reference format is implemented and tested, but under the `eval_condition` name, not the PRD's
+  `condition` field name
 - [ ] No end-to-end integration test for full eval-before-interrupt → suite check → eval_failed chain
-- [ ] Frontend pipeline editor lacks edge properties panel entirely
+- [ ] Pipeline editor lacks a team selector for `required_team_id` — the field is preserved and round-tripped
+  by the edge-properties panel (populate/build in `PipelineEditorView.vue`) but there is no UI control to set it
+- [ ] No retry/backoff on HITL DB operations — a transient DB failure surfaces as a 503 rather than retrying
+- [ ] `modify_then_approve.feature` is listed in the `bdd:` frontmatter but is NOT wired to a `scenarios()` caller and
+  has no step definitions — modify-then-approve behaviour is unit-tested (`test_approve_with_modification_persists_modified_output_payload`,
+  `test_hitl_gate_resume_with_modified_output_writes_output_key`) but the BDD feature is not executable

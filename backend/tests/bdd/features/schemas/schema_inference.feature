@@ -43,6 +43,13 @@ Feature: Schema Inference
     Then the response status is 200
     And the suggestion name mentions "jira-tasks"
 
+  Scenario: Rarely-used fields are flagged in the response
+    Given sample records with a rarely-used field
+    And a model backend is configured
+    When I POST /api/v1/schemas/infer with the rarely-used sample data
+    Then the response status is 200
+    And the response lists the rarely-used field "story_points"
+
   Scenario: Publish inferred schema as a schema version
     Given a connector instance "github-issues" with sample data
     And a model backend is configured

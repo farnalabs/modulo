@@ -54,6 +54,15 @@ async def test_migrated_schema_matches_orm_metadata(db_engine: AsyncEngine) -> N
       - ``hitl_claims.decision_payload`` declared as generic ``JSON`` in the
         ORM for SQLite/MariaDB parity while migration 0075 creates it as
         ``JSONB`` on Postgres — a documented, deliberate divergence, ignored.
+      - ``runs.raw_output_markers`` / ``run_classification`` /
+        ``work_item_refs`` — the same multi-backend JSON-parity pattern
+        (migrations create JSONB, the ORM maps generic JSON), ignored.
+      - ``run_number_counters`` — the ORM model was deleted (FAR-253 dead-code
+        cleanup) but the reconciliation chain still creates the table for the
+        raw-SQL counter path; the table lives outside ORM metadata, ignored.
+      - ``modulo_journey_facts.updated_at`` — the ORM's ``TimestampMixin``
+        declares ``updated_at`` but no migration ever created the column; the
+        fact table's write instant is ``created_at`` only, ignored.
 
     Everything else (tables, columns, constraints, nullability, types, server
     defaults) must match exactly; a genuine drift item there fails the test.
@@ -73,11 +82,28 @@ async def test_migrated_schema_matches_orm_metadata(db_engine: AsyncEngine) -> N
             return True
         if kind == "remove_table":
             # Runtime-managed LangGraph checkpoint tables (ModuloPostgresSaver
-            # setup) — outside ORM metadata by design.
-            return inner[1].name in ("checkpoints", "checkpoint_blobs", "checkpoint_writes", "checkpoint_migrations")
+            # setup) — outside ORM metadata by design. Also the reconciliation
+            # chain's run_number_counters, whose ORM model was deleted (FAR-253)
+            # while the raw-SQL counter path keeps the table.
+            return inner[1].name in (
+                "checkpoints",
+                "checkpoint_blobs",
+                "checkpoint_writes",
+                "checkpoint_migrations",
+                "run_number_counters",
+            )
+        if kind == "add_column":
+            # ORM TimestampMixin declares updated_at on the fact table but no
+            # migration ever created it; created_at is the write instant.
+            return inner[2] == "modulo_journey_facts" and inner[3].name == "updated_at"
         if kind == "modify_type":
             # ORM generic JSON for multi-backend parity vs migration JSONB.
-            return inner[2] == "hitl_claims" and inner[3] == "decision_payload"
+            return (inner[2], inner[3]) in {
+                ("hitl_claims", "decision_payload"),
+                ("runs", "raw_output_markers"),
+                ("runs", "run_classification"),
+                ("runs", "work_item_refs"),
+            }
         return False
 
     real_drift = [d for d in differences if not _is_benign_migration_managed(d)]

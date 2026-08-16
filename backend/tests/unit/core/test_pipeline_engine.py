@@ -1,11 +1,25 @@
 """Tests for pipeline execution core logic."""
 
+import json
+import uuid
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
+from langchain_core.messages import BaseMessage
 
+from modulo.core.model_backend_hub import ModelBackendHub
+from modulo.core.pipeline_engine.decorator import set_model_backend_hub
+from modulo.core.pipeline_engine.event_broker import RunEventBroker
 from modulo.core.pipeline_engine.executor import _map_lg_event, _seed_state
+from modulo.core.pipeline_engine.node_runner import (
+    OutputSchemaValidationError,
+    _validate_against_schema,
+    make_node_fn,
+)
 from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
+from modulo.model_backends.stub.backend import StubModelBackend
 
 
 class TestMapLgEvent:
@@ -143,3 +157,139 @@ def _make_snapshot(
         run_context_defaults=run_context_defaults or {},
         default_autonomy_level=default_autonomy_level,
     )
+
+
+class TestRunEventBrokerReplay:
+    """WebSocket reconnect replay — ring-buffer ``replay_since`` coverage.
+
+    `replay_since()` is the reconnect-replay mechanism (100-event ring buffer
+    per run). Previously implemented but untested.
+    """
+
+    def test_replay_returns_events_after_seq(self) -> None:
+        broker = RunEventBroker(run_id=uuid.uuid4())
+        for i in range(3):
+            broker.publish(f"event_{i}", {"i": i})
+
+        replayed = broker.replay_since(1)
+
+        assert [e.event_type for e in replayed] == ["event_1", "event_2"]
+
+    def test_replay_with_zero_seq_returns_all(self) -> None:
+        broker = RunEventBroker(run_id=uuid.uuid4())
+        broker.publish("node_started", {})
+        broker.publish("node_completed", {})
+
+        replayed = broker.replay_since(0)
+
+        assert [e.event_type for e in replayed] == ["node_started", "node_completed"]
+
+    def test_replay_after_latest_returns_empty(self) -> None:
+        broker = RunEventBroker(run_id=uuid.uuid4())
+        broker.publish("run_completed", {})
+
+        assert not broker.replay_since(1)
+
+    def test_replay_empty_buffer_returns_empty(self) -> None:
+        broker = RunEventBroker(run_id=uuid.uuid4())
+        assert not broker.replay_since(0)
+
+    def test_replay_requested_seq_older_than_buffer_returns_empty(self) -> None:
+        from collections import deque
+
+        from modulo.core.pipeline_engine.event_broker import RunEvent
+
+        broker = RunEventBroker(run_id=uuid.uuid4())
+        # Simulate a ring buffer where seq 1..4 were evicted and the oldest
+        # retained event is seq 5 — replaying from seq 1 must return [].
+        broker._buffer = deque([RunEvent(seq=5, event_type="node_started", run_id=uuid.uuid4(), payload={})])
+        assert not broker.replay_since(1)
+
+
+class TestOutputSchemaValidation:
+    """Manual/agent node output validation raises a domain-specific error."""
+
+    def test_missing_required_field_raises_domain_error(self) -> None:
+        with pytest.raises(OutputSchemaValidationError, match="missing required field 'name'"):
+            _validate_against_schema({"id": "1"}, {"required": ["name"]})
+
+    def test_valid_output_passes(self) -> None:
+        schema = {"required": ["name", "status"]}
+        assert _validate_against_schema({"name": "x", "status": "done"}, schema) is None
+
+    def test_error_is_a_value_error_subclass(self) -> None:
+        with pytest.raises(ValueError):
+            _validate_against_schema({}, {"required": ["x"]})
+
+    def test_schema_validation_failure_maps_to_contract_schema(self) -> None:
+        from modulo.core.pipeline_engine.error_codes import map_legacy_code
+
+        assert map_legacy_code("schema_validation_failure") == "contract.schema"
+
+
+class _AsyncStubAdapter:
+    """Wrap the sync StubModelBackend so make_node_fn can ``await backend.invoke()``."""
+
+    def __init__(self, fixture_map: dict[str, str]) -> None:
+        self._inner = StubModelBackend(fixture_map)
+
+    async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
+        return await self._inner.ainvoke(messages, **kwargs)
+
+    def stream(
+        self,
+        messages: list[BaseMessage],
+        tools: list[dict] | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[BaseMessage]:
+        return self._inner.astream(messages, tools=tools, **kwargs)
+
+    @property
+    def backend_id(self) -> str:
+        return "stub"
+
+
+class TestRunContextPromptTemplates:
+    """PRD 8.18: ``run_context`` fields render as template variables.
+
+    ``make_node_fn`` exposes ``run_context`` as a first-class Jinja variable
+    (alongside ``state``), so ``{{ run_context.model_tier }}`` interpolates the
+    seeded context key at node execution time.
+    """
+
+    async def test_run_context_key_renders_in_prompt_template(self) -> None:
+        node_id = str(uuid.uuid4())
+        backend_id = uuid.uuid4()
+        node_def = {
+            "id": node_id,
+            "prompt_template": "model tier is {{ run_context.model_tier }}",
+            "model_backend_id": str(backend_id),
+        }
+        node_fn = make_node_fn(node_def, role="agent")
+
+        hub = ModelBackendHub()
+        await hub.__aenter__()
+        hub.register(
+            backend_id,
+            _AsyncStubAdapter(
+                {
+                    "model tier is tier-2": json.dumps({"ok": True}),
+                }
+            ),
+        )
+        set_model_backend_hub(hub)
+
+        state: dict[str, Any] = {
+            "run_context": {"model_tier": "tier-2", "input": {}},
+            "artifacts": [],
+        }
+
+        try:
+            result = await node_fn(state)
+            assert "artifacts" in result
+            assert len(result["artifacts"]) == 1
+            assert result["artifacts"][0]["status"] == "completed"
+            assert result["artifacts"][0]["output"] == {"ok": True}
+        finally:
+            set_model_backend_hub(None)
+            await hub.__aexit__(None, None, None)
