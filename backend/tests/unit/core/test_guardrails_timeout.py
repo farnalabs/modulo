@@ -290,6 +290,47 @@ async def test_over_budget_log_and_continue_for_observe_guardrail():
     assert "budget" in outcome.results[0].detail
 
 
+async def test_over_budget_detection_only_replay_never_blocks():
+    """A detection_only replay (item 10) whose payload is over budget records a
+    mechanism error per bound guardrail and NEVER blocks.
+
+    The over-budget early return must consult ``detection_only`` the same way the
+    in-loop mechanism-error path does — a replay must never re-ingest as a block
+    (run creation would otherwise fail the run as ``eval_failed``)."""
+    big_payload = {"body": "x" * 5000}
+    outcome = await run_interception_pass_async(
+        EvalEngine(),
+        [_def("big", "block")],
+        big_payload,
+        max_payload_bytes=100,
+        detection_only=True,
+    )
+    assert outcome.blocked is False
+    assert len(outcome.results) == 1
+    assert outcome.results[0].passed is False
+    assert "budget" in outcome.results[0].detail
+
+
+async def test_over_budget_detection_only_records_error_per_bound_def():
+    """One errored (mechanism-fail) result per bound def — block/redact AND
+    observe/warn — for a detection_only replay over budget, and the raw payload
+    never leaks into any result detail."""
+    big_payload = {"body": "x" * 5000}
+    defs = [_def("b1", "block"), _def("r1", "redact"), _def("o1", "observe"), _def("w1", "warn")]
+    outcome = await run_interception_pass_async(
+        EvalEngine(),
+        defs,
+        big_payload,
+        max_payload_bytes=100,
+        detection_only=True,
+    )
+    assert outcome.blocked is False
+    assert len(outcome.results) == len(defs)
+    assert all(r.passed is False for r in outcome.results)
+    assert all("mechanism error" in r.detail for r in outcome.results)
+    assert all("x" * 10 not in r.detail for r in outcome.results)
+
+
 # ---------------------------------------------------------------------------
 # Per-node cap resolution
 # ---------------------------------------------------------------------------
