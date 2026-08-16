@@ -597,7 +597,7 @@ pg_dump -Fc -f /tmp/pre-bypass-$(date +%Y%m%dT%H%M%S).dump "$DATABASE_URL"
 cat >> /var/log/modulo/admin-bypass.log <<< '{"timestamp": "...", ...}'
 
 # 4. Verify application still works
-curl -s https://modulo.example.com/api/v1/health | python3 -m json.tool
+curl -s https://modulo.example.com/healthz | python3 -m json.tool
 
 # 5. If the operation caused a regression, restore from backup
 pg_restore -d "$DATABASE_URL" /tmp/pre-bypass-*.dump
