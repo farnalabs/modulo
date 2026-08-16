@@ -545,6 +545,22 @@ def test_run_response_gate_fired_true_on_idempotency_gate_code(client: TestClien
     assert resp.json()["gate_fired"] is True
 
 
+def test_run_response_gate_fired_true_on_raw_idempotency_gate_code(client: TestClient) -> None:
+    """FAR-228 review fix: the DB stores the RAW spelling (``idempotency_gate``)
+    for legacy guard-B rows — ``_run_gate_fired`` must route the read through
+    ``map_legacy_code`` so they are not missed."""
+    run = _make_run(status="complete", error_code="idempotency_gate")
+    run.raw_output_markers = {}
+    run.run_classification = None
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.json()["gate_fired"] is True
+
+
 def test_run_response_gate_fired_true_on_email_classification(client: TestClient) -> None:
     """FAR-228: a run classified email_delivered exposes gate_fired True — this
     makes guard-A completions (error_code None) API-distinguishable."""
