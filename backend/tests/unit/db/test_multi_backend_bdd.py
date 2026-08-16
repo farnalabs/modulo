@@ -579,6 +579,63 @@ class TestRegisterTenantFilter:
 
 
 # ===========================================================================
+# Organisation root-entity model invariants
+# ===========================================================================
+
+
+class TestOrganisationRootEntityModel:
+    """Organisation is the root tenant entity — ``created_by`` is nullable and
+    deliberately NOT an FK (the first org must exist before its first user),
+    and the model carries no ``organisation_id`` column so the tenant filter /
+    RLS never scopes it (mirrors ``test_rls_coverage.py``'s only-exclusion)."""
+
+    def test_created_by_column_is_nullable_and_not_fk(self) -> None:
+        from sqlalchemy import ForeignKey
+
+        from modulo.db.models.organisation import Organisation
+
+        column = Organisation.__table__.c.created_by
+        assert column.nullable is True, "created_by must be nullable for org bootstrap"
+        assert not any(isinstance(fk, ForeignKey) for fk in column.foreign_keys), (
+            "created_by must NOT be a foreign key — the first org is created before its first user exists"
+        )
+
+    def test_created_by_defaults_to_none_for_bootstrap_org(self) -> None:
+        """The first org is created with no creator (``_ensure_default_org``
+        builds ``Organisation(name=..., slug=...)`` without ``created_by``)."""
+        from modulo.db.models.organisation import Organisation
+
+        org = Organisation(name="Default Organisation", slug="default")
+        assert org.created_by is None
+
+    def test_organisation_model_has_no_organisation_id_column(self) -> None:
+        """The tenant filter keys on ``organisation_id``; the root entity has
+        none, so a scoped SELECT over ``organisations`` is never injected with
+        a WHERE clause (RLS is not applied to the organisations table)."""
+        from modulo.db.models.organisation import Organisation
+
+        assert "organisation_id" not in Organisation.__table__.columns
+
+    def test_tenant_filter_skips_organisation_entity(self) -> None:
+        """``_inject_tenant_filter`` must skip entities without an
+        ``organisation_id`` column — the ``Organisation`` model is the concrete
+        instance of the generic ``EntityWithoutOrg`` skip case."""
+        from modulo.db.rls import _inject_tenant_filter
+
+        stmt = MagicMock(spec=Select)
+        stmt.column_descriptions = [{"entity": EntityWithoutOrg}]
+        execute_state = MagicMock()
+        execute_state.is_select = True
+        execute_state.is_update = False
+        execute_state.is_delete = False
+        execute_state.statement = stmt
+        execute_state.session.info = {_TENANT_KEY: _ORG_ID}
+
+        _inject_tenant_filter(execute_state)
+        stmt.where.assert_not_called()
+
+
+# ===========================================================================
 # Scenario 10: register_rls_reset_hook skip behaviour
 # ===========================================================================
 

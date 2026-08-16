@@ -482,6 +482,158 @@ class TestConfirmOrgDeletion:
             )
             assert row.scalar_one() == 0
 
+    async def test_confirm_invalidates_token_single_use(self, db_engine: AsyncEngine) -> None:
+        """A confirmed token is single-use — a second confirm with the same
+        token fails (the org row is gone, so the token check raises
+        ``Organisation not found`` / the org no longer exists)."""
+        from modulo.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
+
+        org_id = await _create_org(db_engine, "single-use-confirm")
+        user_id = await _create_user(db_engine, org_id, "single@test.com")
+
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        async with factory() as session:
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org_id)},
+            )
+            result = await request_org_deletion(session, org_id, user_id)
+            await session.commit()
+
+        async with factory() as session:
+            await confirm_org_deletion(session, org_id=org_id, token=result["token"])
+            await session.commit()
+
+        # Replay of the same token must fail — the org row is gone.
+        async with factory() as session:
+            with pytest.raises(ValueError, match="Organisation not found"):
+                await confirm_org_deletion(session, org_id=org_id, token=result["token"])
+
+    async def test_cancel_invalidates_token_single_use(self, db_engine: AsyncEngine) -> None:
+        """A cancelled deletion's token is invalidated — the same token can no
+        longer confirm, and a fresh request mints a NEW token."""
+        from modulo.db.crud.org_deletion import (
+            cancel_org_deletion,
+            confirm_org_deletion,
+            request_org_deletion,
+        )
+
+        org_id = await _create_org(db_engine, "single-use-cancel")
+        user_id = await _create_user(db_engine, org_id, "cancel@test.com")
+
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        async with factory() as session:
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org_id)},
+            )
+            result = await request_org_deletion(session, org_id, user_id)
+            await session.commit()
+
+        async with factory() as session:
+            await cancel_org_deletion(session, org_id)
+            await session.commit()
+
+        # The cancelled token is cleared on the org row.
+        state = await _get_org_status(db_engine, org_id)
+        assert state["status"] == "active"
+        assert state["deletion_token"] is None
+
+        # Confirm with the old token now fails (single-use enforced by cancel).
+        async with factory() as session:
+            with pytest.raises(ValueError, match="Invalid deletion token"):
+                await confirm_org_deletion(session, org_id=org_id, token=result["token"])
+
+        # A fresh request mints a new token — the org can be deleted properly.
+        async with factory() as session:
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org_id)},
+            )
+            fresh = await request_org_deletion(session, org_id, user_id)
+            await session.commit()
+        assert fresh["token"] != result["token"]
+
+        async with factory() as session:
+            outcome = await confirm_org_deletion(session, org_id=org_id, token=fresh["token"])
+            await session.commit()
+        assert outcome["deleted_organisation_id"] == str(org_id)
+
+    async def test_terminal_runs_batch_deleted_before_fk_cascade(self, db_engine: AsyncEngine) -> None:
+        """Old TERMINAL runs are batch-deleted during confirm BEFORE the FK
+        cascade, so the cascade only churns a small remaining set (deadlock
+        avoidance). A young terminal run survives the batch pass and is removed
+        by the cascade — either way the org ends up fully deleted."""
+        from modulo.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
+
+        org_id = await _create_org(db_engine, "batch-runs")
+        user_id = await _create_user(db_engine, org_id, "batch@test.com")
+        pid = await _create_pipeline(db_engine, org_id, "Batch Pipeline", user_id)
+        sid = await _create_snapshot(db_engine, org_id, pid)
+
+        old_thread = "thread-old-terminal"
+        fresh_thread = "thread-fresh-terminal"
+        old_run = await _insert_run(
+            db_engine,
+            org_id=org_id,
+            pipeline_id=pid,
+            snapshot_id=sid,
+            thread_id=old_thread,
+            status="complete",
+        )
+        fresh_run = await _insert_run(
+            db_engine,
+            org_id=org_id,
+            pipeline_id=pid,
+            snapshot_id=sid,
+            thread_id=fresh_thread,
+            status="failed",
+        )
+
+        # Age the OLD run past the 30-day retention window so the batch pass
+        # targets it; leave the fresh one within the window.
+        aged = datetime.now(UTC) - timedelta(days=31)
+        async with db_engine.connect() as conn, conn.begin():
+            await conn.execute(
+                text("UPDATE runs SET created_at = :aged WHERE id = :rid"),
+                {"aged": aged, "rid": str(old_run)},
+            )
+
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        async with factory() as session:
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org_id)},
+            )
+            result = await request_org_deletion(session, org_id, user_id)
+            await session.commit()
+
+        async with factory() as session:
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org_id)},
+            )
+            outcome = await confirm_org_deletion(session, org_id=org_id, token=result["token"])
+            await session.commit()
+
+        # The batch pass purged the aged terminal run before the cascade.
+        assert outcome["hard_deleted_runs"] == 1
+        assert outcome["deleted_organisation_id"] == str(org_id)
+
+        # Both runs are gone (batch delete + FK cascade).
+        async with db_engine.connect() as conn:
+            for rid in (old_run, fresh_run):
+                row = await conn.execute(
+                    text("SELECT COUNT(*) FROM runs WHERE id = :rid"),
+                    {"rid": str(rid)},
+                )
+                assert row.scalar_one() == 0, f"run {rid} must be gone after org delete"
+            row = await conn.execute(
+                text("SELECT COUNT(*) FROM organisations WHERE id = :id"),
+                {"id": str(org_id)},
+            )
+            assert row.scalar_one() == 0
+
 
 # ── Tests: export_org_data ──────────────────────────────────────────
 
