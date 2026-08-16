@@ -25,6 +25,7 @@ from modulo.api.middleware.rate_limiter import (
     RATELIMIT_BYPASS_HEADER,
     RateLimitMiddleware,
 )
+from modulo.core.rate_limiter import RateLimitRule
 
 
 def _make_app(registry=None, settings=None) -> FastAPI:
@@ -81,14 +82,14 @@ class TestRateLimitMiddlewareInit:
         assert mw._registry is registry
 
     def test_set_rules_updates_class_rules(self):
-        RateLimitMiddleware.set_rules([("/custom", 5, 10)])
-        assert RateLimitMiddleware.RULES == [("/custom", 5, 10)]
+        RateLimitMiddleware.set_rules([RateLimitRule(path_prefix="/custom", max_requests=5, window_s=10)])
+        assert [RateLimitRule(path_prefix="/custom", max_requests=5, window_s=10)] == RateLimitMiddleware.RULES
         RateLimitMiddleware.set_rules(
             [
-                ("/api/v1/runs", 60, 60),
-                ("/api/v1/triggers", 100, 60),
-                ("/api/v1/errors/ingest", 10, 60),
-                ("/mcp", 200, 60),
+                RateLimitRule(path_prefix="/api/v1/runs", max_requests=60, window_s=60),
+                RateLimitRule(path_prefix="/api/v1/triggers", max_requests=100, window_s=60),
+                RateLimitRule(path_prefix="/api/v1/errors/ingest", max_requests=10, window_s=60),
+                RateLimitRule(path_prefix="/mcp", max_requests=200, window_s=60),
             ]
         )
 
@@ -201,11 +202,15 @@ class TestShouldRateLimit:
 class TestRuleFor:
     def test_matching_prefix(self):
         mw = RateLimitMiddleware(app=FastAPI(), settings=make_settings(), registry=_registry())
-        assert mw._rule_for(make_mock_request(path="/api/v1/runs")) == ("/api/v1/runs", 60, 60)
+        assert mw._rule_for(make_mock_request(path="/api/v1/runs")) == RateLimitRule(
+            path_prefix="/api/v1/runs", max_requests=60, window_s=60
+        )
 
     def test_no_match(self):
         mw = RateLimitMiddleware(app=FastAPI(), settings=make_settings(), registry=_registry())
-        assert mw._rule_for(make_mock_request(path="/api/v1/other")) == ("", 0, 0)
+        assert mw._rule_for(make_mock_request(path="/api/v1/other")) == RateLimitRule(
+            path_prefix="", max_requests=0, window_s=0
+        )
 
 
 class TestClientKey:

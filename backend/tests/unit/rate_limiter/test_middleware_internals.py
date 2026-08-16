@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from tests.unit.rate_limiter.helpers import make_mock_request, make_settings
 
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware
-from modulo.core.rate_limiter import RateLimiterRegistry
+from modulo.core.rate_limiter import RateLimiterRegistry, RateLimitRule
 
 
 @pytest.fixture
@@ -49,27 +49,31 @@ class TestClientKey:
 class TestRuleFor:
     def test_matching_rule(self, middleware):
         request = make_mock_request(path="/api/v1/runs/123")
-        assert middleware._rule_for(request) == ("/api/v1/runs", 60, 60)
+        assert middleware._rule_for(request) == RateLimitRule(path_prefix="/api/v1/runs", max_requests=60, window_s=60)
 
     def test_no_matching_rule_returns_empty_rule(self, middleware):
         request = make_mock_request(path="/api/v1/other")
-        assert middleware._rule_for(request) == ("", 0, 0)
+        assert middleware._rule_for(request) == RateLimitRule(path_prefix="", max_requests=0, window_s=0)
 
 
 class TestSetRules:
     def test_set_rules_overrides_class_defaults(self):
         original = list(RateLimitMiddleware.RULES)
         try:
-            RateLimitMiddleware.set_rules([("/api/v1/custom", 5, 10)])
-            assert RateLimitMiddleware.RULES == [("/api/v1/custom", 5, 10)]
+            RateLimitMiddleware.set_rules([RateLimitRule(path_prefix="/api/v1/custom", max_requests=5, window_s=10)])
+            assert [
+                RateLimitRule(path_prefix="/api/v1/custom", max_requests=5, window_s=10)
+            ] == RateLimitMiddleware.RULES
         finally:
             RateLimitMiddleware.set_rules(original)
 
     def test_rule_for_uses_updated_rules(self, middleware):
         original = list(RateLimitMiddleware.RULES)
         try:
-            RateLimitMiddleware.set_rules([("/api/v1/custom", 5, 10)])
+            RateLimitMiddleware.set_rules([RateLimitRule(path_prefix="/api/v1/custom", max_requests=5, window_s=10)])
             request = make_mock_request(path="/api/v1/custom/42")
-            assert middleware._rule_for(request) == ("/api/v1/custom", 5, 10)
+            assert middleware._rule_for(request) == RateLimitRule(
+                path_prefix="/api/v1/custom", max_requests=5, window_s=10
+            )
         finally:
             RateLimitMiddleware.set_rules(original)

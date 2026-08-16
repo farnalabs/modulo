@@ -731,23 +731,3 @@ def get_registry() -> FeatureFlagRegistry:
     if _registry is None:
         _registry = FeatureFlagRegistry(current_tier="community")
     return _registry
-
-
-async def get_plan_for_org(
-    session: Any,
-    org_id: uuid.UUID | None,
-) -> str:
-    """Get the effective plan for an org."""
-    from modulo.db.crud.organisation import get_organisation
-    from modulo.db.crud.system_config import get_config
-
-    if org_id is not None:
-        org = await get_organisation(session, org_id)
-        if org is not None and org.plan_id:
-            return org.plan_id
-
-    config = await get_config(session, "default_plan")
-    if config is not None:
-        return str(config.value)
-
-    return "community"

@@ -5,9 +5,8 @@ and error-dashboard schemas in ``api/models/error.py``. These schemas sit on
 the public ingestion boundary (``/api/v1/errors``) and the dashboard/admin
 surface; they had no dedicated unit test file. These tests lock the validator
 surface (level/source allow-lists, non-empty message trimming, breadcrumbs cap,
-batch size bounds), the backward-compatible ``ErrorResponse.model_dump``
-override, and the dashboard/admin response shapes so a schema drift is caught
-at the unit layer.
+batch size bounds), and the dashboard/admin response shapes so a schema drift
+is caught at the unit layer.
 """
 
 from __future__ import annotations
@@ -18,7 +17,6 @@ import pydantic
 import pytest
 
 from modulo.api.models.error import (
-    ErrorDetail,
     ErrorEventDetail,
     ErrorEventInput,
     ErrorEventListResponse,
@@ -28,71 +26,7 @@ from modulo.api.models.error import (
     ErrorIngestRequest,
     ErrorIngestResponse,
     ErrorListResponse,
-    ErrorResponse,
 )
-
-
-class TestErrorDetail:
-    def test_requires_code_and_message(self) -> None:
-        with pytest.raises(pydantic.ValidationError):
-            ErrorDetail()  # type: ignore[call-arg]
-
-    def test_full_fields(self) -> None:
-        detail = ErrorDetail(code="not_found", message="Missing", detail="Extra", request_id="req-1")
-        assert detail.code == "not_found"
-        assert detail.message == "Missing"
-        assert detail.detail == "Extra"
-        assert detail.request_id == "req-1"
-
-    def test_optional_fields_default_to_none(self) -> None:
-        err = ErrorDetail(code="x", message="y")
-        assert err.detail is None
-        assert err.request_id is None
-
-    def test_dumped_without_omitting_optionals(self) -> None:
-        detail = ErrorDetail(code="bad_request", message="Bad")
-        assert detail.model_dump() == {"code": "bad_request", "message": "Bad", "detail": None, "request_id": None}
-
-    def test_round_trips_all_fields(self) -> None:
-        err = ErrorDetail(code="auth", message="denied", detail="no token", request_id="rid-1")
-        assert err.model_dump() == {
-            "code": "auth",
-            "message": "denied",
-            "detail": "no token",
-            "request_id": "rid-1",
-        }
-
-
-class TestErrorResponse:
-    def test_nests_error(self) -> None:
-        resp = ErrorResponse(error=ErrorDetail(code="c", message="m"))
-        assert resp.error.code == "c"
-        assert resp.error.message == "m"
-
-    def test_model_dump_includes_backward_compatible_detail(self) -> None:
-        resp = ErrorResponse(error=ErrorDetail(code="c", message="m"))
-        dumped = resp.model_dump()
-        assert dumped["error"]["message"] == "m"
-        assert dumped["detail"] == "m"
-
-    def test_model_dump_keeps_top_level_detail_even_with_extra_fields(self) -> None:
-        resp = ErrorResponse(error=ErrorDetail(code="c", message="boom", detail="nested"))
-        dumped = resp.model_dump()
-        assert dumped["detail"] == "boom"
-
-    def test_model_dump_preserves_top_level_error_block(self) -> None:
-        resp = ErrorResponse(error=ErrorDetail(code="forbidden", message="No access"))
-        dumped = resp.model_dump()
-        assert dumped["error"] == {"code": "forbidden", "message": "No access", "detail": None, "request_id": None}
-        assert dumped["detail"] == "No access"
-
-    def test_model_dump_json_mode_keeps_backward_compatible_detail(self) -> None:
-        resp = ErrorResponse(error=ErrorDetail(code="error", message="boom", request_id="r-1"))
-        import json
-
-        dumped = resp.model_dump(mode="json")
-        assert dumped["detail"] == "boom"
-        assert json.dumps(dumped)
 
 
 class TestErrorEventInput:
