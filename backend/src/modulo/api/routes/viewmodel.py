@@ -7,7 +7,7 @@ GET /api/v1/viewmodel/current — single-request aggregate for the frontend
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, ClassVar
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -62,7 +62,7 @@ class MeResponse(BaseModel):
     team_memberships: list[TeamMembershipInfo]
     team_memberships_truncated: bool
     org_role: str
-    preferences: ClassVar[dict[str, Any]] = {}
+    preferences: dict[str, Any] = {}
     is_system_admin: bool = False
 
 
@@ -201,6 +201,7 @@ async def me(
             await set_rls_org(session, current_user.organisation_id)
             await set_rls_user_context(session, current_user.account_id, current_user.org_role or "admin")
             memberships = await list_team_memberships_for_account(session, current_user.account_id)
+            account = await get_account_by_id(session, current_user.account_id)
     except ProgrammingError:
         logger.exception("viewmodel.me")
         raise HTTPException(
@@ -232,6 +233,7 @@ async def me(
         team_memberships=[TeamMembershipInfo(team_id=m.team_id, team_role=m.role) for m in memberships],
         team_memberships_truncated=False,
         org_role=current_user.org_role,
+        preferences=account.preferences if account is not None else {},
         is_system_admin=current_user.is_system_admin,
     )
 

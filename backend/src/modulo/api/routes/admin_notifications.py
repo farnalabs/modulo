@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import hmac
 import json
@@ -28,6 +27,7 @@ from modulo.core.notifier import (
     EVENT_CIRCUIT_BREAKER_TRIPPED,
     EVENT_RUN_STALLED,
     EVENT_TRIGGER_DEACTIVATED,
+    endpoint_events_to_list,
 )
 from modulo.db.models.notification_delivery import NotificationDeliveryLog
 from modulo.db.models.notification_endpoint import NotificationEndpoint
@@ -1193,15 +1193,7 @@ async def retry_delivery(
 
 
 def _ep_to_response(ep: NotificationEndpoint) -> WebhookResponse:
-    raw_events: object = ep.events
-    events: list[str] = []
-    if isinstance(raw_events, list) and not any(not isinstance(event, str) for event in raw_events):
-        events = raw_events
-    if isinstance(raw_events, str):
-        with contextlib.suppress(json.JSONDecodeError, TypeError):
-            parsed = json.loads(raw_events)
-            if isinstance(parsed, list) and not any(not isinstance(event, str) for event in parsed):
-                events = parsed
+    events = endpoint_events_to_list(ep.events)
     return WebhookResponse(
         id=str(ep.id),
         url=ep.url,

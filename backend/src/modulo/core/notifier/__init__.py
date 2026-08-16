@@ -20,6 +20,7 @@ For each event, the notifier:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import hmac
 import json
@@ -58,9 +59,26 @@ __all__ = [
     "RETRY_DELAYS",
     "DispatchResult",
     "Notifier",
+    "endpoint_events_to_list",
 ]
 
 _log = logging.getLogger(__name__)
+
+
+def endpoint_events_to_list(raw_events: object) -> list[str]:
+    """Normalise ``NotificationEndpoint.events`` (a list or JSON string) to a list of strings.
+
+    Persisted values may be a JSON-encoded string or a native list; this single
+    helper keeps the API read paths (notifications/admin_notifications) in sync.
+    """
+    if isinstance(raw_events, list) and not any(not isinstance(event, str) for event in raw_events):
+        return raw_events
+    if isinstance(raw_events, str):
+        with contextlib.suppress(json.JSONDecodeError, TypeError):
+            parsed = json.loads(raw_events)
+            if isinstance(parsed, list) and not any(not isinstance(event, str) for event in parsed):
+                return parsed
+    return []
 
 # Lazy OTel counter — records the fail-closed owner-read drop so a DB blip that
 # suppresses ALL webhook dispatch for an event is observable (review #657 obs 1).

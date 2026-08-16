@@ -191,6 +191,7 @@ def _validate_rate_usd_bound(rate_usd: Decimal | None) -> None:
     try:
         knob = Decimal(str(get_settings().max_rate_usd))
     except Exception:
+        _log.exception("rate knob unavailable: cannot validate rate_usd")
         raise ValueError("rate knob unavailable: cannot validate rate_usd") from None
     cap = min(knob, _RATE_COLUMN_CAP)
     if rate_usd > cap:
