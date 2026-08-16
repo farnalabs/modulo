@@ -1244,6 +1244,11 @@ def _folder_parent_chain_session(parent_chain: dict[uuid.UUID, uuid.UUID | None]
     (RLS); a ``parent_id``-projection query returns that folder's parent. This
     lets the folder CRUD cycle/depth/existence validation walk the real code
     path without a database.
+
+    NOTE: routing between the two query shapes depends on the compiled SQL of
+    the shared ``folder_tree`` validators projecting exactly ``parent_id``
+    (vs ``id``) — if a validator ever projects another column, extend the
+    ``"parent_id" in compiled.string`` discrimination here.
     """
     session = AsyncMock()
 
@@ -1288,7 +1293,7 @@ class TestPipelineFolderCyclePrevention:
 
         with (
             patch("modulo.db.crud.pipeline_folder.get_folder", return_value=self._patch_folder(f1)),
-            pytest.raises(ValueError, match="ancestry cycle"),
+            pytest.raises(ValueError, match="descendants"),
         ):
             asyncio.run(update_folder(session, f1, {"parent_id": f2}))
 
@@ -1351,7 +1356,7 @@ class TestPipelineFolderCyclePrevention:
 
     def test_create_folder_rejects_depth_overflow(self) -> None:
         """create_folder must enforce the same depth cap as update — a chain of
-        9 ancestors under the new parent exceeds _MAX_FOLDER_DEPTH (8)."""
+        9 ancestors under the new parent exceeds MAX_FOLDER_DEPTH (8)."""
         ids = [uuid.uuid4() for _ in range(9)]
         chain = {ids[i]: ids[i + 1] for i in range(8)}
         chain[ids[-1]] = None
