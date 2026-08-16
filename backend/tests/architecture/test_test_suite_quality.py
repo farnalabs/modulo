@@ -250,6 +250,21 @@ regression that silently weakens the suite:
   whole-expression position is flagged: a verification call appearing inside a
   larger expression (the negation of another operand, a function argument, ...)
   is not the assertion itself and is left alone
+- ``assert x and not x`` / ``assert x or not x`` (and the ``not``-wrapped
+  twins ``assert not (x and not x)`` / ``assert not (x or not x)``) — a
+  boolean assertion whose test expression joins a value with its own negation.
+  An ``and`` conjunction containing a complementary pair is a contradiction
+  that can never be true, so the assert ALWAYS FAILS (unconditionally red)
+  no matter what the code under test does; an ``or`` disjunction containing a
+  complementary pair is a tautology that is always true, so the assert ALWAYS
+  PASSES (a silent false green that a mutation-testing run believes verifies
+  behavior). Both shapes are dead code — the outcome is decided by the
+  expression itself, never by the behaviour under test. The lens flags only
+  the top-level ``BoolOp`` of the test expression (or one ``not``-wrapped),
+  comparing operands by syntax so it catches attribute paths and subscripts
+  too (``assert row['x'] and not row['x']``); complementary comparisons
+  written with mirrored operators (``x == y or x != y``) are left alone
+  because they need operator algebra rather than syntax to prove
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -4252,3 +4267,139 @@ def test_mock_assert_lens_flags_none_returning_asserts():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _mock_assert_in_assert_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _complementary_boolean_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every assert whose test expression
+    is a ``BoolOp`` (or a ``not``-wrapped ``BoolOp``) that joins a value with
+    its own syntactic negation.
+
+    An ``and`` conjunction containing a complementary pair is a contradiction
+    that always evaluates False (the whole assert ALWAYS FAILS), and an ``or``
+    disjunction containing a complementary pair is a tautology that always
+    evaluates True (the whole assert ALWAYS PASSES); the ``not``-wrapped twins
+    invert the verdict. Either way the outcome is fixed at source time, so the
+    assert is dead code that never exercises the code under test. Only direct
+    operands of the top-level ``BoolOp`` are compared: complementarity nested
+    inside an operand (``assert (x and not x) or y``) does not fix the whole
+    outcome and is deliberately left alone."""
+    found: list[tuple[int, str]] = []
+
+    def _is_negation(candidate: ast.AST, plain: ast.AST) -> bool:
+        return (
+            isinstance(candidate, ast.UnaryOp)
+            and isinstance(candidate.op, ast.Not)
+            and ast.dump(candidate.operand) == ast.dump(plain)
+        )
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        negated = isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not)
+        if negated:
+            test = test.operand
+        if not isinstance(test, ast.BoolOp):
+            continue
+        values = test.values
+        for i in range(len(values)):
+            for j in range(i + 1, len(values)):
+                a, b = values[i], values[j]
+                if not (_is_negation(a, b) or _is_negation(b, a)):
+                    continue
+                if isinstance(test.op, ast.And):
+                    kind = "contradiction"
+                    verdict = "always FAILS" if not negated else "always PASSES"
+                else:
+                    kind = "tautology"
+                    verdict = "always PASSES" if not negated else "always FAILS"
+                found.append(
+                    (
+                        node.lineno,
+                        f"assert {ast.unparse(node.test)} — operand {ast.unparse(a)} is the "
+                        f"negation of {ast.unparse(b)}, a {kind}: {verdict} regardless of the "
+                        "code under test",
+                    )
+                )
+                break
+            else:
+                continue
+            break
+    return found
+
+
+def test_no_complementary_boolean_assertions():
+    """An ``assert`` whose test expression joins a value with its own negation
+    is dead code with a fixed outcome. ``x and not x`` is a contradiction that
+    can never be true, so ``assert x and not x`` ALWAYS FAILS no matter what
+    the code under test does (the suite is unconditionally red — the same dead
+    class as ``assert mock.assert_called()``), and ``x or not x`` is a
+    tautology that is always true, so ``assert x or not x`` ALWAYS PASSES and a
+    mutation-testing run trusts the green as real verification — the silent
+    false green this lens exists to guard. The ``not``-wrapped twins
+    (``assert not (x and not x)``, ``assert not (x or not x)``) invert the
+    verdict. These are almost always a leftover from pasting a condition into
+    an assert while debugging: the code under test has no bearing on the
+    outcome, so the assertion either breaks CI unconditionally or reports green
+    with zero coverage. Operands are compared by syntax, so attribute paths and
+    subscripts are caught too (``assert row['x'] and not row['x']``), while
+    complementarity written with mirrored operators (``assert x == y or x !=
+    y``) needs operator algebra to prove and is deliberately left alone; the
+    literal-constant, self-comparison, and negated-comparison lenses own the
+    neighbouring shapes."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _complementary_boolean_assert_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} assertion(s) joining a value with its own negation.\n"
+        "x and not x is always False (ALWAYS FAILS) and x or not x is always True "
+        "(ALWAYS PASSES), so the outcome never depends on the code under test.\n"
+        "Assert the real condition, or drop the dead check.\n" + "\n".join(violations)
+    )
+
+
+def test_complementary_boolean_lens_flags_fixed_outcomes():
+    """Synthetic positive/negative control for the complementary-boolean lens:
+    must flag an ``assert`` whose top-level ``BoolOp`` joins a value with its
+    own syntactic negation (either operand order, ``and``/``or``, direct or
+    ``not``-wrapped, over names/attributes/subscripts) and ignore non-
+    complementary conjunctions/disjunctions, single operands, complementarity
+    that is nested inside an operand rather than fixing the whole outcome, and
+    value-complementarity expressed with mirrored operators."""
+    positive_sources = [
+        "def test_foo():\n    assert x and not x\n",
+        "def test_foo():\n    assert not x and x\n",
+        "def test_foo():\n    assert x or not x\n",
+        "def test_foo():\n    assert not x or x\n",
+        "def test_foo():\n    assert x and y and not x\n",
+        "def test_foo():\n    assert not (x and not x)\n",
+        "def test_foo():\n    assert not (x or not x)\n",
+        "def test_foo():\n    assert row['active'] and not row['active']\n",
+        "def test_foo():\n    assert result.enabled or not result.enabled\n",
+        "def test_foo():\n    assert not result.enabled and result.enabled\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _complementary_boolean_assert_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert x and not y\n",
+        "def test_foo():\n    assert x or not y\n",
+        "def test_foo():\n    assert x and y\n",
+        "def test_foo():\n    assert x or y\n",
+        "def test_foo():\n    assert not x\n",
+        "def test_foo():\n    assert not (a == 1 and b == 2)\n",
+        "def test_foo():\n    assert (x and not x) or y\n",
+        "def test_foo():\n    assert x == y or x != y\n",
+        "def test_foo():\n    assert x is y or x is not y\n",
+        "def test_foo():\n    assert x in y and x not in y\n",
+        "def test_foo():\n    assert enabled or not disabled\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _complementary_boolean_assert_violations(tree), f"lens should NOT flag:\n{source}"
