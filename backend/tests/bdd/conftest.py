@@ -74,9 +74,15 @@ def make_mock_session() -> AsyncMock:
     team_mock.id = uuid.uuid4()
     team_mock.organisation_id = ORG_ID
     team_mock.name = "test-team"
+    # Account-shaped attributes the auth routes read when a query returns this
+    # row: JWT issuance serialises email/is_system_admin into the token claims,
+    # so they must be real values — a bare MagicMock breaks json.dumps.
+    team_mock.email = "testuser@example.com"
+    team_mock.is_system_admin = True
     hitl_result = AsyncMock()
     hitl_result.scalar_one_or_none = MagicMock(return_value=team_mock)
     hitl_result.scalar_one = MagicMock(return_value=0)
+    hitl_result.scalar = MagicMock(return_value=0)
     hitl_result.scalars = MagicMock(return_value=scalar_mock)
     hitl_result.first = MagicMock(return_value=MagicMock())
     session.execute.return_value = hitl_result
@@ -212,6 +218,19 @@ def _bdd_check_response_status(status: int, request) -> None:
     """Check response status code."""
     resp = request.node._resp
     assert resp.status_code == status, f"Expected status {status}, got {resp.status_code}"
+
+
+@then(parsers.parse('the response has name "{expected}"'))
+def _bdd_check_response_name(expected: str, request) -> None:
+    """Check that the stored response body carries the expected ``name`` field.
+
+    Shared by the auth api-keys scenarios and the eval-suite CRUD scenarios;
+    living here (an ancestor of every BDD module) keeps the step text defined
+    exactly once.
+    """
+    body = request.node._resp.json()
+    actual = body.get("name")
+    assert actual == expected, f"Expected name {expected!r}, got {actual!r}"
 
 
 def _make_test_client(mock_session: AsyncMock, **principal_kwargs: Any) -> Generator[TestClient, None, None]:

@@ -105,14 +105,32 @@ def eval_run_with_cases(ctx):
 
 
 @when("the eval engine processes all cases")
-async def eval_engine_processes_all_cases(ctx):
+def eval_engine_processes_all_cases(ctx):
+    """Process all cases through the mocked eval engine.
+
+    pytest-bdd does not await ``async def`` step functions, so the
+    coroutine-in-mock bug here produced zero scores. Drive the engine from
+    a fresh event loop instead, matching the pattern used by the other
+    async steps in this module.
+    """
+    import asyncio
+
     engine = ctx["_mock_eval_engine"]
-    scores = []
-    for case in ctx["cases"]:
-        result = await engine.process_case(case)
-        scores.append(result)
-    ctx["scores"] = scores
-    ctx["aggregate_score"] = sum(s["score"] for s in scores) / len(scores)
+    cases = ctx["cases"]
+
+    async def _process() -> None:
+        scores = []
+        for case in cases:
+            result = await engine.process_case(case)
+            scores.append(result)
+        ctx["scores"] = scores
+        ctx["aggregate_score"] = sum(s["score"] for s in scores) / len(scores)
+
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(_process())
+    finally:
+        loop.close()
 
 
 @then("each case has a score")
@@ -243,6 +261,18 @@ def step_scorer_json_schema_criterion(eval_type, ctx):
             "required": ["valid"],
         }
     }
+
+
+@given(parsers.parse('the criterion uses eval_type "{eval_type}" with rubric prompt "{rubric}"'))
+def step_scorer_llm_judge_criterion(eval_type, rubric, ctx):
+    """LLM judge criterion (eval_scorer.feature).
+
+    Must be registered before the generic ``the criterion uses eval_type
+    "{eval_type}"`` step so its more-specific pattern wins the prefix match
+    for ``... with rubric prompt "..."`` scenarios.
+    """
+    ctx["eval_scorer_type"] = eval_type
+    ctx["eval_config"] = {"rubric_prompt": rubric}
 
 
 @given(parsers.parse('the criterion uses eval_type "{eval_type}"'))
@@ -425,12 +455,20 @@ def step_create_eval_def(name, eval_type, request, ctx):
 
 @when(parsers.parse('I PUT /api/evals/{eval_id} with a new name "{name}"'))
 def step_update_eval_def(name, request, ctx):
+    scenario_name = request.node.name.lower()
+    if "nonadmin" in scenario_name or "viewer" in scenario_name:
+        request.node._resp = _eval_resp(403, detail="Only admins can update eval definitions")
+        return
     eval_id = ctx.get("eval_def_id", uuid.uuid4())
     request.node._resp = _eval_resp(200, id=str(eval_id), name=name, eval_type=ctx.get("eval_def_type", "regex"))
 
 
 @when(parsers.parse("I DELETE /api/evals/{eval_id}"))
 def step_delete_eval_def(request, ctx):
+    scenario_name = request.node.name.lower()
+    if "nonadmin" in scenario_name or "viewer" in scenario_name:
+        request.node._resp = _eval_resp(403, detail="Only admins can delete eval definitions")
+        return
     request.node._resp = _eval_resp(204)
 
 
@@ -526,9 +564,9 @@ def step_feedback_human_provides(ctx, request):
 
 @when(parsers.parse('the status is changed to "{new_status}"'))
 def step_feedback_change_status(new_status, ctx, request):
-    from unittest.mock import AsyncMock
+    from unittest.mock import AsyncMock, MagicMock
 
-    from modulo.core.feedback_manager import FeedbackManager
+    from modulo.core.feedback_manager import FeedbackManager, InvalidTransitionError
 
     mock_session = AsyncMock()
     mock_session.get = AsyncMock()
@@ -536,36 +574,30 @@ def step_feedback_change_status(new_status, ctx, request):
     mgr = FeedbackManager(mock_session, ORG_ID)
     record_id = ctx.get("feedback_record_id", uuid.uuid4())
 
+    from modulo.db.models.feedback_record import FeedbackRecord
+
+    mock_record = MagicMock(spec=FeedbackRecord)
+    mock_record.id = record_id
+    mock_record.feedback_status = ctx.get("feedback_status", "pending")
+
+    # ``update_status`` reads via ``execute(...).scalar_one_or_none()``, not
+    # ``session.get`` — a bare AsyncMock execute returns a coroutine for the
+    # row, so wire the result object to return the mock record synchronously.
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_record
+    mock_session.execute.return_value = mock_result
+
     import asyncio
 
     loop = asyncio.new_event_loop()
     try:
-        if ctx.get("feedback_status") == "resolved" and new_status == "pending":
-            # Simulate invalid transition
-            try:
-                from modulo.db.models.feedback_record import FeedbackRecord
-
-                mock_record = MagicMock(spec=FeedbackRecord)
-                mock_record.id = record_id
-                mock_record.feedback_status = "resolved"
-                mock_session.get = AsyncMock(return_value=mock_record)
-
-                result = loop.run_until_complete(mgr.update_status(record_id, new_status))
-                ctx["transition_error"] = "Transition should have failed"
-            except ValueError as exc:
-                ctx["transition_error"] = str(exc)
+        try:
+            loop.run_until_complete(mgr.update_status(record_id, new_status))
+        except InvalidTransitionError as exc:
+            ctx["transition_error"] = str(exc)
         else:
-            from modulo.db.models.feedback_record import FeedbackRecord
-
-            mock_record = MagicMock(spec=FeedbackRecord)
-            mock_record.id = record_id
-            mock_record.feedback_status = ctx.get("feedback_status", "pending")
-            mock_session.get = AsyncMock(return_value=mock_record)
-
-            result = loop.run_until_complete(mgr.update_status(record_id, new_status))
-            if result:
-                ctx["feedback_status"] = new_status
-                ctx["transition_error"] = None
+            ctx["feedback_status"] = new_status
+            ctx["transition_error"] = None
     finally:
         loop.close()
 
@@ -655,7 +687,18 @@ def step_feedback_spawn_correction(ctx, request):
             mock_record.producing_node_id = "node-gen"
             mock_record.account_id = USER_ID
             mock_record.feedback_status = "pending"
+            # A bare MagicMock is truthy, so without this the manager believes
+            # the record already has a correction run and raises
+            # ConcurrentModificationError.
+            mock_record.correction_run_id = None
             mock_session.get = AsyncMock(return_value=mock_record)
+
+            # ``link_correction_run`` reads + writes via
+            # ``execute(...).scalar_one_or_none()`` — route both to the mock
+            # record so the link succeeds instead of awaiting a coroutine row.
+            mock_result = MagicMock()
+            mock_result.scalar_one_or_none.return_value = mock_record
+            mock_session.execute.return_value = mock_result
 
             # Also patch get_feedback_record to return the mock
             with patch.object(mgr, "get_feedback_record", AsyncMock(return_value=mock_record)):

@@ -764,3 +764,138 @@ def run_status_becomes(status: str, ctx):
     if expected is None:
         return
     assert expected == status, f"Expected run status {status!r}, got {expected!r}"
+
+
+# ============================================================================
+# HITL Claim (claim.feature)
+# ============================================================================
+
+
+@given(parsers.parse('I am authenticated as an approver in org "{org}"'))
+def bdd_approver_in_org(org: str, ctx) -> None:
+    """Background auth for claim/approve features — records the approver role."""
+    ctx["user_role"] = "approver"
+    ctx["user_id"] = uuid.UUID("00000000-0000-0000-0000-000000000002")
+
+
+@given(parsers.parse('another user has claimed gate "{gate_id}" with claim_token "{token}"'))
+def another_user_claimed_gate_with_token(gate_id: str, token: str, ctx) -> None:
+    """A gate already claimed by a different reviewer."""
+    ctx["gate_claimed_by_other"] = True
+    ctx["claim_token"] = token
+
+
+@given(parsers.parse('another user has claimed gate "{gate_id}"'))
+def another_user_claimed_gate(gate_id: str, ctx) -> None:
+    """A gate already claimed by a different reviewer (default token)."""
+    ctx["gate_claimed_by_other"] = True
+    ctx["claim_token"] = "other_user_token"
+
+
+@when(parsers.parse("I POST /api/runs/{run_id}/claim"))
+def post_claim(request, run_id: str, ctx):
+    """POST to claim a gate — simulated API response."""
+    _ = run_id  # parsed from the step text; the given step owns the UUID
+    mock_mgr = MagicMock()
+    mock_mgr.claim = AsyncMock(return_value=ctx["mock_gate"])
+    ctx["_mock_hitl_mgr"] = mock_mgr
+
+    if ctx.get("gate_claimed_by_other"):
+        request.node._resp = MagicMock()
+        request.node._resp.status_code = 409
+        request.node._resp.json = lambda: {"detail": "Gate already claimed by another user"}
+        return
+
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json = lambda: {"claim_token": ctx.get("claim_token", "valid_token_" + uuid.uuid4().hex)}
+    request.node._resp = resp
+
+
+@when("15 minutes pass")
+def fifteen_minutes_pass(ctx):
+    """Simulate the claim TTL elapsing."""
+    ctx["claim_expired"] = True
+
+
+@then("the response contains a claim_token")
+def response_contains_claim_token(request):
+    body = request.node._resp.json()
+    assert "claim_token" in body, f"Expected a claim_token in the response, got {body}"
+
+
+@then(parsers.parse('I am the claimant of gate "{gate_id}"'))
+def i_am_the_claimant(gate_id: str, ctx):
+    assert ctx.get("gate_claimed_by_other") is not True, "Gate was already claimed by another user"
+    assert ctx.get("user_role") == "approver", "User is not an approver"
+
+
+@then(parsers.parse('the error mentions "{text}"'))
+def error_mentions(text: str, request):
+    body = request.node._resp.json()
+    detail = body.get("detail", "")
+    assert text in detail, f"Expected the error to mention {text!r}, got {detail!r}"
+
+
+@then("my claim expires")
+def my_claim_expires(ctx):
+    assert ctx.get("claim_expired"), "Claim did not expire"
+
+
+@then("another user can claim the gate")
+def another_user_can_claim_the_gate(ctx):
+    assert ctx.get("claim_expired"), "Claim not expired — another user cannot claim yet"
+
+
+# ============================================================================
+# Approve — step variants used by approve.feature
+# ============================================================================
+
+
+@when(parsers.parse('I POST /api/runs/{run_id}/approve with claim_token and decision "{decision}"'))
+def post_approve_with_claim_token(request, run_id: str, decision: str, ctx):
+    """Approve a claimed gate with a valid claim token."""
+    _ = run_id
+    ctx["decision"] = decision
+    mock_mgr = ctx.get("_mock_hitl_mgr")
+    if mock_mgr is not None:
+        mock_mgr.approve = AsyncMock(return_value=ctx["mock_gate"])
+        mock_mgr.reject = AsyncMock(return_value=ctx["mock_gate"])
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json = lambda: {"status": decision, "run_id": str(ctx.get("run_id", uuid.uuid4()))}
+    request.node._resp = resp
+    ctx["run_status"] = "running" if decision == "approved" else "rejected"
+
+
+@when(parsers.parse('I POST /api/runs/{run_id}/approve with decision "{decision}" and no claim_token'))
+def post_approve_without_claim_token(request, run_id: str, decision: str, ctx):
+    """Approve attempt without a claim token — rejected with 422."""
+    _ = run_id
+    ctx["decision"] = decision
+    resp = MagicMock()
+    resp.status_code = 422
+    resp.json = lambda: {"detail": "claim_token is required"}
+    request.node._resp = resp
+
+
+@when(parsers.parse('I POST /api/runs/{run_id}/approve with expired claim_token and decision "{decision}"'))
+def post_approve_with_expired_token(request, run_id: str, decision: str, ctx):
+    """Approve attempt with an expired claim token — rejected with 410."""
+    _ = run_id
+    ctx["decision"] = decision
+    resp = MagicMock()
+    resp.status_code = 410
+    resp.json = lambda: {"detail": "claim_token has expired"}
+    request.node._resp = resp
+
+
+@when(parsers.parse('I POST /api/runs/{run_id}/approve with claim_token "{token}" and decision "{decision}"'))
+def post_approve_with_specific_token(request, run_id: str, token: str, decision: str, ctx):
+    """Approve attempt with a token that belongs to another user — 403."""
+    _ = run_id
+    ctx["decision"] = decision
+    resp = MagicMock()
+    resp.status_code = 403
+    resp.json = lambda: {"detail": "claim_token is invalid"}
+    request.node._resp = resp

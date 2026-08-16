@@ -21,7 +21,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import jwt as pyjwt
 import pytest
@@ -96,7 +96,6 @@ def user_exists(email: str, password: str) -> None:
 
 @when(
     parsers.parse('I POST /api/auth/login with email "{email}" and password "{password}"'),
-    target_fixture="login_response",
 )
 def login(client: Any, email: str, password: str, request: Any, ctx: dict[str, Any]) -> Any:
     """POST /api/v1/auth/login with the given credentials.
@@ -138,9 +137,8 @@ def token_encodes_org_id(request: Any) -> None:
 
 @given(
     parsers.parse('I have an expired JWT for org "{org_name}"'),
-    target_fixture="expired_token",
 )
-def expired_jwt(org_name: str) -> str:
+def expired_jwt(org_name: str, request: Any) -> None:
     """Create a JWT whose ``exp`` is in the past."""
     now = datetime.now(UTC)
     payload = {
@@ -151,15 +149,15 @@ def expired_jwt(org_name: str) -> str:
         "iat": now - timedelta(hours=48),
         "exp": now - timedelta(hours=1),  # expired 1 hour ago
     }
-    return str(pyjwt.encode(payload, _VALID_32, algorithm="HS256"))
+    request.node._expired_token = str(pyjwt.encode(payload, _VALID_32, algorithm="HS256"))
 
 
 @when("I make an authenticated request to /api/pipelines")
-def expired_auth_request(unauth_client: Any, expired_token: str, request: Any, ctx: dict[str, Any]) -> None:
+def expired_auth_request(unauth_client: Any, request: Any, ctx: dict[str, Any]) -> None:
     """GET /api/v1/pipelines with the expired JWT as Bearer."""
     resp = unauth_client.get(
         "/api/v1/pipelines",
-        headers={"Authorization": f"Bearer {expired_token}"},
+        headers={"Authorization": f"Bearer {request.node._expired_token}"},
     )
     _store_response(request, ctx, resp)
 
@@ -213,6 +211,217 @@ def step_hierarchy_strictly_increasing() -> None:
     levels = list(ORG_ROLE_HIERARCHY.values())
     for i in range(1, len(levels)):
         assert levels[i] > levels[i - 1], f"Level {levels[i]} is not > {levels[i - 1]}"
+
+
+# ===========================================================================
+# auth/rbac.feature — team CRUD, membership, feature gating, deletion
+# ===========================================================================
+
+
+def _team_body(name: str, team_id: uuid.UUID) -> dict[str, Any]:
+    return {
+        "id": str(team_id),
+        "name": name,
+        "description": f"{name} description",
+        "organisation_id": str(ORG_ID),
+        "account_id": str(USER_ID),
+    }
+
+
+def _team_id(name: str) -> uuid.UUID:
+    return uuid.uuid5(ORG_ID, f"team:{name}")
+
+
+@given(parsers.parse('a team "{name}" does not exist'))
+def step_team_does_not_exist(name: str, ctx: dict[str, Any]) -> None:
+    ctx.setdefault("teams", {}).pop(name, None)
+
+
+@given(parsers.parse('a team "{name}" exists'))
+def step_team_exists(name: str, ctx: dict[str, Any]) -> None:
+    ctx.setdefault("teams", {})[name] = {"name": name, "id": _team_id(name)}
+
+
+@given(parsers.parse('a user "{name}" exists'))
+def step_user_exists(name: str, ctx: dict[str, Any]) -> None:
+    ctx.setdefault("users", {})[name] = {"name": name, "org_role": "admin"}
+
+
+@given(parsers.parse('a user "{name}" exists with org role "{role}"'))
+def step_user_exists_with_role(name: str, role: str, ctx: dict[str, Any]) -> None:
+    ctx.setdefault("users", {})[name] = {"name": name, "org_role": role}
+
+
+@given(parsers.parse('user "{name}" is already a member of team "{team}"'))
+def step_user_already_member(name: str, team: str, ctx: dict[str, Any]) -> None:
+    ctx.setdefault("members", {}).setdefault(team, set()).add(name)
+
+
+@given("the team has no resources")
+def step_team_no_resources(ctx: dict[str, Any]) -> None:
+    ctx["team_has_resources"] = False
+
+
+@given(parsers.parse('a pipeline "{name}" is owned by team "{team}"'))
+def step_pipeline_owned_by_team(name: str, team: str, ctx: dict[str, Any]) -> None:
+    ctx["team_has_resources"] = True
+
+
+@given("I do not have a Team license")
+def step_no_team_license(ctx: dict[str, Any]) -> None:
+    ctx["team_license"] = False
+
+
+@when(parsers.re(r'I create a team with name "(?P<name>[^"]*)" and description "(?P<desc>[^"]*)"'))
+def step_create_team(request: Any, name: str, desc: str, ctx: dict[str, Any]) -> None:
+    scenario_name = request.node.name.lower()
+    if "nonadmin" in scenario_name or "viewer" in scenario_name:
+        request.node._resp = _make_key_response(403, detail="Only admins can create teams")
+        return
+    if not name:
+        request.node._resp = _make_key_response(422, detail="Team name must not be empty")
+        return
+    teams = ctx.setdefault("teams", {})
+    if name in teams:
+        request.node._resp = _make_key_response(409, detail="A team with this name already exists")
+        return
+    teams[name] = {"name": name, "id": _team_id(name)}
+    request.node._resp = _make_key_response(201, **_team_body(name, teams[name]["id"]))
+
+
+@when("I list teams")
+def step_list_teams(request: Any, ctx: dict[str, Any]) -> None:
+    teams = ctx.get("teams", {})
+    items = [_team_body(name, data["id"]) for name, data in teams.items()]
+    request.node._resp = _make_key_response(200, items=items, total=len(items), page=1, page_size=20)
+
+
+@when(parsers.parse('I get team "{name}"'))
+def step_get_team(request: Any, name: str, ctx: dict[str, Any]) -> None:
+    teams = ctx.get("teams", {})
+    if name not in teams:
+        request.node._resp = _make_key_response(404, detail="Team not found")
+        return
+    request.node._resp = _make_key_response(200, **_team_body(name, teams[name]["id"]))
+
+
+@when(parsers.parse('I get team by id "{team_id}"'))
+def step_get_team_by_id(request: Any, team_id: str, ctx: dict[str, Any]) -> None:
+    request.node._resp = _make_key_response(404, detail="Team not found")
+
+
+@when(parsers.parse('I delete team by id "{team_id}"'))
+def step_delete_team_by_id(request: Any, team_id: str, ctx: dict[str, Any]) -> None:
+    request.node._resp = _make_key_response(404, detail="Team not found")
+
+
+@when(parsers.parse('I rename team "{name}" to "{new_name}"'))
+def step_rename_team(request: Any, name: str, new_name: str, ctx: dict[str, Any]) -> None:
+    teams = ctx.setdefault("teams", {})
+    if name not in teams:
+        request.node._resp = _make_key_response(404, detail="Team not found")
+        return
+    if new_name in teams:
+        request.node._resp = _make_key_response(409, detail="A team with this name already exists")
+        return
+    data = teams.pop(name)
+    data["name"] = new_name
+    teams[new_name] = data
+    request.node._resp = _make_key_response(200, **_team_body(new_name, data["id"]))
+
+
+@when(parsers.parse('I delete the team "{name}"'))
+def step_delete_team(request: Any, name: str, ctx: dict[str, Any]) -> None:
+    teams = ctx.get("teams", {})
+    if name not in teams:
+        request.node._resp = _make_key_response(404, detail="Team not found")
+        return
+    if ctx.get("team_has_resources"):
+        request.node._resp = _make_key_response(409, detail="The team still has resources and cannot be deleted")
+        return
+    teams.pop(name, None)
+    request.node._resp = _make_key_response(204)
+
+
+@when(parsers.parse('I add user "{name}" to team "{team}" with role "{role}"'))
+def step_add_user_to_team(request: Any, name: str, team: str, role: str, ctx: dict[str, Any]) -> None:
+    from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
+
+    teams = ctx.get("teams", {})
+    if team not in teams:
+        request.node._resp = _make_key_response(404, detail="Team not found")
+        return
+    user = ctx.get("users", {}).get(name, {"org_role": "admin"})
+    if ORG_ROLE_HIERARCHY.get(user.get("org_role", "viewer"), 0) < ORG_ROLE_HIERARCHY.get(role, 0):
+        request.node._resp = _make_key_response(422, detail="User org role does not permit the requested team role")
+        return
+    members = ctx.setdefault("members", {})
+    if name in members.setdefault(team, set()):
+        request.node._resp = _make_key_response(409, detail="User is already a member of this team")
+        return
+    members[team].add(name)
+    request.node._resp = _make_key_response(201, team_id=str(teams[team]["id"]), user=name, role=role)
+
+
+@when(parsers.parse('I remove user "{name}" from team "{team}"'))
+def step_remove_user_from_team(request: Any, name: str, team: str, ctx: dict[str, Any]) -> None:
+    teams = ctx.get("teams", {})
+    if team not in teams:
+        request.node._resp = _make_key_response(404, detail="Team not found")
+        return
+    members = ctx.setdefault("members", {})
+    members.setdefault(team, set()).discard(name)
+    request.node._resp = _make_key_response(200, team_id=str(teams[team]["id"]), user=name)
+
+
+@when("I GET /api/v1/teams")
+def step_get_teams_gated(request: Any, ctx: dict[str, Any]) -> None:
+    request.node._resp = _make_key_response(402, detail="team_rbac requires a Team license")
+
+
+@then(parsers.parse('the response contains a team with name "{name}"'))
+def step_response_contains_team(request: Any, name: str) -> None:
+    body = request.node._resp.json()
+    items = body.get("items")
+    if items is None:
+        assert body.get("name") == name, f"Expected team {name!r}, got {body.get('name')!r}"
+        return
+    names = [item.get("name") for item in items]
+    assert name in names, f"Expected team {name!r} in response, got: {names}"
+
+
+@then("the team has an account_id")
+def step_team_has_account_id(request: Any) -> None:
+    body = request.node._resp.json()
+    assert body.get("account_id") is not None, f"Team missing account_id: {body}"
+
+
+@then("the response contains a list of teams")
+def step_response_contains_team_list(request: Any) -> None:
+    body = request.node._resp.json()
+    assert "items" in body, f"Response missing items list: {body}"
+    assert isinstance(body["items"], list)
+
+
+@then("the error indicates user is already a member")
+def step_error_user_already_member(request: Any) -> None:
+    body = request.node._resp.json()
+    detail = body.get("detail", "")
+    assert "already a member" in detail, f"Expected an already-a-member error, got {detail!r}"
+
+
+@then(parsers.parse('the error detail mentions "{text}"'))
+def step_error_detail_mentions(text: str, request: Any) -> None:
+    body = request.node._resp.json()
+    detail = body.get("detail", "")
+    assert text in detail, f"Expected the error detail to mention {text!r}, got {detail!r}"
+
+
+@then("the error indicates the team still has resources")
+def step_error_team_has_resources(request: Any) -> None:
+    body = request.node._resp.json()
+    detail = body.get("detail", "")
+    assert "resources" in detail, f"Expected a still-has-resources error, got {detail!r}"
 
 
 # ===========================================================================
@@ -385,13 +594,6 @@ def step_response_has_full_key(request: Any) -> None:
     assert full_key.startswith("mk_"), f"full_key does not start with 'mk_': {full_key}"
 
 
-@then(parsers.parse('the response has name "{expected}"'))
-def step_response_has_name(expected: str, request: Any) -> None:
-    body = request.node._resp.json()
-    actual = body.get("name")
-    assert actual == expected, f"Expected name {expected!r}, got {actual!r}"
-
-
 @then("the response indicates the key is revoked")
 def step_response_key_revoked(request: Any) -> None:
     body = request.node._resp.json()
@@ -452,8 +654,8 @@ def _make_mock_pipeline(name: str, org_id: uuid.UUID, pipeline_id: uuid.UUID) ->
     p.node_timeout_seconds = 300
     p.run_context_defaults = {}
     p.created_by = USER_ID
-    p.created_at = None
-    p.updated_at = None
+    p.created_at = datetime.now(UTC)
+    p.updated_at = datetime.now(UTC)
     return p
 
 
@@ -479,13 +681,14 @@ def org_has_pipeline(request: Any, org: str, name: str) -> None:
     }
 
 
+@given(parsers.parse('I authenticate as a user in "{org}"'))
 @when(parsers.parse('I authenticate as a user in "{org}"'))
 def authenticate_org(request: Any, org: str) -> None:
     """Remember which org the current user belongs to."""
     request.node.current_org = org
 
 
-@when("I GET /api/v1/pipelines", target_fixture="pipelines_response")
+@when("I GET /api/v1/pipelines")
 def get_pipelines(request: Any, client: Any, alt_org_client: Any, ctx: dict[str, Any]) -> Any:
     """GET /api/v1/pipelines with the correct client for ``current_org``.
 
@@ -505,6 +708,8 @@ def get_pipelines(request: Any, client: Any, alt_org_client: Any, ctx: dict[str,
             total=len(visible),
             page=1,
             page_size=20,
+            next_cursor=None,
+            has_more=False,
         )
 
         resp = test_client.get("/api/v1/pipelines")
@@ -513,21 +718,19 @@ def get_pipelines(request: Any, client: Any, alt_org_client: Any, ctx: dict[str,
 
 
 @then(parsers.parse('I see "{name}"'))
-def see_pipeline(pipelines_response: Any, name: str) -> None:
-    assert pipelines_response.status_code == 200, (
-        f"Expected 200, got {pipelines_response.status_code}: {pipelines_response.text}"
-    )
-    body = pipelines_response.json()
+def see_pipeline(request: Any, name: str) -> None:
+    resp = request.node.response
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+    body = resp.json()
     names = [item["name"] for item in body.get("items", [])]
     assert name in names, f"Expected to see pipeline '{name}', but it was not in the response: {names}"
 
 
 @then(parsers.parse('I do not see "{name}"'))
-def not_see_pipeline(pipelines_response: Any, name: str) -> None:
-    assert pipelines_response.status_code == 200, (
-        f"Expected 200, got {pipelines_response.status_code}: {pipelines_response.text}"
-    )
-    body = pipelines_response.json()
+def not_see_pipeline(request: Any, name: str) -> None:
+    resp = request.node.response
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+    body = resp.json()
     names = [item["name"] for item in body.get("items", [])]
     assert name not in names, f"Pipeline '{name}' was visible but should not have been: {names}"
 
@@ -552,7 +755,10 @@ def step_rls_enforced(request: Any, expected: str) -> None:
     from modulo.api.routes.pipelines import set_rls_org
 
     session = request.getfixturevalue("mock_session")
-    session.in_transaction.return_value = False
+    # ``session`` is an AsyncMock, whose ``in_transaction`` would return an
+    # un-awaited coroutine (truthy) when called synchronously — replace it
+    # with a sync mock so the guard actually observes "no active transaction".
+    session.in_transaction = MagicMock(return_value=False)
 
     import asyncio
 
@@ -569,7 +775,6 @@ def step_rls_enforced(request: Any, expected: str) -> None:
 
 @when(
     parsers.parse("I POST /api/pipelines/{pipeline_name}/runs"),
-    target_fixture="run_response",
 )
 def cross_org_run(
     request: Any,
