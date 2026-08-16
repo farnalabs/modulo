@@ -331,10 +331,7 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from "../components/ui/tooltip";
-import { Pencil } from "@lucide/vue";
-import { Play } from "@lucide/vue";
-import { Trash2 } from "@lucide/vue";
-import { Plus } from "@lucide/vue";
+import { Pencil, Play, Trash2, Plus } from "@lucide/vue";
 
 type NotificationEndpointResponse =
   components["schemas"]["NotificationEndpointResponse"];

@@ -1,5 +1,4 @@
-import type { MonitorConfig } from './types'
-import type { MonitorBackend } from './types'
+import type { MonitorConfig, MonitorBackend } from './types'
 import { BuiltinMonitorBackend } from './backends/builtin'
 import { DatadogRumMonitorBackend } from './backends/datadog-rum'
 import { GrafanaFaroMonitorBackend } from './backends/grafana-faro'
