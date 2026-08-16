@@ -15211,11 +15211,8 @@ export interface components {
             team_memberships_truncated: boolean;
             /** Org Role */
             org_role: string;
-            /**
-             * Preferences
-             * @default {}
-             */
-            preferences: {
+            /** Preferences */
+            preferences?: {
                 [key: string]: unknown;
             };
             /**
