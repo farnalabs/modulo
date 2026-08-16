@@ -1,6 +1,8 @@
 """Unit tests for HITL gate and manual node functions."""
 
-from typing import Any
+from contextlib import asynccontextmanager
+from typing import Any, Self
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -957,3 +959,173 @@ class TestEvaluateEvalCondition:
 
     def test_unknown_operator_false(self):
         assert _evaluate_eval_condition(0.8, 0.8, "unknown") is False
+
+
+# ---------------------------------------------------------------------------
+# Eval-before-interrupt — persistence of eval results (§8.17)
+# ---------------------------------------------------------------------------
+
+
+class _RecordingSession:
+    """Fake async session that records ``EvalResultModel`` rows added."""
+
+    def __init__(self) -> None:
+        self.added: list[Any] = []
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+    def begin(self) -> "_RecordingSession":
+        return self
+
+    def add(self, obj: Any) -> None:
+        self.added.append(obj)
+
+
+async def test_eval_before_interrupt_persists_results(monkeypatch: pytest.MonkeyPatch):
+    """Eval results are written to the ``eval_results`` table via session_factory.
+
+    With ``session_factory`` + ``org_id`` wired (as the executor does), the
+    gate persists an ``EvalResultModel`` row per node-scoped eval definition
+    before raising the interrupt — so post-run suite-level threshold checks
+    (``_check_eval_suites``) can read committed results.
+    """
+    import uuid as _uuid
+
+    from modulo.db.models.eval_result import EvalResult as EvalResultModel
+
+    org_id = _uuid.UUID("00000000-0000-0000-0000-0000000000a1")
+    run_id = _uuid.UUID("00000000-0000-0000-0000-0000000000b2")
+    eval_id = _uuid.UUID("00000000-0000-0000-0000-0000000000c3")
+    node_uuid = _uuid.UUID("00000000-0000-0000-0000-0000000000d4")
+    session = _RecordingSession()
+
+    @asynccontextmanager
+    async def _fake_factory():
+        yield session
+
+    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner.set_rls_org", AsyncMock())
+
+    gate_config = {"gate_id": "persist-gate"}
+    eval_def = EvalDefinition(
+        id=eval_id,
+        org_id=org_id,
+        node_id=str(node_uuid),
+        name="quality-check",
+        eval_type=EvalType.REGEX,
+        config={"pattern": "pass", "field": "level"},
+        failure_behaviour="warn",
+    )
+    node_fn = make_hitl_gate_fn(
+        gate_config,
+        eval_definitions=[eval_def],
+        session_factory=_fake_factory,
+        org_id=org_id,
+    )
+
+    with pytest.raises(GraphInterrupt):
+        await node_fn(
+            {
+                "artifacts": [],
+                "_hitl_gates": [],
+                "_run_id": run_id,
+                "level": "fail",
+            }
+        )
+
+    assert len(session.added) == 1
+    row = session.added[0]
+    assert isinstance(row, EvalResultModel)
+    assert row.organisation_id == org_id
+    assert row.run_id == run_id
+    assert row.node_id == node_uuid
+    assert row.eval_id == eval_id
+    assert row.passed is False
+    assert row.score == 0.0
+
+
+async def test_eval_before_interrupt_persist_failure_does_not_block_interrupt(monkeypatch: pytest.MonkeyPatch):
+    """A persistence failure is logged, not raised — the gate still interrupts.
+
+    Eval-result persistence is best-effort (the run must not die because the
+    ``eval_results`` write failed); the interrupt still fires and the run
+    proceeds to ``awaiting_human``.
+    """
+    import uuid as _uuid
+
+    org_id = _uuid.UUID("00000000-0000-0000-0000-0000000000a1")
+    run_id = _uuid.UUID("00000000-0000-0000-0000-0000000000b2")
+
+    @asynccontextmanager
+    async def _boom_factory():
+        raise RuntimeError("db unavailable")
+        yield  # pragma: no cover - make asynccontextmanager a valid generator
+
+    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner.set_rls_org", AsyncMock())
+
+    eval_def = EvalDefinition(
+        id=_uuid.UUID("00000000-0000-0000-0000-0000000000c3"),
+        org_id=org_id,
+        name="quality-check",
+        eval_type=EvalType.REGEX,
+        config={"pattern": "pass", "field": "level"},
+        failure_behaviour="warn",
+    )
+    node_fn = make_hitl_gate_fn(
+        {"gate_id": "persist-fail-gate"},
+        eval_definitions=[eval_def],
+        session_factory=_boom_factory,
+        org_id=org_id,
+    )
+
+    with pytest.raises(GraphInterrupt):
+        await node_fn(
+            {
+                "artifacts": [],
+                "_hitl_gates": [],
+                "_run_id": run_id,
+                "level": "fail",
+            }
+        )
+
+
+async def test_eval_before_interrupt_skips_persist_without_run_id(monkeypatch: pytest.MonkeyPatch):
+    """No ``_run_id`` in state → no eval-result rows are written (nothing to key)."""
+    import uuid as _uuid
+
+    org_id = _uuid.UUID("00000000-0000-0000-0000-0000000000a1")
+    session = _RecordingSession()
+
+    async def _fake_factory():
+        return session
+
+    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner.set_rls_org", AsyncMock())
+
+    eval_def = EvalDefinition(
+        id=_uuid.UUID("00000000-0000-0000-0000-0000000000c3"),
+        org_id=org_id,
+        name="quality-check",
+        eval_type=EvalType.REGEX,
+        config={"pattern": "pass", "field": "level"},
+        failure_behaviour="warn",
+    )
+    node_fn = make_hitl_gate_fn(
+        {"gate_id": "no-runid-gate"},
+        eval_definitions=[eval_def],
+        session_factory=_fake_factory,
+        org_id=org_id,
+    )
+
+    with pytest.raises(GraphInterrupt):
+        await node_fn(
+            {
+                "artifacts": [],
+                "_hitl_gates": [],
+                "level": "fail",
+            }
+        )
+
+    assert not session.added
