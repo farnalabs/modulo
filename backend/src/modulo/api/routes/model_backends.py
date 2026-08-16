@@ -22,6 +22,7 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_in_dev_operator, require_permission
 from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_logger import append_audit_event
 from modulo.core.model_backend_hub import _build_backend
 from modulo.core.plugin_registry import get_plugin_registry
 from modulo.core.secrets_backend import create_secrets_backend
@@ -159,6 +160,60 @@ async def _run_health_check_on_save_and_persist(
     except Exception:
         logger.exception("Failed to persist health check result for model backend %s", backend.id)
     return status_, detail
+
+
+async def _append_model_backend_audit_event(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    *,
+    event_type: str,
+    resource_id: uuid.UUID,
+    payload: dict[str, Any],
+) -> None:
+    """Append a model-backend audit event in a fresh transaction, failure-isolated.
+
+    The primary operation has already committed. RLS context (SET LOCAL) reverts
+    on COMMIT, so it must be re-established in this fresh transaction or the
+    STRICT-RLS audit INSERT is rejected. A broken append is logged and never
+    fails the completed operation (api_keys/teams gold pattern).
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await append_audit_event(
+                session,
+                org_id=principal.organisation_id,
+                event_type=event_type,
+                actor_user_id=principal.account_id,
+                resource_type="model_backend",
+                resource_id=resource_id,
+                payload_json=payload,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.warning(
+            "model_backends.audit_append_failed",
+            extra={
+                "org_id": str(principal.organisation_id),
+                "backend_id": str(resource_id),
+                "event_type": event_type,
+            },
+        )
+
+
+def _audit_safe_backend_fields(updates: dict[str, Any]) -> dict[str, Any]:
+    """Return the non-credential update fields, UUID values stringified, for audit payloads."""
+    safe: dict[str, Any] = {}
+    for key, value in updates.items():
+        if key == "credentials_ciphertext":
+            continue
+        if isinstance(value, uuid.UUID):
+            safe[key] = str(value)
+        else:
+            safe[key] = value
+    return safe
 
 
 class ModelBackendCreate(TeamVisibilityMixin):
@@ -490,6 +545,24 @@ async def create_model_backend_endpoint(
             user_id=principal.account_id,
             org_role=principal.org_role,
         )
+
+        # PRD §8.12 audit trail: backend registration was previously invisible.
+        # Written in a fresh transaction (the create above already committed)
+        # and failure-isolated so a broken append never fails a completed create.
+        await _append_model_backend_audit_event(
+            session,
+            principal,
+            event_type="model_backend.created",
+            resource_id=mb.id,
+            payload={
+                "name": mb.name,
+                "provider": mb.provider,
+                "model_id": mb.model_id,
+                "tier": mb.tier,
+                "fallback_backend_ids": [str(fid) for fid in (mb.fallback_backend_ids or [])],
+                "has_credentials": bool(mb.credentials_ciphertext),
+            },
+        )
     except IntegrityError:
         logger.exception("model_backends.create_model_backend_endpoint")
         raise HTTPException(
@@ -612,6 +685,35 @@ async def update_model_backend_endpoint(
                 user_id=principal.account_id,
                 org_role=principal.org_role,
             )
+
+        # PRD §8.12 audit trail: backend edits and credential rotation were
+        # previously invisible. Written in fresh transactions (the update above
+        # already committed) and failure-isolated so a broken append never fails
+        # a completed update. ``model_backend_credentials_updated`` fires under
+        # its exact PRD name when an API key is supplied; the generic edit event
+        # carries only the non-credential fields that actually changed.
+        changed_fields = _audit_safe_backend_fields(updates)
+        if changed_fields:
+            await _append_model_backend_audit_event(
+                session,
+                principal,
+                event_type="model_backend.updated",
+                resource_id=mb.id,
+                payload={"backend_id": str(mb.id), "changed_fields": changed_fields},
+            )
+        if req.api_key is not None:
+            await _append_model_backend_audit_event(
+                session,
+                principal,
+                event_type="model_backend_credentials_updated",
+                resource_id=mb.id,
+                payload={
+                    "backend_id": str(mb.id),
+                    "name": mb.name,
+                    "provider": mb.provider,
+                    "model_id": mb.model_id,
+                },
+            )
     except IntegrityError:
         logger.exception("model_backends.update_model_backend_endpoint")
         raise HTTPException(
@@ -718,6 +820,7 @@ async def delete_model_backend_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("model_backend.delete"),
 ) -> None:
+    audit_payload: dict[str, Any] | None = None
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -731,6 +834,16 @@ async def delete_model_backend_endpoint(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=(f"Cannot delete model backend: it is referenced as a fallback by backend(s): {names}"),
                 )
+            # Capture the entity details BEFORE the delete so the audit event can
+            # survive the row (a post-delete read would return nothing).
+            existing = await get_model_backend(session, backend_id)
+            if existing is not None:
+                audit_payload = {
+                    "name": existing.name,
+                    "provider": existing.provider,
+                    "model_id": existing.model_id,
+                    "tier": existing.tier,
+                }
             deleted = await delete_model_backend(session, backend_id)
     except IntegrityError:
         logger.exception("model_backends.delete_model_backend_endpoint")
@@ -760,3 +873,15 @@ async def delete_model_backend_endpoint(
         ) from None
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
+
+    # PRD §8.12 audit trail: backend deletion was previously invisible. Written
+    # in a fresh transaction (the delete above already committed) and
+    # failure-isolated so a broken append never fails a completed delete.
+    if audit_payload is not None:
+        await _append_model_backend_audit_event(
+            session,
+            principal,
+            event_type="model_backend.deleted",
+            resource_id=backend_id,
+            payload=audit_payload,
+        )
