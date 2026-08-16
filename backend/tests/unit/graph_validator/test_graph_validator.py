@@ -1107,6 +1107,24 @@ async def test_guardrail_cap_feature_off_never_violates():
     assert result.is_valid
 
 
+async def test_guardrail_cap_configurable_cap_enforced_at_graph_save():
+    """A RAISED org cap (not just the default 8) is honoured at graph-save:
+    exactly cap rows pass, cap+1 rows reject with GUARDRAIL_CAP_EXCEEDED."""
+    under = [_guardrail_row(None, f"g-{i}", cap=4) for i in range(4)]
+    under_result = await GraphValidator().validate_definition(
+        _SINGLE_NODE, _session_returning([]), guardrail_definitions=under
+    )
+    assert under_result.is_valid
+    assert not any(i.code == "GUARDRAIL_CAP_EXCEEDED" for i in under_result.issues)
+
+    over = [_guardrail_row(None, f"g-{i}", cap=4) for i in range(5)]
+    over_result = await GraphValidator().validate_definition(
+        _SINGLE_NODE, _session_returning([]), guardrail_definitions=over
+    )
+    assert not over_result.is_valid
+    assert any(i.code == "GUARDRAIL_CAP_EXCEEDED" for i in over_result.issues)
+
+
 async def test_guardrail_cap_no_rows_is_skipped():
     result = await GraphValidator().validate_definition(_SINGLE_NODE, _session_returning([]), guardrail_definitions=[])
     assert result.is_valid

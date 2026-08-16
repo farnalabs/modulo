@@ -15,6 +15,7 @@ under test) and assert the ingestion-edge seam:
     is created ``pending`` (no act, no re-block) with detection results.
 """
 
+import logging
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
@@ -24,6 +25,7 @@ import pytest
 from sqlalchemy import Table, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from modulo.core import guardrails as guardrails_module
 from modulo.core.guardrails import serialize_guardrail_pin
 from modulo.core.pipeline_engine.recovery import (
     GuardrailOverrideRejectedError,
@@ -600,3 +602,82 @@ async def test_create_run_conformance_observe_never_blocks(session: AsyncSession
     # observe/warn guardrails are advisory — conformance never fails them closed.
     run = await _create(session, input_payload={"body": "clean"})
     assert run.status == "pending"
+
+
+async def test_create_run_conformance_block_fires_paging_alert(session: AsyncSession, monkeypatch: pytest.MonkeyPatch):
+    """A conformance-blocked block guardrail fires the enforcement-gap paging
+    Notification — the operator must see that the control is not enforcing."""
+    notified: list[dict[str, Any]] = []
+
+    async def _fake_notify(org_id: uuid.UUID, event_type: str, payload: dict[str, Any], **kwargs: Any) -> None:
+        notified.append({"event_type": event_type, "payload": payload})
+
+    monkeypatch.setattr(guardrails_module, "notify_guardrail_event", _fake_notify)
+    await _seed(session)
+    await _seed_guardrail(
+        session,
+        name="needs-docker",
+        action="block",
+        config={"required_capabilities": ["docker"]},
+    )
+    run = await _create(session, input_payload={"body": "clean"})
+    assert run.status == "eval_failed"
+    assert run.error_code == "eval_blocked"
+    assert any(
+        e["event_type"] == "guardrail_enforcement_gap" and e["payload"].get("reason") == "non_conformant"
+        for e in notified
+    )
+
+
+async def test_create_run_kill_switch_suppresses_conformance_block(session: AsyncSession):
+    """The kill-switch downgrade to observe happens BEFORE the conformance
+    check, so a non-conformant block guardrail does NOT block when the switch
+    is ON — the downgrade is the governing control."""
+    await _seed_kill_switch(session, enabled=True)
+    await _seed_guardrail(
+        session,
+        name="needs-docker",
+        action="block",
+        config={"required_capabilities": ["docker"]},
+    )
+    run = await _create(session, input_payload={"body": "clean"})
+    assert run.status == "pending"
+    assert run.error_code is None
+
+
+async def test_create_run_replay_skip_fires_enforcement_gap_alert(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+):
+    """A soft-deleted pinned guardrail is skipped AND pages an enforcement-gap
+    alert so the operator sees the control has silently stopped enforcing."""
+    notified: list[dict[str, Any]] = []
+
+    async def _fake_notify(org_id: uuid.UUID, event_type: str, payload: dict[str, Any], **kwargs: Any) -> None:
+        notified.append({"event_type": event_type, "payload": payload})
+
+    monkeypatch.setattr(guardrails_module, "notify_guardrail_event", _fake_notify)
+    await _seed(session)
+    pinned = await _seed_guardrail(session, name="ghost-block", action="block")
+    pinned_row = await _get_guardrail_row(session, pinned)
+    await _seed_snapshot_with_pins(session, guardrail_defs=[pinned_row])
+    await session.execute(EvalDefinition.__table__.delete().where(EvalDefinition.__table__.c.id == pinned))
+    await session.flush()
+
+    run = await _create(session, input_payload={"body": "clean"}, is_replay=True)
+    assert run.status == "pending"
+    assert any(
+        e["event_type"] == "guardrail_enforcement_gap" and e["payload"].get("guardrail") == "ghost-block"
+        for e in notified
+    )
+
+
+async def test_create_run_emits_guardrail_latency_metric(session: AsyncSession, caplog: pytest.LogCaptureFixture):
+    """Item 7 — the interception wall-clock is emitted as
+    ``guardrails.interception_latency_ms`` (INFO) BEFORE the first node starts.
+    INFO-level assertions are exercised at INFO so the production path runs."""
+    await _seed(session)
+    await _seed_guardrail(session, name="no-secrets", action="block")
+    caplog.set_level(logging.INFO, logger="modulo.db.crud.run")
+    run = await _create(session, input_payload={"body": "clean"})
+    assert run.status == "pending"
+    assert any(r.message == "guardrails.interception_latency_ms" for r in caplog.records)

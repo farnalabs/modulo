@@ -554,7 +554,19 @@ def _apply_redaction_phase(
     block_message: str = ""
     blocking_eval_name: str = ""
     for eval_def in definitions:
-        cfg = _validate_guardrail_definition(eval_def)
+        try:
+            cfg = _validate_guardrail_definition(eval_def)
+        except (GuardrailConfigError, GuardrailMisroutedError):
+            # A malformed guardrail already failed at the evaluation stage
+            # (mechanism error handled by the caller: fail-closed for
+            # block/redact, log-and-continue for observe/warn). Re-validating
+            # here must NOT re-raise and kill the whole pass — skip the
+            # redaction phase for it so the caller's decided outcome stands.
+            _log.warning(
+                "guardrails.redaction_phase_skip",
+                extra={"guardrail": eval_def.name},
+            )
+            continue
         if cfg.action != GuardrailAction.REDACT or not cfg.redaction:
             continue
         try:

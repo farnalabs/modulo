@@ -95,6 +95,37 @@ async def test_timeout_fails_closed_for_block_guardrail():
     assert outcome.results == []
 
 
+async def test_timeout_fails_closed_for_redact_guardrail():
+    """A redact-action guardrail is a guarding action: a detection timeout must
+    fail closed (block), never silently skip the mask that protects the field."""
+    slow = _def("slow-redact", "redact", timeout=0.05)
+    outcome = await run_interception_pass_async(
+        _SleepingEngine(5.0),
+        [slow],
+        {"body": "leak SECRET_ABC12345"},
+        timeout_seconds=0.05,
+    )
+    assert outcome.blocked is True
+    assert outcome.blocking_eval_name == "slow-redact"
+    assert "mechanism error" in outcome.block_message
+
+
+async def test_detection_error_fails_closed_for_block_guardrail():
+    """A malformed block guardrail (empty regex pattern — a config the engine
+    rejects) is a mechanism error: fail closed, never a pass-through with a
+    broken detector."""
+    bad = _def("bad-pattern", "block", config={"pattern": "", "field": "body"})
+    outcome = await run_interception_pass_async(
+        EvalEngine(),
+        [bad],
+        {"body": "clean"},
+        timeout_seconds=5.0,
+    )
+    assert outcome.blocked is True
+    assert outcome.blocking_eval_name == "bad-pattern"
+    assert "mechanism error" in outcome.block_message
+
+
 async def test_timeout_log_and_continue_for_observe_guardrail(caplog):
     slow = _def("slow-observe", "observe", timeout=0.05)
     outcome = await run_interception_pass_async(
@@ -223,6 +254,15 @@ def test_cap_violation_node_bound_rows():
 def test_cap_violation_respects_feature_off():
     rows = [_def(f"g{i}", "observe", cap=0) for i in range(20)]
     assert guardrail_cap_violation(rows) is None
+
+
+def test_cap_violation_with_raised_cap():
+    """A RAISED org cap is enforced by guardrail_cap_violation: cap rows pass,
+    cap+1 rows violate. The default-8 constant is not the only cap shape."""
+    assert guardrail_cap_violation([_def("a", "observe", cap=2), _def("b", "observe", cap=2)]) is None
+    violation = guardrail_cap_violation([_def(f"g{i}", "observe", cap=2) for i in range(3)])
+    assert violation is not None
+    assert "cap" in violation
 
 
 # ---------------------------------------------------------------------------
