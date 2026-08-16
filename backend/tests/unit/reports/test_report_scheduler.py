@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import logging
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -628,6 +629,8 @@ class TestWebhookUrlError:
             ("https://#fragment", "url_missing_host"),
             ("https://user:pass@hooks.example.com/x", "url_contains_credentials"),
             ("https://user@hooks.example.com/x", "url_contains_credentials"),
+            ("https://hooks.example.com:abc/x", "url_malformed"),
+            ("https://hooks.example.com:99999/x", "url_malformed"),
         ],
     )
     def test_validation_matrix(self, url: object, expected: str | None) -> None:
@@ -687,6 +690,47 @@ class TestDeliverToUrlsRejectsInvalid:
         assert results[2]["error"] == "invalid_webhook_url: url_scheme_not_http"
         assert results[0]["status_code"] is None
         assert results[2]["status_code"] is None
+
+    async def test_bad_port_urls_fail_fast_without_retry(self) -> None:
+        """``urlsplit`` accepts ``host:abc`` and ``host:99999``, but httpx
+        would raise ``InvalidURL`` — a permanent config error that must be
+        caught pre-flight so it never enters the retry/backoff loop."""
+        client = await self._spy_client()
+        urls = ["https://hooks.example.com:abc/x", "https://hooks.example.com:99999/x"]
+        with (
+            patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
+            patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls,
+        ):
+            client_cls.return_value.__aenter__.return_value = client
+            results = await _deliver_to_urls(urls, {"a": 1})
+
+        assert [r["error"] for r in results] == [
+            "invalid_webhook_url: url_malformed",
+            "invalid_webhook_url: url_malformed",
+        ]
+        assert all(r["status_code"] is None for r in results)
+        sleep.assert_not_awaited()
+        client.post.assert_not_awaited()
+
+    async def test_credentialed_url_is_redacted_in_result_and_log(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A credentialed URL must not leak its ``user:pass`` into the result
+        ``url`` field (which flows into the quality-report API and the SAQ job
+        result) or into the warning log."""
+        client = await self._spy_client()
+        credentialed = "https://user:secret@hooks.example.com/x"
+        with (
+            caplog.at_level(logging.WARNING, logger="modulo.core.reports.scheduler"),
+            patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls,
+        ):
+            client_cls.return_value.__aenter__.return_value = client
+            results = await _deliver_to_urls([credentialed], {"a": 1})
+
+        assert results[0]["error"] == "invalid_webhook_url: url_contains_credentials"
+        assert results[0]["url"] == "https://hooks.example.com/x"
+        assert "secret" not in results[0]["url"]
+        assert "user:secret" not in caplog.text
+        assert "https://hooks.example.com/x" in caplog.text
+        client.post.assert_not_awaited()
 
 
 class TestDeliverToUrlsTimeout:

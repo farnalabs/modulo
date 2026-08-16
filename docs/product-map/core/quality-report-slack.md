@@ -102,7 +102,7 @@ Weekly quality report generated from run volume, eval pass rate, and cost data, 
 - [x] Retry logic exists in `_deliver_to_urls` — 3 attempts, exponential backoff, 429 handling with Retry-After
 - [ ] No dead-letter queue for persistently failing webhook URLs
 - [x] Delivery timeout is caller-configurable via the `timeout` recipient-config key (default 30s in `_deliver_to_urls`) — invalid or zero values fall back to the default
-- [x] Pre-flight webhook URL validation — non-http(s) schemes, empty/missing hosts, embedded userinfo credentials, whitespace, and empty strings are rejected as permanent config errors before any network attempt
+- [x] Pre-flight webhook URL validation — non-http(s) schemes, empty/missing hosts, embedded userinfo credentials, invalid ports, whitespace, and empty strings are rejected as permanent config errors before any network attempt
 - [x] `generate_quality_report` wraps DB queries in try/except (SQLAlchemyError + Exception) — non-DB errors are caught and logged
 
 ## Resilience
@@ -142,6 +142,8 @@ Weekly quality report generated from run volume, eval pass rate, and cost data, 
 **Fix:** new `_webhook_url_error()` pre-validates every recipient URL (`urlsplit`-parsed; rejects non-string / empty / whitespace-bearing / unparseable-IPv6 values, non-http(s) schemes, missing hosts, and embedded userinfo credentials) and returns a stable reason token. `_deliver_to_urls` skips the retry/backoff loop for invalid URLs, returning a typed `invalid_webhook_url: <reason>` failure with `status_code=None` and no network attempt; per-URL isolation is preserved so one bad URL never blocks valid siblings.
 
 **Tests:** new `TestWebhookUrlError` (18-case validation matrix: trim-around valid URLs pass, None/non-str/empty/whitespace/whitespace-in-URL/IPv6-broken/non-http-scheme/https-bare/userinfo all rejected with their reason token) and `TestDeliverToUrlsRejectsInvalid` (invalid URL → no `client.post` call + no sleeps + typed error; mixed valid+invalid batch isolates per-URL; `https://`/credentials/empty batch). Verification: full `tests/unit/reports/` (scheduler + quality + cost) + `test_cron_helpers.py` + quality-report BDD steps pass (155 focused tests), ruff check + format clean; 3 pre-existing mypy errors in this package unchanged. Status: partial (dead-letter queue, org-level webhook-config UI, team-scoped reports remain).
+
+**Review round 2 (PR #1427)** — 2 findings fixed. (a) **MAJOR: credentialed URLs leaked into fast-fail logs, the quality-report API response, and the SAQ job result** — redaction previously applied only to the `error` string, while `result["url"]` and the `_log.warning("Delivery to %s skipped...")` line kept the raw `https://user:pass@host`. New `_redact_url_credentials()` (userinfo stripped via `urlsplit`/`urlunsplit`) now backs both the per-URL result `url` field and the warning log, so the exact credential the gate protects against never reaches logs, `deliveries` (pipelines.py), or `delivery_results` (Redis). (b) **MINOR: bad-port URLs still entered the retry/backoff loop** — `urlsplit` accepts `host:abc` and `host:99999`, but httpx raises `InvalidURL` on `post`; `_webhook_url_error` now validates `parts.port` (ValueError → `url_malformed`) and the matrix gained both cases. New tests: `test_bad_port_urls_fail_fast_without_retry`, `test_credentialed_url_is_redacted_in_result_and_log` (caplog). Verification: 82/82 `test_report_scheduler.py` tests pass, ruff check + format clean, mypy clean.
 
 ### 2026-08-13 — improve-tests: QA lens pass on the reports scheduler test package
 

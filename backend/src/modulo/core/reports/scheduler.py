@@ -19,7 +19,7 @@ import threading
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from croniter import croniter
@@ -295,6 +295,10 @@ def _webhook_url_error(url: object) -> str | None:
     * parse via ``urlsplit`` (broken IPv6 like ``http://[::1`` rejected)
     * use the ``http`` or ``https`` scheme (``ftp://``, ``file://``, etc. rejected)
     * carry a non-empty hostname (bare ``https://`` rejected)
+    * carry a valid port when one is present (``https://host:abc`` and
+      ``https://host:99999`` are malformed — ``urlsplit`` accepts them but
+      httpx raises ``InvalidURL`` on ``post``, which would otherwise fall into
+      the retry/backoff loop)
     * not embed userinfo credentials (``https://user:pass@host`` — httpx would
       send them as a Basic-Auth header and they would leak into audit/delivery
       logs)
@@ -321,7 +325,35 @@ def _webhook_url_error(url: object) -> str | None:
         return "url_missing_host"
     if parts.username is not None or parts.password is not None:
         return "url_contains_credentials"
+    try:
+        _ = parts.port
+    except ValueError:
+        return "url_malformed"
     return None
+
+
+def _redact_url_credentials(url: str) -> str:
+    """Strip embedded ``user:pass@`` credentials from *url* for storage/logging.
+
+    ``https://user:pass@host/x`` becomes ``https://host/x`` so the credentialed
+    URL rejected by ``_webhook_url_error`` does not leak its credentials into
+    delivery logs, per-URL results, or the SAQ job result. URLs without
+    userinfo are returned unchanged.
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    if parts.username is None and parts.password is None:
+        return url
+    host = parts.hostname or ""
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    if port is not None:
+        host = f"{host}:{port}"
+    return urlunsplit((parts.scheme, host, parts.path, parts.query, parts.fragment))
 
 
 def _serialize_json_body(body: dict[str, Any] | list[Any]) -> bytes:
@@ -388,14 +420,15 @@ async def _deliver_to_urls(
     results: list[dict[str, Any]] = []
     async with httpx.AsyncClient(timeout=request_timeout_seconds) as client:
         for url in urls:
-            result: dict[str, Any] = {"url": url, "status": "failed", "status_code": None, "error": None}
+            display_url = _redact_url_credentials(url)
+            result: dict[str, Any] = {"url": display_url, "status": "failed", "status_code": None, "error": None}
             invalid_reason = _webhook_url_error(url)
             if invalid_reason is not None:
                 # Permanent config error — skip the retry/backoff loop entirely;
                 # a malformed URL cannot become deliverable on a later attempt.
                 _log.warning(
                     "Delivery to %s skipped: invalid webhook URL (%s)",
-                    url,
+                    display_url,
                     invalid_reason,
                 )
                 result.update(
