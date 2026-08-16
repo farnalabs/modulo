@@ -253,6 +253,36 @@ async def test_find_healthy_fallback_skips_unhealthy_in_list():
     assert hub._fallbacks[primary] == [unhealthy_fb, healthy_fb]
 
 
+async def test_get_skips_primary_in_own_fallback_list():
+    """A backend that lists ITSELF in its own fallback chain must be skipped
+    once unhealthy — the scan must not return the (unhealthy) primary — and a
+    genuinely healthy fallback is returned instead."""
+    hub = ModelBackendHub()
+    primary = uuid.uuid4()
+    healthy_fb = uuid.uuid4()
+    hub.register(primary, _FakeBackend())
+    hub.register(healthy_fb, _FakeBackend())
+    hub.mark_unhealthy(primary)
+    hub._fallbacks[primary] = [primary, healthy_fb]
+
+    result = await hub.get(primary)
+
+    assert result is hub._backends[healthy_fb]
+
+
+async def test_get_skips_primary_in_own_fallback_list_when_only_fallback():
+    """When the primary's only fallback is itself, resolution raises
+    BackendUnavailableError — the self-reference is skipped, not followed."""
+    hub = ModelBackendHub()
+    primary = uuid.uuid4()
+    hub.register(primary, _FakeBackend())
+    hub.mark_unhealthy(primary)
+    hub._fallbacks[primary] = [primary]
+
+    with pytest.raises(BackendUnavailableError):
+        await hub.get(primary)
+
+
 async def test_mark_unhealthy_then_health_check_recovers():
     hub = ModelBackendHub()
     bid = uuid.uuid4()
@@ -342,6 +372,24 @@ async def test_get_with_rotation_scans_all_backends_when_no_configured_fallback(
     assert result.original_id == primary
     assert result.used_fallback_id == other
     assert result.backend is hub._backends[other]
+
+
+async def test_get_with_rotation_scan_returns_unrelated_backend():
+    """The scan-all fallback path returns ANY healthy registered backend, even
+    one with a different provider/model than the primary (no capability-based
+    filtering — documented in ``get_with_rotation()``)."""
+    hub = ModelBackendHub()
+    primary = uuid.uuid4()
+    unrelated = uuid.uuid4()
+    hub.register(primary, _FakeBackend(bid="anthropic/claude-sonnet"))
+    hub.register(unrelated, _FakeBackend(bid="openai/gpt-4o"))
+    hub.mark_unhealthy(primary)
+
+    result = await hub.get_with_rotation(primary)
+
+    assert result.rotated is True
+    assert result.used_fallback_id == unrelated
+    assert result.backend.backend_id == "openai/gpt-4o"
 
 
 async def test_get_with_rotation_scan_all_raises_when_all_unhealthy():
