@@ -573,6 +573,36 @@ def _bdd_response_id_and_slug(request) -> None:
     assert "name" in data, "Response missing name"
 
 
+@when("I GET /api/v1/admin/audit/verify with a broken chain")
+def _bdd_get_verify_chain_broken(client, request) -> None:
+    """Shared audit verify step: a tampered chain reports tamper evidence.
+
+    Used by ``audit/event_recording.feature``. Defined once here so both the
+    alpha and full BDD suites resolve the same step text.
+    """
+    with (
+        patch(
+            "modulo.api.routes.audit.verify_chain",
+            return_value={
+                "valid": False,
+                "total_events": 3,
+                "checked_events": 2,
+                "first_gap_index": 2,
+                "first_tampered_id": "evt-3",
+                "chain_head_match": None,
+                "detail": (
+                    "Audit chain break at event 2 (id evt-3): stored previous_hash (tampered-hash) "
+                    "does not match the recomputed hash of the prior event (expected-hash). "
+                    "The event or one before it has been tampered with."
+                ),
+            },
+        ),
+        patch("modulo.api.routes.audit.set_rls_org"),
+    ):
+        resp = client.get("/api/v1/admin/audit/verify")
+    request.node._resp = resp
+
+
 def _make_test_client(mock_session: AsyncMock, **principal_kwargs: Any) -> Generator[TestClient, None, None]:
     from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
     from modulo.api.main import app
