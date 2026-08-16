@@ -43,6 +43,7 @@ from modulo.core.pipeline_engine.classify import (
     persist_classification,
     reconcile_missing_classifications,
 )
+from modulo.core.pipeline_engine.error_codes import class_for
 from modulo.db.crud.run import update_run_status
 from modulo.db.models.base import Base
 from modulo.db.models.run import TERMINAL_STATUSES, Run
@@ -401,8 +402,35 @@ class TestReasons:
         assert result.reason == REASON_SOURCE_ERROR
 
     def test_failed_legacy_provider_code_resolved_to_source_error(self) -> None:
-        # Legacy alias: raw exception class name -> provider.rate_limited.
-        result = classify_run("failed", "RateLimitError")
+        """Legacy alias: raw exception class name -> provider.rate_limited.
+
+        The classifier must pass the CASE-PRESERVED code to ``class_for`` — the
+        pre-fix bug lowercased it, so ``"ratelimiterror"`` fell through to
+        ``harness.unknown`` and this test passed via the harness fallback
+        instead of the provider alias. The argument capture proves the alias
+        path actually fires (it fails without the case-preservation fix).
+        """
+        seen: list[str] = []
+        real_class_for = class_for
+
+        def _capturing_class_for(code: str | None) -> str:
+            seen.append(code or "")
+            return real_class_for(code)
+
+        with patch("modulo.core.pipeline_engine.error_codes.class_for", side_effect=_capturing_class_for):
+            result = classify_run("failed", "RateLimitError")
+        assert seen and seen[-1] == "RateLimitError"
+        assert real_class_for("RateLimitError") == "provider"
+        assert result.reason == REASON_SOURCE_ERROR
+
+    def test_failed_legacy_sandbox_class_name_resolves_its_alias(self) -> None:
+        """A mixed-case NON-provider exception class name resolves its true
+        alias through the case-preserved lookup — SandboxNodeFailedError ->
+        sandbox.no_output_json -> class sandbox -> source_error (not the
+        harness.unknown fallback)."""
+        assert class_for("SandboxNodeFailedError") == "sandbox"
+        assert class_for("SandboxNodeFailedError") != class_for("sandboxnodefailederror")
+        result = classify_run("failed", "SandboxNodeFailedError")
         assert result.reason == REASON_SOURCE_ERROR
 
     def test_failed_needs_human(self) -> None:
