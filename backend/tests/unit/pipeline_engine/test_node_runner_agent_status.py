@@ -196,3 +196,51 @@ async def test_non_string_or_non_dict_output_never_sets_agent_status(output_json
     result = await _run_node(output_json, exit_code=0)
     assert result["output"]["agent_status"] is None
     assert result["artifacts"][0]["output"]["agent_status"] is None
+
+
+async def test_fallback_echo_surfaces_session_lost_marker_not_agent_failed():
+    """FAR-227: the E2B wrapper's fallback echo (a dead opencode session —
+    ``{"status":"failed","summary":"No output from agent - session
+    interrupted"}``) is a PLACEHOLDER, not an agent verdict. It must NOT surface
+    as ``agent_status="failed"`` (which A1-elevates to the non-retryable
+    ``agent.failed``); the envelope stamps the distinct ``sandbox_session_lost``
+    marker instead so the executor routes to retryable ``sandbox.no_output_json``.
+    The summary is preserved so the failure detail stays visible."""
+    echo = '{"status": "failed", "summary": "No output from agent - session interrupted"}'
+    result = await _run_node(echo, exit_code=0)
+
+    node_output = result["output"]
+    artifact_output = result["artifacts"][0]["output"]
+
+    assert node_output["agent_status"] is None
+    assert artifact_output["agent_status"] is None
+    assert node_output["sandbox_session_lost"] is True
+    assert artifact_output["sandbox_session_lost"] is True
+    # The failure detail survives the marker.
+    assert node_output["summary"] == "No output from agent - session interrupted"
+    assert artifact_output["summary"] == "No output from agent - session interrupted"
+    # A dead session is never a completed node, even when the wrapper exits 0.
+    assert node_output["status"] == "failed"
+    assert artifact_output["status"] == "failed"
+
+
+async def test_fallback_echo_nonzero_exit_also_stamped():
+    """The marker fires regardless of the command's exit code — the wrapper may
+    exit 0 or non-zero after writing the echo."""
+    echo = '{"status": "failed", "summary": "No output from agent - session interrupted"}'
+    result = await _run_node(echo, exit_code=1)
+
+    assert result["output"]["sandbox_session_lost"] is True
+    assert result["output"]["agent_status"] is None
+    assert result["output"]["status"] == "failed"
+
+
+async def test_genuine_verdict_no_marker():
+    """A real agent-written verdict with status=failed keeps the verbatim
+    ``agent_status="failed"`` AND carries no session-lost marker — the control
+    proving the fallback-echo detection is surgical, not over-broad."""
+    result = await _run_node('{"status": "failed", "summary": "the task is impossible because X"}', exit_code=0)
+
+    assert result["output"]["agent_status"] == "failed"
+    assert "sandbox_session_lost" not in result["output"]
+    assert result["artifacts"][0]["output"]["agent_status"] == "failed"

@@ -469,6 +469,30 @@ def _node_output_agent_failure(node_output: Any) -> str | None:
     return reason
 
 
+def _node_output_sandbox_session_lost(node_output: Any) -> str | None:
+    """Return a reason string when a captured node output carries the FAR-227
+    session-lost marker.
+
+    node_runner stamps ``sandbox_session_lost: True`` on the output dict ONLY
+    for the E2B wrapper's fallback echo (a dead opencode session). It is NOT an
+    agent verdict — the agent never wrote output.json — so it must be routed to
+    the retryable ``sandbox.no_output_json``, never the non-retryable
+    ``agent.failed`` A1 elevation. Returns None for non-dict / non-marked
+    output, so ordinary node outputs are never misread.
+    """
+    if not isinstance(node_output, dict):
+        return None
+    inner = node_output.get("output")
+    if not isinstance(inner, dict):
+        return None
+    if inner.get("sandbox_session_lost") is not True:
+        return None
+    reason = inner.get("error") or inner.get("summary")
+    if not isinstance(reason, str) or not reason:
+        return "No output from agent - session interrupted"
+    return reason
+
+
 def _should_skip_retry(node_id: str | None, markers: Any, run_id: Any) -> bool:
     """FAR-228 guard B decision: should a transient node failure be suppressed
     as a retry because the run's delivery was already made?
@@ -1274,11 +1298,13 @@ class PipelineExecutor:
         Returns None for non-terminal statuses (nothing to write). An
         A1-elevated run (``failed`` + ``agent.failed``) is NOT complete — its
         honest work verdict is False (§15.4), so the zero-work elevation banner
-        is what renders.
+        is what renders. Same for a ``sandbox.no_output_json`` session-lost run
+        (FAR-227): the agent produced no output at all, so it can never be
+        "work intact".
         """
         if final_status not in _TERMINAL_STATUSES:
             return None
-        if final_status == "failed" and error_code == _ERROR_CODE_AGENT_FAILED:
+        if final_status == "failed" and error_code in ("agent.failed", "sandbox.no_output_json"):
             return False
         return compute_work_intact(completed_node_outputs, node_ids)
 
@@ -2473,6 +2499,11 @@ class PipelineExecutor:
         # UX, phase 1): such a run must NEVER land 'complete'. Only published
         # at terminalization; never twice.
         agent_failure_reason: str | None = None
+        # FAR-227: set when a captured sandbox-agent node output carries the
+        # sandbox-session-lost marker (the E2B wrapper's fallback echo — a dead
+        # opencode session). Routes to retryable ``sandbox.no_output_json`` at
+        # terminalization instead of the non-retryable ``agent.failed``.
+        sandbox_session_lost_reason: str | None = None
         # FAR-198: seed the OTel context with the run's deterministic trace id
         # so every span exported during graph execution carries the SAME
         # trace_id the API reports on RunResponse. The root span is stored on
@@ -2568,6 +2599,9 @@ class PipelineExecutor:
                                 agent_failure = _node_output_agent_failure(output)
                                 if agent_failure:
                                     agent_failure_reason = agent_failure
+                                session_lost = _node_output_sandbox_session_lost(output)
+                                if session_lost:
+                                    sandbox_session_lost_reason = session_lost
 
                 if event_kind == "on_chat_model_end":
                     metadata = lg_event.get("metadata") or {}
@@ -2643,6 +2677,19 @@ class PipelineExecutor:
                                         node_budget,
                                     )
 
+            if sandbox_session_lost_reason and not stalled_node_reason:
+                # FAR-227: a dead opencode session (the E2B wrapper's fallback
+                # echo) is a transient sandbox infra failure — classify as the
+                # retryable ``sandbox.no_output_json`` so the pipeline's
+                # retry_policy ("failure" event) re-dispatches it, instead of
+                # the non-retryable ``agent.failed`` verdict. The summary is
+                # preserved so the failure detail stays visible.
+                scrubbed = _sanitize_detail(sandbox_session_lost_reason, limit=5000)
+                broker.publish(
+                    "run_failed",
+                    {"error": "sandbox.no_output_json", "detail": scrubbed},
+                )
+                return "failed", "sandbox.no_output_json", scrubbed, node_token_usage or None
             if agent_failure_reason and not stalled_node_reason:
                 # A1 elevation (agent-failure UX, phase 1, §15.4): a node that
                 # self-reported failure must NEVER land the run 'complete'.
