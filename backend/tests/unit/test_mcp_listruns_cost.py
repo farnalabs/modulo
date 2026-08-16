@@ -238,7 +238,7 @@ class TestListRunsErrorDetail(_AuthContext):
 
         assert "error" not in result
         item = result["items"][0]
-        assert item["error_code"] == "node_cancelled"
+        assert item["error_code"] == "node.cancelled"
         assert item["error_detail"] == "run likely hung"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)

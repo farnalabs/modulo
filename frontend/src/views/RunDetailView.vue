@@ -164,7 +164,7 @@
       </div>
 
       <!-- Capacity-blocked pending run (queued on sandbox concurrency limit) -->
-      <div v-if="run.status === 'pending' && (run.error_code === 'org_capacity_limited' || run.error_code === 'pipeline_capacity')" data-testid="run-detail-waiting-for-capacity" class="rounded-lg border border-warning/50 bg-warning/10 p-4 mb-4">
+      <div v-if="run.status === 'pending' && (run.error_code === 'capacity.org' || run.error_code === 'capacity.pipeline')" data-testid="run-detail-waiting-for-capacity" class="rounded-lg border border-warning/50 bg-warning/10 p-4 mb-4">
         <h3 class="text-sm font-semibold text-warning mb-1">{{ $t('views.RunDetailView.waiting_for_capacity') }}</h3>
         <p v-if="run.error_detail" class="text-xs whitespace-pre-wrap text-warning/80">{{ run.error_detail }}</p>
       </div>
@@ -173,11 +173,11 @@
       <div v-if="run.status === 'failed' && run.error_detail" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 mb-4">
         <div class="flex flex-wrap items-center gap-2 mb-1">
           <h3 class="text-sm font-semibold text-destructive">{{ $t('views.RunDetailView.run_error') }}</h3>
-          <span
+          <RunErrorTag
             v-if="run.error_code"
-            class="badge badge-status-destructive"
-            :title="$t('views.RunDetailView.error_code_title')"
-          >{{ run.error_code }}</span>
+            :code="run.error_code"
+            :detail="(run.error_detail as string | null | undefined)?.slice(0, 200)"
+          />
         </div>
         <pre class="text-xs whitespace-pre-wrap font-mono text-destructive/80">{{ run.error_detail }}</pre>
       </div>
@@ -511,6 +511,7 @@ import { useApi } from '../composables/useApi'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import RunErrorTag from '../components/shared/RunErrorTag.vue'
 import JsonViewer from '../components/shared/JsonViewer.vue'
 import Dialog from '../components/ui/dialog/Dialog.vue'
 import DialogContent from '../components/ui/dialog/DialogContent.vue'
