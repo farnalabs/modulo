@@ -848,10 +848,16 @@ async def run_interception_pass_async(
       for observe/warn. NEVER a raw payload in any log line.
     * **Skipped guardrails** — *skipped* entries (e.g. a soft-deleted pinned
       guardrail, item 10) are carried on the outcome; the seam audits + alerts.
+    * **Detection-only replays** (``detection_only=True``, item 10) never act,
+      but a mechanism error is ALWAYS recorded as an errored result — even for
+      block/redact guardrails. The replay must preserve the evidence of what
+      happened (including errors) for the guardrail_summary errored bucket;
+      it is never silently dropped.
 
     A detection that raises (malformed config, misrouting) is handled the same
     way as a timeout: fail-closed for block/redact, log-and-continue for
-    observe/warn.
+    observe/warn — except in detection-only mode, where a guarding guardrail's
+    mechanism error is recorded (not dropped) so the replay keeps the evidence.
     """
     if not definitions:
         return GuardrailInterceptionOutcome(payload=dict(payload), skipped=list(skipped))
@@ -895,6 +901,9 @@ async def run_interception_pass_async(
         except Exception as exc:
             # Mechanism error (timeout, malformed config, misrouting). Fail
             # closed for block/redact; log-and-continue for observe/warn.
+            # In detection_only mode the mechanism error is ALWAYS recorded as
+            # an errored result — never dropped — so the replay keeps the
+            # evidence of what happened (guardrail_summary errored bucket).
             reason = (
                 f"detection exceeded {timeout:g}s budget"
                 if isinstance(exc, TimeoutError)
@@ -904,7 +913,7 @@ async def run_interception_pass_async(
                 "guardrails.detection_budget_exceeded",
                 extra={"guardrail": eval_def.name, "reason": reason},
             )
-            if guarding:
+            if guarding and not detection_only:
                 blocked = True
                 block_message = "guardrail mechanism error at ingestion edge"
                 blocking_eval_name = eval_def.name

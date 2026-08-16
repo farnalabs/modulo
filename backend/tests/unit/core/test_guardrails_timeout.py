@@ -341,6 +341,28 @@ async def test_async_pass_replay_is_detection_only():
     assert len(outcome.results) == 1
 
 
+async def test_detection_only_records_mechanism_error_for_guarding_guardrail():
+    """A detection_only replay NEVER drops a mechanism error — item 10.
+
+    A guarding (block) guardrail whose detection raises (empty regex pattern →
+    GuardrailConfigError) is recorded as an errored result even though it would
+    fail CLOSED in a live pass: the replay must preserve the evidence of what
+    happened (guardrail_summary errored bucket), so the result is kept and the
+    pass never blocks."""
+    bad = _def("bad-pattern", "block", config={"pattern": "", "field": "body"})
+    outcome = await run_interception_pass_async(
+        EvalEngine(),
+        [bad],
+        {"body": "clean"},
+        timeout_seconds=5.0,
+        detection_only=True,
+    )
+    assert outcome.blocked is False
+    assert len(outcome.results) == 1
+    assert outcome.results[0].passed is False
+    assert "mechanism error" in outcome.results[0].detail
+
+
 # ---------------------------------------------------------------------------
 # Snapshot pin serialization round-trip (item 10)
 # ---------------------------------------------------------------------------

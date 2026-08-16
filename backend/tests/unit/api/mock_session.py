@@ -10,11 +10,25 @@ from sqlalchemy.sql import Select
 # authz_enforce column is stubbed by default to the enforce=True default.
 _AUTHZ_ENFORCE_SNIPPET = "authz_enforce"
 
+# FAR-223 PR A: the graph-save route loads the pipeline's guardrail eval rows
+# (select(EvalDefinition).where(pipeline_id=..., organisation_id=...,
+# eval_type="guardrail")) to enforce the per-node guardrail cap at authoring
+# time. The strict mock raises on un-stubbed queries, so this SELECT on the
+# eval_definitions table is stubbed by default to no rows — no guardrail rows
+# means no cap violation (no 422).
+_GUARDRAIL_ROWS_SNIPPET = "FROM eval_definitions"
+
 
 def _is_authz_enforce_query(stmt: Any) -> bool:
     if not isinstance(stmt, Select):
         return False
     return _AUTHZ_ENFORCE_SNIPPET in str(stmt)
+
+
+def _is_guardrail_rows_query(stmt: Any) -> bool:
+    if not isinstance(stmt, Select):
+        return False
+    return _GUARDRAIL_ROWS_SNIPPET in str(stmt)
 
 
 def configure_mock_session(session: AsyncMock, *, allow_empty_execute: bool = False) -> AsyncMock:
@@ -50,6 +64,10 @@ def configure_mock_session(session: AsyncMock, *, allow_empty_execute: bool = Fa
                 authz_result = MagicMock()
                 authz_result.scalar_one_or_none.return_value = None
                 return authz_result
+            if _is_guardrail_rows_query(args[0] if args else None):
+                guardrail_result = MagicMock()
+                guardrail_result.scalars.return_value.all.return_value = []
+                return guardrail_result
             raise AssertionError(
                 "Unexpected session.execute(); stub the expected result or opt in with allow_empty_execute=True"
             )
