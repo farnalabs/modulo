@@ -862,7 +862,8 @@ def response_contains_claim_token(request):
 def i_am_the_claimant(gate_id: str, request, ctx):
     assert ctx.get("user_role") == "approver", "User is not an approver"
     resp = getattr(request.node, "_resp", None)
-    assert resp is not None and resp.status_code == 200, "Claim did not succeed"
+    assert resp is not None, "No claim response was captured"
+    assert resp.status_code == 200, "Claim did not succeed"
     body = resp.json()
     assert body.get("gate_id") == gate_id, f"Expected claim on gate {gate_id!r}, got {body}"
     assert body.get("claim_token"), f"Expected a claim_token in the response, got {body}"
