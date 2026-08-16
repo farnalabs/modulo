@@ -20,7 +20,36 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.db.models.eval_definition import EvalDefinition as EvalDefinitionRow
 from modulo.db.models.organisation import Organisation
+
+
+async def load_pipeline_guardrail_rows(
+    session: AsyncSession,
+    *,
+    pipeline_id: uuid.UUID,
+    organisation_id: uuid.UUID,
+) -> list[EvalDefinitionRow]:
+    """Load a pipeline's bound guardrail eval rows (``eval_type='guardrail'``).
+
+    Single shared implementation of the guardrail row-load used by the
+    run-creation interception seam (``db.crud.run``), the guardrail-override
+    seam (``core.pipeline_engine.recovery``), snapshot guardrail pinning
+    (``db.crud.pipeline_snapshot``), and the graph-save cap validation
+    (``api.routes.pipelines``) — previously copy-pasted at each call site.
+    Returns ORM rows; each caller converts to its own DTO
+    (``to_engine_definition`` / ``serialize_guardrail_pin``) so result shapes
+    are unchanged. The filter is fixed: ``pipeline_id`` + ``organisation_id`` +
+    ``eval_type == 'guardrail'``.
+    """
+    result = await session.execute(
+        select(EvalDefinitionRow).where(
+            EvalDefinitionRow.pipeline_id == pipeline_id,
+            EvalDefinitionRow.organisation_id == organisation_id,
+            EvalDefinitionRow.eval_type == "guardrail",
+        )
+    )
+    return list(result.scalars().all())
 
 
 async def get_guardrail_pin(session: AsyncSession, org_id: uuid.UUID) -> dict[str, Any] | None:
@@ -45,4 +74,4 @@ async def set_guardrail_pin(session: AsyncSession, org_id: uuid.UUID, pin_json: 
         raise NoResultFound(f"Organisation {org_id} not found for guardrail pin update")
 
 
-__all__ = ["get_guardrail_pin", "set_guardrail_pin"]
+__all__ = ["get_guardrail_pin", "load_pipeline_guardrail_rows", "set_guardrail_pin"]

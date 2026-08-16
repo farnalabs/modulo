@@ -94,6 +94,24 @@ async def test_live_graph_becomes_executable_snapshot_with_dependency_pins() -> 
     backend.model_id = "fixed-model-version"
     backend.credentials_ciphertext = b"must-not-be-copied"
 
+    guardrail_id = uuid.uuid4()
+    guardrail_row = MagicMock()
+    guardrail_row.id = guardrail_id
+    guardrail_row.organisation_id = org_id
+    guardrail_row.pipeline_id = pipeline_id
+    guardrail_row.node_id = None
+    guardrail_row.name = "no-secrets"
+    guardrail_row.eval_type = "guardrail"
+    guardrail_row.config_json = {
+        "action": "block",
+        "type": "regex",
+        "field": "body",
+        "pattern": r"SECRET_[A-Z0-9]{8}",
+    }
+    guardrail_row.failure_behaviour = "warn"
+    guardrail_row.pass_threshold = None
+    guardrail_row.suite_id = None
+
     session = AsyncMock(spec=AsyncSession)
     lock_result = MagicMock()
     lock_result.scalar_one.return_value = True
@@ -107,6 +125,7 @@ async def test_live_graph_becomes_executable_snapshot_with_dependency_pins() -> 
         _scalars_result([input_schema, output_schema]),
         _scalars_result([backend]),
         _scalar_result(4),
+        _scalars_result([guardrail_row]),
         unlock_result,
     ]
 
@@ -139,6 +158,23 @@ async def test_live_graph_becomes_executable_snapshot_with_dependency_pins() -> 
             "agent_id": str(agent_id),
             "model_backend_id": str(backend_id),
             "model_id": "fixed-model-version",
+        }
+    ]
+    # FAR-223 item 10: the pipeline's guardrail rows are pinned at snapshot
+    # creation so a replay evaluates the ORIGINAL conditions, never the live
+    # rows. The pin is self-contained (serialized by serialize_guardrail_pin).
+    assert snapshot.guardrail_pins_json == [
+        {
+            "id": str(guardrail_id),
+            "org_id": str(org_id),
+            "pipeline_id": str(pipeline_id),
+            "node_id": None,
+            "name": "no-secrets",
+            "eval_type": "guardrail",
+            "config_json": guardrail_row.config_json,
+            "failure_behaviour": "warn",
+            "pass_threshold": None,
+            "suite_id": None,
         }
     ]
     assert "credentials" not in repr(snapshot.connector_bindings_json)

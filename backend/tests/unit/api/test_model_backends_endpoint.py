@@ -59,7 +59,20 @@ def _make_backend(credentials_ciphertext: bytes = b"encrypted", tier: str = "nat
 
 @pytest.fixture(autouse=True)
 def _patch_secrets_backend() -> Generator[None, None, None]:
-    with patch("modulo.core.secrets_backend.create_secrets_backend", return_value=AsyncMock()):
+    with patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _patch_health_check_on_save() -> Generator[None, None, None]:
+    """Every endpoint test here uses a MagicMock CRUD return value, so the
+    save-time health check would otherwise hit the network (or a bare MagicMock
+    that lacks ``health_check``). Patch it to a canned healthy result instead of
+    gating production behavior on a runtime ``isinstance`` check."""
+    with patch(
+        "modulo.api.routes.model_backends._run_health_check_on_save",
+        new=AsyncMock(return_value=("ok", None)),
+    ):
         yield
 
 
@@ -561,7 +574,7 @@ def test_create_model_backend_writes_secret_inside_transaction(client: TestClien
 
     with (
         patch(
-            "modulo.core.secrets_backend.create_secrets_backend",
+            "modulo.api.routes.model_backends.create_secrets_backend",
             return_value=_TrackingSecretsBackend(in_txn, calls),
         ),
         patch("modulo.api.routes.model_backends.create_model_backend", return_value=_make_backend()),
@@ -591,7 +604,7 @@ def test_update_model_backend_writes_secret_inside_transaction(client: TestClien
 
     with (
         patch(
-            "modulo.core.secrets_backend.create_secrets_backend",
+            "modulo.api.routes.model_backends.create_secrets_backend",
             return_value=_TrackingSecretsBackend(in_txn, calls),
         ),
         patch("modulo.api.routes.model_backends.update_model_backend", return_value=_make_backend()),

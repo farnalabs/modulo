@@ -9,8 +9,10 @@ with the ORM model:
   single source of truth) — comparing against the model MINUS the value added
   after 0104 by FAR-214 (``guardrail_blocked``, migration 0106),
 * the migration sits on ``0103_lifecycle_map_version_actor`` and the chain is
-  revised up to the FAR-214 head ``0106_trigger_event_guardrail_blocked`` (the
-  sole head),
+  revised up through main's FAR-219 ``0105_guardrail_pins`` and FAR-214
+  ``0106_trigger_event_guardrail_blocked`` to this branch's FAR-223 head
+  ``0107_guardrail_t1_remainder`` (the sole head; renumbered from ``0106`` to
+  clear the numeric-prefix collision with FAR-214),
 * the migration's Postgres DDL widens the constraint to the FULL 20-value set
   (NOT VALID + VALIDATE, 0069-pattern) and the downgrade restores the 19-value
   set,
@@ -44,8 +46,8 @@ _MIGRATION_PATH = (
     Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 )
 
-# The FAR-214 migration that revises the 0104 chain and is the current head.
-_HEAD_MIGRATION_NAME = "0106_trigger_event_guardrail_blocked"
+# The FAR-223 migration that revises the 0104 chain and is the current head.
+_HEAD_MIGRATION_NAME = "0107_guardrail_t1_remainder"
 
 # The value added AFTER 0104 shipped (by FAR-214 migration 0106). 0104's own
 # hardcoded vocabulary predates it, so 0104-era comparisons exclude it.
@@ -117,7 +119,7 @@ class TestModelVocabulary:
 
 
 class TestMigrationChain:
-    def test_migration_is_revised_by_head_0106(self) -> None:
+    def test_migration_is_revised_by_head_0107(self) -> None:
         migration = _load_migration()
         assert migration.revision == _MIGRATION_NAME
         assert migration.down_revision == "0103_lifecycle_map_version_actor"
@@ -130,7 +132,27 @@ class TestMigrationChain:
         assert _HEAD_MIGRATION_NAME in revisions
         head = script.get_revision(_HEAD_MIGRATION_NAME)
         assert head is not None
-        assert head.down_revision == "0105_guardrail_pins"
+        # The head revises the whole chain above 0104 — collect all ancestors
+        # via the down_revision links (which may be a tuple at a merge point,
+        # e.g. the 0037 branch) and assert 0104 and the main-side 0105/0106
+        # migrations are among them.
+        ancestors: set[str] = set()
+
+        def _collect(rev: object) -> None:
+            if rev is None:
+                return
+            ancestors.add(rev.revision)
+            down = rev.down_revision
+            if isinstance(down, str):
+                _collect(script.get_revision(down))
+            elif isinstance(down, tuple):
+                for item in down:
+                    _collect(script.get_revision(item))
+
+        _collect(head)
+        assert _MIGRATION_NAME in ancestors
+        assert "0105_guardrail_pins" in ancestors
+        assert "0106_trigger_event_guardrail_blocked" in ancestors
 
     def test_migration_vocabulary_matches_model(self) -> None:
         """The migration's hardcoded vocabulary must equal the ORM single source
