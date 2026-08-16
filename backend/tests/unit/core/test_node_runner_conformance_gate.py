@@ -2,8 +2,12 @@
 
 Covers the node_runner seam ``_run_conformance_gate``:
   - no conformance ctx -> fast path (no DB, no interrupt)
-  - resume after a human reviewed the conformance block (``_hitl_decision``)
-    -> check skipped entirely
+  - resume of THIS node's conformance block (per-node marker) with ``approved``
+    -> documented override, marker cleared, node continues
+  - resume with ``rejected`` -> the run FAILS CLOSED (``GuardrailBlockedError``),
+    the node never executes with the blocked capability
+  - a foreign resume decision (``_hitl_decision`` from a different gate, no
+    marker) never skips the live check -> block still blocks (fail-closed)
   - block-action absent/unknown -> audit + interrupt (never fail open)
   - warn/observe advisory -> audit only, continue (never blocks)
   - present -> continue with no audit
@@ -111,23 +115,101 @@ async def test_gate_no_ctx_fast_path(monkeypatch: pytest.MonkeyPatch):
 # ---------------------------------------------------------------------------
 
 
-async def test_gate_resume_skips_check(monkeypatch: pytest.MonkeyPatch):
-    """State carrying ``_hitl_decision`` (resumed after human review) skips the
-    re-check entirely — the block was already routed to a human and reviewed."""
+async def test_gate_resume_approved_clears_marker_and_continues(monkeypatch: pytest.MonkeyPatch):
+    """Resume of THIS node's conformance block with an ``approved`` decision is
+    the documented human override: the marker is cleared and the node continues
+    WITHOUT re-running the live check."""
     _set_ctx(monkeypatch)
     check = _patch_check_node_start(monkeypatch, None)
     audit = _patch_audit(monkeypatch)
     interrupt = _patch_interrupt(monkeypatch)
+    state = {
+        "_conformance_blocked_node": _NODE_ID,
+        "_hitl_decision": {"action": "approved", "gate_id": "guardrail_conformance_g_block"},
+    }
+
+    blocked = await nr._run_conformance_gate(state, node_id=_NODE_ID)
+
+    assert blocked is False
+    assert state["_conformance_blocked_node"] is None
+    check.assert_not_awaited()
+    audit.assert_not_awaited()
+    interrupt.assert_not_called()
+
+
+async def test_gate_resume_rejected_fails_closed(monkeypatch: pytest.MonkeyPatch):
+    """Rejecting THIS node's conformance block FAILS CLOSED: the node must not
+    execute with the capability the guardrail protected, so the run is denied
+    (``GuardrailBlockedError`` -> terminal ``eval_failed``), never resumed."""
+    import modulo.core.guardrails as gr
+
+    _set_ctx(monkeypatch)
+    check = _patch_check_node_start(monkeypatch, None)
+    audit = _patch_audit(monkeypatch)
+    interrupt = _patch_interrupt(monkeypatch)
+    state = {
+        "_conformance_blocked_node": _NODE_ID,
+        "_hitl_decision": {"action": "rejected", "reason": "capability genuinely revoked"},
+    }
+
+    with pytest.raises(gr.GuardrailBlockedError):
+        await nr._run_conformance_gate(state, node_id=_NODE_ID)
+
+    check.assert_not_awaited()
+    audit.assert_not_awaited()
+    interrupt.assert_not_called()
+
+
+async def test_gate_resume_foreign_decision_runs_real_check(monkeypatch: pytest.MonkeyPatch):
+    """A resume decision for a DIFFERENT gate (``_hitl_decision`` present but no
+    per-node marker) must NEVER skip this node's conformance check — the
+    decision persists in state for the whole run, so a foreign decision must
+    not disable the safety gate. The real live check still runs (fail-closed)."""
+    _set_ctx(monkeypatch)
+    check = _patch_check_node_start(
+        monkeypatch,
+        ConformanceRecheckResult(blocked=False, gate_id=None, detail="", state="present", warned=False, claimed=True),
+    )
+    audit = _patch_audit(monkeypatch)
+    interrupt = _patch_interrupt(monkeypatch)
 
     blocked = await nr._run_conformance_gate(
-        {"_hitl_decision": {"approved": True, "gate_id": "guardrail_conformance_g_block"}},
+        {"_hitl_decision": {"action": "approved", "gate_id": "some_other_gate"}},
         node_id=_NODE_ID,
     )
 
     assert blocked is False
-    check.assert_not_awaited()
+    check.assert_awaited_once()
     audit.assert_not_awaited()
     interrupt.assert_not_called()
+
+
+async def test_gate_resume_foreign_decision_block_still_blocks(monkeypatch: pytest.MonkeyPatch):
+    """Even under a foreign resume decision the live check still enforces the
+    block — a capability that is absent/unknown at node start blocks, never
+    fail-open because a different gate was resumed earlier in the run."""
+    _set_ctx(monkeypatch)
+    _patch_check_node_start(
+        monkeypatch,
+        ConformanceRecheckResult(
+            blocked=True,
+            gate_id="guardrail_conformance_g_block",
+            detail="capability missing",
+            state="absent",
+            warned=False,
+            claimed=True,
+        ),
+    )
+    audit = _patch_audit(monkeypatch)
+    interrupt = _patch_interrupt(monkeypatch)
+    state = {"_hitl_decision": {"action": "approved", "gate_id": "some_other_gate"}}
+
+    blocked = await nr._run_conformance_gate(state, node_id=_NODE_ID)
+
+    assert blocked is True
+    assert state["_conformance_blocked_node"] == _NODE_ID
+    audit.assert_awaited_once()
+    interrupt.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -163,10 +245,14 @@ async def test_gate_blocked_interrupts(monkeypatch: pytest.MonkeyPatch, result: 
     _patch_check_node_start(monkeypatch, result)
     audit = _patch_audit(monkeypatch)
     interrupt = _patch_interrupt(monkeypatch)
+    state: dict[str, Any] = {"_run_id": _RUN_ID}
 
-    blocked = await nr._run_conformance_gate({"_run_id": _RUN_ID}, node_id=_NODE_ID)
+    blocked = await nr._run_conformance_gate(state, node_id=_NODE_ID)
 
     assert blocked is True
+    # The per-node marker is stamped so the resume path can route the human
+    # decision (approve -> override, reject -> fail closed) for THIS node.
+    assert state["_conformance_blocked_node"] == _NODE_ID
     interrupt.assert_called_once_with(
         {
             "gate_id": result.gate_id,

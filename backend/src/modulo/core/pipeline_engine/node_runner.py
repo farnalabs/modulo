@@ -1007,8 +1007,15 @@ async def _run_conformance_gate(
     connector instance ids and agent id come from the node definition.
 
     Behaviour:
-      - On resume (``state`` carries ``_hitl_decision``) the check is skipped —
-        the conformance block was already routed to a human and reviewed.
+      - On resume of THIS node's conformance block (``state`` carries the
+        ``_conformance_blocked_node`` marker set before the interrupt) the
+        human decision is routed: ``approved`` (or ``deliver_manual``) is the
+        documented human override -> the marker is cleared and the node
+        continues; ``rejected`` -> the node is DENIED and the run FAILS CLOSED
+        (raises ``GuardrailBlockedError`` -> terminal ``eval_failed``), never a
+        fail-open continuation. ``_hitl_decision`` alone is NEVER trusted to
+        skip the check: it persists in state for the whole run after ANY HITL
+        resume, so a foreign decision must not disable this safety gate.
       - No bound guardrail with a conformance claim -> fast path (no DB).
       - ``absent``/``unknown`` on a ``block``-action guardrail -> raise a HITL
         interrupt (the run transitions to ``awaiting_human`` with a
@@ -1025,8 +1032,27 @@ async def _run_conformance_gate(
     session_factory, org_id_raw, environment_profile_id, pipeline_id_raw = ctx
     if session_factory is None or not pipeline_id_raw:
         return False
-    if state.get("_hitl_decision") is not None:
-        # Resumed after a human reviewed the conformance block -> continue.
+    if state.get("_conformance_blocked_node") == node_id:
+        # Resume after a human reviewed THIS node's conformance block. The
+        # marker was stamped into state just before the interrupt. Only THIS
+        # branch may skip the re-check, and only for a human override.
+        decision = state.get("_hitl_decision")
+        action = decision.get("action") if isinstance(decision, dict) else None
+        if action == "rejected":
+            # Reject -> the run FAILS CLOSED: the capability the block
+            # protected is still unavailable, so the node must NOT execute.
+            # GuardrailBlockedError is mapped by the executor to terminal
+            # ``eval_failed``/``eval_blocked`` (never a resume).
+            from modulo.core.guardrails import GuardrailBlockedError
+
+            raise GuardrailBlockedError(
+                f"conformance_gate_{node_id}",
+                "capability conformance gate was rejected by the human reviewer; the run fails closed",
+            )
+        # approved / deliver_manual -> documented human override: clear the
+        # marker (so a later foreign resume replay of this node re-runs the
+        # real check) and continue with normal execution.
+        state["_conformance_blocked_node"] = None
         return False
     try:
         org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
@@ -1066,6 +1092,12 @@ async def _run_conformance_gate(
             state=result.state,
             event_type="guardrail.conformance_blocked_midrun",
         )
+        # Stamp the per-node marker so the resume path can tell THIS node's
+        # conformance block apart from any other gate's resume decision
+        # (``_hitl_decision`` persists in state for the rest of the run).
+        # Mutations before ``interrupt()`` are persisted by the checkpointer
+        # (same pattern as ``_hitl_gate`` / ``_manual_node``).
+        state["_conformance_blocked_node"] = node_id
         interrupt(
             {
                 "gate_id": result.gate_id,
