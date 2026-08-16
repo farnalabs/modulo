@@ -42,6 +42,9 @@ from modulo.db.models.notification import Notification
 
 _log = logging.getLogger(__name__)
 
+# Deep-link template shared by every run-scoped notification action URL.
+_RUN_DETAIL_URL = "/runs/{run_id}"
+
 # HITL-gate guard events (hitl-gate-removal-guard-plan.md v19 §5). These are
 # emitted by the service-layer backstop as AuditEvents; the config registration
 # keeps the in-app Notification surface aware of them (scope: admin).
@@ -218,16 +221,16 @@ _BODY_TEMPLATES: dict[str, str] = {
 }
 
 _ACTION_URL_TEMPLATES: dict[str, str | None] = {
-    EVENT_HITL_AWAITING: "/runs/{run_id}",
-    EVENT_RUN_FAILED: "/runs/{run_id}",
-    EVENT_RUN_STALLED: "/runs/{run_id}",
-    EVENT_BUDGET_EXCEEDED: "/runs/{run_id}",
-    EVENT_CLAIM_EXPIRED: "/runs/{run_id}",
-    EVENT_HITL_OVERDUE: "/runs/{run_id}",
+    EVENT_HITL_AWAITING: _RUN_DETAIL_URL,
+    EVENT_RUN_FAILED: _RUN_DETAIL_URL,
+    EVENT_RUN_STALLED: _RUN_DETAIL_URL,
+    EVENT_BUDGET_EXCEEDED: _RUN_DETAIL_URL,
+    EVENT_CLAIM_EXPIRED: _RUN_DETAIL_URL,
+    EVENT_HITL_OVERDUE: _RUN_DETAIL_URL,
     EVENT_HITL_GATE_REMOVED: None,
     EVENT_HITL_GATE_REMOVAL_DENIED: None,
     EVENT_EVAL_REGRESSION: "/evals",
-    EVENT_EVAL_BLOCKED: "/runs/{run_id}",
+    EVENT_EVAL_BLOCKED: _RUN_DETAIL_URL,
     EVENT_FEEDBACK_PENDING: "/feedback/inbox",
     EVENT_SYSTEM_ANNOUNCEMENT: None,
     EVENT_TRIGGER_DEACTIVATED: None,

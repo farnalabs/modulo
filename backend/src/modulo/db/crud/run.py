@@ -46,6 +46,9 @@ ERROR_CODE_CAPACITY_TIMEOUT = "capacity_timeout"
 # failures. The stale-run sweep exempts runs carrying these markers.
 CAPACITY_MARKERS = frozenset({ERROR_CODE_ORG_CAPACITY_LIMITED, ERROR_CODE_PIPELINE_CAPACITY})
 
+# Day-key format used for run-usage bucketing and the --older-than parser.
+_DAY_FORMAT = "%Y-%m-%d"
+
 # The canonical whitelist of run statuses (subset of the ``ck_runs_status``
 # CHECK constraint). ``transition_run`` and ``update_run_status`` refuse any
 # status outside this set (a typo would otherwise silently violate the CHECK
@@ -1560,7 +1563,7 @@ async def _get_run_stats_python(
     dur_by_day: dict[str, list[int]] = defaultdict(list)
 
     for r in runs:
-        day = r.created_at.strftime("%Y-%m-%d")
+        day = r.created_at.strftime(_DAY_FORMAT)
         by_day[day]["count"] += 1
         if r.status == "complete":
             by_day[day]["success"] += 1
@@ -1568,7 +1571,7 @@ async def _get_run_stats_python(
             by_day[day]["failed"] += 1
 
     for r in completed_runs:
-        day = r.created_at.strftime("%Y-%m-%d")
+        day = r.created_at.strftime(_DAY_FORMAT)
         if r.completed_at is None or r.started_at is None:
             continue
         ms = int((r.completed_at - r.started_at).total_seconds() * 1000)
@@ -1731,7 +1734,7 @@ async def get_run_heatmap(
 
     by_day: dict[str, int] = defaultdict(int)
     for r in runs:
-        by_day[r.created_at.strftime("%Y-%m-%d")] += 1
+        by_day[r.created_at.strftime(_DAY_FORMAT)] += 1
 
     return [{"date": d, "count": c} for d, c in sorted(by_day.items())]
 
@@ -1785,7 +1788,7 @@ async def purge_runs(
     Returns dict with ``deleted_run_count``.
     """
     try:
-        cutoff = datetime.strptime(older_than, "%Y-%m-%d").replace(tzinfo=UTC)
+        cutoff = datetime.strptime(older_than, _DAY_FORMAT).replace(tzinfo=UTC)
     except ValueError as exc:
         raise ValueError(f"Invalid date format: '{older_than}'. Expected YYYY-MM-DD.") from exc
     deleted_total = 0

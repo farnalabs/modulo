@@ -39,6 +39,9 @@ _RATE_LIMIT_HEADERS = (
 # Preferred header (epoch seconds) for the quota-reset retry delay.
 _RATE_LIMIT_RESET_HEADERS = ("X-RateLimit-Reset",)
 
+# Fallback content-type for attachment downloads (S1192).
+_OCTET_STREAM = "application/octet-stream"
+
 
 def _compute_delay(attempt: int, response: httpx.Response | None = None) -> float:
     """Compute retry delay with exponential backoff, jitter, and optional Retry-After."""
@@ -476,7 +479,7 @@ class JiraConnector(ConnectorBase):
                     raise ValueError("Jira attachment query requires 'attachment_id' filter")
                 attachment_id = q.filters["attachment_id"]
                 r = await self._call_api("GET", f"/attachment/{attachment_id}/content")
-                content_type = r.headers.get("content-type", "application/octet-stream")
+                content_type = r.headers.get("content-type", _OCTET_STREAM)
                 encoded = base64.b64encode(r.content).decode("ascii")
                 return ConnectorResult(
                     records=[
@@ -597,7 +600,7 @@ class JiraConnector(ConnectorBase):
                     raw = content if isinstance(content, bytes) else str(content).encode("utf-8")
                 else:
                     raw = file_content if isinstance(file_content, bytes) else str(file_content).encode("utf-8")
-                mime_type = payload.data.get("mime_type", "application/octet-stream")
+                mime_type = payload.data.get("mime_type", _OCTET_STREAM)
                 r = await self._call_api(
                     "POST",
                     f"/issue/{issue_key}/attachments",
@@ -633,7 +636,7 @@ class JiraConnector(ConnectorBase):
             raise ValueError("Jira issue attachment must provide exactly one of 'content' or 'file'")
         raw = content if content is not None else file_content
         raw_bytes = raw.encode("utf-8") if isinstance(raw, str) else raw
-        files: dict[str, Any] = {"file": (filename, raw_bytes, "application/octet-stream")}
+        files: dict[str, Any] = {"file": (filename, raw_bytes, _OCTET_STREAM)}
         form_data = {k: v for k, v in data.items() if k not in ("issue_key", "filename", "content", "file")}
         r = await self._call_api(
             "POST",

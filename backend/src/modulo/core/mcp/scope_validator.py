@@ -42,6 +42,9 @@ class MCPConfigurationError(Exception):
 
 
 # tool (or ``tool:action``) -> permission key in ``PERMISSIONS``
+# Secret-management permission shared by the create/delete/list secret tools.
+_SCOPE_SECRET_MANAGE = "secret.manage"
+
 _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "trigger_pipeline": "run.trigger",
     "cancel_run": "run.cancel",
@@ -74,9 +77,9 @@ _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "create_agent": "agent.create",
     "create_schema": "schema.create",
     "infer_schema": "schema.infer",
-    "create_secret": "secret.manage",
-    "delete_secret": "secret.manage",
-    "list_secrets": "secret.manage",
+    "create_secret": _SCOPE_SECRET_MANAGE,
+    "delete_secret": _SCOPE_SECRET_MANAGE,
+    "list_secrets": _SCOPE_SECRET_MANAGE,
     "create_api_key": "api_key.create",
     "list_api_keys": "api_key.update",
     "revoke_api_key": "api_key.revoke",

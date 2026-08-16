@@ -73,6 +73,10 @@ FIRE_JOB_HEARTBEAT = 30
 FIRE_JOB_RETRIES = 2
 FIRE_JOB_TTL = 300
 
+# Advisory-lock SQL and paused-trigger skip log message (S1192). Pure aliases.
+_SQL_TRY_ADVISORY_LOCK = "SELECT pg_try_advisory_xact_lock(:key1, :key2)"
+_LOG_TRIGGERS_PAUSED_SKIP = "triggers.paused.skip trigger=%s org=%s"
+
 # Missed-fire catch-up (2026-08-10 incident). The fire_due_triggers tick
 # advances next_fire_at ATOMICALLY (claiming the epoch) and THEN enqueues the
 # per-item fire job. If the worker machine dies between the two — or the
@@ -632,7 +636,7 @@ async def fire_cron_trigger(
 
         key1, key2 = _uuid_to_lock_keys(trigger_id)
         lock_result = await session.execute(
-            text("SELECT pg_try_advisory_xact_lock(:key1, :key2)"),
+            text(_SQL_TRY_ADVISORY_LOCK),
             {"key1": key1, "key2": key2},
         )
         if not lock_result.scalar_one():
@@ -758,7 +762,7 @@ async def fire_cron_trigger(
         except TriggersPausedError:
             # TOCTOU race backstop: the org was paused between the early check
             # and create_run. Skip, no paused TriggerEvent (race backstop only).
-            _log.info("triggers.paused.skip trigger=%s org=%s", trigger_id, org_id)
+            _log.info(_LOG_TRIGGERS_PAUSED_SKIP, trigger_id, org_id)
             return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
 
         event = await _log_event(
@@ -826,7 +830,7 @@ async def fire_polling_trigger(
 
         key1, key2 = _uuid_to_lock_keys(trigger_id)
         lock_result = await session.execute(
-            text("SELECT pg_try_advisory_xact_lock(:key1, :key2)"),
+            text(_SQL_TRY_ADVISORY_LOCK),
             {"key1": key1, "key2": key2},
         )
         if not lock_result.scalar_one():
@@ -1010,7 +1014,7 @@ async def fire_polling_trigger(
                 input_payload=input_payload,
             )
         except TriggersPausedError:
-            _log.info("triggers.paused.skip trigger=%s org=%s", trigger_id, org_id)
+            _log.info(_LOG_TRIGGERS_PAUSED_SKIP, trigger_id, org_id)
             return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
 
         event = await _log_poll_event(
@@ -1291,7 +1295,7 @@ async def _ongoing_topup(
 
     key1, key2 = _uuid_to_lock_keys(trigger_id)
     lock_result = await session.execute(
-        text("SELECT pg_try_advisory_xact_lock(:key1, :key2)"),
+        text(_SQL_TRY_ADVISORY_LOCK),
         {"key1": key1, "key2": key2},
     )
     if not lock_result.scalar_one():
@@ -1461,7 +1465,7 @@ async def _ongoing_topup(
     except TriggersPausedError:
         # TOCTOU race backstop: the org was paused mid-loop. Stop creating —
         # the runs already created stay (they are dispatched below).
-        _log.info("triggers.paused.skip trigger=%s org=%s", trigger_id, org_id)
+        _log.info(_LOG_TRIGGERS_PAUSED_SKIP, trigger_id, org_id)
         if outcome is not None:
             outcome.update({"status": "skipped", "reason": PAUSE_SKIP_REASON})
 
