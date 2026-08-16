@@ -395,6 +395,39 @@ describe('DashboardView', () => {
     expect(wrapper.text()).toContain('Run a Pipeline')
   })
 
+  it('shows the eval trend indicator as declining when eval pass rates dip', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/dashboard/summary') {
+        return Promise.resolve({
+          data: {
+            ...mockSummaryData,
+            trend: mockSummaryData.trend.map((d, i) => ({
+              ...d,
+              eval_pass_rate: [90, 88, 85, 82, 80, 75, 70][i],
+            })),
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
+      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    expect(wrapper.text()).toContain('Declining')
+    expect(wrapper.text()).not.toContain('Improving')
+  })
+
+  it('renders recent runs as links that navigate to the run detail page', async () => {
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    const runLinks = wrapper.findAll('a[href^="/runs/"]')
+    expect(runLinks.length).toBe(mockSummaryData.recent_runs.length)
+    expect(runLinks[0].attributes('href')).toBe('/runs/run-1')
+    expect(wrapper.findAll('a[href="/runs/run-4"]').length).toBe(1)
+  })
+
   it('shows no eval data for null pass rate', async () => {
     setupEmptyMocks()
     const wrapper = mount(DashboardView)

@@ -396,6 +396,11 @@ class PipelineGraphNode(BaseModel):
     template_id: str | None = None
     agent_command: str | None = None
     agent_prompt: str | None = None
+    # FAR-228: opt-in idempotency gate for side-effecting sandbox nodes. When
+    # non-empty, a FULL-LINE occurrence of this literal in the sandbox output
+    # marks the run's delivery as done (raw-output marker ``delivery_done``),
+    # and transient retries of that node are suppressed by the idempotency gate.
+    delivery_sentinel: str | None = None
     env_vars: dict[str, str] | None = None
     context_files: dict[str, str] | None = None
     timeout_seconds: int | None = Field(

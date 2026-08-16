@@ -71,6 +71,22 @@ The command will:
 4. Re-insert `checkpoint_blobs` from the JSON export
 5. Re-encrypt credentials if `FERNET_KEY` has changed
 
+### Preview a restore (dry run)
+
+Before running an irreversible restore, preview every step without touching
+the database:
+
+```bash
+modulo restore ./modulo-backup-20250215-143022 --dry-run
+```
+
+The dry run validates `backup-info.json`, verifies all file checksums, and
+pre-validates the JSON exports, then reports what WOULD be restored: the psql
+SQL restore, per-file checkpoint record counts, and whether credential
+re-encryption would be required. It also surfaces blocking problems (e.g. a
+missing `--previous-fernet-key` after key rotation) before you commit to the
+real restore, and never prompts for confirmation because no changes are made.
+
 ### Skip confirmation prompt
 
 ```bash

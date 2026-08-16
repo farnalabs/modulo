@@ -1,7 +1,6 @@
 """POST /api/v1/runs — manual pipeline trigger and run lifecycle endpoints."""
 
 import asyncio
-import difflib
 import json
 import logging
 import uuid
@@ -31,7 +30,9 @@ from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.dispatch import dispatch_run
 from modulo.core.exceptions import OrgDeletedError
+from modulo.core.line_diff import iter_line_diffs
 from modulo.core.node_output_split import node_return, node_telemetry
+from modulo.core.pipeline_engine.classify import REASON_DELIVERED_EMAIL, _any_marker_delivery_done
 from modulo.core.pipeline_engine.error_codes import present_error, sanitize_error_text
 from modulo.core.pipeline_engine.event_broker import get_registry
 from modulo.core.pipeline_engine.recovery import (
@@ -361,6 +362,31 @@ class RunResponse(BaseModel):
     created_at: datetime | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    # FAR-228: the stored run-outcome classification record (FAR-189) and the
+    # derived gate-fired flag. gate_fired is True when the idempotency gate
+    # suppressed a delivery retry (error_code harness.idempotency_gate), or the
+    # classification reason is email_delivered, or any raw-output marker carries
+    # delivery_done — this makes guard-A completions (error_code=None) API
+    # distinguishable from an ordinary complete run.
+    run_classification: dict[str, Any] | None = None
+    gate_fired: bool = False
+
+
+def _run_gate_fired(run: Any) -> bool:
+    """Derive whether the FAR-228 idempotency gate fired for a run row.
+
+    True when (a) the run's error_code is ``harness.idempotency_gate`` (guard B
+    suppression), (b) the stored classification reason is ``email_delivered``,
+    or (c) any raw-output marker carries ``delivery_done is True`` (guard A /
+    success-path stamp / cancelled-retention). Never raises on non-dict columns.
+    """
+    if getattr(run, "error_code", None) == "harness.idempotency_gate":
+        return True
+    classification = getattr(run, "run_classification", None)
+    if isinstance(classification, dict) and classification.get("reason") == REASON_DELIVERED_EMAIL:
+        return True
+    markers = getattr(run, "raw_output_markers", None)
+    return bool(_any_marker_delivery_done(markers))
 
 
 def _build_run_response(
@@ -390,6 +416,11 @@ def _build_run_response(
 
     error_code, error_detail = present_error(run.error_code, run.error_detail, limit=5000)
 
+    # FAR-228: defensive coercion — the run_classification JSON column could
+    # hold any JSON value (or a MagicMock in tests); a non-dict is surfaced as
+    # None, never a 500. gate_fired is derived in _run_gate_fired (also guarded).
+    run_classification = run.run_classification if isinstance(run.run_classification, dict) else None
+
     return RunResponse(
         run_id=run.id,
         status=run.status,
@@ -411,6 +442,8 @@ def _build_run_response(
         created_at=run.created_at,
         started_at=run.started_at,
         completed_at=run.completed_at,
+        run_classification=run_classification,
+        gate_fired=_run_gate_fired(run),
     )
 
 
@@ -1971,7 +2004,7 @@ async def diff_node_output(
 
     Accepts two (run_id, node_id) pairs, fetches each node's output,
     applies sensitive masking, and returns a structured line-level diff
-    using difflib.SequenceMatcher.
+    via the shared modulo.core.line_diff helper.
     """
     try:
         async with session.begin():
@@ -2044,71 +2077,15 @@ async def diff_node_output(
     lines_a = text_a.splitlines(keepends=True)
     lines_b = text_b.splitlines(keepends=True)
 
-    differ = difflib.SequenceMatcher(None, lines_a, lines_b)
-    diff_lines: list[NodeOutputDiffLine] = []
-    line_a = 1
-    line_b = 1
-
-    for op, i1, i2, j1, j2 in differ.get_opcodes():
-        if op == "equal":
-            for idx in range(i1, i2):
-                diff_lines.append(
-                    NodeOutputDiffLine(
-                        type="unchanged",
-                        content=lines_a[idx].rstrip("\n"),
-                        line_a=line_a,
-                        line_b=line_b,
-                    )
-                )
-                line_a += 1
-                line_b += 1
-        elif op == "replace":
-            for _ in range(i2 - i1):
-                diff_lines.append(
-                    NodeOutputDiffLine(
-                        type="removed",
-                        content=lines_a[i1].rstrip("\n"),
-                        line_a=line_a,
-                        line_b=None,
-                    )
-                )
-                line_a += 1
-                i1 += 1
-            for _ in range(j2 - j1):
-                diff_lines.append(
-                    NodeOutputDiffLine(
-                        type="added",
-                        content=lines_b[j1].rstrip("\n"),
-                        line_a=None,
-                        line_b=line_b,
-                    )
-                )
-                line_b += 1
-                j1 += 1
-        elif op == "delete":
-            for _ in range(i2 - i1):
-                diff_lines.append(
-                    NodeOutputDiffLine(
-                        type="removed",
-                        content=lines_a[i1].rstrip("\n"),
-                        line_a=line_a,
-                        line_b=None,
-                    )
-                )
-                line_a += 1
-                i1 += 1
-        elif op == "insert":
-            for _ in range(j2 - j1):
-                diff_lines.append(
-                    NodeOutputDiffLine(
-                        type="added",
-                        content=lines_b[j1].rstrip("\n"),
-                        line_a=None,
-                        line_b=line_b,
-                    )
-                )
-                line_b += 1
-                j1 += 1
+    diff_lines = [
+        NodeOutputDiffLine(
+            type=kind,
+            content=content,
+            line_a=line_a,
+            line_b=line_b,
+        )
+        for kind, content, line_a, line_b in iter_line_diffs(lines_a, lines_b)
+    ]
 
     has_diff = any(d.type != "unchanged" for d in diff_lines)
 

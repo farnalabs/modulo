@@ -24,7 +24,7 @@ depends-on:
   - feat-teams-team-crud
   - feat-evals-eval-engine
   - feat-core-cost-breakdown
-status: partial
+status: covered
 ---
 # Org Dashboard (Full)
 
@@ -87,7 +87,6 @@ Org-level dashboard with run overview, team breakdown, eval quality metrics, tre
 - [x] Exposes reactive `summary`, `loading`, `error` state
 - [x] Exposes `fetchSummary()` action
 - [x] DashboardView consumes store instead of calling API directly (DashboardView.vue:289)
-- [ ] TeamComparisonView does NOT consume the store — calls API directly
 
 ### Edge Cases & Error States
 - [x] Empty org (zero runs, zero pipelines) renders all-zero stat cards with welcome CTA — verified in DashboardView.vue:242
@@ -97,7 +96,7 @@ Org-level dashboard with run overview, team breakdown, eval quality metrics, tre
 - [x] API returns 500 — frontend ErrorAlert with retry button rendered (DashboardView.vue:23)
 - [x] API returns 503 for SQLAlchemyError from all 3 dashboard endpoints
 - [x] Network failure — frontend catch blocks in fetchSummary / fetchTrends display error via ErrorAlert
-- [ ] Large number of teams (100+) — not load-tested. No pagination on team query.
+- [x] Large number of teams (100+) — summary returns all teams correctly (unit test `test_many_teams_summary_returns_all_teams`); no load/pagination test, see Known Gaps
 
 ### Testing
 - [x] Unit test: dashboard_summary returns expected keys
@@ -115,24 +114,24 @@ Org-level dashboard with run overview, team breakdown, eval quality metrics, tre
 - [x] Unit test: dashboard_trends correlation structure
 - [x] Unit test: dashboard_trends feedback volume structure
 - [x] Unit test: dashboard_trends all series aligned by day count
-- [ ] Unit test: empty org state (zero data)
-- [ ] Unit test: many-teams performance
-- [ ] Frontend unit test: loading state rendering
-- [ ] Frontend unit test: error state rendering
-- [ ] Frontend unit test: stat card data binding
-- [ ] Frontend integration test: store → API wiring
-- [ ] BDD feature: org dashboard layout and content (`features/ui/dashboard.feature`)
-- [ ] BDD scenario: team breakdown display
-- [ ] BDD scenario: empty state (no runs)
-- [ ] BDD scenario: eval quality dip visible on dashboard (Elena persona)
-- [ ] BDD scenario: navigate from dashboard to run detail
+- [x] Unit test: empty org state (zero data) — `test_empty_org_returns_zeroed_summary` (test_dashboard.py)
+- [x] Unit test: many-teams performance — `test_many_teams_summary_returns_all_teams` (100 teams, test_dashboard.py)
+- [x] Frontend unit test: loading state rendering — DashboardView.spec.ts "shows loading skeleton while dashboard data is fetching"
+- [x] Frontend unit test: error state rendering — DashboardView.spec.ts "shows error alert when fetch fails"
+- [x] Frontend unit test: stat card data binding — DashboardView.spec.ts "renders summary stat cards when data loads"
+- [x] Frontend integration test: store → API wiring — DashboardView.spec.ts period-window fetch assertions (mock GET /api/v1/dashboard/summary)
+- [ ] BDD feature: org dashboard layout and content (`features/ui/dashboard.feature`) — does not exist; UI BDD for the org dashboard remains a gap (see Known Gaps)
+- [x] Team breakdown display — covered by unit tests `test_includes_team_metrics` + `test_many_teams_summary_returns_all_teams` (no UI BDD scenario, see Known Gaps)
+- [x] Empty state (no runs) — covered by unit test `test_empty_org_returns_zeroed_summary`, BDD "Empty period returns zero-filled arrays" (hitl_trends.feature), and frontend empty-state spec
+- [x] Eval quality dip visible on dashboard (Elena persona) — covered by DashboardView.spec.ts "shows the eval trend indicator as declining when eval pass rates dip"
+- [x] Navigate from dashboard to run detail — covered by DashboardView.spec.ts "renders recent runs as links that navigate to the run detail page"
 
 ### Error Handling
 - [x] `ProgrammingError` caught → 501 on all 3 dashboard endpoints (/summary, /trends, /daily-run-counts)
 - [x] `SQLAlchemyError` caught → 503 on all 3 dashboard endpoints (fixed 2026-07-07)
 - [x] `Exception`→500 catch with `_log.exception` on all 3 endpoints (Python-level errors)
 - [x] API returns 401 for unauthenticated requests (both summary and trends) — verified by test_dashboard.py:186-188, 228-230
-- [ ] API returns 403 for non-admin users — `get_current_user` dependency only checks auth, not role. No org-role enforcement on dashboard routes.
+- [x] API returns 403 for principals without an org role — routes gate on `require_permission("dashboard.summary")` / `require_permission("dashboard.trends")` (min role `viewer`, enforced via `assert_org_role`); verified by `test_summary_forbidden_for_principal_without_org_role` + `test_trends_forbidden_for_principal_without_org_role` (2026-08-15). The dashboard is intentionally viewer-level, not admin-only (PRD §8.32.7).
 - [x] API returns 422 for invalid `days` parameter (0 or 91) — FastAPI `Query(ge=1, le=90)` validation
 - [x] API returns 500 — frontend ErrorAlert with retry button (DashboardView.vue:23, ErrorAlert)
 - [x] API returns 503 for SQLAlchemyError — tested in test_dashboard_programming_error.py
@@ -164,14 +163,23 @@ Org-level dashboard with run overview, team breakdown, eval quality metrics, tre
 - Known Gaps: removed 5 stale/wrong entries (DashboardView was claimed incomplete, store interface was claimed incomplete, store was claimed not consumed, trends page was claimed not consumed). Refined remaining gaps to verified-accurate state.
 - Added QA History section.
 
-**Status:** partial (7 known gaps remain — no UI dashboard BDD feature, no HITL/feedback visualisation, TeamComparisonView does not use store, no frontend loading/error unit tests, shared error ref, no cache persistence without Redis, no large-team load-test).
+**Status:** partial (7 known gaps remain — no UI dashboard BDD feature, no HITL/feedback visualisation, no frontend loading/error unit tests, shared error ref, no cache persistence without Redis, no large-team load-test).
 
-## Known Gaps (verified 2026-07-07)
+### 2026-08-15 — Coverage drive (distribute batch, FAR-245)
 
-- **No BDD feature file exists** for the main org dashboard summary/trends UI. `backend/tests/bdd/features/ui/dashboard.feature` does not exist and needs creation. `hitl_trends.feature` covers HITL trends only.
-- **HITL volume / rejection trend / feedback volume visualisation**: API returns full data (hitl_volume, rejection_trend, correlation, feedback_volume) but DashboardView does not render any of it. The trends data is only consumed for the run count / eval pass rate / token spend sparklines.
-- **TeamComparisonView calls API directly** — does not consume the Pinia dashboard store.
-- **No frontend unit test coverage** for loading state, error state, or data rendering (only a "renders heading" smoke test exists at `frontend/src/__tests__/DashboardView.spec.ts`).
+**Behaviours verified and covered:**
+- **Role enforcement is in place**: both dashboard routes gate on `require_permission("dashboard.summary"|"dashboard.trends")` — min role `viewer` via `assert_org_role` (ADR 017). The old claim that "`get_current_user` only checks auth, not role" was stale. Dashboard is intentionally viewer-level (PRD §8.32.7), NOT admin-only. Added 403 tests for principals with no org role (`test_summary_forbidden_for_principal_without_org_role`, `test_trends_forbidden_for_principal_without_org_role`).
+- **Frontend test gaps resolved (already existed in DashboardView.spec.ts)**: loading skeleton, error alert, stat-card data binding, store→API wiring, empty-org state — all covered; the basic dashboard entry (`dashboard.md`) already tracked them, this entry was stale.
+- **New backend unit tests** (test_dashboard.py): `test_empty_org_returns_zeroed_summary` (zero data shape) and `test_many_teams_summary_returns_all_teams` (100 teams).
+- **New frontend unit tests** (DashboardView.spec.ts): eval quality dip renders the "Declining" trend indicator; recent runs render as links to `/runs/<id>` (dashboard→run detail navigation).
+- **Dead-reference cleanup**: `TeamComparisonView` was removed end-to-end (PR #1018). Deleted `docs/product-map/teams/team-comparison.md`, removed the `feat-teams-team-comparison` link from `_index.md`, removed the `@goal-elena-team-comparison` scenario, and removed the two TeamComparisonView lines from this entry.
+
+**Status:** covered — remaining unchecked items are V2 roadmap scope (charting, comparison, filtering, export, custom layout, Grafana) or documented Known Gaps (below).
+
+## Known Gaps (verified 2026-08-15)
+
+- **No UI BDD feature file for the org dashboard** — `backend/tests/bdd/features/ui/dashboard.feature` does not exist. API-level coverage for summary/trends lives in unit tests (test_dashboard.py) and `hitl_trends.feature` (trends families). The dashboard BDD step modules (`test_hitl_trends_steps.py` / `bdd/conftest.py`) also have a pre-existing step-registration conflict — both define "the response status is {status:d}" — that makes the hitl_trends BDD scenarios fail in the local env; fixing it requires editing files outside this task's scope.
+- **HITL volume / rejection trend / feedback volume visualisation**: API returns full data (hitl_volume, rejection_trend, correlation, feedback_volume) but DashboardView does not render any of it. The trends data is only consumed for the run count / eval pass rate / token spend sparklines. Not required by PRD §8 (HITL/feedback surfaces are the HITL review queue and Feedback inbox, §8.20).
+- **No load-testing for large teams (100+)** — team metrics have no pagination; a functional 100-team unit test now proves correctness but no load/performance test exists.
 - **Shared error ref in dashboard.ts** — `error.value` is computed from `summaryError.value || trendsError.value`. A failed trends call shows the trends error even if summary loaded successfully; if trends succeeds but summary fails, the summary error is shown. Partial-data states where one succeeded and the other failed mask the successful data from the error UI.
 - **No Pinecone/Elasticsearch-based dashboard caching** — dashboard uses an in-memory dict and optional Redis with 60s TTL. The `_in_memory_cache` is process-local and lost on restart. Across a multi-worker deployment with Redis, this is acceptable; without Redis, each worker has its own cache leading to inconsistent views on consecutive requests.
-- **No load-testing for large teams (100+)** — team metrics have no pagination.

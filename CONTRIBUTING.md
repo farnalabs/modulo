@@ -358,7 +358,7 @@ in `.github/workflows/`:
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `ci.yml` | Every push & PR | Backend lint (ruff, mypy, bandit, semgrep, pip-audit), frontend (lint, type-check, unit test, build, npm audit), product map validation, gitleaks secret scan |
+| `ci.yml` | Every push & PR | Backend lint (ruff, mypy, bandit, semgrep, vulture, pip-audit), frontend (lint, type-check, unit test, build, npm audit), product map validation, gitleaks secret scan |
 | `unit.yml` | Every push & PR | Backend unit tests with coverage threshold enforcement |
 | `integration.yml` | Push to main | Backend integration tests against real PostgreSQL |
 | `bdd.yml` | Push to main | Full BDD/E2E suite: spin up Postgres + Redis, run migrations, build frontend, start backend, run Playwright tests |

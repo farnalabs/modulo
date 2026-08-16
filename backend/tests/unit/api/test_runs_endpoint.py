@@ -513,6 +513,103 @@ def test_run_response_error_detail_none_when_run_succeeded(client: TestClient) -
     assert body["error_code"] is None
 
 
+def test_run_response_gate_fired_false_for_plain_complete(client: TestClient) -> None:
+    """FAR-228: a plain complete run has gate_fired False and run_classification
+    surfaced as stored."""
+    run = _make_run(status="complete", error_detail=None, error_code=None)
+    run.raw_output_markers = {}
+    run.run_classification = {"value": "no_delivery", "reason": "no_work"}
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    body = resp.json()
+    assert body["gate_fired"] is False
+    assert body["run_classification"]["reason"] == "no_work"
+
+
+def test_run_response_gate_fired_true_on_idempotency_gate_code(client: TestClient) -> None:
+    """FAR-228: a guard-B suppressed run (error_code harness.idempotency_gate)
+    exposes gate_fired True."""
+    run = _make_run(status="complete", error_code="harness.idempotency_gate")
+    run.raw_output_markers = {}
+    run.run_classification = None
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.json()["gate_fired"] is True
+
+
+def test_run_response_gate_fired_true_on_email_classification(client: TestClient) -> None:
+    """FAR-228: a run classified email_delivered exposes gate_fired True — this
+    makes guard-A completions (error_code None) API-distinguishable."""
+    run = _make_run(status="complete", error_code=None)
+    run.raw_output_markers = {}
+    run.run_classification = {"value": "delivered", "reason": "email_delivered"}
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.json()["gate_fired"] is True
+
+
+def test_run_response_gate_fired_true_on_marker_delivery_done(client: TestClient) -> None:
+    """FAR-228: a run whose raw-output marker carries delivery_done exposes
+    gate_fired True even before classification runs."""
+    run = _make_run(status="complete", error_code=None)
+    run.run_classification = None
+    run.raw_output_markers = {
+        "run:run-1:node:n1:1": {
+            "_modulo_marker": True,
+            "delivery_done": True,
+            "attempt_key": "run:run-1:node:n1:1",
+        }
+    }
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.json()["gate_fired"] is True
+
+
+def test_run_response_gate_fired_true_on_success_path_marker(client: TestClient) -> None:
+    """FAR-228 review fix: a delivery_done marker written on the SUCCESS path
+    (status ``completed``, empty parse_error — the shape the node persists)
+    drives gate_fired True via the shared marker scan, so a successful sentinel
+    run is API-distinguishable without waiting for classification."""
+    run = _make_run(status="complete", error_code=None)
+    run.run_classification = None
+    run.raw_output_markers = {
+        "run:run-1:node:n1:1": {
+            "_modulo_marker": True,
+            "status": "completed",
+            "summary": "Sandbox agent completed with delivery sentinel observed (idempotency gate)",
+            "parse_error": "",
+            "pr_url": "",
+            "exit_code": 0,
+            "attempt_key": "run:run-1:node:n1:1",
+            "node_id": "n1",
+            "delivery_done": True,
+        }
+    }
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.json()["gate_fired"] is True
+
+
 def test_run_response_populates_total_cost(client: TestClient) -> None:
     run = _make_run(status="complete", total_cost_usd=Decimal("1.234567"))
     with (

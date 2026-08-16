@@ -67,7 +67,7 @@ A HITL gate may specify `required_team_id` to restrict claim/approve to members 
 
 ### Notification routing
 - [x] `hitl_awaiting` for `required_team_id` gates dispatches `team_id` in the event payload for routing to team notification endpoints
-- [ ] Actual dispatch to team notification endpoints (falls back to org-wide endpoints if team has none) — notifier layer not yet wired
+- [x] Actual dispatch to team notification endpoints (falls back to org-wide endpoints if team has none) — `Notifier.dispatch_event(org_id, event_type, payload, team_id=...)` routes to the team's endpoints first and falls back to org-wide (`team_id IS NULL`) endpoints when the team has none (`_get_subscribed_endpoints`); verified by `test_team_scoped_dispatch` / `test_get_subscribed_endpoints` (parametrised: team endpoints → org fallback → org-only) in `tests/unit/notifier/test_notifier.py`
 
 ### Unit test coverage
 - [x] `test_create_gate_with_required_team_id` — gate stores the team ref
@@ -77,17 +77,21 @@ A HITL gate may specify `required_team_id` to restrict claim/approve to members 
 
 ### Error Handling
 - [x] `HITLManager.create_gate()` is called from the `NodeInterrupt` handler in `executor.py` — gate row is persisted during pipeline execution before the `hitl_awaiting` event is published
-- [ ] `required_team_id` extraction from graph state in executor handles invalid UUID gracefully (logged, not raised)
+- [x] `required_team_id` extraction from graph state in executor handles invalid UUID gracefully (logged, not raised) — `make_hitl_gate_fn` normalises the gate config's `required_team_id` via `_normalize_required_team_id` before it enters the interrupt payload, so the executor's `uuid.UUID()` conversion never sees an unparseable value; an invalid value is logged (`hitl_gate.invalid_required_team_id`) and treated as org-wide (None). Verified by `test_hitl_gate_invalid_required_team_id_is_logged_and_sanitized` / `test_hitl_gate_valid_required_team_id_passes_through` / `test_hitl_gate_required_team_id_absent_is_none` in `tests/unit/hitl_manager/test_hitl_manager.py`
 
 ## Known Gaps
 
 - `ViewAsTeam` enforcement for HITL gate visibility not yet tested
 - No test for `human_only` + `required_team_id` additive enforcement at ViewModel layer
-- No test for team notification fallback chain (team endpoints → org endpoints)
 - No performance test for DB-live membership check on high-claim-contention gates
 - (Resolved) Team membership role enforcement: `claim()` checks TeamMembership existence only — any role (including `viewer`) could claim a team-scoped gate. Fixed 2026-08-15: both membership queries now carry `role IN ('runner', 'operator')` (`_TEAM_CLAIM_ROLES` in `core/hitl_manager/__init__.py`), so a `viewer` membership can never satisfy the claim. Propagates to REST (`hitl.claim_gate` → 403) and MCP (`review_hitl` → `not_team_member`) because both call `HITLManager.claim()`.
 - BDD scenarios for team HITL gates are implemented as mock-based step definitions, not full integration tests with real DB
-- Notifier layer is not yet wired to use `team_id` from `hitl_awaiting` payload for team-specific dispatch
+- **Executor → notifier wiring for `hitl_awaiting` is still outstanding.** The notifier layer fully supports team-scoped dispatch with org-wide fallback (`dispatch_event(..., team_id=...)`), and the executor already publishes the `hitl_awaiting` broker event carrying `team_id` — but `core/pipeline_engine/executor.py` does not yet call `Notifier.dispatch_event(EVENT_HITL_AWAITING, ..., team_id=...)`, so `hitl_awaiting` webhook delivery (team or org-wide) is not triggered from the run lifecycle (only the WebSocket broker event fires). Requires a change in `executor.py` `_handle_graph_interrupt` (outside the FAR-245 distribution allowlist). PRD §8.8 HITL Flow step 2 ("Outbound notification webhook dispatched (HMAC-signed)") covers this path.
+
+### 2026-08-15 — distribute (FAR-245 coverage walk)
+
+- **Verified (notification routing):** `Notifier.dispatch_event(..., team_id=...)` routes `hitl_awaiting` to team endpoints first, falling back to org-wide (`team_id IS NULL`) endpoints when the team has none configured — `_get_subscribed_endpoints` queries `team_id == <team>` then falls back to `team_id IS NULL`. Existing coverage in `tests/unit/notifier/test_notifier.py` (`test_team_scoped_dispatch`, `test_get_subscribed_endpoints` parametrised with the team→org-fallback→org-only cases). The residual gap is the executor-side call site (see Known Gaps).
+- **Implemented (graceful invalid-UUID handling):** `make_hitl_gate_fn` in `core/pipeline_engine/node_runner.py` now normalises `hitl_gate_config.required_team_id` via `_normalize_required_team_id` — a `uuid.UUID` passes through, a valid UUID string is canonicalised, and an unparseable value is logged (`hitl_gate.invalid_required_team_id`) and treated as org-wide (None) instead of letting the executor's `uuid.UUID(...)` raise and fail the run. Added 3 unit tests in `tests/unit/hitl_manager/test_hitl_manager.py` (invalid → logged + None, valid string passthrough, absent → None). Verified: full `test_hitl_manager.py` + `test_error_handling.py` + `test_notifier.py` + `test_node_runner_hitl.py` pass.
 
 ### 2026-08-15 — improve-architecture (product-map walk)
 

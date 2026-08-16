@@ -1904,3 +1904,61 @@ def test_hitl_claim_model_columns_stable():
     )
     for expected in expected_columns:
         assert expected in columns, f"HitlClaim is missing expected column {expected!r}"
+
+
+# ---------------------------------------------------------------------------
+# required_team_id extraction — invalid UUID handled gracefully (logged, not raised)
+# ---------------------------------------------------------------------------
+
+
+async def _interrupt_payload(gate_config: dict[str, Any]) -> dict[str, Any]:
+    """Run a hitl_gate node fn built from ``gate_config`` and return the interrupt payload.
+
+    Mirrors ``test_node_runner_hitl.py``: ``interrupt`` is stubbed to raise
+    ``GraphInterrupt`` carrying its value so the first-invocation payload can
+    be inspected without a LangGraph runtime.
+    """
+    from langgraph.errors import GraphInterrupt
+    from langgraph.types import Interrupt
+
+    from modulo.core.pipeline_engine.node_runner import make_hitl_gate_fn
+
+    def _raise_interrupt(value: Any) -> None:
+        raise GraphInterrupt((Interrupt(value=value),))
+
+    node_fn = make_hitl_gate_fn(gate_config)
+    with (
+        patch("modulo.core.pipeline_engine.node_runner.interrupt", side_effect=_raise_interrupt),
+        pytest.raises(GraphInterrupt) as exc_info,
+    ):
+        await node_fn({"artifacts": [], "_hitl_gates": []})
+    interrupt_list = exc_info.value.args[0]
+    return interrupt_list[0].value
+
+
+async def test_hitl_gate_invalid_required_team_id_is_logged_and_sanitized(caplog) -> None:
+    """An unparseable ``required_team_id`` on a gate config is logged and
+    normalised to None in the interrupt payload — the executor's
+    ``uuid.UUID()`` conversion must never see an invalid string (logged, not
+    raised)."""
+    caplog.set_level("WARNING", logger="modulo.core.pipeline_engine.node_runner")
+    payload = await _interrupt_payload(
+        {"gate_id": "review-step", "human_only": False, "required_team_id": "not-a-uuid"}
+    )
+    assert payload["required_team_id"] is None
+    assert "hitl_gate.invalid_required_team_id" in caplog.text
+
+
+async def test_hitl_gate_valid_required_team_id_passes_through() -> None:
+    """A valid UUID string is preserved in the interrupt payload unchanged."""
+    team_id = uuid.uuid4()
+    payload = await _interrupt_payload(
+        {"gate_id": "review-step", "human_only": False, "required_team_id": str(team_id)}
+    )
+    assert payload["required_team_id"] == str(team_id)
+
+
+async def test_hitl_gate_required_team_id_absent_is_none() -> None:
+    """Gate without ``required_team_id`` still carries None (no restriction)."""
+    payload = await _interrupt_payload({"gate_id": "review-step", "human_only": False})
+    assert payload["required_team_id"] is None

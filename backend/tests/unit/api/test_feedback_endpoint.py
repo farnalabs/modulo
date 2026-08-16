@@ -130,6 +130,66 @@ class TestCreateFeedback:
         assert body["feedback_status"] == "pending"
         assert body["gate_id"] == "gate-1"
 
+    def test_creates_feedback_emits_feedback_created_audit(self, client: TestClient) -> None:
+        mock_record = _make_mock_record()
+        audit = AsyncMock(return_value=MagicMock())
+
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.create_feedback_record") as mock_create,
+            patch("modulo.api.routes.feedback.append_audit_event", new=audit),
+        ):
+            mock_create.return_value = mock_record
+
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/feedback",
+                json={
+                    "gate_id": "gate-1",
+                    "rejection_reason": "Wrong output",
+                    "rejected_output": {"result": "bad"},
+                    "producing_node_id": "node-b",
+                    "feedback_handler_type": "human",
+                },
+            )
+
+        assert resp.status_code == 201
+        audit.assert_awaited_once()
+        kwargs = audit.await_args.kwargs
+        assert kwargs["event_type"] == "feedback.created"
+        assert kwargs["org_id"] == _ORG_ID
+        assert kwargs["actor_user_id"] == _USER_ID
+        assert kwargs["resource_type"] == "feedback_record"
+        assert kwargs["resource_id"] == _RECORD_ID
+        assert kwargs["payload_json"] == {
+            "run_id": str(_RUN_ID),
+            "gate_id": "gate-1",
+            "feedback_handler_type": "human",
+        }
+
+    def test_create_feedback_audit_failure_does_not_block_creation(self, client: TestClient) -> None:
+        async def _raise_audit(*_a: object, **_k: object) -> object:
+            raise RuntimeError("audit boom")
+
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.create_feedback_record") as mock_create,
+            patch("modulo.api.routes.feedback.append_audit_event", side_effect=_raise_audit),
+        ):
+            mock_create.return_value = _make_mock_record()
+
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/feedback",
+                json={
+                    "gate_id": "gate-1",
+                    "rejection_reason": "Wrong output",
+                    "rejected_output": {"result": "bad"},
+                    "producing_node_id": "node-b",
+                },
+            )
+
+        assert resp.status_code == 201
+        assert resp.json()["feedback_status"] == "pending"
+
     def test_returns_404_when_run_not_found(self, client: TestClient) -> None:
         with (
             patch("modulo.api.routes.feedback.set_rls_org"),
@@ -234,8 +294,10 @@ class TestUpdateStatus:
 
         with (
             patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
             patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
         ):
+            mock_get.return_value = _make_mock_record(feedback_status="pending")
             mock_update.return_value = mock_record
 
             resp = client.patch(
@@ -246,12 +308,81 @@ class TestUpdateStatus:
         assert resp.status_code == 200
         assert resp.json()["feedback_status"] == "resolved"
 
-    def test_rejects_invalid_status(self, client: TestClient) -> None:
-        resp = client.patch(
-            f"/api/v1/feedback/{_RECORD_ID}/status",
-            json={"status": "invalid_status"},
-        )
-        assert resp.status_code == 422
+    def test_emits_status_changed_audit(self, client: TestClient) -> None:
+        mock_record = _make_mock_record(feedback_status="resolved")
+        audit = AsyncMock(return_value=MagicMock())
+
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("modulo.api.routes.feedback.append_audit_event", new=audit),
+        ):
+            mock_get.return_value = _make_mock_record(feedback_status="pending")
+            mock_update.return_value = mock_record
+
+            resp = client.patch(
+                f"/api/v1/feedback/{_RECORD_ID}/status",
+                json={"status": "resolved"},
+            )
+
+        assert resp.status_code == 200
+        audit.assert_awaited_once()
+        kwargs = audit.await_args.kwargs
+        assert kwargs["event_type"] == "feedback.status_changed"
+        assert kwargs["org_id"] == _ORG_ID
+        assert kwargs["actor_user_id"] == _USER_ID
+        assert kwargs["resource_type"] == "feedback_record"
+        assert kwargs["resource_id"] == _RECORD_ID
+        assert kwargs["payload_json"] == {
+            "old_status": "pending",
+            "new_status": "resolved",
+            "action": "update_status",
+            "run_id": str(_RUN_ID),
+            "gate_id": "gate-1",
+        }
+
+    def test_status_audit_failure_does_not_block_update(self, client: TestClient) -> None:
+        mock_record = _make_mock_record(feedback_status="resolved")
+
+        async def _raise_audit(*_a: object, **_k: object) -> object:
+            raise RuntimeError("audit boom")
+
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("modulo.api.routes.feedback.append_audit_event", side_effect=_raise_audit),
+        ):
+            mock_get.return_value = _make_mock_record(feedback_status="pending")
+            mock_update.return_value = mock_record
+
+            resp = client.patch(
+                f"/api/v1/feedback/{_RECORD_ID}/status",
+                json={"status": "resolved"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["feedback_status"] == "resolved"
+
+    def test_returns_404_when_not_found(self, client: TestClient) -> None:
+        audit = AsyncMock(return_value=MagicMock())
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("modulo.api.routes.feedback.append_audit_event", new=audit),
+        ):
+            mock_get.return_value = None
+            mock_update.return_value = None
+
+            resp = client.patch(
+                f"/api/v1/feedback/{uuid.uuid4()}/status",
+                json={"status": "resolved"},
+            )
+
+        assert resp.status_code == 404
+        audit.assert_not_awaited()
 
     def test_accepts_dismissed_status(self, client: TestClient) -> None:
         """'dismissed' is a valid terminal status per PRD 8.20 — PATCH must accept it."""
@@ -273,11 +404,13 @@ class TestUpdateStatus:
         call_args, _call_kwargs = mock_update.call_args
         assert call_args[1] == "dismissed"
 
-    def test_returns_404_when_not_found(self, client: TestClient) -> None:
+    def test_returns_404_when_update_returns_none(self, client: TestClient) -> None:
         with (
             patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
             patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
         ):
+            mock_get.return_value = _make_mock_record()
             mock_update.return_value = None
 
             resp = client.patch(
@@ -286,6 +419,13 @@ class TestUpdateStatus:
             )
 
         assert resp.status_code == 404
+
+    def test_rejects_invalid_status(self, client: TestClient) -> None:
+        resp = client.patch(
+            f"/api/v1/feedback/{_RECORD_ID}/status",
+            json={"status": "invalid_status"},
+        )
+        assert resp.status_code == 422
 
 
 class TestDetectEvalGap:
@@ -466,6 +606,84 @@ class TestReviewFeedback:
             patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
         ):
             mock_get.return_value = _make_mock_record()
+            mock_update.return_value = mock_record
+
+            resp = client.post(
+                f"/api/v1/feedback/inbox/{_RECORD_ID}/review",
+                json={"action": "mark_reviewed"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["feedback_status"] == "resolved"
+
+    def test_marks_as_reviewed_emits_status_changed_audit(self, client: TestClient) -> None:
+        mock_record = _make_mock_record(feedback_status="resolved")
+        audit = AsyncMock(return_value=MagicMock())
+
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("modulo.api.routes.feedback.append_audit_event", new=audit),
+        ):
+            mock_get.return_value = _make_mock_record(feedback_status="pending")
+            mock_update.return_value = mock_record
+
+            resp = client.post(
+                f"/api/v1/feedback/inbox/{_RECORD_ID}/review",
+                json={"action": "mark_reviewed"},
+            )
+
+        assert resp.status_code == 200
+        audit.assert_awaited_once()
+        kwargs = audit.await_args.kwargs
+        assert kwargs["event_type"] == "feedback.status_changed"
+        assert kwargs["resource_id"] == _RECORD_ID
+        assert kwargs["payload_json"]["old_status"] == "pending"
+        assert kwargs["payload_json"]["new_status"] == "resolved"
+        assert kwargs["payload_json"]["action"] == "mark_reviewed"
+        assert kwargs["payload_json"]["run_id"] == str(_RUN_ID)
+        assert kwargs["payload_json"]["gate_id"] == "gate-1"
+
+    def test_create_correction_run_emits_status_changed_audit(self, client: TestClient) -> None:
+        audit = AsyncMock(return_value=MagicMock())
+
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("modulo.api.routes.feedback.FeedbackManager.spawn_correction_run") as mock_spawn,
+            patch("modulo.api.routes.feedback.append_audit_event", new=audit),
+        ):
+            mock_get.return_value = _make_mock_record(feedback_status="pending")
+            mock_spawn.return_value = uuid.uuid4()
+
+            resp = client.post(
+                f"/api/v1/feedback/inbox/{_RECORD_ID}/review",
+                json={"action": "create_correction_run"},
+            )
+
+        assert resp.status_code == 200
+        audit.assert_awaited_once()
+        kwargs = audit.await_args.kwargs
+        assert kwargs["event_type"] == "feedback.status_changed"
+        assert kwargs["payload_json"]["old_status"] == "pending"
+        assert kwargs["payload_json"]["new_status"] == "correcting"
+        assert kwargs["payload_json"]["action"] == "create_correction_run"
+        assert kwargs["payload_json"]["correction_run_id"] is not None
+
+    def test_review_audit_failure_does_not_block_action(self, client: TestClient) -> None:
+        mock_record = _make_mock_record(feedback_status="resolved")
+
+        async def _raise_audit(*_a: object, **_k: object) -> object:
+            raise RuntimeError("audit boom")
+
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("modulo.api.routes.feedback.append_audit_event", side_effect=_raise_audit),
+        ):
+            mock_get.return_value = _make_mock_record(feedback_status="pending")
             mock_update.return_value = mock_record
 
             resp = client.post(

@@ -12,6 +12,7 @@ idempotency (UNIQUE(run_id)), and re-terminalization refresh (upsert).
 import builtins
 import uuid
 from collections.abc import AsyncGenerator
+from datetime import UTC
 from typing import Any, Self, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -29,6 +30,7 @@ from modulo.core.pipeline_engine.classify import (
     REASON_BUDGET_EXCEEDED,
     REASON_CANCELLED,
     REASON_DELIVERED,
+    REASON_DELIVERED_EMAIL,
     REASON_NEEDS_HUMAN,
     REASON_NO_WORK,
     REASON_PARSE_ERROR,
@@ -245,6 +247,124 @@ class TestPrUrlSources:
             raw_output_markers=_markers(_PR),
         )
         assert result.value == RunClassificationValue.no_delivery
+
+
+def _email_markers(*attempt_keys: str) -> dict[str, dict[str, Any]]:
+    """raw_output_markers where each marker carries delivery_done (FAR-228)."""
+    return {
+        key: {
+            "_modulo_marker": True,
+            "status": "failed",
+            "pr_url": "",
+            "parse_error": "email sent then sandbox crashed",
+            "attempt_key": key,
+            "delivery_done": True,
+        }
+        for key in attempt_keys
+    }
+
+
+class TestDeliveryDoneClassification:
+    """FAR-228: a complete run whose raw-output marker carries delivery_done is
+    classified delivered (REASON_DELIVERED_EMAIL) — the delivery was made even
+    though the node later failed/retried. pr_url STILL wins when both exist."""
+
+    def test_complete_with_delivery_done_marker_is_delivered(self) -> None:
+        result = classify_run(
+            "complete",
+            None,
+            outputs_json={},
+            telemetry_json={},
+            raw_output_markers=_email_markers("run:run-1:node:n1:1"),
+        )
+        assert result.value == RunClassificationValue.delivered
+        assert result.reason == REASON_DELIVERED_EMAIL
+
+    def test_complete_without_marker_still_no_work(self) -> None:
+        result = classify_run("complete", None, outputs_json={}, telemetry_json={})
+        assert result.value == RunClassificationValue.no_delivery
+        assert result.reason == REASON_NO_WORK
+
+    def test_real_pr_url_still_wins_over_email_marker(self) -> None:
+        """A valid pr_url takes precedence — a run that made a PR AND sent the
+        email records REASON_DELIVERED (pr_delivered), not email_delivered."""
+        result = classify_run(
+            "complete",
+            None,
+            outputs_json={"n1": _node_return_with_pr(_PR)},
+            telemetry_json={"n1": {}},
+            raw_output_markers=_email_markers("run:run-1:node:n1:1"),
+        )
+        assert result.value == RunClassificationValue.delivered
+        assert result.reason == REASON_DELIVERED
+        assert result.delivered_pr_urls == (_PR,)
+
+    def test_failed_with_delivery_done_marker_is_still_no_delivery(self) -> None:
+        """The email verdict only applies to the complete bucket — a failed run
+        remains countable no_delivery (mirrors the pr_url rule)."""
+        result = classify_run(
+            "failed",
+            "node.cancelled",
+            outputs_json={},
+            telemetry_json={},
+            raw_output_markers=_email_markers("run:run-1:node:n1:1"),
+        )
+        assert result.value == RunClassificationValue.no_delivery
+
+    def test_complete_with_success_path_marker_is_email_delivered(self) -> None:
+        """FAR-228 review fix: a marker persisted on the SUCCESS path (status
+        ``completed``, empty parse_error, exit_code 0 — the shape written by the
+        node's success-path retention) classifies a pr_url-less complete run as
+        delivered/email_delivered, NOT no_delivery/no_work. This is the
+        observable outcome the success marker must produce."""
+        result = classify_run(
+            "complete",
+            None,
+            outputs_json={},
+            telemetry_json={},
+            raw_output_markers={
+                "run:run-1:node:n1:1": {
+                    "_modulo_marker": True,
+                    "status": "completed",
+                    "summary": "Sandbox agent completed with delivery sentinel observed (idempotency gate)",
+                    "raw_output": "email sent\nEMAIL_SENT\n",
+                    "parse_error": "",
+                    "pr_url": "",
+                    "exit_code": 0,
+                    "stdout_length": 10,
+                    "stderr_length": 0,
+                    "attempt_key": "run:run-1:node:n1:1",
+                    "node_id": "n1",
+                    "delivery_done": True,
+                }
+            },
+        )
+        assert result.value == RunClassificationValue.delivered
+        assert result.reason == REASON_DELIVERED_EMAIL
+        assert not result.delivered_pr_urls
+
+    def test_complete_without_success_marker_still_no_work(self) -> None:
+        """FAR-228: without a delivery_done marker (and without pr_url) a
+        successful sentinel-free run stays no_delivery/no_work — the marker is
+        what flips the verdict, never the run status alone."""
+        result = classify_run(
+            "complete",
+            None,
+            outputs_json={},
+            telemetry_json={},
+            raw_output_markers={
+                "run:run-1:node:n1:1": {
+                    "_modulo_marker": True,
+                    "status": "completed",
+                    "parse_error": "",
+                    "pr_url": "",
+                    "attempt_key": "run:run-1:node:n1:1",
+                    "node_id": "n1",
+                }
+            },
+        )
+        assert result.value == RunClassificationValue.no_delivery
+        assert result.reason == REASON_NO_WORK
 
 
 class TestReasons:
@@ -779,6 +899,74 @@ class TestSweep:
         maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
         summary = await reconcile_missing_classifications(maker, org_ids=[_ORG], max_runs=10, budget_seconds=30.0)
         assert summary["scanned"] == 0
+
+    async def test_sweep_backfills_run_failed_by_saq_hooks_mark_run_failed(
+        self,
+    ) -> None:
+        """FAR-224: a run terminalised by ``saq_hooks._mark_run_failed`` — a
+        raw-SQL terminalizer that bypasses the inline classification hook — must
+        be classified by the reconcile sweep within one tick.
+
+        Drives the REAL ``_mark_run_failed`` path (claim-token-fenced
+        task_failure write) against the test engine, asserts the run is left
+        with ``run_classification = NULL``, then runs the periodic
+        ``run_classification_reconcile`` entrypoint and asserts the record is
+        backfilled. A directly-seeded ``status='failed'`` row (as in
+        ``test_reconcile_backfills_terminal_runs_without_record``) could not
+        catch a regression where ``_mark_run_failed`` stops writing the
+        terminal shape the sweep's predicate depends on.
+
+        Uses its OWN engine (not the shared ``engine`` fixture) so the raw
+        UPDATE's Postgres-style ``now()`` can be exposed on SQLite via
+        ``create_function`` without affecting any other test.
+        """
+        from datetime import datetime
+
+        from sqlalchemy import event
+
+        from modulo.core import cron_helpers
+        from modulo.core.error_tracking import saq_hooks
+
+        eng = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool, echo=False)
+
+        @event.listens_for(eng.sync_engine, "connect")
+        def _sqlite_now(dbapi_connection: Any, connection_record: Any) -> None:
+            dbapi_connection.create_function("now", 0, lambda: datetime.now(UTC).isoformat())
+
+        async with eng.begin() as conn:
+            await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_TABLES))
+        try:
+            run_id = uuid.uuid4()
+            maker = async_sessionmaker(eng, expire_on_commit=False, autobegin=False)
+            async with maker() as s, s.begin():
+                await _seed_run(s, run_id)  # status="running", claim_token="tok-a"
+
+            with patch.object(saq_hooks, "_open_factory", return_value=maker):
+                # Pass the id strings in SQLite's hyphenless-hex storage form:
+                # SQLAlchemy's Uuid() stores a CHAR(32) hex string here, so the
+                # production ``str(uuid)`` bind would match 0 rows on this test
+                # engine (on Postgres both forms coerce to the same native
+                # UUID — this is a SQLite test-infra accommodation only).
+                rowcount = await saq_hooks._mark_run_failed(
+                    run_id.hex,
+                    _ORG.hex,
+                    claim_token="tok-a",
+                    error_detail="task failure",
+                )
+            assert rowcount == 1
+
+            # The raw-SQL write bypasses the classification hook — the exact gap
+            # the 60s dispatcher_reconcile sweep exists to close.
+            assert await _read_classification(eng, run_id) is None
+
+            with patch.object(cron_helpers, "_open_factory", return_value=maker):
+                summary = await cron_helpers.run_classification_reconcile()
+            assert summary["classified"] == 1
+            record = await _read_classification(eng, run_id)
+            assert record is not None
+            assert record["value"] == "no_delivery"
+        finally:
+            await eng.dispose()
 
 
 class _MockBegin:

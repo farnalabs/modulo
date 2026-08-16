@@ -2,9 +2,11 @@
 
 The Azure Repos (``value``), Azure Pipelines (``value``), Azure Key Vault
 (``value``), Bitbucket (``values``), Microsoft Teams (``value``), SharePoint
-(``value``), and TeamCity (``build``/``project``/``buildType``/``agent``)
-connectors each guard their list parsing against corrupt or hostile response
-bodies. A corrupt or hostile response may return
+(``value``), TeamCity (``build``/``project``/``buildType``/``agent``),
+CircleCI (``items``), n8n (``data``), Opsgenie (``data``), Datadog
+(``data``), and PagerDuty (``incidents``/``services``/``teams``/``users``/
+``escalation_policies``/``schedules``/``oncalls``) connectors each guard
+their list parsing against corrupt or hostile response bodies. A corrupt or hostile response may return
 a non-dict body (list, string, number, ...) or a non-list page field — either
 crashes the connector with ``AttributeError`` on the bare
 ``body.get(key, [])`` chain or returns a bare string as the records list.

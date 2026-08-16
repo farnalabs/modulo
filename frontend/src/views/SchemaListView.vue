@@ -61,7 +61,7 @@
           <div v-if="foldersList.length > 0" class="md:hidden mb-4">
             <Select v-model="mobileFolderSelectValue" :aria-label="$t('views.SchemaListView.folders')">
               <SelectTrigger class="w-full" :aria-label="$t('views.SchemaListView.folders')" data-testid="schema-list-mobile-folder-select">
-                <SelectValue :placeholder="$t('views.SchemaListView.all_schemas')" />
+                <SelectValue :placeholder="$t('views.SchemaListView.folders')" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="__all__">{{ $t('views.SchemaListView.all_schemas') }}</SelectItem>

@@ -3588,7 +3588,7 @@ export interface paths {
          *
          *     Accepts two (run_id, node_id) pairs, fetches each node's output,
          *     applies sensitive masking, and returns a structured line-level diff
-         *     using difflib.SequenceMatcher.
+         *     via the shared modulo.core.line_diff helper.
          */
         post: operations["diff_node_output_api_v1_runs_diff_post"];
         delete?: never;
@@ -6384,6 +6384,116 @@ export interface paths {
         put?: never;
         /** Review Feedback */
         post: operations["review_feedback_api_v1_feedback_inbox__record_id__review_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/guardrails/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Guardrail Config
+         * @description Export the org's applied guardrail config as YAML + pin metadata.
+         */
+        get: operations["get_guardrail_config_api_v1_guardrails_config_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/guardrails/config/propose": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose Guardrail Config
+         * @description Validate + hash a proposed config set, diff it, and store the proposal.
+         */
+        post: operations["propose_guardrail_config_api_v1_guardrails_config_propose_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/guardrails/config/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Apply Guardrail Config
+         * @description Apply the pending proposal — the approve/merge step (admin only).
+         *
+         *     Reconciles the live ``EvalDefinition`` rows to the proposed set and moves
+         *     the pin to a clean applied state. 409 when there is no proposal to apply.
+         *     Guardrails are safety controls, so the reconcile is gated by the same
+         *     admin-only check the direct eval-definition API enforces (evals.py) — an
+         *     operator with ``eval.definition.create`` must not be able to mutate these
+         *     rows through the config seam when the direct API denies it.
+         */
+        post: operations["apply_guardrail_config_api_v1_guardrails_config_apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/guardrails/config/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject Guardrail Config
+         * @description Discard the pending proposal (admin only). 409 when none exists.
+         *
+         *     Rejecting discards a proposed safety-control change, so it is gated by the
+         *     same admin-only check as apply and the direct eval-definition API.
+         */
+        post: operations["reject_guardrail_config_api_v1_guardrails_config_reject_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/guardrails/config/drift": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Guardrail Drift
+         * @description Recompute drift between the live rows and the applied pin.
+         */
+        get: operations["get_guardrail_drift_api_v1_guardrails_config_drift_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -9752,6 +9862,58 @@ export interface components {
             /** Mappings */
             mappings: components["schemas"]["GroupMappingItem"][];
         };
+        /** GuardrailApplyResponse */
+        GuardrailApplyResponse: {
+            /** Applied */
+            applied: boolean;
+            /** Hash */
+            hash: string;
+            /** Applied At */
+            applied_at: string;
+            /**
+             * Status
+             * @default clean
+             */
+            status: string;
+        };
+        /** GuardrailChangeResponse */
+        GuardrailChangeResponse: {
+            /** Action */
+            action: string;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Old Hash */
+            old_hash?: string | null;
+            /** New Hash */
+            new_hash?: string | null;
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
+        };
+        /** GuardrailConfigResponse */
+        GuardrailConfigResponse: {
+            /** Config Yaml */
+            config_yaml: string;
+            /** Hash */
+            hash?: string | null;
+            /** Applied At */
+            applied_at?: string | null;
+            /** Status */
+            status: string;
+        };
+        /** GuardrailDriftResponse */
+        GuardrailDriftResponse: {
+            /** Status */
+            status: string;
+            /** Current Hash */
+            current_hash?: string | null;
+            /** Applied Hash */
+            applied_hash?: string | null;
+        };
         /** GuardrailOverrideRequest */
         GuardrailOverrideRequest: {
             /** Input Data */
@@ -9773,6 +9935,30 @@ export interface components {
              * @default override
              */
             action: string;
+        };
+        /** GuardrailProposalResponse */
+        GuardrailProposalResponse: {
+            /** Proposed */
+            proposed: boolean;
+            /** Hash */
+            hash: string;
+            /** Diff */
+            diff: components["schemas"]["GuardrailChangeResponse"][];
+            /**
+             * Status
+             * @default proposed
+             */
+            status: string;
+        };
+        /** GuardrailRejectResponse */
+        GuardrailRejectResponse: {
+            /** Rejected */
+            rejected: boolean;
+            /**
+             * Status
+             * @default clean
+             */
+            status: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -11588,6 +11774,8 @@ export interface components {
             agent_command?: string | null;
             /** Agent Prompt */
             agent_prompt?: string | null;
+            /** Delivery Sentinel */
+            delivery_sentinel?: string | null;
             /** Env Vars */
             env_vars?: {
                 [key: string]: string;
@@ -12008,6 +12196,11 @@ export interface components {
             notes: string;
             /** Optimized From */
             optimized_from?: string | null;
+        };
+        /** ProposeGuardrailConfigRequest */
+        ProposeGuardrailConfigRequest: {
+            /** Config Yaml */
+            config_yaml: string;
         };
         /** PublishRequestV2 */
         PublishRequestV2: {
@@ -12705,6 +12898,15 @@ export interface components {
             started_at?: string | null;
             /** Completed At */
             completed_at?: string | null;
+            /** Run Classification */
+            run_classification?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Gate Fired
+             * @default false
+             */
+            gate_fired: boolean;
         };
         /** RunSummary */
         RunSummary: {
@@ -30171,6 +30373,165 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_guardrail_config_api_v1_guardrails_config_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GuardrailConfigResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    propose_guardrail_config_api_v1_guardrails_config_propose_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProposeGuardrailConfigRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GuardrailProposalResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    apply_guardrail_config_api_v1_guardrails_config_apply_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GuardrailApplyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_guardrail_config_api_v1_guardrails_config_reject_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GuardrailRejectResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_guardrail_drift_api_v1_guardrails_config_drift_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GuardrailDriftResponse"];
                 };
             };
             /** @description Validation Error */

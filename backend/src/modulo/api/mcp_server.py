@@ -48,6 +48,7 @@ from modulo.api.dependencies import (
 )
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware as RateLimiterMiddleware
 from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+from modulo.api.routes.triggers import _streak_status_for
 from modulo.auth.api_key import (
     ApiKeyInvalidError,
     validate_api_key,
@@ -2630,9 +2631,11 @@ async def list_triggers(
                 limit=lim,
                 team_id=_ctx_team_id_val(),
             )
-
-        return {
-            "data": [
+            # FAR-251 — surface the SAME streak_status shape as the REST
+            # trigger serializers (via the shared routes helper), computed
+            # INSIDE the RLS transaction so a deactivated trigger's reason /
+            # streak reads land in-org (mirrors the FAR-191 list fix).
+            data = [
                 {
                     "id": str(t.id),
                     "pipeline_id": str(t.pipeline_id),
@@ -2642,9 +2645,13 @@ async def list_triggers(
                     "cron_expression": t.cron_expression,
                     "last_fired_at": t.last_fired_at.isoformat() if t.last_fired_at else None,
                     "created_at": t.created_at.isoformat() if t.created_at else None,
+                    "streak_status": await _streak_status_for(s, t),
                 }
                 for t in result.items
-            ],
+            ]
+
+        return {
+            "data": data,
             "total": result.total,
             "next_cursor": result.next_cursor,
             "has_more": result.has_more,
@@ -2864,6 +2871,11 @@ async def create_trigger(
                 trigger.next_fire_at = compute_next_fire(cron_expression, timezone=trigger.cron_timezone or "UTC")
             s.add(trigger)
             await s.flush()
+            # FAR-251 — surface the created trigger's streak_status exactly as
+            # the REST create serializer does (computed inside the RLS
+            # transaction; for a fresh ongoing trigger this reads the anchored
+            # streak=0 / state=ok baseline).
+            created_streak_status = await _streak_status_for(s, trigger)
 
         return {
             "id": str(trigger.id),
@@ -2873,6 +2885,7 @@ async def create_trigger(
             "max_concurrent_runs": trigger.max_concurrent_runs,
             "daily_spend_limit": float(trigger.daily_spend_limit) if trigger.daily_spend_limit is not None else None,
             "cron_expression": trigger.cron_expression,
+            "streak_status": created_streak_status,
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
@@ -2917,6 +2930,11 @@ async def get_trigger(trigger_id: str) -> dict[str, Any]:
             in_flight = (
                 await _count_ongoing_runs(s, tid) if trigger is not None and trigger.trigger_type == "ongoing" else 0
             )
+            # FAR-251 — surface the SAME streak_status shape as the REST
+            # trigger detail serializer (shared ``_streak_status_for``), computed
+            # INSIDE the RLS transaction (mirrors the FAR-191 fix — never read
+            # streak status post-commit).
+            streak_status = await _streak_status_for(s, trigger) if trigger is not None else None
 
         if trigger is None:
             return {"error": "not_found", "detail": "Trigger not found"}
@@ -2935,6 +2953,7 @@ async def get_trigger(trigger_id: str) -> dict[str, Any]:
             "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
             "input_template": (trigger.config_json or {}).get("input_template"),
             "in_flight": in_flight,
+            "streak_status": streak_status,
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
@@ -3097,6 +3116,10 @@ async def update_trigger(
             from modulo.core.cron_helpers import _count_ongoing_runs
 
             in_flight = await _count_ongoing_runs(s, trigger.id) if trigger.trigger_type == "ongoing" else 0
+            # FAR-251 — surface the updated trigger's streak_status exactly as
+            # the REST update serializer does (computed inside the RLS
+            # transaction so a re-enabled trigger reflects its reset streak).
+            updated_streak_status = await _streak_status_for(s, trigger)
 
         # FAR-190: clear the config-failure Redis counter only AFTER the commit
         # (the _session context commits on exit); best-effort.
@@ -3117,6 +3140,7 @@ async def update_trigger(
             "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
             "input_template": (trigger.config_json or {}).get("input_template"),
             "in_flight": in_flight,
+            "streak_status": updated_streak_status,
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}

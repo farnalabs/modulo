@@ -1279,6 +1279,8 @@ The `TriggerEvent` log accumulates records for every trigger activation (webhook
 
 **Pipeline retry policy (auto re-dispatch)**: a pipeline may declare `retry_policy` as `{"on": ["stall" | "timeout" | "failure"], "max_retries": 0-5}`. When a run ends in a configured state and the retry budget remains, the run is reset to `pending` and automatically re-dispatched as a new attempt instead of terminal-failing — `max_retries` counts actual retries (max_retries=1 yields one retry, i.e. two execution attempts). Re-dispatches wait a jittered, capped exponential backoff (base ~45s doubling per attempt, capped at ~5min, bounded by `max_retries`) so a persistent failure does not re-fire back-to-back. The `"failure"` event excludes sandbox-agent hang deaths: a run that terminalizes as `error_code="node_cancelled"` with `error_detail` containing `"likely hung"` is NOT re-dispatched (each re-dispatch would burn a full node timeout with zero recovery probability); transient `node_cancelled` outcomes stay retryable. Known limitation: the `stall` event covers node-idle stalls only (a node returns a stalled output); the executor-level zombie-watchdog stall terminal-fails the run before the retry decision, so it is not retried.
 
+**Idempotency gate for side-effecting sandbox nodes (FAR-228)**: an opt-in `sandbox_agent` node may declare a `delivery_sentinel` — a literal string the agent prints on its own line when the side effect (e.g. an email) has been sent. When a single-sandbox-node run's raw-output marker carries `delivery_done` (the sentinel was observed in a prior attempt's output — including on cancellation), a transient `SandboxNodeFailedError`/cancellation for that node is NOT re-dispatched: the run completes `complete` with `error_code="harness.idempotency_gate"` instead of burning the retry budget and re-sending the side effect. The gate is inert on multi-node graphs and is disabled by the `MODULO_IDEMPOTENCY_GATE_ENABLED` kill-switch. Runs suppressed by the gate are classified `delivered` (reason `email_delivered`) and surface `gate_fired=true` on the run detail API.
+
 **Recovery actions on failed runs**:
 - Retry from failed node (same inputs)
 - Retry from start
@@ -1700,7 +1702,20 @@ Behaviour:
 - **Observe/warn** never block; observe-mode results stamp `eval_results.observed` so the guardrail_summary observed bucket counts once.
 - **Remediation** is the dedicated guardrail-override endpoint (`POST /runs/{run_id}/guardrail-override`). The generic recover endpoint REFUSES guardrail-blocked runs (`error_code` `eval_blocked`) — the generic path does not re-run the guardrail pass on the supplied input and would resume execution on the blocked payload. `deliver_manual` is unavailable for terminal runs (no HITL gate → 404). The override re-runs the guardrail pass on the operator-supplied input (re-block safe default; a still-violating input is refused and the run stays terminal), persists the post-redaction payload, flips the run to `pending`, sets `is_replay=True` so lifecycle-map journeys increment exactly once, and re-dispatches from run start (the blocked run never executed, so there is no checkpoint to resume).
 
-Planned (not shipped in T1): conformance enforcement wiring at dispatch time (three-state derivation is shipped as a pure helper; enforcement is planned), kill-switch rollout flag, snapshot pinning (`guardrail_pins_json`), guardrail_summary telemetry on run detail, canary guardrails, and the guardrail management UI.
+The boundary philosophy: the agent definition is the driver's manual; boundary controls are the enforcement. An orchestrator CAN enforce deterministic, auditable, tamper-resistant controls at the orchestration boundary — validating what enters and leaves a run. It must DELEGATE agent-internal behaviour and unmediated external runtimes, which no boundary control can observe. Guardrails are therefore not agent-internal safety; they are the contract between the orchestrator and the agent it runs.
+
+What guardrails do NOT cover (known failure classes, follow-on work): free-text PII embedded in otherwise-valid field values, content-based detection (semantic, not structural), the interior of an agent loop (e.g. a long-running agent's intermediate steps), and output-side effects (already specified in the §8.17 output-side gates above).
+
+Planned (not shipped in T1): conformance enforcement wiring at dispatch time (three-state derivation is shipped as a pure helper; enforcement is planned), kill-switch rollout flag, guardrail_summary telemetry on run detail, canary guardrails, and the guardrail management UI.
+
+#### Guardrail config-as-code (shipped — T3, FAR-219)
+
+Versioned, hashed, PR-gated (git-backed) guardrail configuration is **shipped**. An org's guardrail configuration is expressed as a versioned YAML document (`version` + a list of guardrails, each with a stable slug `id`, `name`, `action: observe|warn|block|redact`, `detection: {type: regex|json_schema, pattern/field} | {type: json_schema, schema}`, static `redaction` paths, and `required_capabilities`). It layers a git-style review workflow on top of the engine:
+
+- **Snapshot pinning** — the org's applied config snapshot is pinned in `organisations.guardrail_pins_json` (applied/proposed content hashes, serialized YAML, timestamps, status). Content hashes are stable SHA-256 digests over a canonical serialization (sorted keys, guardrails sorted by stable id), so equivalent YAML layouts hash identically and the hash is reproducible from the live DB rows.
+- **Propose → diff → apply** — `POST /api/v1/guardrails/config/propose` validates + hashes a proposal and computes a per-guardrail add/update/remove diff; `POST /apply` (the approve/merge step, operator+) reconciles the live `eval_type='guardrail'` `EvalDefinition` rows bound to the org's pipelines (upsert present ids, delete removed ids — the engine's interception seam consumes these rows unchanged); `POST /reject` discards the proposal. Propose validates against the engine's guardrail rules (regex|json_schema detection only, no `failure_behaviour='retry'` — guardrail rows are always written with `failure_behaviour='warn'` because block semantics are guardrail-owned).
+- **Drift detection** — `GET /api/v1/guardrails/config/drift` recomputes the applied hash from the current DB rows and reports `clean`/`drift` when they diverge from the applied pin (e.g. a row edited outside the config layer). Each state-changing step emits an audit event (`guardrail_config.proposed|applied|rejected|drift_detected`) with summary payloads only — never raw config content.
+- Two-step delete + break-glass machinery from the T1 engine remains the emergency path.
 
 #### Alpha Note
 The Eval Engine component appears in the §6.1 architecture diagram. Eval System is a **v1 feature** — no eval definitions, no eval UI, and no conditional HITL in alpha. Alpha runs do not execute evals.
@@ -1708,20 +1723,18 @@ The Eval Engine component appears in the §6.1 architecture diagram. Eval System
 #### V1 delivery dependency
 The Eval System (§8.17) must ship before the Feedback System (§8.20). The Feedback System's `ai_correction` handler, eval gap detection, and proposed eval curation all require a functioning eval suite. The `human` feedback handler mode operates without evals (it is a routing and inbox feature only) and can ship alongside or before the Eval System. V1 Core delivery order: Eval System → Feedback System (`ai_correction` and gap detection). Human feedback inbox can ship earlier as a standalone feature. Additionally, Run Context Propagation (alpha) is a prerequisite for the Feedback System's correction run mechanics — correction runs inherit `run_context` from the original checkpoint. Run Context must be fully implemented and validated in alpha before the Feedback System's correction run feature can ship in v1.
 
-#### Guardrails (planned)
+#### Guardrails — phase history
 
-Guardrails are boundary enforcement for agent safety: the same eval primitives as §8.17 extended to the input side, with interception points, transform actions (redaction), and remediation wiring. They are **planned — not yet shipped** (T1 of the phase-guardrails epic). Nothing in this subsection exists in shipped code today.
+Guardrails are boundary enforcement for agent safety: the same eval primitives as §8.17 extended to the input side, with interception points, transform actions (redaction), and remediation wiring. T1 (the input-side engine, described above under "Guardrails — the input-side seam (FAR-208)") and T3 (snapshot-pinned, PR-gated config-as-code) are **shipped**. The original T1 planned-capability list is retained for traceability; every listed item is now shipped, with the caveats noted.
 
-The boundary philosophy: the agent definition is the driver's manual; boundary controls are the enforcement. An orchestrator CAN enforce deterministic, auditable, tamper-resistant controls at the orchestration boundary — validating what enters and leaves a run. It must DELEGATE agent-internal behaviour and unmediated external runtimes, which no boundary control can observe. Guardrails are therefore not agent-internal safety; they are the contract between the orchestrator and the agent it runs.
-
-Planned capability (T1) — all **planned, not yet shipped**:
+T1 planned capability — all **shipped**:
 - **Input-side interception** at run creation — evaluated before the run's first node executes.
 - **Actions**: `observe` | `warn` | `block` | `redact` (masks-only; redaction replaces matched field values with a placeholder, never logs the raw value).
 - **Deterministic detection** — the same `regex` / `json_schema` primitives as §8.17; no LLM judge on the input side.
-- **Conformance** for the `block` action — the run is rejected at the boundary, leaving an auditable, machine-readable rejection record.
-- **Audited override/recovery** — any bypass of a guardrail result is itself an auditable event.
+- **Conformance** for the `block` action — the three-state derivation is shipped as a pure helper; enforcement wiring at dispatch time is planned.
+- **Audited override/recovery** — the guardrail-override endpoint re-runs the pass on operator-supplied input; any bypass is itself an auditable event.
 
-What guardrails do NOT cover (known failure classes, all planned follow-on work, none shipped): free-text PII embedded in otherwise-valid field values, content-based detection (semantic, not structural), the interior of an agent loop (e.g. a long-running agent's intermediate steps), and output-side effects (already specified in §8.17 output-side gates).
+The boundary philosophy and the guardrails' non-coverage (known failure classes) are described in the §8.17 "Guardrails — the input-side seam (FAR-208)" section above.
 
 ---
 
@@ -4283,7 +4296,7 @@ Optional dimension (`trigger_type`, `status`, `pipeline`, `folder`, `team`, `err
 
 #### 8.32.7 Dashboard Rolling-Window Toggle
 
-The live dashboard (`/`) has a top-right rolling-window toggle: **Last 1h / Last 24h / Last 3d / Last 7d / Last 30d / Last 90d** (the `days` query param accepts any integer 1–90). When a window is selected, the stat cards (pipelines, total runs, running / awaiting human / failed / idle, eval pass rate, token spend) become **period-scoped** to that window and each card shows a **trend arrow** (▲ up / ▼ down / → flat; green / red / grey; 1dp %) comparing the current window against the immediately-preceding equal-length window.
+The live dashboard (`/`) has a top-right rolling-window toggle: **Last 24h / Last 3d / Last 7d / Last 30d / Last 90d** (the `days` query param accepts any integer 1–90). When a window is selected, the stat cards (pipelines, total runs, running / awaiting human / failed / idle, eval pass rate, token spend) become **period-scoped** to that window and each card shows a **trend arrow** (▲ up / ▼ down / → flat; green / red / grey; 1dp %) comparing the current window against the immediately-preceding equal-length window.
 
 The toggle also includes an **All time** option that clears the window (no `days` param) and shows the all-time scalars. The selected window persists to `localStorage` (`modulo.dashboard.trendWindow` — `'all'` for all-time, otherwise the day count as a string) and is restored on the next visit; first-time users (nothing stored) default to the **3d** window. Clicking a numbered window refreshes **only** the period-scoped block via the same `summary?days=N` endpoint — the all-time summary (totals, teams, trend, recent runs) is not reloaded and no full-page loading skeleton appears; switching to All time reloads the full summary. When a period window has no data for a metric (current is zero), the card falls back to the all-time value rather than showing 0.
 

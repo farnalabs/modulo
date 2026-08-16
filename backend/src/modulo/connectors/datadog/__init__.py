@@ -5,6 +5,7 @@ from typing import Any, cast
 
 import httpx
 
+from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -146,7 +147,7 @@ class DatadogConnector(ConnectorBase):
         resp = await c.post("/api/v2/query/timeseries", json=data)
         resp.raise_for_status()
         body = resp.json()
-        series: list[dict[str, Any]] = body.get("data", [])
+        series: list[dict[str, Any]] = _safe_records(body, "data")
         return ConnectorResult(records=series, total=len(series))
 
     async def _list_dashboards(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -158,7 +159,7 @@ class DatadogConnector(ConnectorBase):
         resp = await c.get("/api/v2/dashboards", params=params)
         resp.raise_for_status()
         body = resp.json()
-        dashboards: list[dict[str, Any]] = body.get("data", [])
+        dashboards: list[dict[str, Any]] = _safe_records(body, "data")
         return ConnectorResult(records=dashboards[: q.limit], total=len(dashboards))
 
     async def _search_logs(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -173,8 +174,8 @@ class DatadogConnector(ConnectorBase):
         resp = await c.post("/api/v2/logs/events/search", json=data)
         resp.raise_for_status()
         body = resp.json()
-        logs: list[dict[str, Any]] = body.get("data", [])
-        meta = body.get("meta")
+        logs: list[dict[str, Any]] = _safe_records(body, "data")
+        meta = body.get("meta") if isinstance(body, dict) else None
         page = meta.get("page") if isinstance(meta, dict) else None
         after = page.get("after") if isinstance(page, dict) else None
         next_cursor: str | None = after if isinstance(after, str) else None

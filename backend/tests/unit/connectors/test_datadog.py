@@ -252,6 +252,47 @@ async def test_query_logs_missing_meta(connector: DatadogConnector) -> None:
     assert result.next_cursor is None
 
 
+# -- corrupt list payload hardening -- #
+
+
+@respx.mock
+async def test_query_metrics_corrupt_body_no_crash(connector: DatadogConnector) -> None:
+    """A non-dict body from the metrics timeseries endpoint must degrade to an
+    empty page instead of crashing with AttributeError on ``.get()``."""
+    respx.post(f"{_BASE}/api/v2/query/timeseries").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await connector.query(ConnectorQuery(resource="metrics"))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_metrics_non_list_data_no_crash(connector: DatadogConnector) -> None:
+    """A corrupt body placing a non-list in ``data`` must fall back to an
+    empty page instead of returning a bare string as the records list."""
+    respx.post(f"{_BASE}/api/v2/query/timeseries").mock(return_value=httpx.Response(200, json={"data": "not-a-list"}))
+    result = await connector.query(ConnectorQuery(resource="metrics"))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_dashboards_corrupt_body_no_crash(connector: DatadogConnector) -> None:
+    """A non-dict dashboards body must degrade to an empty page, not crash."""
+    respx.get(f"{_BASE}/api/v2/dashboards").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await connector.query(ConnectorQuery(resource="dashboards"))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_logs_corrupt_body_no_crash(connector: DatadogConnector) -> None:
+    """A non-dict logs search body must degrade to an empty page, not crash."""
+    respx.post(f"{_BASE}/api/v2/logs/events/search").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await connector.query(ConnectorQuery(resource="logs"))
+    assert not result.records
+    assert result.next_cursor is None
+
+
 @respx.mock
 async def test_write_event(connector: DatadogConnector) -> None:
     respx.post(f"{_BASE}/api/v1/events").mock(
