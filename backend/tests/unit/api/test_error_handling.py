@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.sql import Select, Update
 
 from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -390,11 +391,29 @@ SESSION_CASES: list[tuple[str, str, str, type, int, dict | None, str | None]] = 
     ("teams_my_prog", "GET", "/api/v1/teams/my", ProgrammingError, 501, None, "database"),
     ("teams_my_sqla", "GET", "/api/v1/teams/my", SQLAlchemyError, 503, None, "database"),
     (
+        "teams_reassign_prog",
+        "POST",
+        f"/api/v1/teams/{_TEAM_ID}/reassign-org",
+        ProgrammingError,
+        501,
+        None,
+        "database",
+    ),
+    (
         "admin_team_reassign_all_prog",
         "POST",
         f"/api/v1/admin/teams/{_TEAM_ID}/reassign-all",
         ProgrammingError,
         501,
+        None,
+        "database",
+    ),
+    (
+        "teams_reassign_sqla",
+        "POST",
+        f"/api/v1/teams/{_TEAM_ID}/reassign-org",
+        SQLAlchemyError,
+        503,
         None,
         "database",
     ),
@@ -716,6 +735,141 @@ def test_update_schema_patch_can_clear_nullable_field(client: TestClient) -> Non
     mock_update.assert_awaited_once()
     updates = mock_update.await_args.args[2]
     assert updates == {"abstract_name": None}
+
+
+# ── Team bulk resource reassignment (PRD §9.3 Team Deletion Policy) ──────────
+
+
+class TestReassignTeamResources:
+    """POST /api/v1/teams/{id}/reassign-org — bulk "Reassign all to org-wide"."""
+
+    URL = f"/api/v1/teams/{_TEAM_ID}/reassign-org"
+
+    def _reassign_session(self, team_exists: bool, rowcounts: list[int]) -> AsyncMock:
+        session = _make_mock_session()
+        counts = iter(rowcounts)
+
+        async def _execute(stmt, *args: object, **kwargs: object):
+            if "authz_enforce" in str(stmt):
+                result = MagicMock()
+                result.scalar_one_or_none.return_value = None
+                return result
+            if isinstance(stmt, Select):
+                result = MagicMock()
+                result.scalar_one_or_none.return_value = MagicMock() if team_exists else None
+                return result
+            if isinstance(stmt, Update):
+                result = MagicMock()
+                result.rowcount = next(counts, 0)
+                return result
+            # RLS set_config TextClause and any other statement: no-op result.
+            result = MagicMock()
+            result.rowcount = 0
+            result.scalar_one_or_none.return_value = None
+            return result
+
+        session.execute = AsyncMock(side_effect=_execute)
+        return session
+
+    def test_reassign_all_returns_count(self, client: TestClient) -> None:
+        """Rows across pipeline/connector/model-backend/library are reassigned."""
+        session = self._reassign_session(team_exists=True, rowcounts=[2, 0, 1, 0])
+        _override_session(client, session)
+        resp = client.post(self.URL)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["team_id"] == str(_TEAM_ID)
+        assert body["reassigned"] == 3
+
+    def test_reassign_is_idempotent(self, client: TestClient) -> None:
+        """A second pass finds zero owned rows and reports reassigned=0."""
+        session = self._reassign_session(team_exists=True, rowcounts=[0, 0, 0, 0])
+        _override_session(client, session)
+        resp = client.post(self.URL)
+        assert resp.status_code == 200
+        assert resp.json()["reassigned"] == 0
+
+    def test_reassign_flips_visibility_to_org(self, client: TestClient) -> None:
+        """Every reassign UPDATE must also set visibility='org'.
+
+        The four resource tables carry a check constraint
+        ``'visibility = org OR owner_team_id IS NOT NULL'``; clearing
+        ``owner_team_id`` without flipping ``visibility`` would violate it and
+        the reassignment would fail with a misleading 409.
+        """
+        updates: list[str] = []
+        counts = iter([1, 1, 1, 1])
+
+        async def _execute(stmt, *args: object, **kwargs: object):
+            if "authz_enforce" in str(stmt):
+                result = MagicMock()
+                result.scalar_one_or_none.return_value = None
+                return result
+            if isinstance(stmt, Select):
+                result = MagicMock()
+                result.scalar_one_or_none.return_value = MagicMock()
+                return result
+            if isinstance(stmt, Update):
+                updates.append(str(stmt))
+                result = MagicMock()
+                result.rowcount = next(counts, 0)
+                return result
+            result = MagicMock()
+            result.rowcount = 0
+            result.scalar_one_or_none.return_value = None
+            return result
+
+        session = _make_mock_session()
+        session.execute = AsyncMock(side_effect=_execute)
+        _override_session(client, session)
+        resp = client.post(self.URL)
+        assert resp.status_code == 200
+        assert resp.json()["reassigned"] == 4
+        assert len(updates) == 4
+        for stmt in updates:
+            assert "visibility" in stmt
+            assert "org" in stmt
+
+    def test_reassign_unknown_team_returns_404(self, client: TestClient) -> None:
+        session = self._reassign_session(team_exists=False, rowcounts=[])
+        _override_session(client, session)
+        resp = client.post(self.URL)
+        assert resp.status_code == 404
+
+    def test_reassign_requires_admin(self) -> None:
+        session = self._reassign_session(team_exists=True, rowcounts=[1])
+        mock_plan = MagicMock()
+        mock_plan.feature_enabled.return_value = True
+        app.dependency_overrides[get_settings] = _make_settings
+        app.dependency_overrides[get_plan_context] = lambda: mock_plan
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="operator",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="operator",
+        )
+        app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+            username="operator",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="operator",
+        )
+        app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(
+            username="operator",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="operator",
+        )
+        try:
+
+            async def _session_override() -> AsyncGenerator[AsyncMock, None]:
+                yield session
+
+            app.dependency_overrides[get_db_session] = _session_override
+            resp = TestClient(app).post(self.URL)
+        finally:
+            app.dependency_overrides.clear()
+        assert resp.status_code == 403
 
 
 def test_model_backend_create_persists_health_check_on_save(client: TestClient) -> None:

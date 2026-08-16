@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from modulo.auth.api_key import (
+    _UNSET,
     ApiKeyInvalidError,
     _hash_key,
     _serialize_key,
@@ -543,3 +544,120 @@ async def test_revoke_api_key_wrong_org_returns_false() -> None:
 
     ok = await revoke_api_key(session, uuid.uuid4(), uuid.uuid4())
     assert ok is False
+
+
+# ---------------------------------------------------------------------------
+# revoke_api_key — FOR UPDATE row lock
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_revoke_api_key_select_locks_row_for_update() -> None:
+    """Concurrent revocations serialise: the SELECT takes a FOR UPDATE row lock."""
+    org_id = uuid.uuid4()
+    key_id = uuid.uuid4()
+    key = MagicMock(spec=OrgApiKey)
+    key.id = key_id
+    key.revoked_at = None
+
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = key
+
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=result)
+    session.flush = AsyncMock()
+
+    await revoke_api_key(session, key_id, org_id)
+
+    stmt = session.execute.await_args.args[0]
+    compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+    assert "FOR UPDATE" in compiled.upper()
+
+
+# ---------------------------------------------------------------------------
+# update_api_key — team-scope transitions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_update_api_key_clears_team_id() -> None:
+    """A team-scoped key can be moved back to org-wide by passing team_id=None."""
+    org_id = uuid.uuid4()
+    key_id = uuid.uuid4()
+    key = MagicMock(spec=OrgApiKey)
+    key.id = key_id
+    key.name = "Original"
+    key.role = "operator"
+    key.team_id = uuid.uuid4()
+
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = key
+
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=result)
+    session.flush = AsyncMock()
+
+    updated = await update_api_key(session, key_id, org_id, team_id=None)
+    assert updated is not None
+    assert updated.team_id is None
+
+
+@pytest.mark.asyncio
+async def test_update_api_key_team_id_unset_leaves_scope_unchanged() -> None:
+    """An update that omits team_id must not clear an existing team scope."""
+    team_id = uuid.uuid4()
+    key = MagicMock(spec=OrgApiKey)
+    key.id = uuid.uuid4()
+    key.name = "Original"
+    key.role = "operator"
+    key.team_id = team_id
+
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = key
+
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=result)
+    session.flush = AsyncMock()
+
+    updated = await update_api_key(session, key.id, uuid.uuid4(), name="Renamed")
+    assert updated is not None
+    assert updated.team_id == team_id
+
+
+@pytest.mark.asyncio
+async def test_update_api_key_clear_team_id_allowed_for_admin_role_key() -> None:
+    """Clearing the team scope is valid even for a legacy admin-role key — the
+    admin-role restriction applies to team-SCOPED keys only."""
+    key = MagicMock(spec=OrgApiKey)
+    key.id = uuid.uuid4()
+    key.name = "Original"
+    key.role = "admin"
+    key.team_id = uuid.uuid4()
+
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = key
+
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=result)
+    session.flush = AsyncMock()
+
+    updated = await update_api_key(session, key.id, uuid.uuid4(), team_id=None)
+    assert updated is not None
+    assert updated.team_id is None
+
+
+def test_unset_sentinel_is_object() -> None:
+    """The ``_UNSET`` sentinel is a single shared object, distinct from None."""
+    assert _UNSET is not None
+    assert _UNSET is not False
+
+
+# ---------------------------------------------------------------------------
+# OrgApiKey.lookup_prefix — exactly 8 chars at the column level
+# ---------------------------------------------------------------------------
+
+
+def test_lookup_prefix_column_is_string_8() -> None:
+    """The DB column is String(8): shorter/longer prefixes never match the index."""
+    column = OrgApiKey.__table__.c.lookup_prefix
+    assert column.type.length == 8
