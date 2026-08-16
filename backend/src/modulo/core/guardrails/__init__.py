@@ -38,7 +38,11 @@ A block outcome raises :class:`GuardrailBlockedError` (an
 
 from __future__ import annotations
 
+import asyncio
 import copy
+import json
+import logging
+import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -54,6 +58,8 @@ from modulo.core.eval_engine import (
     EvalType,
     GuardrailMisroutedError,
 )
+
+_log = logging.getLogger(__name__)
 
 
 class GuardrailAction(StrEnum):
@@ -103,6 +109,18 @@ GUARDRAIL_NEVER_TOUCH_FIELDS: frozenset[str] = frozenset(
 # guardrail config, never below this floor's spirit (0 = feature off).
 DEFAULT_MAX_GUARDRAILS_PER_NODE = 8
 
+# Per-guardrail hard timeout for detection (item 7) — each guardrail's
+# detection is bounded with ``asyncio.wait_for`` so a single pathological
+# regex can never hold the ingestion edge hostage. Configurable via guardrail
+# config.
+DEFAULT_GUARDRAIL_TIMEOUT_SECONDS = 2.0
+
+# Bounded-payload budget checked BEFORE guardrail evaluation (item 7) — a
+# guardrail pass must never run regex/json_schema detection over an unbounded
+# payload (ReDoS amplification guard). Over-budget fails CLOSED for
+# block/redact guardrails and log-and-continues for observe/warn.
+DEFAULT_MAX_GUARDRAIL_PAYLOAD_BYTES = 1_000_000
+
 # Only deterministic, pure eval types may serve as guardrail detection.
 GUARDRAIL_DETECTION_TYPES: frozenset[str] = frozenset({EvalType.REGEX, EvalType.JSON_SCHEMA})
 
@@ -141,6 +159,7 @@ class GuardrailConfig(BaseModel):
     redaction: list[FieldRedactionPolicy] = Field(default_factory=list)
     required_capabilities: list[str] = Field(default_factory=list)
     max_guardrails_per_node: int = Field(default=DEFAULT_MAX_GUARDRAILS_PER_NODE, ge=0)
+    guardrail_timeout_seconds: float = Field(default=DEFAULT_GUARDRAIL_TIMEOUT_SECONDS, gt=0)
 
     @classmethod
     def from_eval_config(cls, config: dict[str, Any]) -> GuardrailConfig:
@@ -167,14 +186,32 @@ class GuardrailPassResult:
     observed_only: bool = True
 
 
+@dataclass(frozen=True)
+class GuardrailSkip:
+    """A bound guardrail that the interception pass could not evaluate.
+
+    Item 10 (snapshot & replay residual): a guardrail referenced by a
+    snapshot pin whose live row no longer exists (soft-deleted) is SKIPPED —
+    never a run failure. The seam writes an audit event and raises an
+    enforcement-gap alert for each skip. ``reason`` is the skip enum:
+    ``"soft_deleted"`` (pinned row gone) — later kinds may extend it.
+    """
+
+    name: str
+    reason: str = "soft_deleted"
+    detail: str = ""
+
+
 @dataclass
 class GuardrailInterceptionOutcome:
     """Non-raising interception outcome — used by the run-creation seam.
 
     ``payload`` is the post-redaction payload the caller persists (persisted
     state is post-redaction). ``blocked`` is True when a block-action guardrail
-    (or a block-mode redaction policy) fired; ``block_message`` carries the
-    terminal reason for the ``eval_failed`` run.
+    (or a block-mode redaction policy, or a fail-closed mechanism error on a
+    block/redact guardrail) fired; ``block_message`` carries the terminal
+    reason for the ``eval_failed`` run. ``skipped`` lists guardrails the pass
+    could not evaluate (e.g. a soft-deleted pinned guardrail).
     """
 
     payload: dict[str, Any]
@@ -183,6 +220,7 @@ class GuardrailInterceptionOutcome:
     blocked: bool = False
     block_message: str = ""
     blocking_eval_name: str = ""
+    skipped: list[GuardrailSkip] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -422,6 +460,32 @@ def _sanitise_guardrail_detail(
     return result.model_copy(update={"detail": detail})
 
 
+def _detect_one(
+    engine: EvalEngine,
+    pre_act: dict[str, Any],
+    eval_def: EvalDefinition,
+) -> EvalResult:
+    """Validate + mirror + evaluate ONE guardrail against *pre_act*.
+
+    Shared by the sync pass (:func:`evaluate_guardrails`) and the bounded
+    async pass (:func:`run_interception_pass_async`, which invokes this in a
+    worker thread under ``asyncio.wait_for``). Raises
+    :class:`GuardrailConfigError` / :class:`GuardrailMisroutedError` on a
+    malformed guardrail — the caller decides fail-closed vs log-and-continue.
+    """
+    _validate_guardrail_definition(eval_def)
+    detection_type, effective_config = _resolve_detection(eval_def)
+    mirrored = eval_def.model_copy(
+        update={
+            "eval_type": EvalType(detection_type),
+            "failure_behaviour": "warn",  # block semantics are guardrail-owned
+            "config": effective_config,
+        }
+    )
+    result = engine.evaluate(pre_act, mirrored)
+    return _sanitise_guardrail_detail(detection_type, effective_config, result)
+
+
 def evaluate_guardrails(
     engine: EvalEngine,
     definitions: Sequence[EvalDefinition],
@@ -440,24 +504,164 @@ def evaluate_guardrails(
     results: list[EvalResult] = []
     violations: list[tuple[EvalDefinition, EvalResult]] = []
     for eval_def in definitions:
-        _validate_guardrail_definition(eval_def)
-        detection_type, effective_config = _resolve_detection(eval_def)
-        mirrored = eval_def.model_copy(
-            update={
-                "eval_type": EvalType(detection_type),
-                "failure_behaviour": "warn",  # block semantics are guardrail-owned
-                "config": effective_config,
-            }
-        )
-        result = engine.evaluate(payload, mirrored)
-        result = _sanitise_guardrail_detail(detection_type, effective_config, result)
+        result = _detect_one(engine, payload, eval_def)
         results.append(result)
+        detection_type, _ = _resolve_detection(eval_def)
         if _interpret_violation(detection_type, result) and eval_def.config.get("action") == GuardrailAction.BLOCK:
             violations.append((eval_def, result))
     if violations and raise_on_block:
         first_def, first_result = violations[0]
         raise GuardrailBlockedError(first_def.name, first_result.detail)
     return results
+
+
+def _resolve_action(eval_def: EvalDefinition) -> GuardrailAction:
+    """Best-effort action resolution for mechanism-error decisions.
+
+    A malformed/unknown action string resolves to OBSERVE — matching the
+    pre-existing seam behaviour (only a declared block/redact action is
+    treated as guarding) so a malformed row never silently becomes a block.
+    """
+    try:
+        return GuardrailAction(eval_def.config.get("action") or GuardrailAction.OBSERVE.value)
+    except ValueError:
+        return GuardrailAction.OBSERVE
+
+
+def _detect_block(
+    definitions: Sequence[EvalDefinition],
+    results: Sequence[EvalResult],
+) -> tuple[bool, str, str]:
+    """Determine the block decision from aligned (definitions, results)."""
+    for eval_def, result in zip(definitions, results, strict=True):
+        detection_type, _ = _resolve_detection(eval_def)
+        if _interpret_violation(detection_type, result) and eval_def.config.get("action") == GuardrailAction.BLOCK:
+            return True, f"Guardrail {eval_def.name!r} blocked: {result.detail}", eval_def.name
+    return False, "", ""
+
+
+def _apply_redaction_phase(
+    definitions: Sequence[EvalDefinition],
+    redacted: dict[str, Any],
+) -> tuple[dict[str, Any], list[RedactionEntry], bool, str, str]:
+    """Phase two — apply redaction masks to redact-action guardrails.
+
+    Returns ``(redacted, entries, blocked, block_message, blocking_eval_name)``.
+    A block-mode redaction policy firing records a block (never raises).
+    """
+    entries: list[RedactionEntry] = []
+    blocked: bool = False
+    block_message: str = ""
+    blocking_eval_name: str = ""
+    for eval_def in definitions:
+        cfg = _validate_guardrail_definition(eval_def)
+        if cfg.action != GuardrailAction.REDACT or not cfg.redaction:
+            continue
+        try:
+            redacted, batch_entries = apply_redaction_masks(
+                redacted,
+                cfg.redaction,
+                raise_on_block=True,
+                guardrail_name=eval_def.name,
+            )
+            entries.extend(batch_entries)
+        except GuardrailBlockedError as exc:
+            if not blocked:
+                blocked = True
+                block_message = str(exc)
+                blocking_eval_name = eval_def.name
+    return redacted, entries, blocked, block_message, blocking_eval_name
+
+
+def _mechanism_fail_result(eval_def: EvalDefinition, reason: str) -> EvalResult:
+    """A synthetic failed eval result for a log-and-continue mechanism error.
+
+    Never a raw payload in the detail — only descriptive text (the no-raw
+    persist contract).
+    """
+    return EvalResult(
+        run_id=uuid.uuid4(),
+        node_id=eval_def.node_id or "",
+        eval_id=eval_def.id,
+        passed=False,
+        score=0.0,
+        detail=f"guardrail {eval_def.name!r} mechanism error: {reason}",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Item 7 — cap enforcement + bounded evaluation
+# ---------------------------------------------------------------------------
+
+
+def resolve_guardrail_cap(definitions: Sequence[EvalDefinition]) -> int:
+    """Resolve the effective per-node guardrail cap (0 = feature off).
+
+    The cap is org-configurable via guardrail config-as-code: every applied row
+    carries ``max_guardrails_per_node`` in its ``config_json`` (mirrored from
+    the org's ``GuardrailConfigSet`` at apply time). The effective cap is the
+    MAXIMUM declared across the bound rows — a single row carrying 0 turns the
+    cap OFF for the whole pipeline. Falls back to the module constant when no
+    row declares it.
+    """
+    declared = [d.config.get("max_guardrails_per_node") for d in definitions]
+    values = [v for v in declared if isinstance(v, int) and not isinstance(v, bool) and v >= 0]
+    if 0 in values:
+        return 0
+    return max(values, default=DEFAULT_MAX_GUARDRAILS_PER_NODE)
+
+
+def guardrail_cap_violation(definitions: Sequence[EvalDefinition]) -> str | None:
+    """Return a description of the first per-node cap violation, or None.
+
+    Org-level guardrails (``node_id IS NULL``) bind to EVERY node; a node-bound
+    guardrail binds to its node. A node's effective count is org-level count +
+    its own rows. ``cap <= 0`` (feature off) never violates.
+    """
+    cap = resolve_guardrail_cap(definitions)
+    if cap <= 0:
+        return None
+    org_count = sum(1 for d in definitions if not d.node_id)
+    by_node: dict[str, int] = {}
+    for d in definitions:
+        if d.node_id:
+            by_node[d.node_id] = by_node.get(d.node_id, 0) + 1
+    if org_count > cap:
+        return f"org-level guardrail count {org_count} exceeds per-node cap {cap}"
+    for nid, count in sorted(by_node.items()):
+        if org_count + count > cap:
+            return f"node {nid!r} binds {org_count + count} guardrails (cap {cap})"
+    return None
+
+
+def resolve_guardrail_timeout(definitions: Sequence[EvalDefinition]) -> float:
+    """Resolve the effective per-guardrail detection timeout (seconds).
+
+    Same configurable mechanism as the cap — the maximum declared
+    ``guardrail_timeout_seconds`` across the bound rows, falling back to
+    :data:`DEFAULT_GUARDRAIL_TIMEOUT_SECONDS`.
+    """
+    declared = [d.config.get("guardrail_timeout_seconds") for d in definitions]
+    values = [v for v in declared if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0]
+    return float(max(values, default=DEFAULT_GUARDRAIL_TIMEOUT_SECONDS))
+
+
+def check_payload_within_budget(
+    payload: dict[str, Any],
+    max_bytes: int = DEFAULT_MAX_GUARDRAIL_PAYLOAD_BYTES,
+) -> bool:
+    """True when *payload*'s serialised size is within *max_bytes*.
+
+    Best-effort: an unserialisable payload is allowed through (evaluation will
+    handle it); the size guard is a DoS-amplification budget, not a validation
+    gate.
+    """
+    if max_bytes <= 0 or not payload:
+        return True
+    try:
+        return len(json.dumps(payload, separators=(",", ":"), default=str)) <= max_bytes
+    except (TypeError, ValueError):
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -495,6 +699,7 @@ def run_guardrail_pass(
 # ---------------------------------------------------------------------------
 # Conformance (three-state for block-action guardrails only)
 # ---------------------------------------------------------------------------
+
 
 ConformanceState = Literal["present", "absent", "unknown"]
 
@@ -564,7 +769,7 @@ def run_interception_pass(
     *,
     detection_only: bool = False,
 ) -> GuardrailInterceptionOutcome:
-    """Non-raising two-phase guardrail pass for the ingestion edge.
+    """Non-raising two-phase guardrail pass for the ingestion edge (sync).
 
     Phase one evaluates every bound guardrail against an immutable pre-act
     copy (block violations are recorded, never raised). Phase two applies
@@ -574,45 +779,24 @@ def run_interception_pass(
 
     *detection_only* (replays) skips both the block decision and the
     redaction act — replays are detection-only (item 10).
+
+    NOTE: this unbounded sync variant is the test/contract surface. The
+    production seam (``create_run`` / ``guardrail_override``) uses
+    :func:`run_interception_pass_async`, which adds the per-guardrail hard
+    timeout + bounded-payload budget.
     """
     if not definitions:
         return GuardrailInterceptionOutcome(payload=dict(payload), results=[])
     pre_act = copy.deepcopy(payload)
     results = evaluate_guardrails(engine, definitions, pre_act, raise_on_block=False)
 
-    blocked: bool = False
-    block_message: str = ""
-    blocking_eval_name: str = ""
-    for eval_def, result in zip(definitions, results, strict=True):
-        detection_type, _ = _resolve_detection(eval_def)
-        if _interpret_violation(detection_type, result) and eval_def.config.get("action") == GuardrailAction.BLOCK:
-            blocked = True
-            block_message = f"Guardrail {eval_def.name!r} blocked: {result.detail}"
-            blocking_eval_name = eval_def.name
-            break
-
+    blocked, block_message, blocking_eval_name = _detect_block(definitions, results)
     if detection_only:
         return GuardrailInterceptionOutcome(payload=pre_act, results=results, blocked=False)
 
-    redacted: dict[str, Any] = pre_act
-    entries: list[RedactionEntry] = []
-    for eval_def in definitions:
-        cfg = _validate_guardrail_definition(eval_def)
-        if cfg.action != GuardrailAction.REDACT or not cfg.redaction:
-            continue
-        try:
-            redacted, batch_entries = apply_redaction_masks(
-                redacted,
-                cfg.redaction,
-                raise_on_block=True,
-                guardrail_name=eval_def.name,
-            )
-            entries.extend(batch_entries)
-        except GuardrailBlockedError as exc:
-            if not blocked:
-                blocked = True
-                block_message = str(exc)
-                blocking_eval_name = eval_def.name
+    redacted, entries, rb, rbm, rbname = _apply_redaction_phase(definitions, pre_act)
+    if not blocked and rb:
+        blocked, block_message, blocking_eval_name = rb, rbm, rbname
     return GuardrailInterceptionOutcome(
         payload=redacted,
         results=results,
@@ -623,9 +807,276 @@ def run_interception_pass(
     )
 
 
+async def run_interception_pass_async(
+    engine: EvalEngine,
+    definitions: Sequence[EvalDefinition],
+    payload: dict[str, Any],
+    *,
+    detection_only: bool = False,
+    timeout_seconds: float | None = None,
+    max_payload_bytes: int = DEFAULT_MAX_GUARDRAIL_PAYLOAD_BYTES,
+    skipped: Sequence[GuardrailSkip] = (),
+) -> GuardrailInterceptionOutcome:
+    """Async two-phase guardrail pass with per-guardrail hard timeouts (item 7).
+
+    Identical semantics to :func:`run_interception_pass` PLUS:
+
+    * **Per-guardrail hard timeout** — each detection runs in a worker thread
+      under ``asyncio.wait_for`` (default
+      :data:`DEFAULT_GUARDRAIL_TIMEOUT_SECONDS`, configurable per-row). A
+      timeout is a mechanism error: fail CLOSED for block/redact guardrails
+      (recorded as a block), log-and-continue for observe/warn (recorded as a
+      failed result so it stays observable).
+    * **Bounded payload** — a payload over ``max_payload_bytes`` (ReDoS
+      amplification guard) fails closed for block/redact and log-and-continues
+      for observe/warn. NEVER a raw payload in any log line.
+    * **Skipped guardrails** — *skipped* entries (e.g. a soft-deleted pinned
+      guardrail, item 10) are carried on the outcome; the seam audits + alerts.
+
+    A detection that raises (malformed config, misrouting) is handled the same
+    way as a timeout: fail-closed for block/redact, log-and-continue for
+    observe/warn.
+    """
+    if not definitions:
+        return GuardrailInterceptionOutcome(payload=dict(payload), skipped=list(skipped))
+
+    if not check_payload_within_budget(payload, max_payload_bytes):
+        any_guarding = any(_resolve_action(d) in (GuardrailAction.BLOCK, GuardrailAction.REDACT) for d in definitions)
+        reason = f"payload exceeds {max_payload_bytes}-byte guardrail budget"
+        if any_guarding:
+            _log.warning("guardrails.payload_over_budget", extra={"reason": reason})
+            return GuardrailInterceptionOutcome(
+                payload=copy.deepcopy(payload),
+                skipped=list(skipped),
+                blocked=True,
+                block_message="guardrail mechanism error at ingestion edge",
+                blocking_eval_name="<payload-budget>",
+            )
+        _log.warning("guardrails.payload_over_budget_observe", extra={"reason": reason})
+        return GuardrailInterceptionOutcome(
+            payload=copy.deepcopy(payload),
+            results=[_mechanism_fail_result(d, reason) for d in definitions],
+            skipped=list(skipped),
+        )
+
+    timeout = timeout_seconds if timeout_seconds is not None else resolve_guardrail_timeout(definitions)
+    pre_act = copy.deepcopy(payload)
+    results: list[EvalResult] = []
+    evaluated_defs: list[EvalDefinition] = []
+    blocked: bool = False
+    block_message: str = ""
+    blocking_eval_name: str = ""
+    for eval_def in definitions:
+        action = _resolve_action(eval_def)
+        guarding = action in (GuardrailAction.BLOCK, GuardrailAction.REDACT)
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(_detect_one, engine, pre_act, eval_def),
+                timeout=timeout,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Mechanism error (timeout, malformed config, misrouting). Fail
+            # closed for block/redact; log-and-continue for observe/warn.
+            reason = (
+                f"detection exceeded {timeout:g}s budget"
+                if isinstance(exc, TimeoutError)
+                else f"detection error: {exc}"
+            )
+            _log.warning(
+                "guardrails.detection_budget_exceeded",
+                extra={"guardrail": eval_def.name, "reason": reason},
+            )
+            if guarding:
+                blocked = True
+                block_message = "guardrail mechanism error at ingestion edge"
+                blocking_eval_name = eval_def.name
+                continue
+            results.append(_mechanism_fail_result(eval_def, reason))
+            evaluated_defs.append(eval_def)
+            continue
+        results.append(result)
+        evaluated_defs.append(eval_def)
+
+    if not blocked:
+        blocked, block_message, blocking_eval_name = _detect_block(evaluated_defs, results)
+    if detection_only:
+        return GuardrailInterceptionOutcome(
+            payload=pre_act,
+            results=results,
+            skipped=list(skipped),
+            blocked=False,
+        )
+
+    redacted, entries, rb, rbm, rbname = _apply_redaction_phase(definitions, pre_act)
+    if not blocked and rb:
+        blocked, block_message, blocking_eval_name = rb, rbm, rbname
+    return GuardrailInterceptionOutcome(
+        payload=redacted,
+        results=results,
+        redactions=entries,
+        blocked=blocked,
+        block_message=block_message,
+        blocking_eval_name=blocking_eval_name,
+        skipped=list(skipped),
+    )
+
+
 # ---------------------------------------------------------------------------
-# DB row → engine DTO
+# Conformance enforcement (item 7 "Plus") — dispatch-time wiring
 # ---------------------------------------------------------------------------
+
+
+def non_conformant_blocking_guardrails(
+    definitions: Sequence[EvalDefinition],
+    registered: dict[str, bool | None],
+) -> list[tuple[EvalDefinition, ConformanceDerivation]]:
+    """Block-action guardrails whose conformance claim is NOT satisfied.
+
+    *registered* maps a capability to True (confirmed present) / False
+    (confirmed absent) / None (unreadable). Fail-closed: a block-action
+    guardrail with ``required_capabilities`` whose derivation is ``absent`` OR
+    ``unknown`` is non-conformant. observe/warn guardrails never participate.
+    """
+    out: list[tuple[EvalDefinition, ConformanceDerivation]] = []
+    for eval_def in definitions:
+        if _resolve_action(eval_def) != GuardrailAction.BLOCK:
+            continue
+        required = eval_def.config.get("required_capabilities") or []
+        if not required:
+            continue
+        derivation = derive_conformance_state([str(c) for c in required], registered)
+        if derivation.state in ("absent", "unknown"):
+            out.append((eval_def, derivation))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Skip auditing + enforcement-gap alerts (item 10)
+# ---------------------------------------------------------------------------
+
+
+async def notify_guardrail_event(
+    org_id: uuid.UUID,
+    event_type: str,
+    payload: dict[str, Any],
+    *,
+    run_id: uuid.UUID | None = None,
+) -> None:
+    """Best-effort guardrail alert via the shared notifier (fail-open WITH a log).
+
+    Lazy-imports the notifier so this module stays importable without an app
+    engine. A dispatch failure is logged and swallowed — the enforcement
+    (block/skip) already happened; the alert is observability.
+    """
+    try:
+        from modulo.core.notifier import Notifier
+        from modulo.db.session import get_shared_engine
+        from modulo.settings import get_settings
+
+        settings = get_settings()
+        notifier = Notifier(get_shared_engine(), settings.fernet_key)
+        await notifier.dispatch_event(org_id, event_type, payload, run_id=run_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "guardrails.alert_dispatch_failed",
+            extra={"org_id": str(org_id), "event_type": event_type},
+        )
+
+
+async def audit_guardrail_skip(
+    session: Any,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    skip: GuardrailSkip,
+    *,
+    actor_id: uuid.UUID | None = None,
+) -> None:
+    """Audit a skipped guardrail and raise an enforcement-gap alert (item 10).
+
+    A guardrail referenced by a snapshot pin whose live row no longer exists
+    is SKIPPED — never a run failure. The skip is recorded as a
+    ``guardrail.skipped`` audit event AND an enforcement-gap notification so
+    the operator sees the control has silently stopped enforcing. Both are
+    best-effort (fail-open WITH a log) — the skip itself is the policy.
+    """
+    try:
+        from modulo.core.audit_logger import append_audit_event
+
+        await append_audit_event(
+            session,
+            org_id=org_id,
+            event_type="guardrail.skipped",
+            actor_user_id=actor_id,
+            resource_type="run",
+            resource_id=run_id,
+            payload_json={"guardrail": skip.name, "reason": skip.reason, "detail": skip.detail},
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "guardrails.skip_audit_failed",
+            extra={"org_id": str(org_id), "run_id": str(run_id), "guardrail": skip.name},
+        )
+    await notify_guardrail_event(
+        org_id,
+        "guardrail_enforcement_gap",
+        {"guardrail": skip.name, "reason": skip.reason, "detail": skip.detail, "run_id": str(run_id)},
+        run_id=run_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# DB row → engine DTO (live rows + snapshot pins)
+# ---------------------------------------------------------------------------
+
+
+def serialize_guardrail_pin(db_row: Any) -> dict[str, Any]:
+    """Serialize a DB ``eval_definitions`` guardrail row into a snapshot pin.
+
+    Item 10: the pipeline snapshot pins the guardrail set so a replay evaluates
+    the ORIGINAL conditions, not the live rows. The pin is self-contained
+    (carries org/pipeline ids) so it can be rebuilt without the live row.
+    """
+    return {
+        "id": str(db_row.id),
+        "org_id": str(db_row.organisation_id),
+        "pipeline_id": str(db_row.pipeline_id),
+        "node_id": str(db_row.node_id) if db_row.node_id else None,
+        "name": db_row.name,
+        "eval_type": db_row.eval_type,
+        "config_json": dict(db_row.config_json or {}),
+        "failure_behaviour": db_row.failure_behaviour,
+        "pass_threshold": str(db_row.pass_threshold) if db_row.pass_threshold is not None else None,
+        "suite_id": db_row.suite_id,
+    }
+
+
+def to_engine_definition_from_pin(entry: dict[str, Any]) -> EvalDefinition:
+    """Build an engine ``EvalDefinition`` DTO from a snapshot pin entry.
+
+    The pin carries the ORIGINAL (snapshot-time) config — a replay must not
+    silently pick up live-row edits to the same guardrail.
+    """
+    config: dict[str, Any] = entry.get("config_json") or {}
+    if not isinstance(config, dict):
+        config = {}
+    return EvalDefinition(
+        id=uuid.UUID(str(entry["id"])),
+        org_id=uuid.UUID(str(entry["org_id"])),
+        pipeline_id=uuid.UUID(str(entry["pipeline_id"])) if entry.get("pipeline_id") else None,
+        node_id=str(entry["node_id"]) if entry.get("node_id") else None,
+        name=str(entry["name"]),
+        eval_type=EvalType(str(entry["eval_type"])),
+        config=config,
+        failure_behaviour=str(entry.get("failure_behaviour") or "warn"),
+        pass_threshold=float(entry["pass_threshold"]) if entry.get("pass_threshold") else None,
+        suite_id=entry.get("suite_id"),
+    )
 
 
 def to_engine_definition(db_row: Any) -> EvalDefinition:
@@ -650,7 +1101,9 @@ def to_engine_definition(db_row: Any) -> EvalDefinition:
 
 
 __all__ = [
+    "DEFAULT_GUARDRAIL_TIMEOUT_SECONDS",
     "DEFAULT_MAX_GUARDRAILS_PER_NODE",
+    "DEFAULT_MAX_GUARDRAIL_PAYLOAD_BYTES",
     "GUARDRAIL_DETECTION_TYPES",
     "GUARDRAIL_FORBIDDEN_FAILURE_BEHAVIOURS",
     "GUARDRAIL_NEVER_TOUCH_FIELDS",
@@ -666,13 +1119,24 @@ __all__ = [
     "GuardrailInterceptionOutcome",
     "GuardrailMisroutedError",
     "GuardrailPassResult",
+    "GuardrailSkip",
     "RedactionEntry",
     "apply_redaction_masks",
+    "audit_guardrail_skip",
+    "check_payload_within_budget",
     "derive_conformance_state",
     "evaluate_guardrails",
+    "guardrail_cap_violation",
+    "non_conformant_blocking_guardrails",
+    "notify_guardrail_event",
+    "resolve_guardrail_cap",
+    "resolve_guardrail_timeout",
     "resolve_static_path",
     "run_guardrail_pass",
     "run_interception_pass",
+    "run_interception_pass_async",
+    "serialize_guardrail_pin",
     "set_static_path",
     "to_engine_definition",
+    "to_engine_definition_from_pin",
 ]

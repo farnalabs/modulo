@@ -1057,3 +1057,56 @@ async def test_conditional_edge_normal_edges_still_checked():
     session = _session_returning([])
     result = await GraphValidator().validate(snap, session)
     assert result.is_valid
+
+
+# ---------------------------------------------------------------------------
+# Guardrail per-node cap (FAR-223 item 7)
+# ---------------------------------------------------------------------------
+
+
+def _guardrail_row(node_id, name, *, cap=None):
+    row = MagicMock()
+    row.id = uuid.uuid4()
+    row.organisation_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    row.pipeline_id = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
+    row.node_id = node_id
+    row.name = name
+    row.eval_type = "guardrail"
+    row.config_json = (
+        {"action": "observe", "max_guardrails_per_node": cap} if cap is not None else {"action": "observe"}
+    )
+    row.failure_behaviour = "warn"
+    row.pass_threshold = None
+    row.suite_id = None
+    return row
+
+
+async def test_guardrail_cap_exceeded_rejected_at_graph_save():
+    rows = [_guardrail_row(None, f"g-{i}") for i in range(9)]
+    result = await GraphValidator().validate_definition(
+        _SINGLE_NODE, _session_returning([]), guardrail_definitions=rows
+    )
+    assert not result.is_valid
+    assert any(i.code == "GUARDRAIL_CAP_EXCEEDED" for i in result.issues)
+
+
+async def test_guardrail_cap_within_budget_passes_graph_save():
+    rows = [_guardrail_row(None, f"g-{i}") for i in range(8)]
+    result = await GraphValidator().validate_definition(
+        _SINGLE_NODE, _session_returning([]), guardrail_definitions=rows
+    )
+    assert result.is_valid
+    assert not any(i.code == "GUARDRAIL_CAP_EXCEEDED" for i in result.issues)
+
+
+async def test_guardrail_cap_feature_off_never_violates():
+    rows = [_guardrail_row(None, f"g-{i}", cap=0) for i in range(12)]
+    result = await GraphValidator().validate_definition(
+        _SINGLE_NODE, _session_returning([]), guardrail_definitions=rows
+    )
+    assert result.is_valid
+
+
+async def test_guardrail_cap_no_rows_is_skipped():
+    result = await GraphValidator().validate_definition(_SINGLE_NODE, _session_returning([]), guardrail_definitions=[])
+    assert result.is_valid

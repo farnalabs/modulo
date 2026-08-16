@@ -296,8 +296,14 @@ async def guardrail_override(
 
     # Re-run the guardrail pass on the operator-supplied input BEFORE flipping
     # the run (re-block safe default). Persisted state is post-redaction.
+    # The bounded async pass applies the same per-guardrail hard timeout +
+    # bounded-payload budget as the run-creation seam (FAR-223 item 7).
     from modulo.core.eval_engine import EvalEngine
-    from modulo.core.guardrails import GuardrailInterceptionOutcome, run_interception_pass, to_engine_definition
+    from modulo.core.guardrails import (
+        GuardrailInterceptionOutcome,
+        run_interception_pass_async,
+        to_engine_definition,
+    )
     from modulo.db.models.eval_definition import EvalDefinition as EvalDefinitionModel
 
     guardrail_rows = (
@@ -314,7 +320,7 @@ async def guardrail_override(
         .all()
     )
     guardrail_defs = [to_engine_definition(row) for row in guardrail_rows]
-    outcome: GuardrailInterceptionOutcome = run_interception_pass(
+    outcome: GuardrailInterceptionOutcome = await run_interception_pass_async(
         EvalEngine(),
         guardrail_defs,
         input_data,

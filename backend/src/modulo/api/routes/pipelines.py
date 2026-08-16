@@ -989,12 +989,40 @@ async def replace_pipeline_graph_endpoint(
                 account_id=principal.account_id,
             )
             if graph is not None:
+                # Load the pipeline's guardrail eval rows so the graph-save
+                # validation can reject a per-node guardrail-cap violation
+                # (FAR-223 item 7) — the authoring-time rejection that the
+                # create_run fail-closed backstop also enforces at run start.
+                from sqlalchemy import select
+
+                from modulo.db.models.eval_definition import EvalDefinition
+
+                guardrail_rows = (
+                    (
+                        await session.execute(
+                            select(EvalDefinition).where(
+                                EvalDefinition.pipeline_id == pipeline_id,
+                                EvalDefinition.organisation_id == principal.organisation_id,
+                                EvalDefinition.eval_type == "guardrail",
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
                 validation = await GraphValidator().validate_definition(
                     validator_graph,
                     session,
                     connector_bindings=connector_bindings,
                     model_backend_pins=model_backend_pins,
+                    guardrail_definitions=list(guardrail_rows),
                 )
+                for issue in validation.issues:
+                    if issue.code == "GUARDRAIL_CAP_EXCEEDED":
+                        raise HTTPException(
+                            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                            detail=issue.message,
+                        )
     except HitlGateWeakeningDenied as exc:
         await _deny_hitl_gate(
             session,

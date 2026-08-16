@@ -275,6 +275,29 @@ async def create_snapshot_from_live_graph(
             "nodes": nodes,
             "edges": edge_dicts,
         }
+
+        # Guardrail snapshot pin (FAR-223 item 10): serialize the pipeline's
+        # bound guardrail rows so a replay evaluates the ORIGINAL conditions
+        # (the pinned set), never the live rows. Loaded here — not inside
+        # create_run — so the pin is immutable like the graph itself.
+        from modulo.core.guardrails import serialize_guardrail_pin
+        from modulo.db.models.eval_definition import EvalDefinition
+
+        guardrail_rows = (
+            (
+                await session.execute(
+                    select(EvalDefinition).where(
+                        EvalDefinition.pipeline_id == pipeline_id,
+                        EvalDefinition.organisation_id == pipeline.organisation_id,
+                        EvalDefinition.eval_type == "guardrail",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        guardrail_pins = [serialize_guardrail_pin(row) for row in guardrail_rows] or None
+
         snapshot = PipelineSnapshot(
             organisation_id=pipeline.organisation_id,
             pipeline_id=pipeline.id,
@@ -287,6 +310,7 @@ async def create_snapshot_from_live_graph(
             model_backend_pins_json=model_backend_pins,
             composite_bindings_json=composite_bindings or None,
             parameter_bindings_json=parameter_bindings or None,
+            guardrail_pins_json=guardrail_pins,
             run_context_defaults=copy.deepcopy(pipeline.run_context_defaults),
         )
         session.add(snapshot)

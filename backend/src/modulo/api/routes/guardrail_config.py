@@ -240,7 +240,11 @@ async def _reconcile_guardrail_rows(
     for pipeline, rows_by_name in pipelines_rows:
         for gid, item in proposed_by_id.items():
             row = rows_by_name.get(gid)
-            config_json = to_eval_config(item)
+            config_json = to_eval_config(
+                item,
+                max_guardrails_per_node=config_set.max_guardrails_per_node,
+                guardrail_timeout_seconds=config_set.guardrail_timeout_seconds,
+            )
             if row is None:
                 session.add(
                     EvalDefinitionRow(
