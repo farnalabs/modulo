@@ -671,3 +671,90 @@ def test_update_schema_patch_can_clear_nullable_field(client: TestClient) -> Non
     mock_update.assert_awaited_once()
     updates = mock_update.await_args.args[2]
     assert updates == {"abstract_name": None}
+
+
+# ── HITL auth: 401 (unauthenticated) and 403 (insufficient role) ─────────────
+
+
+@pytest.fixture
+def unauth_hitl_client() -> Generator[TestClient, None, None]:
+    """Client with NO auth override — unauthenticated requests → 401."""
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def viewer_hitl_client() -> Generator[TestClient, None, None]:
+    """Client authenticated as a viewer — HITL claim/approve/reject → 403."""
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="viewer",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="viewer",
+    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="viewer",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="viewer",
+    )
+    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(
+        username="viewer",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="viewer",
+    )
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+class TestHitlAuth:
+    """HITL claim/approve/reject endpoints enforce auth: 401 unauth, 403 role."""
+
+    @pytest.mark.parametrize(
+        ("path", "body"),
+        [
+            (f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/claim", {"expiry_minutes": 15}),
+            (f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve", {"claim_token": "tok"}),
+            (f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/reject", {"claim_token": "tok", "reason": "no"}),
+        ],
+        ids=["claim", "approve", "reject"],
+    )
+    def test_unauthenticated_returns_401(self, unauth_hitl_client: TestClient, path: str, body: dict) -> None:
+        resp = unauth_hitl_client.post(path, json=body)
+        assert resp.status_code == 401
+
+    @pytest.mark.parametrize(
+        ("path", "body"),
+        [
+            (f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/claim", {"expiry_minutes": 15}),
+            (f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve", {"claim_token": "tok"}),
+            (f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/reject", {"claim_token": "tok", "reason": "no"}),
+        ],
+        ids=["claim", "approve", "reject"],
+    )
+    def test_viewer_returns_403(self, viewer_hitl_client: TestClient, path: str, body: dict) -> None:
+        resp = viewer_hitl_client.post(path, json=body)
+        assert resp.status_code == 403
