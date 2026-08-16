@@ -731,7 +731,7 @@ async def admin_get_org_guardrails_kill_switch(
             await set_rls_org(session, org_id)
             org = await get_organisation(session, org_id)
             if org is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
             return GetOrgGuardrailsKillSwitchResponse(
                 enabled=bool(org.guardrails_kill_switch),
                 enabled_at=org.guardrails_kill_switch_at.isoformat() if org.guardrails_kill_switch_at else None,
@@ -780,7 +780,7 @@ async def admin_set_org_guardrails_kill_switch(
             await set_rls_org(session, org_id)
             org = await get_organisation(session, org_id)
             if org is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
 
             # Idempotency: toggling to the current state is a no-op (no audit write).
             if bool(org.guardrails_kill_switch) == req.enabled:

@@ -46,6 +46,7 @@ _CODE_MODEL_BACKENDS_GET_MODEL = "model_backends.get_model_backend_endpoint"
 _MSG_MODEL_BACKEND_NOT_FOUND = "Model backend not found"
 _CODE_MODEL_BACKENDS_UPDATE_MODEL = "model_backends.update_model_backend_endpoint"
 _CODE_MODEL_BACKENDS_DELETE_MODEL = "model_backends.delete_model_backend_endpoint"
+_CODE_MODEL_BACKENDS_RECHECK_MODEL = "model_backends.recheck_model_backend_health_endpoint"
 
 
 logger = logging.getLogger(__name__)
@@ -652,7 +653,7 @@ async def update_model_backend_endpoint(
 
 
 @router.post("/{backend_id}/health-check", response_model=ModelBackendHealthCheckResponse)
-@handle_db_errors("model_backends.recheck_model_backend_health_endpoint")
+@handle_db_errors(_CODE_MODEL_BACKENDS_RECHECK_MODEL)
 async def recheck_model_backend_health_endpoint(
     backend_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -692,19 +693,19 @@ async def recheck_model_backend_health_endpoint(
             org_role=principal.org_role,
         )
     except IntegrityError:
-        logger.exception("model_backends.recheck_model_backend_health_endpoint")
+        logger.exception(_CODE_MODEL_BACKENDS_RECHECK_MODEL)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
-        logger.exception("model_backends.recheck_model_backend_health_endpoint")
+        logger.exception(_CODE_MODEL_BACKENDS_RECHECK_MODEL)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Model backends are not available. Run database migrations to enable this feature.",
         ) from None
     except SQLAlchemyError:
-        logger.exception("model_backends.recheck_model_backend_health_endpoint")
+        logger.exception(_CODE_MODEL_BACKENDS_RECHECK_MODEL)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while re-checking model backend health.",
