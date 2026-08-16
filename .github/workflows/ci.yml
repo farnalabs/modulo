@@ -35,8 +35,10 @@ jobs:
       - run: uv run --no-sync bandit -r src/modulo/ -ll
       - name: Vulture (block new dead code)
         # BLOCKING: no continue-on-error, no `|| true`. The repo-root
-        # .vulture_whitelist.py (framework-contract symbols) is the only
-        # sanctioned dead-code escape hatch; anything else fails CI.
+        # .vulture_whitelist.py (framework-contract + test-referenced symbols)
+        # is the only sanctioned dead-code escape hatch; anything else fails CI.
+        # At --min-confidence 60 unused functions/methods/classes block (see
+        # scripts/run_vulture.py for the full finding-type semantics).
         working-directory: .
         run: uv run --project backend --no-sync python scripts/run_vulture.py
       - name: Semgrep (block new findings)

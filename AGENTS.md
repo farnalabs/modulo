@@ -683,7 +683,7 @@ first-party endpoint:
 | `ruff-format` (staged .py) | `vue-tsc type-check` |
 | `bandit -r backend/src/` | `pip-audit` (deps scan) |
 | `semgrep --config=.semgrep/` | `generate-api-types` |
-| `vulture (dead code, --min-confidence 80)` | |
+| `vulture (dead code, --min-confidence 60)` | |
 | `gitleaks` (secret scan) | |
 | `import-linter` | |
 | `eslint` (staged .vue/.ts) | |
@@ -714,15 +714,21 @@ wrappers in `scripts/`:
   (semgrep-core cannot complete the full `backend/src/` scan with
   `--baseline-commit` on Windows — it hangs). Semgrep remains enforced on
   Linux: CI (`ci.yml`, `deploy.yml`) and E2B sandbox commits.
-- `scripts/run_vulture.py` runs the vulture dead-code gate (`--min-confidence 80`)
+- `scripts/run_vulture.py` runs the vulture dead-code gate (`--min-confidence 60`)
   over `backend/src/modulo` against the repo-root `.vulture_whitelist.py`.
   Unlike semgrep it is pure Python and runs identically on Windows and Linux,
   so it blocks on every platform — in pre-commit (default stage) AND in CI's
-  `backend-lint` job. The whitelist `__all__` list is the ONLY sanctioned
-  dead-code escape hatch; it exists solely for framework-contract symbols
-  (TYPE_CHECKING string annotations, FastAPI path params, SQLAlchemy
-  `@compiles` / LangChain callback params). New dead code is a blocking
-  finding.
+  `backend-lint` job. At 60% confidence vulture reports unused
+  functions/methods/classes, so the gate blocks NEW dead functions (the old 80
+  threshold only caught imports + unreachable code — see FAR-252). Framework
+  registration decorators and interface names are suppressed via
+  `--ignore-decorators` / `--ignore-names` in the wrapper. The whitelist
+  `__all__` list is the ONLY sanctioned dead-code escape hatch; it exists
+  solely for framework-contract symbols and test-referenced production-dead
+  code, each with a comment. `unused variable` findings (Pydantic/dataclass/
+  SQLAlchemy metaclass fields, Alembic vars) are reported to stderr but never
+  block — no name pattern distinguishes them from real dead vars, and ruff F841
+  already catches unused locals. New dead code is a blocking finding.
 
 Windows note: when `ruff-format`, `mixed-line-ending`, or `end-of-file-fixer`
 report "files were modified by this hook", they have normalised a Windows-tool
