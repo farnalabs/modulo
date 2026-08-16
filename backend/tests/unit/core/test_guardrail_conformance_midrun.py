@@ -480,6 +480,251 @@ async def test_check_node_start_zero_claim_no_manifest_roundtrip(monkeypatch: py
     assert result.claimed is False
 
 
+# ---------------------------------------------------------------------------
+# Hoisted claim discovery (FAR-215 MINOR 2): the executor precomputes the
+# claimed guardrail list once per run; the per-node check skips its own
+# guardrail-load query entirely when the list is provided.
+# ---------------------------------------------------------------------------
+
+
+def _guardrail_row(name: str, action: str, required: list[str] | None, node_id: str | None = None) -> MagicMock:
+    """DB-row-like guardrail row for ``load_claimed_guardrails`` (which maps
+    rows to engine DTOs via ``to_engine_definition``)."""
+    row = MagicMock()
+    row.id = uuid.uuid4()
+    row.organisation_id = _ORG_ID
+    row.pipeline_id = uuid.uuid4()
+    row.node_id = node_id
+    row.name = name
+    row.eval_type = "guardrail"
+    config: dict[str, Any] = {"action": action, "interception_point": "input"}
+    if required is not None:
+        config["required_capabilities"] = required
+    row.config_json = config
+    row.failure_behaviour = "block" if action == "block" else "warn"
+    row.pass_threshold = None
+    row.suite_id = None
+    return row
+
+
+def _hoist_factory(session: AsyncMock) -> MagicMock:
+    session.begin = MagicMock(return_value=session)
+    factory = MagicMock()
+    factory.return_value = session
+    factory.return_value.__aenter__ = AsyncMock(return_value=session)
+    factory.return_value.__aexit__ = AsyncMock(return_value=None)
+    return factory
+
+
+async def test_load_claimed_guardrails_hoists_claimed_only(monkeypatch: pytest.MonkeyPatch):
+    """The run-start hoist loads ALL guardrail rows once and returns only those
+    carrying a conformance claim (non-empty ``required_capabilities``)."""
+    import modulo.core.guardrails.conformance as mod
+
+    async def _noop_rls(session: Any, org_id: uuid.UUID) -> None:
+        return None
+
+    rows = [
+        _guardrail_row("g_claim", "block", ["sandbox.e2b"]),
+        _guardrail_row("g_plain", "warn", None),
+        _guardrail_row("g_no_caps", "block", []),
+    ]
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=_ScalarsResult(rows))
+    factory = _hoist_factory(session)
+    monkeypatch.setattr(mod, "_set_rls", _noop_rls)
+
+    claimed, load_failed = await mod.load_claimed_guardrails(
+        factory,
+        org_id=_ORG_ID,
+        pipeline_id=uuid.uuid4(),
+    )
+
+    assert load_failed is False
+    assert [g.name for g in claimed] == ["g_claim"]
+
+
+async def test_load_claimed_guardrails_failure_marks_fail_closed(monkeypatch: pytest.MonkeyPatch):
+    """A run-start load failure must NOT silently skip claims — it returns the
+    fail-closed marker so the node gate treats capabilities as unknown."""
+    import modulo.core.guardrails.conformance as mod
+
+    async def _noop_rls(session: Any, org_id: uuid.UUID) -> None:
+        return None
+
+    async def _boom(stmt: Any) -> Any:
+        raise RuntimeError("db down")
+
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=_boom)
+    factory = _hoist_factory(session)
+    monkeypatch.setattr(mod, "_set_rls", _noop_rls)
+
+    claimed, load_failed = await mod.load_claimed_guardrails(
+        factory,
+        org_id=_ORG_ID,
+        pipeline_id=uuid.uuid4(),
+    )
+
+    assert load_failed is True
+    assert claimed == []
+
+
+async def test_check_node_start_hoisted_claims_skips_guardrail_load(monkeypatch: pytest.MonkeyPatch):
+    """With the executor's hoisted claimed list the per-node guardrail-load
+    query is skipped entirely — a non-hoisted path that touches the loader
+    would raise, proving zero per-node DB round-trip."""
+    import modulo.core.guardrails.conformance as mod
+
+    async def _boom_load(*args: Any, **kwargs: Any) -> list[Any]:
+        raise AssertionError("load_node_guardrails must not be called on the hoisted path")
+
+    async def _noop_rls(session: Any, org_id: uuid.UUID) -> None:
+        return None
+
+    async def _manifest(*args: Any, **kwargs: Any) -> dict[str, bool | None]:
+        return {"sandbox.e2b": False}
+
+    monkeypatch.setattr(mod, "load_node_guardrails", _boom_load)
+    monkeypatch.setattr(mod, "build_live_manifest", _manifest)
+    monkeypatch.setattr(mod, "_set_rls", _noop_rls)
+    session = _manifest_session()
+    factory = _hoist_factory(session)
+
+    result = await check_node_start(
+        factory,
+        org_id=_ORG_ID,
+        pipeline_id=uuid.uuid4(),
+        node_id="node-1",
+        connector_instance_ids=[],
+        environment_profile_id=None,
+        agent_id=None,
+        claimed_guardrails=[_gr("g_block", "block", ["sandbox.e2b"])],
+    )
+    assert result.blocked is True
+    assert result.state == "absent"
+    assert result.claimed is True
+
+
+async def test_check_node_start_hoisted_zero_claims_fast_path(monkeypatch: pytest.MonkeyPatch):
+    """Hoisted empty claim list -> fast path: no guardrail load AND no manifest."""
+    import modulo.core.guardrails.conformance as mod
+
+    async def _boom_load(*args: Any, **kwargs: Any) -> list[Any]:
+        raise AssertionError("load_node_guardrails must not be called on the hoisted path")
+
+    async def _noop_rls(session: Any, org_id: uuid.UUID) -> None:
+        return None
+
+    async def _boom_manifest(*args: Any, **kwargs: Any) -> dict[str, bool | None]:
+        raise AssertionError("build_live_manifest must not be called on zero-claim fast path")
+
+    monkeypatch.setattr(mod, "load_node_guardrails", _boom_load)
+    monkeypatch.setattr(mod, "build_live_manifest", _boom_manifest)
+    monkeypatch.setattr(mod, "_set_rls", _noop_rls)
+    session = _manifest_session()
+    factory = _hoist_factory(session)
+
+    result = await check_node_start(
+        factory,
+        org_id=_ORG_ID,
+        pipeline_id=uuid.uuid4(),
+        node_id="node-1",
+        connector_instance_ids=[],
+        environment_profile_id=None,
+        agent_id=None,
+        claimed_guardrails=[],
+    )
+    assert result.blocked is False
+    assert result.claimed is False
+
+
+async def test_check_node_start_claims_load_failed_fails_closed(monkeypatch: pytest.MonkeyPatch):
+    """Run-start claim-discovery failure -> fail CLOSED (unknown blocks): no
+    session, no load, no manifest — the node is denied, never fail-open."""
+    import modulo.core.guardrails.conformance as mod
+
+    async def _boom_load(*args: Any, **kwargs: Any) -> list[Any]:
+        raise AssertionError("load_node_guardrails must not be called when claims load failed")
+
+    async def _boom_manifest(*args: Any, **kwargs: Any) -> dict[str, bool | None]:
+        raise AssertionError("build_live_manifest must not be called when claims load failed")
+
+    monkeypatch.setattr(mod, "load_node_guardrails", _boom_load)
+    monkeypatch.setattr(mod, "build_live_manifest", _boom_manifest)
+    factory = MagicMock()
+    factory.return_value.__aenter__ = AsyncMock(
+        side_effect=AssertionError("no session must open when claims load failed")
+    )
+
+    result = await check_node_start(
+        factory,
+        org_id=_ORG_ID,
+        pipeline_id=uuid.uuid4(),
+        node_id="node-1",
+        connector_instance_ids=[],
+        environment_profile_id=None,
+        agent_id=None,
+        claimed_guardrails=None,
+        claims_load_failed=True,
+    )
+    assert result.blocked is True
+    assert result.state == "unknown"
+    assert result.gate_id == "guardrail_conformance_check_failed"
+    assert result.claimed is True
+
+
+async def test_check_node_start_hoisted_claims_node_scoped(monkeypatch: pytest.MonkeyPatch):
+    """The hoisted list carries every node's claims; only THIS node's bindings
+    (org-level + node-bound) are evaluated — another node's block claim must
+    not block this node."""
+    import modulo.core.guardrails.conformance as mod
+
+    async def _noop_rls(session: Any, org_id: uuid.UUID) -> None:
+        return None
+
+    async def _manifest(*args: Any, **kwargs: Any) -> dict[str, bool | None]:
+        return {"sandbox.e2b": True, "git.write": False}
+
+    monkeypatch.setattr(mod, "build_live_manifest", _manifest)
+    monkeypatch.setattr(mod, "_set_rls", _noop_rls)
+    session = _manifest_session()
+    factory = _hoist_factory(session)
+
+    node_a = str(uuid.uuid4())
+    node_b = str(uuid.uuid4())
+    org_level = _gr("g_org_level", "block", ["sandbox.e2b"])
+    node_b_claim = _gr("g_node_b", "block", ["git.write"])
+    node_b_claim.node_id = node_b
+
+    result_a = await check_node_start(
+        factory,
+        org_id=_ORG_ID,
+        pipeline_id=uuid.uuid4(),
+        node_id=node_a,
+        connector_instance_ids=[],
+        environment_profile_id=None,
+        agent_id=None,
+        claimed_guardrails=[org_level, node_b_claim],
+    )
+    # g_org_level's capability is present; node B's git.write claim is ignored.
+    assert result_a.blocked is False
+    assert result_a.state == "present"
+
+    result_b = await check_node_start(
+        factory,
+        org_id=_ORG_ID,
+        pipeline_id=uuid.uuid4(),
+        node_id=node_b,
+        connector_instance_ids=[],
+        environment_profile_id=None,
+        agent_id=None,
+        claimed_guardrails=[org_level, node_b_claim],
+    )
+    assert result_b.blocked is True
+    assert result_b.state == "absent"
+
+
 async def test_build_live_manifest_unreadable_surface_fails_closed(monkeypatch: pytest.MonkeyPatch):
     """An unreadable capability source contributes nothing (unknown), so a
     block-action guardrail fails CLOSED — never fail-open."""

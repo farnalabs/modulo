@@ -661,6 +661,89 @@ def test_seed_state_seeds_iteration_counts():
 # ---------------------------------------------------------------------------
 
 
+async def test_execute_seeds_hoisted_claimed_guardrails_into_conformance_ctx():
+    """FAR-215 MINOR 2: ``execute`` hoists the claimed-guardrail list ONCE per
+    run and seeds it into the run-scoped conformance context, so the per-node
+    check pays zero guardrail-load queries at every node start."""
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="complete")
+    snapshot = _make_snapshot()
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    compiled = _mock_compiled()
+    registry = _mock_registry()
+
+    async def _fake_load(self, org_id: Any, pipeline_id: Any):
+        return ["claim-a", "claim-b"], False
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+        patch.object(PipelineExecutor, "_load_claimed_conformance_guardrails", _fake_load),
+        patch("modulo.core.pipeline_engine.executor.set_conformance_ctx") as mock_ctx,
+    ):
+        executor = PipelineExecutor(MagicMock())
+        await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+
+    mock_ctx.assert_called_once()
+    args = mock_ctx.call_args.args
+    assert args[4] == ["claim-a", "claim-b"]
+    assert args[5] is False
+
+
+async def test_resume_seeds_hoisted_claimed_guardrails_into_conformance_ctx():
+    """FAR-215 MINOR 2: ``resume`` re-hoists the claimed-guardrail list (the
+    manifest may have changed since the original run) and seeds the same
+    run-scoped conformance context."""
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="complete")
+    snapshot = _make_snapshot()
+    session = _make_resume_session(snapshot)
+    factory = _make_session_factory(session)
+    compiled = _mock_compiled()
+    registry = _mock_registry()
+
+    async def _fake_load(self, org_id: Any, pipeline_id: Any):
+        return ["claim-a"], True
+
+    checkpointer_mock = MagicMock()
+    checkpointer_mock.__aenter__ = AsyncMock(return_value=checkpointer_mock)
+    checkpointer_mock.__aexit__ = AsyncMock(return_value=False)
+
+    settings_mock = MagicMock()
+    settings_mock.fernet_key = "test-fernet-key-not-for-production="
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("modulo.core.pipeline_engine.executor._checkpointer_scope", return_value=checkpointer_mock),
+        patch("modulo.settings.get_settings", return_value=settings_mock),
+        patch("modulo.core.pipeline_engine.executor.RunawayGuard", return_value=MagicMock()),
+        patch.object(PipelineExecutor, "_load_claimed_conformance_guardrails", _fake_load),
+        patch("modulo.core.pipeline_engine.executor.set_conformance_ctx") as mock_ctx,
+    ):
+        executor = PipelineExecutor(MagicMock())
+        executor._checkpointer_conn_string = "sqlite:///test.db"
+        await executor.resume(run_id=run.id, org_id=uuid.uuid4(), resume_data={"action": "approved"})
+
+    mock_ctx.assert_called_once()
+    args = mock_ctx.call_args.args
+    assert args[4] == ["claim-a"]
+    assert args[5] is True
+
+
 async def test_execute_success_transitions_status():
     run = _make_run()
     final_run = _make_run(run_id=run.id, status="complete")
