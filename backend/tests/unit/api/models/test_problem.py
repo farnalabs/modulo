@@ -182,6 +182,13 @@ class TestProblemFromHttpException:
             assert problem.type == f"urn:problem:modulo:{expected.value}", f"status {status}"
             assert problem.status == status
 
+    def test_504_maps_to_gateway_timeout_not_internal_error(self) -> None:
+        problem = _problem_from_http_exception("r", 504, "Connector sampling timed out after 30s")
+        assert problem.type == "urn:problem:modulo:gateway_timeout"
+        assert problem.title == "Gateway Timeout"
+        assert problem.status == 504
+        assert problem.detail == "Connector sampling timed out after 30s"
+
     def test_unknown_status_falls_back_to_internal_error_500(self) -> None:
         problem = _problem_from_http_exception(None, 418, "teapot")
         assert problem.type == "urn:problem:modulo:internal_error"

@@ -33,6 +33,8 @@ _NODE_ID = uuid.UUID("00000000-0000-0000-0000-000000000080")
 _PROFILE_ID = uuid.UUID("00000000-0000-0000-0000-000000000090")
 _EVAL_DEF_ID = uuid.UUID("00000000-0000-0000-0000-0000000000b0")
 _RECORD_ID = uuid.UUID("00000000-0000-0000-0000-0000000000c0")
+_TRIGGER_ID = uuid.UUID("00000000-0000-0000-0000-0000000000d0")
+_EVENT_ID = uuid.UUID("00000000-0000-0000-0000-0000000000e0")
 
 
 def _make_settings() -> Settings:
@@ -423,6 +425,47 @@ SESSION_CASES: list[tuple[str, str, str, type, int, dict | None, str | None]] = 
         503,
         None,
         "database",
+    ),
+    # Webhook triggers — the receive/replay routes authenticate via
+    # get_current_tenant_user_optional (no require_permission kill-switch read),
+    # so the injected session failure surfaces on the handler's own DB work.
+    # cleanup_expired IS require_permission-gated and is therefore excluded here
+    # (its kill-switch read fail-closes before the handler runs).
+    (
+        "webhook_receive_prog",
+        "POST",
+        f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+        ProgrammingError,
+        501,
+        {"event": "push"},
+        "database",
+    ),
+    (
+        "webhook_receive_sqla",
+        "POST",
+        f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+        SQLAlchemyError,
+        503,
+        {"event": "push"},
+        None,
+    ),
+    (
+        "webhook_replay_prog",
+        "POST",
+        f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{_EVENT_ID}",
+        ProgrammingError,
+        501,
+        {},
+        "database",
+    ),
+    (
+        "webhook_replay_sqla",
+        "POST",
+        f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{_EVENT_ID}",
+        SQLAlchemyError,
+        503,
+        {},
+        None,
     ),
 ]
 
@@ -827,3 +870,83 @@ class TestReassignTeamResources:
         finally:
             app.dependency_overrides.clear()
         assert resp.status_code == 403
+
+
+class TestTriggerPaginationValidation:
+    """Query-param bounds on the trigger listing endpoints.
+
+    FastAPI ``Query(ge=...)`` / ``Query(le=...)`` reject out-of-range values
+    with 422 *before* the handler runs, so the mocked DB session is never
+    touched on these paths.
+    """
+
+    def test_list_triggers_page_below_one_returns_422(self, client: TestClient) -> None:
+        resp = client.get("/api/v1/triggers?page=0")
+        assert resp.status_code == 422
+
+    def test_list_triggers_page_size_zero_returns_422(self, client: TestClient) -> None:
+        resp = client.get("/api/v1/triggers?page_size=0")
+        assert resp.status_code == 422
+
+    def test_list_triggers_page_size_above_100_returns_422(self, client: TestClient) -> None:
+        resp = client.get("/api/v1/triggers?page_size=101")
+        assert resp.status_code == 422
+
+    def test_list_trigger_events_limit_above_100_returns_422(self, client: TestClient) -> None:
+        resp = client.get(f"/api/v1/triggers/{_TRIGGER_ID}/events?limit=101")
+        assert resp.status_code == 422
+
+    def test_list_trigger_events_limit_below_one_returns_422(self, client: TestClient) -> None:
+        resp = client.get(f"/api/v1/triggers/{_TRIGGER_ID}/events?limit=0")
+        assert resp.status_code == 422
+
+
+class TestCronTimezoneValidation:
+    """Cron timezone validation: the validator returns an error string for an
+    invalid IANA timezone, and the API surfaces it as 422.
+
+    ``validate_cron_expression`` is the shared validator used by both
+    ``create_trigger`` and ``update_cron_config`` via ``_validated_next_fire``,
+    which raises HTTPException(422) on any non-None error string.
+    """
+
+    def test_invalid_timezone_returns_error_string(self) -> None:
+        from modulo.core.cron_helpers import validate_cron_expression
+
+        error = validate_cron_expression("0 0 * * *", timezone="Not/AZone")
+        assert error is not None
+        assert "Invalid timezone" in error
+
+    def test_valid_timezone_returns_none(self) -> None:
+        from modulo.core.cron_helpers import validate_cron_expression
+
+        assert validate_cron_expression("0 0 * * *", timezone="America/New_York") is None
+
+    def test_invalid_timezone_on_cron_config_update_returns_422(self, client: TestClient) -> None:
+        # Stub the trigger select so the handler reaches _validated_next_fire,
+        # which maps the invalid-timezone error string to HTTP 422.
+        trigger = MagicMock()
+        trigger.id = _TRIGGER_ID
+        trigger.organisation_id = _ORG_ID
+        trigger.trigger_type = "cron"
+        trigger.cron_expression = "0 0 * * *"
+        trigger.cron_timezone = "Not/AZone"
+        trigger.deleted_at = None
+
+        session = _make_mock_session()
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = trigger
+        session.execute = AsyncMock(return_value=result)
+
+        with (
+            patch("modulo.api.routes.triggers.set_rls_org"),
+            patch("modulo.api.routes.triggers.compute_next_fire") as mock_next,
+        ):
+            _override_session(client, session)
+            resp = client.patch(
+                f"/api/v1/triggers/{_TRIGGER_ID}/cron",
+                json={"cron_timezone": "Not/AZone", "cron_expression": "0 0 * * *"},
+            )
+
+        assert resp.status_code == 422
+        mock_next.assert_not_called()
