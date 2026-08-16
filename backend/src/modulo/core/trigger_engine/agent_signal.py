@@ -22,6 +22,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.exceptions import TriggersPausedError
+from modulo.core.trigger_engine import is_guardrail_blocked_run, record_dependent_suppressed
 from modulo.db.crud.run import create_run
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, Run
 from modulo.db.models.trigger import Trigger
@@ -117,6 +118,34 @@ async def fire_agent_signal(
                     "status": "skipped",
                     "reason": "concurrency_limit",
                     "active_runs": active_count,
+                }
+            )
+            continue
+
+        # FAR-213 dependent-trigger suppression: a guardrail-blocked source run
+        # (terminal ``eval_failed`` / ``eval_blocked``) must NEVER fire this
+        # dependent trigger — its external side effects are being compensated,
+        # not published. Checked at fire time (defense-in-depth: the executor
+        # only reaches this call for completing runs, but the guard is the
+        # durable invariant). The suppression is audited best-effort with a
+        # summary-only payload.
+        if await is_guardrail_blocked_run(session, source_run_id):
+            _log.info(
+                "agent_signal.dependent_suppressed source_run=%s trigger=%s",
+                source_run_id,
+                str_trigger_id,
+            )
+            await record_dependent_suppressed(
+                session,
+                org_id=org_id,
+                run_id=source_run_id,
+                trigger_count=1,
+            )
+            results.append(
+                {
+                    "trigger_id": str_trigger_id,
+                    "status": "skipped",
+                    "reason": "source_run_guardrail_blocked",
                 }
             )
             continue

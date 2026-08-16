@@ -422,6 +422,7 @@ async def create_run(
     guardrail_results: list[Any] = []
     guardrail_blocked = False
     guardrail_block_message = ""
+    guardrail_blocking_eval_name = ""
     guardrail_observed_by_eval: dict[uuid.UUID, bool] = {}
     from modulo.core.eval_engine import EvalEngine
     from modulo.core.guardrails import (
@@ -577,6 +578,9 @@ async def create_run(
                     guardrail_blocked = outcome.blocked
                     guardrail_block_message = outcome.block_message
                     skipped_guardrails = outcome.skipped
+                    # FAR-213: the blocking eval name feeds the blocked_partial
+                    # summary written at terminalization below.
+                    guardrail_blocking_eval_name = outcome.blocking_eval_name
                 # Item 7 — guardrail latency metric: the interception runs
                 # BEFORE the first node starts, so its wall-clock is accounted
                 # separately (a structured log line) and never silently eats
@@ -697,6 +701,31 @@ async def create_run(
     # NEVER abort create_run — a lost create-stamp is recoverable at finalise
     # via the deterministic canonical id.
     await _hydrate_journeys(session, org_id, canonical_refs)
+
+    # Run-termination compensation (FAR-213) — runs AFTER the terminal status
+    # write (the run was flushed above) as best-effort + failure-isolated: it
+    # writes the blocked_partial summary and, when a connector hub is supplied,
+    # compensates executed nodes' external side effects. It must NEVER block or
+    # delay the terminal write and never propagate — guard-the-guard: any
+    # compensation raise is logged + audited here. At the ingestion edge no
+    # nodes have executed (connector_hub is always None here), so only the
+    # summary + summary audit are written; the mid-run terminalization paths
+    # call compensate_blocked_run directly with the executed node outputs and a
+    # connector hub.
+    if guardrail_blocked:
+        from modulo.core.guardrails.compensation import compensate_blocked_run
+
+        try:
+            await compensate_blocked_run(
+                session,
+                run,
+                guardrail_block=guardrail_block_message,
+                blocking_eval_name=guardrail_blocking_eval_name,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("guardrails.compensation.error run=%s", run_id)
     return run
 
 

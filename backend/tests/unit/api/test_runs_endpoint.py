@@ -399,6 +399,53 @@ def test_get_run_returns_current_status(client: TestClient) -> None:
     assert resp.json()["status"] == "complete"
 
 
+def test_get_run_exposes_blocked_partial_summary(client: TestClient) -> None:
+    """FAR-213: a guardrail-blocked run's blocked_partial summary is surfaced on
+    the run-detail response (executed nodes + per-node publish status)."""
+    summary = {
+        "blocked": True,
+        "blocking_eval_name": "no-secrets",
+        "executed_nodes": ["node_a"],
+        "nodes": [
+            {
+                "node_id": "node_a",
+                "publish_status": "compensated",
+                "output_ref": {"run_id": str(_RUN_ID), "node_id": "node_a"},
+                "compensation": {"outcome": "compensated", "reason": "closed", "resource_id": "42"},
+            }
+        ],
+    }
+    run = _make_run(status="eval_failed", error_code="eval_blocked")
+    run.blocked_partial_summary = summary
+
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["blocked_partial_summary"] == summary
+    assert body["blocked_partial_summary"]["nodes"][0]["publish_status"] == "compensated"
+
+
+def test_get_run_blocked_partial_summary_non_dict_returns_null(client: TestClient) -> None:
+    """FAR-213 defensive coercion: a corrupt (non-dict) column value is surfaced
+    as null, never a 500."""
+    run = _make_run(status="eval_failed", error_code="eval_blocked")
+    run.blocked_partial_summary = "not-a-dict"
+
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.status_code == 200
+    assert resp.json()["blocked_partial_summary"] is None
+
+
 # ---------------------------------------------------------------------------
 # GET /api/v1/runs/{run_id} — not found
 # ---------------------------------------------------------------------------

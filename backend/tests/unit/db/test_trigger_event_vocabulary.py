@@ -13,7 +13,8 @@ constraint with the FULL 21-value vocabulary. This file asserts:
 * the reconciliation migration's hardcoded vocabulary stays in sync with the
   model (the single source of truth) — a value added to one side and not the
   other breaks the constraint/model contract,
-* the chain has a single linear head ``0110_schema_pipeline_runtime``.
+* the chain has a single linear head ``0110_schema_pipeline_runtime`` (the
+  FAR-213 ``0111_run_blocked_partial_summary`` migration chains on top of it).
 
 The old SQLite round-trip (which ran the migration's upgrade/downgrade against
 a mock ``op``) is obsolete: the reconciliation migration expresses the
@@ -36,6 +37,9 @@ _MIGRATION_NAME = "0110_schema_pipeline_runtime"
 _MIGRATION_PATH = (
     Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 )
+
+# The chain head after the FAR-213 blocked_partial_summary migration (0111).
+_CHAIN_HEAD_MIGRATION_NAME = "0111_run_blocked_partial_summary"
 
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
@@ -80,7 +84,7 @@ class TestReconciliationMigration:
     def test_0008_is_single_chain_head(self) -> None:
         script = _script()
         heads = script.get_heads()
-        assert heads == [_MIGRATION_NAME], f"expected a single head, got {heads}"
+        assert heads == [_CHAIN_HEAD_MIGRATION_NAME], f"expected a single head, got {heads}"
 
     def test_0008_owns_trigger_events_validation_constraint(self) -> None:
         """The reconciliation migration must create the constraint with the
