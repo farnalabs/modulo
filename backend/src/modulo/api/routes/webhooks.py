@@ -55,6 +55,7 @@ from modulo.core.trigger_engine import (  # noqa: F401
     verify_hmac,
     verify_timestamp,
 )
+from modulo.core.trigger_engine.pre_guardrail import GuardrailBlockedAtIntakeError
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
@@ -157,12 +158,14 @@ async def receive_webhook(
     NOT exempt — see those handlers.
 
     Returns 202 on success. All validation outcomes are recorded as TriggerEvent rows.
-    Returns 400 on duplicate payload, 401 on HMAC failure, 429 on flood rejection.
+    Returns 400 on duplicate payload or guardrail-blocked payload, 401 on HMAC
+    failure, 429 on flood rejection.
     """
     raw_body = await request.body()
     hmac_signature = request.headers.get("X-Modulo-Webhook-Secret")
     modulo_timestamp = request.headers.get("X-Modulo-Timestamp") or str(int(time.time()))
     trigger: Trigger | None = None
+    guardrail_block_detail: str | None = None
 
     try:
         raw_payload: dict[str, Any] = await request.json()
@@ -260,6 +263,14 @@ async def receive_webhook(
                 session.add(paused_event)
                 await session.flush()
                 return {"status": "paused"}
+            except GuardrailBlockedAtIntakeError as exc:
+                # The engine wrote the ``guardrail_blocked`` TriggerEvent and
+                # stored the raw payload INSIDE this transaction. Catch here
+                # (mirroring the paused pattern) so the transaction COMMITS and
+                # the event survives, then surface the 400 after the
+                # transaction — the delivery is reject-and-retry, NOT
+                # acked-as-accepted, and no run was created.
+                guardrail_block_detail = exc.detail
     except TriggerNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found") from exc
     except TriggerInactiveError as exc:
@@ -316,6 +327,16 @@ async def receive_webhook(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error",
         ) from None
+
+    if guardrail_block_detail is not None:
+        # A block-action guardrail rejected the delivery at the trigger
+        # boundary. The ``guardrail_blocked`` TriggerEvent and the stored raw
+        # payload were committed with the transaction above; the delivery is
+        # reject-and-retry — never acked, no run, no dedup slot.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=guardrail_block_detail,
+        )
 
     run_id = run.id
     background_tasks.add_task(_dispatch_webhook_run, str(run_id), str(org_id))

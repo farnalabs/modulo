@@ -691,7 +691,7 @@ class TestCapacityMarkerExclusion:
         sql = self._sql()
         assert "runs.status = 'pending'" in sql
         assert "runs.heartbeat_at IS NULL" in sql
-        assert "now() - interval '120 seconds'" in sql
+        assert "now() - 120 * interval '1 second'" in sql
 
     def test_fresh_heartbeat_capacity_marked_pending_excluded(self) -> None:
         """The carve-out only admits a run whose heartbeat is NULL or older
@@ -701,7 +701,7 @@ class TestCapacityMarkerExclusion:
         claim/demote churn."""
         sql = self._sql()
         assert "heartbeat_at IS NULL" in sql
-        assert "now() - interval '120 seconds'" in sql
+        assert "now() - 120 * interval '1 second'" in sql
         assert "NOT IN" in sql
 
 
@@ -726,7 +726,7 @@ class TestReconcileCapacityMarkedRedispatch:
         assert "org_capacity_limited" in sql
         assert "pipeline_capacity" in sql
         assert "heartbeat_at IS NULL" in sql
-        assert "now() - interval '120 seconds'" in sql
+        assert "now() - 120 * interval '1 second'" in sql
 
     @pytest.mark.asyncio
     async def test_capacity_marked_pending_stale_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:

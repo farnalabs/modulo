@@ -1620,6 +1620,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teams/my": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * My Teams Endpoint
+         * @description List the current user's team memberships with team names (profile "My Teams").
+         */
+        get: operations["my_teams_endpoint_api_v1_teams_my_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teams": {
         parameters: {
             query?: never;
@@ -2897,6 +2917,33 @@ export interface paths {
         patch: operations["update_model_backend_endpoint_api_v1_model_backends__backend_id__patch"];
         trace?: never;
     };
+    "/api/v1/model-backends/{backend_id}/health-check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Recheck Model Backend Health Endpoint
+         * @description Re-run the health check on demand and persist the result (PRD §8.1).
+         *
+         *     Operators use this to re-validate a backend after a transient save-time
+         *     outage — the only alternative before this route was PATCHing a new API key,
+         *     which made a sticky ``last_health_check_error`` un-clearable without rotation.
+         *     The stored credential is decrypted and re-pinged against the provider; the
+         *     result is persisted in a short transaction after the read transaction
+         *     commits, so the network call never holds a DB connection or row lock.
+         */
+        post: operations["recheck_model_backend_health_endpoint_api_v1_model_backends__backend_id__health_check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/node-categories": {
         parameters: {
             query?: never;
@@ -3890,7 +3937,8 @@ export interface paths {
          *     NOT exempt — see those handlers.
          *
          *     Returns 202 on success. All validation outcomes are recorded as TriggerEvent rows.
-         *     Returns 400 on duplicate payload, 401 on HMAC failure, 429 on flood rejection.
+         *     Returns 400 on duplicate payload or guardrail-blocked payload, 401 on HMAC
+         *     failure, 429 on flood rejection.
          */
         post: operations["receive_webhook_api_v1_triggers__trigger_id__webhook_post"];
         delete?: never;
@@ -7518,8 +7566,18 @@ export interface components {
              * @default 0
              */
             member_count: number;
+            /**
+             * Owned Resource Count
+             * @default 0
+             */
+            owned_resource_count: number;
             /** Created At */
             created_at: string;
+            /**
+             * Updated At
+             * @default
+             */
+            updated_at: string;
         };
         /** AdminTeamListResponse */
         AdminTeamListResponse: {
@@ -7538,6 +7596,8 @@ export interface components {
             name?: string | null;
             /** Description */
             description?: string | null;
+            /** Expected Updated At */
+            expected_updated_at?: string | null;
         };
         /** AgentCreate */
         AgentCreate: {
@@ -10842,6 +10902,18 @@ export interface components {
              */
             tier: "native" | "preview" | "in_dev";
         };
+        /** ModelBackendHealthCheckResponse */
+        ModelBackendHealthCheckResponse: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "healthy" | "unhealthy" | "not_applicable";
+            /** Detail */
+            detail?: string | null;
+            /** Checked At */
+            checked_at?: string | null;
+        };
         /** ModelBackendListResponse */
         ModelBackendListResponse: {
             /** Items */
@@ -10959,6 +11031,15 @@ export interface components {
             grafana_faro?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** MyTeamResponse */
+        MyTeamResponse: {
+            /** Team Id */
+            team_id: string;
+            /** Team Name */
+            team_name: string;
+            /** Role */
+            role: string;
         };
         /** NodeCategoryCreate */
         NodeCategoryCreate: {
@@ -14290,6 +14371,8 @@ export interface components {
             name?: string | null;
             /** Description */
             description?: string | null;
+            /** Expected Updated At */
+            expected_updated_at?: string | null;
         };
         /** UpdateUserRequest */
         UpdateUserRequest: {
@@ -18959,6 +19042,37 @@ export interface operations {
             };
         };
     };
+    my_teams_endpoint_api_v1_teams_my_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MyTeamResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_teams_endpoint_api_v1_teams_get: {
         parameters: {
             query?: {
@@ -22425,6 +22539,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ModelBackendResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recheck_model_backend_health_endpoint_api_v1_model_backends__backend_id__health_check_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                backend_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelBackendHealthCheckResponse"];
                 };
             };
             /** @description Validation Error */

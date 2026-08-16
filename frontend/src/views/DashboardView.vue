@@ -28,6 +28,7 @@
             v-for="w in trendWindows"
             :key="w.value ?? 'all'"
             :data-testid="'trend-toggle-' + (w.value ?? 'all')"
+            :aria-pressed="selectedWindow === w.value"
             :class="[
               'px-3 py-1 text-xs font-medium rounded transition-colors',
               selectedWindow === w.value ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80',
@@ -67,7 +68,7 @@
       <!-- Eval pass rate + Token spend -->
       <div class="grid gap-4 sm:grid-cols-2">
         <!-- Eval pass rate card -->
-        <router-link to="/eval-editor" class="card card-hover p-4 block">
+        <router-link to="/eval-editor" class="card card-hover p-4 block" data-testid="dashboard-eval-rate">
           <p class="text-sm font-medium text-muted-foreground mb-2">{{ $t('views.DashboardView.eval_pass_rate') }}</p>
           <div v-if="summary.eval_pass_rate != null">
             <p class="text-2xl font-semibold tabular-nums">{{ evalRateDisplay }}</p>
@@ -76,8 +77,8 @@
                 <span aria-hidden="true">{{ evalDeltaArrow }}</span>{{ evalDeltaPctText }}
               </span>
               <span v-else :class="evalTrendClass" class="inline-flex items-center text-sm font-medium">
-                <svg v-if="evalTrend === 'up'" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg>
-                <svg v-else xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                <ChevronUp v-if="evalTrend === 'up'" class="h-3.5 w-3.5" aria-hidden="true" />
+                <ChevronDown v-else class="h-3.5 w-3.5" aria-hidden="true" />
                 {{ evalTrendLabel }}
               </span>
               <span class="text-xs text-muted-foreground">{{ summary.eval_pass_rate.total_evals }} {{ $t('views.DashboardView.total_evals') }}</span>
@@ -88,7 +89,7 @@
         </router-link>
 
         <!-- Token spend card -->
-        <router-link to="/admin/costs" class="card card-hover p-4 block">
+        <router-link to="/admin/costs" class="card card-hover p-4 block" data-testid="dashboard-token-spend">
           <p class="text-sm font-medium text-muted-foreground mb-2">{{ $t('views.DashboardView.token_spend_7d') }}</p>
           <div class="flex items-baseline gap-2">
             <p class="text-2xl font-semibold tabular-nums">{{ formatMoney(totalSpend, currencyCode, 2) }}</p>
@@ -108,13 +109,13 @@
         data-testid="dashboard-run-pipeline"
       >
         <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
-          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          <Play class="h-[18px] w-[18px]" aria-hidden="true" />
         </div>
         <div>
           <p class="text-sm font-medium text-foreground">{{ $t('views.DashboardView.run_a_pipeline') }}</p>
           <p class="text-xs text-muted-foreground">{{ $t('views.DashboardView.select_a_pipeline_and_run_it_with_a_prompt') }}</p>
         </div>
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ml-auto text-muted-foreground"><polyline points="9 18 15 12 9 6"/></svg>
+        <ChevronRight class="ml-auto h-4 w-4 text-muted-foreground" aria-hidden="true" />
       </router-link>
 
       <!-- Team breakdown (Team only) -->
@@ -138,6 +139,7 @@
             <tr v-for="team in summary.teams" :key="team.id"
                 role="button"
                 tabindex="0"
+                :data-testid="'dashboard-team-row-' + team.id"
                 class="border-b last:border-0 cursor-pointer hover:bg-muted/50"
                 @click="toggleTeam(team.id)"
                 @keydown.enter="toggleTeam(team.id)"
@@ -148,8 +150,8 @@
               <td class="py-2.5 text-right text-destructive">{{ team.run_counts_by_status?.failed ?? 0 }}</td>
               <td class="py-2.5 text-right">{{ team.eval_pass_rate ? team.eval_pass_rate.pass_rate + '%' : '—' }}</td>
               <td class="py-2.5 text-right">
-                <svg v-if="expandedTeam === team.id" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg>
-                <svg v-else xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                <ChevronUp v-if="expandedTeam === team.id" class="h-3.5 w-3.5" aria-hidden="true" />
+                <ChevronDown v-else class="h-3.5 w-3.5" aria-hidden="true" />
               </td>
             </tr>
             <tr v-if="expandedTeam && expandedTeamData">
@@ -197,7 +199,7 @@
       <div class="card p-4">
         <h2 class="text-base font-semibold mb-4">{{ $t('views.DashboardView.recent_runs') }}</h2>
         <div v-if="summary.recent_runs && summary.recent_runs.length > 0" class="divide-y">
-          <router-link v-for="run in summary.recent_runs" :key="run.id" :to="'/runs/' + run.id" class="flex items-center justify-between py-2.5 first:pt-0 last:pb-0">
+          <router-link v-for="run in summary.recent_runs" :key="run.id" :to="'/runs/' + run.id" class="flex items-center justify-between py-2.5 first:pt-0 last:pb-0" :data-testid="'dashboard-recent-run-' + run.id">
             <div class="min-w-0 flex-1">
               <Tooltip :delay-duration="300">
                 <TooltipTrigger as-child>
@@ -238,6 +240,7 @@ import { useDashboardStore } from '../stores/dashboard'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import Sparkline from '../components/shared/Sparkline.vue'
 import StatCard from '../components/StatCard.vue'
+import { ChevronUp, ChevronDown, ChevronRight, Play } from '@lucide/vue'
 import {
   Tooltip,
   TooltipTrigger,

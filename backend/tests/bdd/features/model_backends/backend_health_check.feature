@@ -23,3 +23,18 @@ Feature: Model Backend Health Check
     Given a pipeline with a model backend that has never been health-checked
     When the pipeline graph is validated at save time
     Then no MODEL_BACKEND_UNHEALTHY error is returned
+
+  Scenario: Creating a backend records a successful health check on save
+    Given a model backend is created with a healthy health check
+    When the model backend creation is submitted
+    Then the backend health check result is persisted as healthy
+
+  Scenario: Creating a backend with invalid credentials records the health check error
+    Given a model backend is created with an unhealthy health check
+    When the model backend creation is submitted
+    Then the backend health check result is persisted with the error detail
+
+  Scenario: Updating the API key re-runs the health check on save
+    Given a model backend API key update with an unhealthy health check
+    When the model backend update is submitted
+    Then the backend health check result is persisted with the error detail

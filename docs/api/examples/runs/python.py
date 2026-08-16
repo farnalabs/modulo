@@ -119,7 +119,7 @@ def main():
     if resp.status_code == 200:
         ws = resp.json()
         print(f"  WS token:    {ws['ws_token'][:20]}...")
-        print(f"  Expires in:  {ws['expires_in_minutes']} min")
+        print(f"  Expires in:  {ws['expires_in_seconds']} seconds")
         ws_url = f"{BASE_URL}/api/v1/runs/{run_id}/ws?token={ws['ws_token']}"
         print(f"  Connect via: websocat {ws_url}")
     else:

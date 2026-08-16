@@ -425,3 +425,147 @@ async def test_membership_round_trip(db_engine: AsyncEngine) -> None:
 
         gone = await get_membership(session, membership.id)
         assert gone is None
+
+
+async def test_count_owned_resources_reflects_resource_ownership(db_engine: AsyncEngine) -> None:
+    """count_owned_resources sums the 4-way delete-blocking resource set per team."""
+    org = await _create_org(db_engine, f"owned-cnt-{uuid.uuid4().hex[:8]}")
+    user = await _create_user(db_engine, org, "owned-cnt@test.com")
+
+    from modulo.db.crud.team import count_owned_resources, create_team
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    async with factory() as session, session.begin():
+        await session.execute(
+            text("SELECT set_config('app.organisation_id', :oid, true)"),
+            {"oid": str(org)},
+        )
+        team_a = await create_team(session, org_id=org, name="Owned A", account_id=user)
+        team_b = await create_team(session, org_id=org, name="Owned B", account_id=user)
+
+        await session.execute(
+            text(
+                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
+                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
+                "run_context_defaults, graph_nodes_json, visibility, owner_team_id) "
+                "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json, 'team', :team_id)"
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "oid": str(org),
+                "name": "owned-pipeline-1",
+                "uid": str(user),
+                "team_id": str(team_a.id),
+            },
+        )
+        await session.execute(
+            text(
+                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
+                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
+                "run_context_defaults, graph_nodes_json, visibility, owner_team_id) "
+                "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json, 'team', :team_id)"
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "oid": str(org),
+                "name": "owned-pipeline-2",
+                "uid": str(user),
+                "team_id": str(team_a.id),
+            },
+        )
+        await session.execute(
+            text(
+                "INSERT INTO connector_instances "
+                "(id, organisation_id, name, connector_type_id, status, owner_team_id, "
+                "visibility, account_id, credentials_ciphertext, config_json, allowed_operations) "
+                "VALUES (:id, :oid, :name, :type_id, 'active', :team_id, 'team', "
+                ":uid, '\\x00'::bytea, '{}'::json, '[]'::json)"
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "oid": str(org),
+                "name": "owned-connector",
+                "type_id": "filesystem",
+                "uid": str(user),
+                "team_id": str(team_a.id),
+            },
+        )
+        await session.execute(
+            text(
+                "INSERT INTO model_backends "
+                "(id, organisation_id, name, display_name, provider, model_id, owner_team_id, "
+                "visibility, credentials_ciphertext, default_params, account_id) "
+                "VALUES (:id, :oid, :name, :display, :provider, :model, :team_id, 'team', "
+                "'\\x00'::bytea, '{}'::json, :uid)"
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "oid": str(org),
+                "name": "owned-backend",
+                "display": "Owned Backend",
+                "provider": "openai",
+                "model": "gpt-4o-mini",
+                "uid": str(user),
+                "team_id": str(team_a.id),
+            },
+        )
+
+        counts = await count_owned_resources(session, team_ids=[team_a.id, team_b.id])
+        assert counts[team_a.id] == 4  # 2 pipelines + 1 connector + 1 model backend
+        assert team_b.id not in counts or counts[team_b.id] == 0
+
+
+async def test_notification_endpoints_persist_after_team_soft_delete(db_engine: AsyncEngine) -> None:
+    """Notification endpoints referencing a team survive a team soft-delete.
+
+    Team deletion is a soft delete (``deleted_at`` set, row retained), so the
+    ``notification_endpoints.team_id`` FK's ``ondelete=CASCADE`` never fires —
+    concurrent notification CRUD against a deleted team's endpoints keeps
+    working. This documents the intended soft-delete semantics.
+    """
+    org = await _create_org(db_engine, f"ne-softdel-{uuid.uuid4().hex[:8]}")
+    user = await _create_user(db_engine, org, "ne-softdel@test.com")
+
+    from modulo.db.crud.team import create_team, delete_team
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    async with factory() as session, session.begin():
+        await session.execute(
+            text("SELECT set_config('app.organisation_id', :oid, true)"),
+            {"oid": str(org)},
+        )
+        team = await create_team(session, org_id=org, name="NE Team", account_id=user)
+        ep_id = str(uuid.uuid4())
+        await session.execute(
+            text(
+                "INSERT INTO notification_endpoints "
+                "(id, organisation_id, url, events, team_id, created_at, updated_at, "
+                "consecutive_dead_letter_count) "
+                "VALUES (:id, :oid, :url, '[\"run.completed\"]'::json, :team_id, "
+                "current_timestamp, current_timestamp, 0)"
+            ),
+            {
+                "id": ep_id,
+                "oid": str(org),
+                "url": "https://example.invalid/hook",
+                "team_id": str(team.id),
+            },
+        )
+
+        assert await delete_team(session, team.id) is True
+
+    async with factory() as session:
+        await session.execute(
+            text("SELECT set_config('app.organisation_id', :oid, true)"),
+            {"oid": str(org)},
+        )
+        row = (
+            await session.execute(
+                text("SELECT team_id FROM notification_endpoints WHERE id = :eid"),
+                {"eid": ep_id},
+            )
+        ).scalar_one_or_none()
+    assert row is not None
+    assert str(row) == str(team.id)
