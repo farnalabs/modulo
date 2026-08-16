@@ -47,6 +47,9 @@ from modulo.api.dependencies import get_or_create_engine, pg_connection_string
 from modulo.core.cron_helpers import read_dispatcher_reconcile_stats
 from modulo.settings import Settings, break_glass_boot_findings, get_settings
 
+_CODE_HEALTH_CHECK_CHECKPOINTER = "health._check_checkpointer"
+
+
 _log = logging.getLogger(__name__)
 
 
@@ -225,7 +228,7 @@ async def _check_checkpointer() -> CheckResult:
         try:
             await conn.fetchrow("SELECT 1 FROM checkpoint_migrations LIMIT 1")
         except Exception as exc:
-            _log.warning("health._check_checkpointer", exc_info=True)
+            _log.warning(_CODE_HEALTH_CHECK_CHECKPOINTER, exc_info=True)
             return "degraded", f"checkpoint_migrations table not accessible: {exc}"
         finally:
             with contextlib.suppress(Exception):
@@ -237,10 +240,10 @@ async def _check_checkpointer() -> CheckResult:
         latency_ms = (time.monotonic() - start) * 1000
         return CheckResult(status=status, latency_ms=round(latency_ms, 1), detail=detail)
     except TimeoutError:
-        _log.warning("health._check_checkpointer", exc_info=True)
+        _log.warning(_CODE_HEALTH_CHECK_CHECKPOINTER, exc_info=True)
         return _timeout_result("degraded", "checkpointer", timeout, start)
     except Exception as exc:
-        _log.warning("health._check_checkpointer", exc_info=True)
+        _log.warning(_CODE_HEALTH_CHECK_CHECKPOINTER, exc_info=True)
         return CheckResult(
             status="degraded",
             latency_ms=round((time.monotonic() - start) * 1000, 1),

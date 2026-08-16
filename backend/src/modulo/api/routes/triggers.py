@@ -22,6 +22,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_DB_OPERATION_FAILED, MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
 from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK, mask_config_json
@@ -46,6 +47,13 @@ from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.rls import set_rls_org
 from modulo.db.settings_resolver import org_row_is_paused
+
+_CODE_TRIGGER_LIST = "trigger.list"
+_CODE_TRIGGER_UPDATE = "trigger.update"
+_MSG_TRIGGER_NOT_FOUND = "Trigger not found"
+_MSG_ONLY_CRON_TRIGGERS_CAN = "Only cron triggers can have cron configuration"
+_CODE_TRIGGERS_TEST_TRIGGER = "triggers.test_trigger"
+
 
 _log = logging.getLogger(__name__)
 
@@ -100,7 +108,7 @@ async def list_triggers(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("trigger.list"),
+    principal: TenantPrincipal = require_permission(_CODE_TRIGGER_LIST),
 ) -> dict[str, Any]:
     """List all triggers, optionally filtered by pipeline or type."""
     items: list[dict[str, Any]] = []
@@ -176,13 +184,13 @@ async def list_triggers(
         _log.exception("triggers.list_triggers")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("triggers.list_triggers")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -190,7 +198,7 @@ async def list_triggers(
         _log.exception("list_triggers failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     return {
@@ -240,7 +248,7 @@ async def update_cron_config(
     trigger_id: uuid.UUID,
     req: CronConfigUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("trigger.update"),
+    principal: TenantPrincipal = require_permission(_CODE_TRIGGER_UPDATE),
 ) -> dict[str, Any]:
     """Update cron configuration for a trigger.
 
@@ -260,12 +268,12 @@ async def update_cron_config(
             )
             trigger = result.scalar_one_or_none()
             if trigger is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND)
 
             if trigger.trigger_type != "cron":
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Only cron triggers can have cron configuration",
+                    detail=_MSG_ONLY_CRON_TRIGGERS_CAN,
                 )
 
             next_fire_at: datetime.datetime | None = None
@@ -300,13 +308,13 @@ async def update_cron_config(
         _log.exception("triggers.update_cron_config")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("triggers.update_cron_config")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -314,7 +322,7 @@ async def update_cron_config(
         _log.exception("update_cron_config failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     # FAR-190: clear the config-failure Redis counter only AFTER the commit
@@ -338,7 +346,7 @@ async def preview_cron_schedule(
     trigger_id: uuid.UUID,
     count: int = Query(5, ge=1, le=50),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("trigger.list"),
+    principal: TenantPrincipal = require_permission(_CODE_TRIGGER_LIST),
 ) -> dict[str, Any]:
     """Preview the next *count* fire times for a cron trigger."""
     try:
@@ -353,7 +361,7 @@ async def preview_cron_schedule(
             )
             trigger = result.scalar_one_or_none()
             if trigger is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND)
 
             if not trigger.cron_expression:
                 raise HTTPException(
@@ -374,13 +382,13 @@ async def preview_cron_schedule(
         _log.exception("triggers.preview_cron_schedule")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("triggers.preview_cron_schedule")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -388,7 +396,7 @@ async def preview_cron_schedule(
         _log.exception("preview_cron_schedule failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     return {
@@ -426,7 +434,7 @@ async def update_polling_config(
     trigger_id: uuid.UUID,
     req: PollingConfigUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("trigger.update"),
+    principal: TenantPrincipal = require_permission(_CODE_TRIGGER_UPDATE),
 ) -> dict[str, Any]:
     """Update polling configuration for a trigger.
 
@@ -446,7 +454,7 @@ async def update_polling_config(
             )
             trigger = result.scalar_one_or_none()
             if trigger is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND)
 
             if trigger.trigger_type != "polling":
                 raise HTTPException(
@@ -498,13 +506,13 @@ async def update_polling_config(
         _log.exception("triggers.update_polling_config")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("triggers.update_polling_config")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -512,7 +520,7 @@ async def update_polling_config(
         _log.exception("update_polling_config failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     # FAR-190: clear the config-failure Redis counter only AFTER the commit.
@@ -548,7 +556,7 @@ async def update_ongoing_config(
     trigger_id: uuid.UUID,
     req: OngoingConfigUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("trigger.update"),
+    principal: TenantPrincipal = require_permission(_CODE_TRIGGER_UPDATE),
 ) -> dict[str, Any]:
     """Update the ongoing configuration for an ``ongoing`` trigger.
 
@@ -572,7 +580,7 @@ async def update_ongoing_config(
             )
             trigger = result.scalar_one_or_none()
             if trigger is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND)
 
             if trigger.trigger_type != "ongoing":
                 raise HTTPException(
@@ -616,13 +624,13 @@ async def update_ongoing_config(
         _log.exception("triggers.update_ongoing_config")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("triggers.update_ongoing_config")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -630,7 +638,7 @@ async def update_ongoing_config(
         _log.exception("update_ongoing_config failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     # FAR-190: clear the config-failure Redis counter only AFTER the commit.
@@ -663,7 +671,7 @@ async def test_polling_condition(
     trigger_id: uuid.UUID,
     req: PollingTestRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("trigger.update"),
+    principal: TenantPrincipal = require_permission(_CODE_TRIGGER_UPDATE),
 ) -> dict[str, Any]:
     """Test a polling trigger's query and condition expression without firing a run.
 
@@ -682,7 +690,7 @@ async def test_polling_condition(
             )
             trigger = result.scalar_one_or_none()
             if trigger is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND)
 
             if trigger.trigger_type != "polling":
                 raise HTTPException(
@@ -693,13 +701,13 @@ async def test_polling_condition(
         _log.exception("triggers.test_polling_condition")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("triggers.test_polling_condition")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -707,7 +715,7 @@ async def test_polling_condition(
         _log.exception("test_polling_condition failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     # Evaluate outside the transaction (connector ops are I/O, not DB)
@@ -758,7 +766,7 @@ async def create_trigger(
                 if req.trigger_type != "cron":
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Only cron triggers can have cron configuration",
+                        detail=_MSG_ONLY_CRON_TRIGGERS_CAN,
                     )
                 next_fire_at = _validated_next_fire(req.cron_expression, req.cron_timezone)
             if req.trigger_type == "ongoing":
@@ -802,13 +810,13 @@ async def create_trigger(
         _log.exception("triggers.create_trigger")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("triggers.create_trigger")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -816,7 +824,7 @@ async def create_trigger(
         _log.exception("create_trigger failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     return {
@@ -854,7 +862,7 @@ async def update_trigger(
     trigger_id: uuid.UUID,
     req: TriggerUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("trigger.update"),
+    principal: TenantPrincipal = require_permission(_CODE_TRIGGER_UPDATE),
 ) -> dict[str, Any]:
     """Update a trigger's general configuration."""
     try:
@@ -869,12 +877,12 @@ async def update_trigger(
             )
             trigger = result.scalar_one_or_none()
             if trigger is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND)
 
             if (req.cron_expression is not None or req.cron_timezone is not None) and trigger.trigger_type != "cron":
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Only cron triggers can have cron configuration",
+                    detail=_MSG_ONLY_CRON_TRIGGERS_CAN,
                 )
 
             # FAR-158 ongoing guards. The ongoing spend limit is REQUIRED — it
@@ -976,13 +984,13 @@ async def update_trigger(
         _log.exception("triggers.update_trigger")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("triggers.update_trigger")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -990,7 +998,7 @@ async def update_trigger(
         _log.exception("update_trigger failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     # FAR-190: clear the config-failure Redis counter only AFTER the commit.
@@ -1033,18 +1041,18 @@ async def delete_trigger(
 
             deleted = await soft_delete_trigger(session, trigger_id)
             if deleted is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND)
     except ProgrammingError:
         _log.exception("triggers.delete_trigger")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("triggers.delete_trigger")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -1052,7 +1060,7 @@ async def delete_trigger(
         _log.exception("delete_trigger failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
 
@@ -1065,7 +1073,7 @@ async def delete_trigger(
 async def restore_trigger(
     trigger_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("trigger.update"),
+    principal: TenantPrincipal = require_permission(_CODE_TRIGGER_UPDATE),
 ) -> dict[str, Any]:
     """Restore a soft-deleted trigger."""
     try:
@@ -1075,7 +1083,7 @@ async def restore_trigger(
 
             trigger = await _restore_trigger(session, trigger_id)
             if trigger is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND)
             # An ongoing trigger restored back into service must fire on the
             # next tick (its next_fire_at was advanced while it was deleted).
             if trigger.trigger_type == "ongoing":
@@ -1090,13 +1098,13 @@ async def restore_trigger(
         _log.exception("triggers.restore_trigger")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("triggers.restore_trigger")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -1104,7 +1112,7 @@ async def restore_trigger(
         _log.exception("restore_trigger failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     # FAR-190: clear the config-failure Redis counter only AFTER the commit.
@@ -1137,7 +1145,7 @@ async def restore_trigger(
 async def toggle_trigger(
     trigger_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("trigger.update"),
+    principal: TenantPrincipal = require_permission(_CODE_TRIGGER_UPDATE),
 ) -> dict[str, Any]:
     """Toggle a trigger's active state."""
     try:
@@ -1152,7 +1160,7 @@ async def toggle_trigger(
             )
             trigger = result.scalar_one_or_none()
             if trigger is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND)
 
             trigger.active = not trigger.active
             # An ongoing trigger being turned back ON must fire on the next
@@ -1169,13 +1177,13 @@ async def toggle_trigger(
         _log.exception("triggers.toggle_trigger")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("triggers.toggle_trigger")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -1183,7 +1191,7 @@ async def toggle_trigger(
         _log.exception("toggle_trigger failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     # FAR-190: clear the config-failure Redis counter only AFTER the commit.
@@ -1202,12 +1210,12 @@ class TestTriggerRequest(BaseModel):
 
 
 @router.post("/triggers/{trigger_id}/test", status_code=status.HTTP_200_OK)
-@handle_db_errors("triggers.test_trigger")
+@handle_db_errors(_CODE_TRIGGERS_TEST_TRIGGER)
 async def test_trigger(
     trigger_id: uuid.UUID,
     req: TestTriggerRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("trigger.update"),
+    principal: TenantPrincipal = require_permission(_CODE_TRIGGER_UPDATE),
 ) -> dict[str, Any]:
     """Fire a test event for a trigger.
 
@@ -1226,7 +1234,7 @@ async def test_trigger(
             )
             trigger = result.scalar_one_or_none()
             if trigger is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND)
 
             raw_body = json.dumps(req.payload, sort_keys=True).encode()
             payload_hash = hashlib.sha256(raw_body).hexdigest()
@@ -1269,19 +1277,19 @@ async def test_trigger(
 
             await session.flush()
     except ProgrammingError:
-        _log.exception("triggers.test_trigger")
+        _log.exception(_CODE_TRIGGERS_TEST_TRIGGER)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("triggers.test_trigger")
+        _log.exception(_CODE_TRIGGERS_TEST_TRIGGER)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except OrgDeletedError as exc:
-        _log.exception("triggers.test_trigger")
+        _log.exception(_CODE_TRIGGERS_TEST_TRIGGER)
         if exc.deleted:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1297,7 +1305,7 @@ async def test_trigger(
         _log.exception("test_trigger failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     return {
@@ -1334,7 +1342,7 @@ async def list_trigger_events(
             )
             trigger = trigger_result.scalar_one_or_none()
             if trigger is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND)
 
             q = select(TriggerEvent).where(
                 TriggerEvent.trigger_id == trigger_id,
@@ -1361,13 +1369,13 @@ async def list_trigger_events(
         _log.exception("triggers.list_trigger_events")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("triggers.list_trigger_events")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -1375,7 +1383,7 @@ async def list_trigger_events(
         _log.exception("list_trigger_events failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     has_more = len(rows) > limit
@@ -1419,7 +1427,7 @@ async def list_pipeline_triggers(
     pipeline_id: uuid.UUID,
     trigger_type: str | None = Query(None),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("trigger.list"),
+    principal: TenantPrincipal = require_permission(_CODE_TRIGGER_LIST),
 ) -> dict[str, Any]:
     """List triggers for a specific pipeline."""
     pipeline_items: list[dict[str, Any]] = []
@@ -1466,13 +1474,13 @@ async def list_pipeline_triggers(
         _log.exception("triggers.list_pipeline_triggers")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("triggers.list_pipeline_triggers")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -1480,7 +1488,7 @@ async def list_pipeline_triggers(
         _log.exception("list_pipeline_triggers failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     return {

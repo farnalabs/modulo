@@ -14,6 +14,9 @@ from modulo.connectors.base import (
     HealthResult,
 )
 
+# Type alias used in ``cast`` for response payloads (S1192).
+type _DICT_STR_ANY = dict[str, Any]
+
 
 class YouTrackConnector(ConnectorBase):
     """Read/write YouTrack issues, projects, users via the REST API.
@@ -137,7 +140,7 @@ class YouTrackConnector(ConnectorBase):
                 async with self._client() as client:
                     r = await client.post("/issues", json=payload.data)
                     r.raise_for_status()
-                    return cast("dict[str, Any]", r.json())
+                    return cast(_DICT_STR_ANY, r.json())
 
             case "issue_update":
                 issue_id = payload.data.get("id")
@@ -147,7 +150,7 @@ class YouTrackConnector(ConnectorBase):
                 async with self._client() as client:
                     r = await client.post(f"/issues/{issue_id}", json=update_data)
                     r.raise_for_status()
-                    return cast("dict[str, Any]", r.json())
+                    return cast(_DICT_STR_ANY, r.json())
 
             case "comment":
                 issue_id = payload.data.get("issue_id")
@@ -158,7 +161,7 @@ class YouTrackConnector(ConnectorBase):
                 async with self._client() as client:
                     r = await client.post(f"/issues/{issue_id}/comments", json=comment_data)
                     r.raise_for_status()
-                    return cast("dict[str, Any]", r.json())
+                    return cast(_DICT_STR_ANY, r.json())
 
             case _:
                 raise ValueError(f"Unsupported YouTrack write resource: {payload.resource!r}")

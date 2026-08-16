@@ -24,6 +24,10 @@ from modulo.db.crud.template import (
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.rls import set_rls_org
 
+_CODE_TEMPLATES_LIST_TEMPLATES_ENDPOINT = "templates.list_templates_endpoint"
+_CODE_TEMPLATES_CREATE_PIPELINE_TEMPLATE = "templates.create_pipeline_from_template_endpoint"
+
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["templates"])
@@ -73,7 +77,7 @@ class FromTemplateResponse(BaseModel):
 
 
 @router.get("/templates", response_model=TemplateListResponse)
-@handle_db_errors("templates.list_templates_endpoint")
+@handle_db_errors(_CODE_TEMPLATES_LIST_TEMPLATES_ENDPOINT)
 async def list_templates_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -101,19 +105,19 @@ async def list_templates_endpoint(
     except HTTPException:
         raise
     except IntegrityError as exc:
-        logger.exception("templates.list_templates_endpoint")
+        logger.exception(_CODE_TEMPLATES_LIST_TEMPLATES_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from exc
     except ProgrammingError as exc:
-        logger.exception("templates.list_templates_endpoint")
+        logger.exception(_CODE_TEMPLATES_LIST_TEMPLATES_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
         ) from exc
     except Exception as e:
-        logger.exception("templates.list_templates_endpoint")
+        logger.exception(_CODE_TEMPLATES_LIST_TEMPLATES_ENDPOINT)
         raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
@@ -122,7 +126,7 @@ async def list_templates_endpoint(
     response_model=FromTemplateResponse,
     status_code=status.HTTP_201_CREATED,
 )
-@handle_db_errors("templates.create_pipeline_from_template_endpoint")
+@handle_db_errors(_CODE_TEMPLATES_CREATE_PIPELINE_TEMPLATE)
 async def create_pipeline_from_template_endpoint(
     template_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -229,17 +233,17 @@ async def create_pipeline_from_template_endpoint(
     except HTTPException:
         raise
     except IntegrityError as exc:
-        logger.exception("templates.create_pipeline_from_template_endpoint")
+        logger.exception(_CODE_TEMPLATES_CREATE_PIPELINE_TEMPLATE)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from exc
     except ProgrammingError as exc:
-        logger.exception("templates.create_pipeline_from_template_endpoint")
+        logger.exception(_CODE_TEMPLATES_CREATE_PIPELINE_TEMPLATE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
         ) from exc
     except Exception as e:
-        logger.exception("templates.create_pipeline_from_template_endpoint")
+        logger.exception(_CODE_TEMPLATES_CREATE_PIPELINE_TEMPLATE)
         raise HTTPException(status_code=500, detail="Internal server error") from e

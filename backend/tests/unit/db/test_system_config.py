@@ -77,6 +77,21 @@ class TestSystemConfigCRUD:
         assert entity.value == {"new": "value"}
         mock_session.add.assert_not_called()
 
+    async def test_set_config_locks_existing_row(self, mock_session: AsyncMock) -> None:
+        """Concurrent PUTs of the same key must serialize on a row lock.
+
+        ``set_config`` reads the existing row with ``SELECT ... FOR UPDATE``, so
+        two concurrent writes to the same key cannot interleave a torn write —
+        they serialize and the last commit wins (the documented upsert semantics).
+        """
+        key = "contended_key"
+        existing = SystemConfig(key=key, value="v1")
+        mock_session.execute.return_value.scalar_one_or_none.return_value = existing
+
+        await set_config(mock_session, key, "v2")
+        stmt = mock_session.execute.call_args.args[0]
+        assert "FOR UPDATE" in str(stmt)
+
     async def test_set_config_with_updated_by(self, mock_session: AsyncMock) -> None:
         account_id = uuid.uuid4()
         mock_session.execute.return_value.scalar_one_or_none.return_value = None

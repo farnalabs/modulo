@@ -20,6 +20,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
@@ -33,6 +34,23 @@ from modulo.db.models.notification_delivery import NotificationDeliveryLog
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
+
+_CODE_ADMIN_NOTIFICATION_MANAGE = "admin.notification.manage"
+_CODE_NOTIFICATIONS_DELIVERY_TABLE_MISSING = "notifications.delivery_table_missing"
+_MSG_NOTIFICATION_DELIVERY_LOGGING_NOT = (
+    "Notification delivery logging is not available. Run database migrations to enable it."
+)
+_CODE_NOTIFICATIONS_DB_ERROR = "notifications.db_error"
+_MSG_DATABASE_ERROR_PLEASE_TRY = "Database error. Please try again later."
+_CODE_NOTIFICATIONS_UNEXPECTED_ERROR = "notifications.unexpected_error"
+_MSG_MODULO_NOTIFIER_1_0 = "Modulo-Notifier/1.0"
+_MSG_APPLICATION_JSON = "application/json"
+_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING = "notifications.endpoint_table_missing"
+_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN = (
+    "Notifications are not available. Run database migrations to enable this feature."
+)
+_MSG_WEBHOOK_NOT_FOUND = "Webhook not found"
+
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +168,7 @@ async def list_all_deliveries(
     date_from: str | None = Query(None, alias="from"),
     date_to: str | None = Query(None, alias="to"),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("admin.notification.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ADMIN_NOTIFICATION_MANAGE),
 ) -> DeliveryLogResponse:
     try:
         return await _list_deliveries(
@@ -165,25 +183,25 @@ async def list_all_deliveries(
             principal=principal,
         )
     except ProgrammingError:
-        logger.warning("notifications.delivery_table_missing", extra={"route": "list_all_deliveries"})
-        logger.exception("notifications.delivery_table_missing")
+        logger.warning(_CODE_NOTIFICATIONS_DELIVERY_TABLE_MISSING, extra={"route": "list_all_deliveries"})
+        logger.exception(_CODE_NOTIFICATIONS_DELIVERY_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Notification delivery logging is not available. Run database migrations to enable it.",
+            detail=_MSG_NOTIFICATION_DELIVERY_LOGGING_NOT,
         ) from None
     except SQLAlchemyError:
-        logger.exception("notifications.db_error", extra={"route": "list_all_deliveries"})
+        logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "list_all_deliveries"})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
     except HTTPException:
         raise
     except Exception:
-        logger.exception("notifications.unexpected_error", extra={"route": "list_all_deliveries"})
+        logger.exception(_CODE_NOTIFICATIONS_UNEXPECTED_ERROR, extra={"route": "list_all_deliveries"})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
 
@@ -302,7 +320,7 @@ async def _list_deliveries(
 @handle_db_errors("admin.notifications.retry_all_failed_deliveries")
 async def retry_all_failed_deliveries(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("admin.notification.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ADMIN_NOTIFICATION_MANAGE),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     """Retry all failed and dead_lettered deliveries across all webhooks in the org."""
@@ -325,25 +343,25 @@ async def retry_all_failed_deliveries(
                 ).all()
             )
     except ProgrammingError:
-        logger.warning("notifications.delivery_table_missing", extra={"route": "retry_all_failed_deliveries"})
-        logger.exception("notifications.delivery_table_missing")
+        logger.warning(_CODE_NOTIFICATIONS_DELIVERY_TABLE_MISSING, extra={"route": "retry_all_failed_deliveries"})
+        logger.exception(_CODE_NOTIFICATIONS_DELIVERY_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Notification delivery logging is not available. Run database migrations to enable it.",
+            detail=_MSG_NOTIFICATION_DELIVERY_LOGGING_NOT,
         ) from None
     except SQLAlchemyError:
-        logger.exception("notifications.db_error", extra={"route": "retry_all_failed_deliveries"})
+        logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "retry_all_failed_deliveries"})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
     except HTTPException:
         raise
     except Exception:
-        logger.exception("notifications.unexpected_error", extra={"route": "retry_all_failed_deliveries"})
+        logger.exception(_CODE_NOTIFICATIONS_UNEXPECTED_ERROR, extra={"route": "retry_all_failed_deliveries"})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
     retried = 0
@@ -359,7 +377,7 @@ async def retry_all_failed_deliveries(
             }
         ).encode()
 
-        headers = {"Content-Type": "application/json", "User-Agent": "Modulo-Notifier/1.0"}
+        headers = {"Content-Type": _MSG_APPLICATION_JSON, "User-Agent": _MSG_MODULO_NOTIFIER_1_0}
         if ep.secret_ciphertext:
             try:
                 fernet = Fernet(settings.fernet_key.encode())
@@ -415,18 +433,18 @@ async def retry_all_failed_deliveries(
                             )
             except ProgrammingError:
                 logger.warning(
-                    "notifications.delivery_table_missing", extra={"route": "retry_all_failed_deliveries.record"}
+                    _CODE_NOTIFICATIONS_DELIVERY_TABLE_MISSING, extra={"route": "retry_all_failed_deliveries.record"}
                 )
-                logger.exception("notifications.delivery_table_missing")
+                logger.exception(_CODE_NOTIFICATIONS_DELIVERY_TABLE_MISSING)
                 raise HTTPException(
                     status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                    detail="Notification delivery logging is not available. Run database migrations to enable it.",
+                    detail=_MSG_NOTIFICATION_DELIVERY_LOGGING_NOT,
                 ) from None
             except SQLAlchemyError:
-                logger.exception("notifications.db_error", extra={"route": "retry_all_failed_deliveries.record"})
+                logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "retry_all_failed_deliveries.record"})
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="Database error. Please try again later.",
+                    detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
                 ) from None
 
             retried += 1
@@ -463,18 +481,21 @@ async def retry_all_failed_deliveries(
                         )
             except ProgrammingError:
                 logger.warning(
-                    "notifications.delivery_table_missing", extra={"route": "retry_all_failed_deliveries.error_record"}
+                    _CODE_NOTIFICATIONS_DELIVERY_TABLE_MISSING,
+                    extra={"route": "retry_all_failed_deliveries.error_record"},
                 )
-                logger.exception("notifications.delivery_table_missing")
+                logger.exception(_CODE_NOTIFICATIONS_DELIVERY_TABLE_MISSING)
                 raise HTTPException(
                     status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                    detail="Notification delivery logging is not available. Run database migrations to enable it.",
+                    detail=_MSG_NOTIFICATION_DELIVERY_LOGGING_NOT,
                 ) from None
             except SQLAlchemyError:
-                logger.exception("notifications.db_error", extra={"route": "retry_all_failed_deliveries.error_record"})
+                logger.exception(
+                    _CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "retry_all_failed_deliveries.error_record"}
+                )
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="Database error. Please try again later.",
+                    detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
                 ) from None
 
             errors.append(str(exc))
@@ -486,7 +507,7 @@ async def retry_all_failed_deliveries(
 @router.get("/available-events", response_model=list[str])
 @handle_db_errors("admin.notifications.list_available_events")
 async def list_available_events(
-    principal: TenantPrincipal = require_permission("admin.notification.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ADMIN_NOTIFICATION_MANAGE),
 ) -> list[str]:
     return AVAILABLE_EVENTS
 
@@ -498,7 +519,7 @@ async def list_available_events(
 @handle_db_errors("admin.notifications.list_webhooks")
 async def list_webhooks(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("admin.notification.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ADMIN_NOTIFICATION_MANAGE),
 ) -> list[WebhookResponse]:
     try:
         async with session.begin():
@@ -510,25 +531,25 @@ async def list_webhooks(
             )
             endpoints = list(result.scalars())
     except ProgrammingError:
-        logger.warning("notifications.endpoint_table_missing", extra={"route": "list_webhooks"})
-        logger.exception("notifications.endpoint_table_missing")
+        logger.warning(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING, extra={"route": "list_webhooks"})
+        logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Notifications are not available. Run database migrations to enable this feature.",
+            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
         ) from None
     except SQLAlchemyError:
-        logger.exception("notifications.db_error", extra={"route": "list_webhooks"})
+        logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "list_webhooks"})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
     except HTTPException:
         raise
     except Exception:
-        logger.exception("notifications.unexpected_error", extra={"route": "list_webhooks"})
+        logger.exception(_CODE_NOTIFICATIONS_UNEXPECTED_ERROR, extra={"route": "list_webhooks"})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return [_ep_to_response(ep) for ep in endpoints]
 
@@ -538,7 +559,7 @@ async def list_webhooks(
 async def create_webhook(
     req: WebhookCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("admin.notification.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ADMIN_NOTIFICATION_MANAGE),
     settings: Settings = Depends(get_settings),
 ) -> WebhookResponse:
     fernet = Fernet(settings.fernet_key.encode())
@@ -561,25 +582,25 @@ async def create_webhook(
             session.add(ep)
             await session.flush()
     except ProgrammingError:
-        logger.warning("notifications.endpoint_table_missing", extra={"route": "create_webhook"})
-        logger.exception("notifications.endpoint_table_missing")
+        logger.warning(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING, extra={"route": "create_webhook"})
+        logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Notifications are not available. Run database migrations to enable this feature.",
+            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
         ) from None
     except SQLAlchemyError:
-        logger.exception("notifications.db_error", extra={"route": "create_webhook"})
+        logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "create_webhook"})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
     except HTTPException:
         raise
     except Exception:
-        logger.exception("notifications.unexpected_error", extra={"route": "create_webhook"})
+        logger.exception(_CODE_NOTIFICATIONS_UNEXPECTED_ERROR, extra={"route": "create_webhook"})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
     return _ep_to_response(ep)
@@ -590,38 +611,38 @@ async def create_webhook(
 async def get_webhook(
     webhook_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("admin.notification.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ADMIN_NOTIFICATION_MANAGE),
 ) -> WebhookResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             ep = await session.get(NotificationEndpoint, webhook_id)
             if ep is None or ep.organisation_id != principal.organisation_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_WEBHOOK_NOT_FOUND)
     except ProgrammingError:
         logger.warning(
-            "notifications.endpoint_table_missing", extra={"route": "get_webhook", "webhook_id": str(webhook_id)}
+            _CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING, extra={"route": "get_webhook", "webhook_id": str(webhook_id)}
         )
-        logger.exception("notifications.endpoint_table_missing")
+        logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Notifications are not available. Run database migrations to enable this feature.",
+            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
         ) from None
     except SQLAlchemyError:
-        logger.exception("notifications.db_error", extra={"route": "get_webhook", "webhook_id": str(webhook_id)})
+        logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "get_webhook", "webhook_id": str(webhook_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
     except HTTPException:
         raise
     except Exception:
         logger.exception(
-            "notifications.unexpected_error", extra={"route": "get_webhook", "webhook_id": str(webhook_id)}
+            _CODE_NOTIFICATIONS_UNEXPECTED_ERROR, extra={"route": "get_webhook", "webhook_id": str(webhook_id)}
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return _ep_to_response(ep)
 
@@ -632,7 +653,7 @@ async def update_webhook(
     webhook_id: uuid.UUID,
     req: WebhookUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("admin.notification.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ADMIN_NOTIFICATION_MANAGE),
     settings: Settings = Depends(get_settings),
 ) -> WebhookResponse:
     try:
@@ -640,7 +661,7 @@ async def update_webhook(
             await set_rls_org(session, principal.organisation_id)
             ep = await session.get(NotificationEndpoint, webhook_id)
             if ep is None or ep.organisation_id != principal.organisation_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_WEBHOOK_NOT_FOUND)
 
             if req.url is not None:
                 ep.url = req.url
@@ -655,28 +676,28 @@ async def update_webhook(
             await session.flush()
     except ProgrammingError:
         logger.warning(
-            "notifications.endpoint_table_missing", extra={"route": "update_webhook", "webhook_id": str(webhook_id)}
+            _CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING, extra={"route": "update_webhook", "webhook_id": str(webhook_id)}
         )
-        logger.exception("notifications.endpoint_table_missing")
+        logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Notifications are not available. Run database migrations to enable this feature.",
+            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
         ) from None
     except SQLAlchemyError:
-        logger.exception("notifications.db_error", extra={"route": "update_webhook", "webhook_id": str(webhook_id)})
+        logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "update_webhook", "webhook_id": str(webhook_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
     except HTTPException:
         raise
     except Exception:
         logger.exception(
-            "notifications.unexpected_error", extra={"route": "update_webhook", "webhook_id": str(webhook_id)}
+            _CODE_NOTIFICATIONS_UNEXPECTED_ERROR, extra={"route": "update_webhook", "webhook_id": str(webhook_id)}
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
     return _ep_to_response(ep)
@@ -687,39 +708,39 @@ async def update_webhook(
 async def delete_webhook(
     webhook_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("admin.notification.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ADMIN_NOTIFICATION_MANAGE),
 ) -> None:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             ep = await session.get(NotificationEndpoint, webhook_id)
             if ep is None or ep.organisation_id != principal.organisation_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_WEBHOOK_NOT_FOUND)
             await session.delete(ep)
     except ProgrammingError:
         logger.warning(
-            "notifications.endpoint_table_missing", extra={"route": "delete_webhook", "webhook_id": str(webhook_id)}
+            _CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING, extra={"route": "delete_webhook", "webhook_id": str(webhook_id)}
         )
-        logger.exception("notifications.endpoint_table_missing")
+        logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Notifications are not available. Run database migrations to enable this feature.",
+            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
         ) from None
     except SQLAlchemyError:
-        logger.exception("notifications.db_error", extra={"route": "delete_webhook", "webhook_id": str(webhook_id)})
+        logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "delete_webhook", "webhook_id": str(webhook_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
     except HTTPException:
         raise
     except Exception:
         logger.exception(
-            "notifications.unexpected_error", extra={"route": "delete_webhook", "webhook_id": str(webhook_id)}
+            _CODE_NOTIFICATIONS_UNEXPECTED_ERROR, extra={"route": "delete_webhook", "webhook_id": str(webhook_id)}
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
 
@@ -731,7 +752,7 @@ async def delete_webhook(
 async def test_webhook(
     webhook_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("admin.notification.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ADMIN_NOTIFICATION_MANAGE),
     settings: Settings = Depends(get_settings),
 ) -> TestResult:
     try:
@@ -739,31 +760,31 @@ async def test_webhook(
             await set_rls_org(session, principal.organisation_id)
             ep = await session.get(NotificationEndpoint, webhook_id)
             if ep is None or ep.organisation_id != principal.organisation_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_WEBHOOK_NOT_FOUND)
     except ProgrammingError:
         logger.warning(
-            "notifications.endpoint_table_missing", extra={"route": "test_webhook", "webhook_id": str(webhook_id)}
+            _CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING, extra={"route": "test_webhook", "webhook_id": str(webhook_id)}
         )
-        logger.exception("notifications.endpoint_table_missing")
+        logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Notifications are not available. Run database migrations to enable this feature.",
+            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
         ) from None
     except SQLAlchemyError:
-        logger.exception("notifications.db_error", extra={"route": "test_webhook", "webhook_id": str(webhook_id)})
+        logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "test_webhook", "webhook_id": str(webhook_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
     except HTTPException:
         raise
     except Exception:
         logger.exception(
-            "notifications.unexpected_error", extra={"route": "test_webhook", "webhook_id": str(webhook_id)}
+            _CODE_NOTIFICATIONS_UNEXPECTED_ERROR, extra={"route": "test_webhook", "webhook_id": str(webhook_id)}
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
     payload = json.dumps(
@@ -774,7 +795,7 @@ async def test_webhook(
         }
     ).encode()
 
-    headers = {"Content-Type": "application/json", "User-Agent": "Modulo-Notifier/1.0"}
+    headers = {"Content-Type": _MSG_APPLICATION_JSON, "User-Agent": _MSG_MODULO_NOTIFIER_1_0}
     if ep.secret_ciphertext:
         try:
             fernet = Fernet(settings.fernet_key.encode())
@@ -811,42 +832,45 @@ async def test_webhook(
 async def re_enable_webhook(
     webhook_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("admin.notification.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ADMIN_NOTIFICATION_MANAGE),
 ) -> WebhookResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             ep = await session.get(NotificationEndpoint, webhook_id)
             if ep is None or ep.organisation_id != principal.organisation_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_WEBHOOK_NOT_FOUND)
             ep.auto_disabled = False
             ep.disabled_at = None
             ep.consecutive_dead_letter_count = 0
             await session.flush()
     except ProgrammingError:
         logger.warning(
-            "notifications.endpoint_table_missing", extra={"route": "re_enable_webhook", "webhook_id": str(webhook_id)}
+            _CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING,
+            extra={"route": "re_enable_webhook", "webhook_id": str(webhook_id)},
         )
-        logger.exception("notifications.endpoint_table_missing")
+        logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Notifications are not available. Run database migrations to enable this feature.",
+            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
         ) from None
     except SQLAlchemyError:
-        logger.exception("notifications.db_error", extra={"route": "re_enable_webhook", "webhook_id": str(webhook_id)})
+        logger.exception(
+            _CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "re_enable_webhook", "webhook_id": str(webhook_id)}
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
     except HTTPException:
         raise
     except Exception:
         logger.exception(
-            "notifications.unexpected_error", extra={"route": "re_enable_webhook", "webhook_id": str(webhook_id)}
+            _CODE_NOTIFICATIONS_UNEXPECTED_ERROR, extra={"route": "re_enable_webhook", "webhook_id": str(webhook_id)}
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return _ep_to_response(ep)
 
@@ -862,7 +886,7 @@ async def list_deliveries(
     limit: int = Query(default=25, ge=1, le=100),
     status_filter: str | None = Query(None, alias="status"),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("admin.notification.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ADMIN_NOTIFICATION_MANAGE),
 ) -> DeliveryLogResponse:
 
     try:
@@ -870,7 +894,7 @@ async def list_deliveries(
             await set_rls_org(session, principal.organisation_id)
             ep = await session.get(NotificationEndpoint, webhook_id)
             if ep is None or ep.organisation_id != principal.organisation_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_WEBHOOK_NOT_FOUND)
 
             query = select(NotificationDeliveryLog).where(
                 NotificationDeliveryLog.endpoint_id == webhook_id,
@@ -904,28 +928,31 @@ async def list_deliveries(
             total = count_result.scalar() or 0
     except ProgrammingError:
         logger.warning(
-            "notifications.delivery_table_missing", extra={"route": "list_deliveries", "webhook_id": str(webhook_id)}
+            _CODE_NOTIFICATIONS_DELIVERY_TABLE_MISSING,
+            extra={"route": "list_deliveries", "webhook_id": str(webhook_id)},
         )
-        logger.exception("notifications.delivery_table_missing")
+        logger.exception(_CODE_NOTIFICATIONS_DELIVERY_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Notification delivery logging is not available. Run database migrations to enable it.",
+            detail=_MSG_NOTIFICATION_DELIVERY_LOGGING_NOT,
         ) from None
     except SQLAlchemyError:
-        logger.exception("notifications.db_error", extra={"route": "list_deliveries", "webhook_id": str(webhook_id)})
+        logger.exception(
+            _CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "list_deliveries", "webhook_id": str(webhook_id)}
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
     except HTTPException:
         raise
     except Exception:
         logger.exception(
-            "notifications.unexpected_error", extra={"route": "list_deliveries", "webhook_id": str(webhook_id)}
+            _CODE_NOTIFICATIONS_UNEXPECTED_ERROR, extra={"route": "list_deliveries", "webhook_id": str(webhook_id)}
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
     has_more = len(rows) > limit
@@ -965,7 +992,7 @@ async def retry_delivery(
     webhook_id: uuid.UUID,
     delivery_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("admin.notification.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ADMIN_NOTIFICATION_MANAGE),
     settings: Settings = Depends(get_settings),
 ) -> TestResult:
 
@@ -974,38 +1001,38 @@ async def retry_delivery(
             await set_rls_org(session, principal.organisation_id)
             ep = await session.get(NotificationEndpoint, webhook_id)
             if ep is None or ep.organisation_id != principal.organisation_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_WEBHOOK_NOT_FOUND)
 
             delivery = await session.get(NotificationDeliveryLog, delivery_id)
     except ProgrammingError:
         logger.warning(
-            "notifications.delivery_table_missing",
+            _CODE_NOTIFICATIONS_DELIVERY_TABLE_MISSING,
             extra={"route": "retry_delivery", "webhook_id": str(webhook_id), "delivery_id": str(delivery_id)},
         )
-        logger.exception("notifications.delivery_table_missing")
+        logger.exception(_CODE_NOTIFICATIONS_DELIVERY_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Notifications are not available. Run database migrations to enable this feature.",
+            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
         ) from None
     except SQLAlchemyError:
         logger.exception(
-            "notifications.db_error",
+            _CODE_NOTIFICATIONS_DB_ERROR,
             extra={"route": "retry_delivery", "webhook_id": str(webhook_id), "delivery_id": str(delivery_id)},
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
     except HTTPException:
         raise
     except Exception:
         logger.exception(
-            "notifications.unexpected_error",
+            _CODE_NOTIFICATIONS_UNEXPECTED_ERROR,
             extra={"route": "retry_delivery", "webhook_id": str(webhook_id), "delivery_id": str(delivery_id)},
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
     if delivery is None or delivery.endpoint_id != webhook_id:
@@ -1023,7 +1050,7 @@ async def retry_delivery(
         }
     ).encode()
 
-    headers = {"Content-Type": "application/json", "User-Agent": "Modulo-Notifier/1.0"}
+    headers = {"Content-Type": _MSG_APPLICATION_JSON, "User-Agent": _MSG_MODULO_NOTIFIER_1_0}
     if ep.secret_ciphertext:
         try:
             fernet = Fernet(settings.fernet_key.encode())
@@ -1079,21 +1106,21 @@ async def retry_delivery(
                         )
         except ProgrammingError:
             logger.warning(
-                "notifications.delivery_table_missing",
+                _CODE_NOTIFICATIONS_DELIVERY_TABLE_MISSING,
                 extra={
                     "route": "retry_delivery.record",
                     "webhook_id": str(webhook_id),
                     "delivery_id": str(delivery_id),
                 },
             )
-            logger.exception("notifications.delivery_table_missing")
+            logger.exception(_CODE_NOTIFICATIONS_DELIVERY_TABLE_MISSING)
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                detail="Notification delivery logging is not available. Run database migrations to enable it.",
+                detail=_MSG_NOTIFICATION_DELIVERY_LOGGING_NOT,
             ) from None
         except SQLAlchemyError:
             logger.exception(
-                "notifications.db_error",
+                _CODE_NOTIFICATIONS_DB_ERROR,
                 extra={
                     "route": "retry_delivery.record",
                     "webhook_id": str(webhook_id),
@@ -1102,7 +1129,7 @@ async def retry_delivery(
             )
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Database error. Please try again later.",
+                detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
             ) from None
 
         return TestResult(
@@ -1144,21 +1171,21 @@ async def retry_delivery(
                     )
         except ProgrammingError:
             logger.warning(
-                "notifications.delivery_table_missing",
+                _CODE_NOTIFICATIONS_DELIVERY_TABLE_MISSING,
                 extra={
                     "route": "retry_delivery.error_record",
                     "webhook_id": str(webhook_id),
                     "delivery_id": str(delivery_id),
                 },
             )
-            logger.exception("notifications.delivery_table_missing")
+            logger.exception(_CODE_NOTIFICATIONS_DELIVERY_TABLE_MISSING)
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                detail="Notification delivery logging is not available. Run database migrations to enable it.",
+                detail=_MSG_NOTIFICATION_DELIVERY_LOGGING_NOT,
             ) from None
         except SQLAlchemyError:
             logger.exception(
-                "notifications.db_error",
+                _CODE_NOTIFICATIONS_DB_ERROR,
                 extra={
                     "route": "retry_delivery.error_record",
                     "webhook_id": str(webhook_id),
@@ -1167,7 +1194,7 @@ async def retry_delivery(
             )
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Database error. Please try again later.",
+                detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
             ) from None
 
         return TestResult(
@@ -1180,12 +1207,12 @@ async def retry_delivery(
         raise
     except Exception:
         logger.exception(
-            "notifications.unexpected_error",
+            _CODE_NOTIFICATIONS_UNEXPECTED_ERROR,
             extra={"route": "retry_delivery", "webhook_id": str(webhook_id), "delivery_id": str(delivery_id)},
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
 

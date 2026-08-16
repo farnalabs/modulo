@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import _get_engine, get_db_session, pg_connection_string, require_permission
 from modulo.auth.jwt import TenantPrincipal
@@ -39,6 +40,10 @@ from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.rls import set_rls_org
 from modulo.settings import get_settings
+
+_MSG_DATABASE_ERROR_PLEASE_TRY = "Database error. Please try again."
+_CODE_HITL_APPROVE = "hitl.approve"
+
 
 logger = logging.getLogger(__name__)
 
@@ -173,13 +178,13 @@ async def claim_gate(
         logger.exception("hitl.claim_gate")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         logger.exception("hitl.claim_gate")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -187,7 +192,7 @@ async def claim_gate(
         logger.exception("hitl.claim_gate.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
 
     if gate.claim_token is None or gate.expires_at is None:
@@ -219,7 +224,7 @@ async def approve_gate(
     req: ApproveRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
-    principal: TenantPrincipal = require_permission("hitl.approve"),
+    principal: TenantPrincipal = require_permission(_CODE_HITL_APPROVE),
 ) -> dict[str, str]:
     """Approve an interrupted HITL gate and resume the run."""
     resume_data: dict[str, Any] = {"action": "approved"}
@@ -255,13 +260,13 @@ async def approve_gate(
         logger.exception("hitl.approve_gate")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         logger.exception("hitl.approve_gate")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -269,7 +274,7 @@ async def approve_gate(
         logger.exception("hitl.approve_gate.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
 
     try:
@@ -308,7 +313,7 @@ async def approve_gate_with_modification(
     req: ApproveWithModificationRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
-    principal: TenantPrincipal = require_permission("hitl.approve"),
+    principal: TenantPrincipal = require_permission(_CODE_HITL_APPROVE),
 ) -> dict[str, str]:
     """Approve a HITL gate with a modified output payload.
 
@@ -352,13 +357,13 @@ async def approve_gate_with_modification(
         logger.exception("hitl.approve_gate_with_modification")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         logger.exception("hitl.approve_gate_with_modification")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -366,7 +371,7 @@ async def approve_gate_with_modification(
         logger.exception("hitl.approve_gate_with_modification.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
 
     try:
@@ -441,13 +446,13 @@ async def reject_gate(
         logger.exception("hitl.reject_gate")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         logger.exception("hitl.reject_gate")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -455,7 +460,7 @@ async def reject_gate(
         logger.exception("hitl.reject_gate.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
 
     # Resume the graph with rejection data so the gate router picks the
@@ -541,13 +546,13 @@ async def deliver_manual_output(
         logger.exception("hitl.deliver_manual_output")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         logger.exception("hitl.deliver_manual_output")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -555,7 +560,7 @@ async def deliver_manual_output(
         logger.exception("hitl.deliver_manual_output.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
 
     try:
@@ -594,7 +599,7 @@ async def submit_manual_output(
     req: ManualOutputRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
-    principal: TenantPrincipal = require_permission("hitl.approve"),
+    principal: TenantPrincipal = require_permission(_CODE_HITL_APPROVE),
 ) -> dict[str, str]:
     """Submit output for a manual-input node and resume the run."""
     resume_data: dict[str, Any] = {"action": "manual_output", "output": req.output}
@@ -629,13 +634,13 @@ async def submit_manual_output(
         logger.exception("hitl.submit_manual_output")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         logger.exception("hitl.submit_manual_output")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -643,7 +648,7 @@ async def submit_manual_output(
         logger.exception("hitl.submit_manual_output.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
 
     try:
@@ -706,13 +711,13 @@ async def list_run_pending_gates(
         logger.exception("hitl.list_run_pending_gates")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         logger.exception("hitl.list_run_pending_gates")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -720,7 +725,7 @@ async def list_run_pending_gates(
         logger.exception("hitl.list_run_pending_gates.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
 
     return PendingGatesResponse(gates=[_gate_to_response(g, pipeline_name=pipeline_name) for g in gates])
@@ -753,13 +758,13 @@ async def list_org_pending_gates(
         logger.exception("hitl.list_org_pending_gates")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         logger.exception("hitl.list_org_pending_gates")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -767,7 +772,7 @@ async def list_org_pending_gates(
         logger.exception("hitl.list_org_pending_gates.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
 
     return PendingGatesResponse(

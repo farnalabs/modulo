@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
@@ -30,6 +31,17 @@ from modulo.db.crud.notifications import (
 )
 from modulo.db.models.notification import Notification
 from modulo.db.rls import set_rls_org, set_rls_user_context
+
+_CODE_NOTIFICATION_SELF = "notification.self"
+_CODE_APP_NOTIFICATIONS_GET_DASHBOARD = "in_app_notifications.get_dashboard"
+_MSG_DATA_CONFLICT_OCCURRED = "A data conflict occurred."
+_MSG_DATABASE_ERROR_OCCURRED = "A database error occurred."
+_CODE_APP_NOTIFICATIONS_GET_UNREAD = "in_app_notifications.get_unread"
+_CODE_APP_NOTIFICATIONS_LIST_NOTIFICATIONS = "in_app_notifications.list_notifications"
+_CODE_APP_NOTIFICATIONS_GET_NOTIFICATION = "in_app_notifications.get_notification_detail"
+_CODE_APP_NOTIFICATIONS_REVIEW_LATER = "in_app_notifications.review_later_endpoint"
+_CODE_APP_NOTIFICATIONS_DISMISS_ENDPOINT = "in_app_notifications.dismiss_endpoint"
+
 
 _log = logging.getLogger(__name__)
 
@@ -102,10 +114,10 @@ def _notification_to_response(n: Notification) -> NotificationResponse:
 
 
 @router.get("/dashboard", response_model=DashboardNotificationResponse)
-@handle_db_errors("in_app_notifications.get_dashboard")
+@handle_db_errors(_CODE_APP_NOTIFICATIONS_GET_DASHBOARD)
 async def get_dashboard(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("notification.self"),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_SELF),
 ) -> DashboardNotificationResponse:
     try:
         async with session.begin():
@@ -123,22 +135,22 @@ async def get_dashboard(
                 user_id=principal.account_id,
             )
     except ProgrammingError:
-        _log.exception("in_app_notifications.get_dashboard")
+        _log.exception(_CODE_APP_NOTIFICATIONS_GET_DASHBOARD)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except IntegrityError:
-        _log.exception("in_app_notifications.get_dashboard")
+        _log.exception(_CODE_APP_NOTIFICATIONS_GET_DASHBOARD)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A data conflict occurred.",
+            detail=_MSG_DATA_CONFLICT_OCCURRED,
         ) from None
     except SQLAlchemyError:
-        _log.exception("in_app_notifications.get_dashboard")
+        _log.exception(_CODE_APP_NOTIFICATIONS_GET_DASHBOARD)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="A database error occurred.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED,
         ) from None
     return DashboardNotificationResponse(
         notifications=[_notification_to_response(n) for n in notifications],
@@ -147,10 +159,10 @@ async def get_dashboard(
 
 
 @router.get("/unread-count", response_model=dict)
-@handle_db_errors("in_app_notifications.get_unread")
+@handle_db_errors(_CODE_APP_NOTIFICATIONS_GET_UNREAD)
 async def get_unread(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("notification.self"),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_SELF),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -162,31 +174,31 @@ async def get_unread(
                 user_id=principal.account_id,
             )
     except ProgrammingError:
-        _log.exception("in_app_notifications.get_unread")
+        _log.exception(_CODE_APP_NOTIFICATIONS_GET_UNREAD)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except IntegrityError:
-        _log.exception("in_app_notifications.get_unread")
+        _log.exception(_CODE_APP_NOTIFICATIONS_GET_UNREAD)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A data conflict occurred.",
+            detail=_MSG_DATA_CONFLICT_OCCURRED,
         ) from None
     except SQLAlchemyError:
-        _log.exception("in_app_notifications.get_unread")
+        _log.exception(_CODE_APP_NOTIFICATIONS_GET_UNREAD)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="A database error occurred.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED,
         ) from None
     return {"count": count}
 
 
 @router.get("", response_model=PaginatedNotificationsResponse)
-@handle_db_errors("in_app_notifications.list_notifications")
+@handle_db_errors(_CODE_APP_NOTIFICATIONS_LIST_NOTIFICATIONS)
 async def list_notifications(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("notification.self"),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_SELF),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     level: str | None = Query(None),
@@ -220,22 +232,22 @@ async def list_notifications(
                 status_filter=status_filter,
             )
     except ProgrammingError:
-        _log.exception("in_app_notifications.list_notifications")
+        _log.exception(_CODE_APP_NOTIFICATIONS_LIST_NOTIFICATIONS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except IntegrityError:
-        _log.exception("in_app_notifications.list_notifications")
+        _log.exception(_CODE_APP_NOTIFICATIONS_LIST_NOTIFICATIONS)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A data conflict occurred.",
+            detail=_MSG_DATA_CONFLICT_OCCURRED,
         ) from None
     except SQLAlchemyError:
-        _log.exception("in_app_notifications.list_notifications")
+        _log.exception(_CODE_APP_NOTIFICATIONS_LIST_NOTIFICATIONS)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="A database error occurred.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED,
         ) from None
     return PaginatedNotificationsResponse(
         items=[_notification_to_response(n) for n in notifications],
@@ -246,11 +258,11 @@ async def list_notifications(
 
 
 @router.get("/{notification_id}", response_model=NotificationResponse)
-@handle_db_errors("in_app_notifications.get_notification_detail")
+@handle_db_errors(_CODE_APP_NOTIFICATIONS_GET_NOTIFICATION)
 async def get_notification_detail(
     notification_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("notification.self"),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_SELF),
 ) -> NotificationResponse:
     try:
         async with session.begin():
@@ -264,32 +276,32 @@ async def get_notification_detail(
             if n is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found")
     except ProgrammingError:
-        _log.exception("in_app_notifications.get_notification_detail")
+        _log.exception(_CODE_APP_NOTIFICATIONS_GET_NOTIFICATION)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except IntegrityError:
-        _log.exception("in_app_notifications.get_notification_detail")
+        _log.exception(_CODE_APP_NOTIFICATIONS_GET_NOTIFICATION)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A data conflict occurred.",
+            detail=_MSG_DATA_CONFLICT_OCCURRED,
         ) from None
     except SQLAlchemyError:
-        _log.exception("in_app_notifications.get_notification_detail")
+        _log.exception(_CODE_APP_NOTIFICATIONS_GET_NOTIFICATION)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="A database error occurred.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED,
         ) from None
     return _notification_to_response(n)
 
 
 @router.post("/{notification_id}/review-later", status_code=status.HTTP_200_OK)
-@handle_db_errors("in_app_notifications.review_later_endpoint")
+@handle_db_errors(_CODE_APP_NOTIFICATIONS_REVIEW_LATER)
 async def review_later_endpoint(
     notification_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("notification.self"),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_SELF),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -305,22 +317,22 @@ async def review_later_endpoint(
             except ValueError as exc:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except ProgrammingError:
-        _log.exception("in_app_notifications.review_later_endpoint")
+        _log.exception(_CODE_APP_NOTIFICATIONS_REVIEW_LATER)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except IntegrityError:
-        _log.exception("in_app_notifications.review_later_endpoint")
+        _log.exception(_CODE_APP_NOTIFICATIONS_REVIEW_LATER)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A data conflict occurred.",
+            detail=_MSG_DATA_CONFLICT_OCCURRED,
         ) from None
     except SQLAlchemyError:
-        _log.exception("in_app_notifications.review_later_endpoint")
+        _log.exception(_CODE_APP_NOTIFICATIONS_REVIEW_LATER)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="A database error occurred.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED,
         ) from None
 
     try:
@@ -339,12 +351,12 @@ async def review_later_endpoint(
 
 
 @router.post("/{notification_id}/dismiss", status_code=status.HTTP_200_OK)
-@handle_db_errors("in_app_notifications.dismiss_endpoint")
+@handle_db_errors(_CODE_APP_NOTIFICATIONS_DISMISS_ENDPOINT)
 async def dismiss_endpoint(
     notification_id: uuid.UUID,
     req: DismissRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("notification.self"),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_SELF),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -362,22 +374,22 @@ async def dismiss_endpoint(
             except ValueError as exc:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except ProgrammingError:
-        _log.exception("in_app_notifications.dismiss_endpoint")
+        _log.exception(_CODE_APP_NOTIFICATIONS_DISMISS_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except IntegrityError:
-        _log.exception("in_app_notifications.dismiss_endpoint")
+        _log.exception(_CODE_APP_NOTIFICATIONS_DISMISS_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A data conflict occurred.",
+            detail=_MSG_DATA_CONFLICT_OCCURRED,
         ) from None
     except SQLAlchemyError:
-        _log.exception("in_app_notifications.dismiss_endpoint")
+        _log.exception(_CODE_APP_NOTIFICATIONS_DISMISS_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="A database error occurred.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED,
         ) from None
 
     try:
@@ -400,7 +412,7 @@ async def dismiss_endpoint(
 @handle_db_errors("in_app_notifications.get_preferences")
 async def get_preferences(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("notification.self"),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_SELF),
 ) -> NotificationPreferencesResponse:
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -413,7 +425,7 @@ async def get_preferences(
 async def update_preferences(
     req: NotificationPreferencesUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("notification.self"),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_SELF),
 ) -> NotificationPreferencesResponse:
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,

@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.sso import (
@@ -19,6 +20,9 @@ from modulo.auth.sso import (
     saml_process_response,
 )
 from modulo.settings import Settings, get_settings
+
+_MSG_DATABASE_ERROR_PLEASE_TRY = "Database error. Please try again."
+
 
 _log = logging.getLogger(__name__)
 
@@ -71,7 +75,7 @@ async def sso_providers(
         _log.exception("sso.sso_providers.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
 
 
@@ -102,7 +106,7 @@ async def oidc_login(
         _log.exception("sso.oidc_login.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
 
     return Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"Location": auth_url})
@@ -146,13 +150,13 @@ async def oidc_callback(
         _log.warning("OIDC callback failed — DB table missing: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.warning("OIDC callback DB error: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -160,7 +164,7 @@ async def oidc_callback(
         _log.exception("sso.oidc_callback.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
 
     return _redirect_to_frontend(tokens, settings)
@@ -191,13 +195,13 @@ async def saml_login(
         _log.warning("SAML login failed — DB table missing: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.warning("SAML login DB error: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -205,7 +209,7 @@ async def saml_login(
         _log.exception("sso.saml_login.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
 
     return Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"Location": auth_url})
@@ -245,13 +249,13 @@ async def saml_acs(
         _log.warning("SAML ACS failed — DB table missing: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.warning("SAML ACS DB error: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -259,7 +263,7 @@ async def saml_acs(
         _log.exception("sso.saml_acs.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
 
     return _redirect_to_frontend(tokens, settings)
@@ -304,5 +308,5 @@ async def saml_metadata(
         _log.exception("sso.saml_metadata.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e

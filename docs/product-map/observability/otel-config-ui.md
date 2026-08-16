@@ -137,6 +137,12 @@ Settings page at `/settings/observability`.
 
 ## QA History
 
+### 2026-08-15 — coverage drive (product-map walk)
+
+- **Verified all `[x]` behaviours against code + tests**: the otel config JSON column + migration 0008 (`organisations.otel_config_json`), CRUD read/write, merged-config GET/PUT with env override, LangSmith key Fernet encryption + `has_langsmith_api_key` boolean + empty-key-clears, sensitive header masking, `POST /test` (Timeout/Connect/generic distinction, no-endpoint→200 success:false), `GET /preview`, and the startup OTel provider config (no-op default, stdout when enabled, conditional OTLP, graceful failure) all match the entry's claims. Test coverage counts in `test_observability_routes.py` verified (cache, degraded, config-to-response, resilience, preview, test-endpoint suites).
+- **Confirmed genuine gaps** (left unchecked, in "Not yet implemented — gaps"): ExportPreview not wired into the frontend UI (API exists), no trace-sampling/rate-limiting config, SimpleSpanProcessor (no BatchSpanProcessor), effective endpoint not displayed in normal mode, no per-org telemetry toggle in UI (global env var only). BDD step definitions remain mock-based.
+- No source changes required — the settings page at `/settings/observability` already covers OTLP endpoint, dynamic headers, export interval, LangSmith toggle + key, test connection, and reset.
+
 ### 2026-07-10 — Cross-cutting QA (improve-architecture index 307)
 
 **Fixed (CRITICAL):** Added `except SQLAlchemyError → 503 Service Unavailable` catch to `PUT /api/v1/settings/observability` endpoint. Connection/deadlock failures (connection pool exhaustion, DB restart) previously fell through to `except Exception → 500` with generic "Internal server error" instead of the established project-wide 503 pattern.

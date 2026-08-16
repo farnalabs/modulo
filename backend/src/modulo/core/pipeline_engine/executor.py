@@ -140,6 +140,12 @@ _log = logging.getLogger(__name__)
 _RETRY_POLICY_EVENTS = frozenset({"stall", "timeout", "failure"})
 _RETRY_POLICY_MAX_RETRIES = 5
 
+# Canonical dotted error codes written at terminalization (agent-failure UX) and
+# matched by the retry policy. Constants are pure aliases so the retry policy,
+# the failure write, and log names cannot drift (S1192).
+_ERROR_CODE_AGENT_FAILED = "agent.failed"
+_ERROR_CODE_NODE_TIMEOUT = "node.timeout"
+
 # Backoff schedule for a retry_policy re-dispatch (FAR-136). A policy-triggered
 # retry must NOT re-fire back-to-back — the run is re-dispatched only after a
 # jittered, capped exponential delay. ``base`` is the first-attempt wait; the
@@ -262,7 +268,7 @@ def _retry_after_policy(
     if "stall" in event_set and (final_status == "stalled" or code == "executor_stalled" or mapped == "agent.stall"):
         return max_retries
     if "timeout" in event_set and (
-        code in ("node_timeout", "TimeoutError") or mapped in ("node.timeout", "node.runaway")
+        code in ("node_timeout", "TimeoutError") or mapped in (_ERROR_CODE_NODE_TIMEOUT, "node.runaway")
     ):
         return max_retries
     if (
@@ -271,7 +277,7 @@ def _retry_after_policy(
         # Timeout is a distinct event — a "failure"-only policy must not retry
         # a timeout outcome, and a stall is not a generic failure.
         and code not in ("node_timeout", "TimeoutError", "executor_stalled")
-        and mapped not in ("node.timeout", "node.runaway", "agent.stall")
+        and mapped not in (_ERROR_CODE_NODE_TIMEOUT, "node.runaway", "agent.stall")
     ):
         # FAR-136 Gap 2: exclude sandbox-agent hang deaths. A hang terminalizes
         # as node_cancelled + "likely hung" in error_detail — retrying it only
@@ -1263,7 +1269,7 @@ class PipelineExecutor:
         """
         if final_status not in _TERMINAL_STATUSES:
             return None
-        if final_status == "failed" and error_code == "agent.failed":
+        if final_status == "failed" and error_code == _ERROR_CODE_AGENT_FAILED:
             return False
         return compute_work_intact(completed_node_outputs, node_ids)
 
@@ -2579,9 +2585,9 @@ class PipelineExecutor:
                         scrubbed = _sanitize_detail(agent_failure_reason, limit=5000)
                         broker.publish(
                             "run_failed",
-                            {"error": "agent.failed", "detail": scrubbed},
+                            {"error": _ERROR_CODE_AGENT_FAILED, "detail": scrubbed},
                         )
-                        return "failed", "agent.failed", scrubbed, node_token_usage or None
+                        return "failed", _ERROR_CODE_AGENT_FAILED, scrubbed, node_token_usage or None
                 except Exception:
                     _log.warning(
                         "agent_failure_elevation.failed_open",
@@ -2636,7 +2642,7 @@ class PipelineExecutor:
             error_detail = _sanitize_detail(exc, limit=5000)
             broker.publish("run_failed", {"error": "node_timeout", "detail": error_detail})
             _log.warning(
-                "node.timeout",
+                _ERROR_CODE_NODE_TIMEOUT,
                 extra={"run_id": str(run_id), "detail": error_detail},
             )
             return "failed", "node_timeout", error_detail, node_token_usage or None

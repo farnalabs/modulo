@@ -46,6 +46,10 @@ from modulo.db.models.cost_component import CostComponent, CostComponentKind
 from modulo.db.rls import set_rls_org
 from modulo.settings import get_settings
 
+_RE_SAFE_KEY_NAME = "^[a-z][a-z0-9_]{1,63}$"
+_CODE_COST_MANAGE = "cost.manage"
+
+
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/costs/components", tags=["admin", "costs"])
@@ -110,7 +114,7 @@ def validate_component_formula(
 
 
 class CostComponentBase(BaseModel):
-    name: str | None = Field(None, pattern=r"^[a-z][a-z0-9_]{1,63}$")
+    name: str | None = Field(None, pattern=_RE_SAFE_KEY_NAME)
     display_name: str | None = Field(None, min_length=1, max_length=MAX_DISPLAY_NAME_LENGTH)
     kind: CostComponentKind | None = None
     rate_usd: Decimal | None = Field(None, ge=0)
@@ -122,7 +126,7 @@ class CostComponentBase(BaseModel):
 
 
 class CostComponentCreate(CostComponentBase):
-    name: str = Field(..., pattern=r"^[a-z][a-z0-9_]{1,63}$")
+    name: str = Field(..., pattern=_RE_SAFE_KEY_NAME)
     display_name: str = Field(..., min_length=1, max_length=MAX_DISPLAY_NAME_LENGTH)
     kind: CostComponentKind = Field(...)
     enabled: bool = True
@@ -148,7 +152,7 @@ class CostComponentUpdate(BaseModel):
     do NOT use exclude_none.
     """
 
-    name: str | None = Field(None, pattern=r"^[a-z][a-z0-9_]{1,63}$")
+    name: str | None = Field(None, pattern=_RE_SAFE_KEY_NAME)
     display_name: str | None = Field(None, min_length=1, max_length=MAX_DISPLAY_NAME_LENGTH)
     kind: CostComponentKind | None = None
     rate_usd: Decimal | None = Field(None, ge=0)
@@ -239,7 +243,7 @@ def _to_response(component: CostComponent) -> CostComponentResponse:
 @handle_db_errors("costs.components.list")
 async def get_components(
     _: object = require_feature("admin_cost_breakdown"),
-    current_user: TenantPrincipal = require_permission("cost.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[CostComponentResponse]:
     try:
@@ -258,7 +262,7 @@ async def get_components(
 async def create_component(
     req: CostComponentCreate,
     _: object = require_feature("admin_cost_breakdown"),
-    current_user: TenantPrincipal = require_permission("cost.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> CostComponentResponse:
     try:
@@ -301,7 +305,7 @@ async def update_component(
     component_id: uuid.UUID,
     req: CostComponentUpdate,
     _: object = require_feature("admin_cost_breakdown"),
-    current_user: TenantPrincipal = require_permission("cost.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> CostComponentResponse:
     updates = dict(req.model_dump(exclude_unset=True))
@@ -346,7 +350,7 @@ async def update_component(
 async def delete_component(
     component_id: uuid.UUID,
     _: object = require_feature("admin_cost_breakdown"),
-    current_user: TenantPrincipal = require_permission("cost.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     try:

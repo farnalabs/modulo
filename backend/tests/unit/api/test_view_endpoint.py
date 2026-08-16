@@ -1,5 +1,6 @@
 """Unit tests for /api/v1/views endpoints."""
 
+import asyncio
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
@@ -86,6 +87,56 @@ def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+def _make_viewer_client() -> Generator[TestClient, None, None]:
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="viewer",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="viewer",
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def viewer_client() -> Generator[TestClient, None, None]:
+    yield from _make_viewer_client()
+
+
+@pytest.fixture
+def client_feature_disabled() -> Generator[TestClient, None, None]:
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="testuser",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = False
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     yield TestClient(app)
     app.dependency_overrides.clear()
@@ -286,3 +337,102 @@ class TestDeleteView:
         ):
             resp = client.delete(f"/api/v1/views/{uuid.uuid4()}")
         assert resp.status_code == 404
+
+
+class TestFeatureGate:
+    """The view_modes feature flag must gate every /api/v1/views route."""
+
+    @pytest.mark.parametrize(
+        "method",
+        ["GET", "POST"],
+        ids=["list", "create"],
+    )
+    def test_feature_disabled_returns_402(self, client_feature_disabled: TestClient, method: str) -> None:
+        if method == "GET":
+            resp = client_feature_disabled.get("/api/v1/views")
+        else:
+            resp = client_feature_disabled.post("/api/v1/views", json={"name": "T", "view_type": "run_list"})
+        assert resp.status_code == 402
+
+
+class TestRoleGating:
+    """view.list is viewer-level; view.manage is operator-level (ADR 017)."""
+
+    def test_viewer_can_list(self, viewer_client: TestClient) -> None:
+        page_result = MagicMock(items=[], total=0, page=1, page_size=20)
+        with (
+            patch("modulo.api.routes.views.list_views", return_value=page_result),
+            patch("modulo.api.routes.views.set_rls_org"),
+            patch("modulo.api.routes.views.set_rls_user_context"),
+        ):
+            resp = viewer_client.get("/api/v1/views")
+        assert resp.status_code == 200
+
+    def test_viewer_cannot_create(self, viewer_client: TestClient) -> None:
+        resp = viewer_client.post("/api/v1/views", json={"name": "T", "view_type": "run_list"})
+        assert resp.status_code == 403
+
+
+class TestCancelledErrorPropagation:
+    """Cancellation must propagate — never be wrapped as an HTTP 500."""
+
+    def _make_session(self) -> AsyncMock:
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=asyncio.CancelledError())
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin = MagicMock(return_value=begin_cm)
+        return session
+
+    def _principal(self) -> AuthenticatedPrincipal:
+        return AuthenticatedPrincipal(
+            username="u",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="admin",
+        )
+
+    @pytest.mark.anyio
+    async def test_list_propagates_cancelled_error(self) -> None:
+        from modulo.api.routes.views import list_views_endpoint
+
+        with (
+            pytest.raises(asyncio.CancelledError),
+            patch("modulo.api.routes.views.set_rls_org", new_callable=AsyncMock),
+            patch("modulo.api.routes.views.set_rls_user_context", new_callable=AsyncMock),
+        ):
+            await list_views_endpoint(
+                page=1,
+                page_size=20,
+                session=self._make_session(),
+                principal=self._principal(),
+            )
+
+    @pytest.mark.anyio
+    async def test_create_propagates_cancelled_error(self) -> None:
+        from modulo.api.routes.views import create_view_endpoint
+
+        with (
+            pytest.raises(asyncio.CancelledError),
+            patch(
+                "modulo.api.routes.views.create_view",
+                new_callable=AsyncMock,
+                side_effect=asyncio.CancelledError(),
+            ),
+            patch("modulo.api.routes.views.set_rls_org", new_callable=AsyncMock),
+            patch("modulo.api.routes.views.set_rls_user_context", new_callable=AsyncMock),
+        ):
+            await create_view_endpoint(
+                req=MagicMock(
+                    name="T",
+                    description=None,
+                    view_type="run_list",
+                    filters={},
+                    columns=None,
+                    sort_by=None,
+                    sort_order="desc",
+                ),
+                session=self._make_session(),
+                principal=self._principal(),
+            )

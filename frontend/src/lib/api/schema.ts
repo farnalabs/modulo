@@ -13052,6 +13052,10 @@ export interface components {
              * @default false
              */
             gate_fired: boolean;
+            /** Blocked Partial Summary */
+            blocked_partial_summary?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** RunSummary */
         RunSummary: {
@@ -13310,7 +13314,7 @@ export interface components {
             };
             /**
              * Limit
-             * @default 10
+             * @default 200
              */
             limit: number;
         };

@@ -18,10 +18,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_RESOURCE_ALREADY_EXISTS
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_in_dev_operator, require_permission
 from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_logger import append_audit_event_isolated
 from modulo.core.model_backend_hub import _build_backend
 from modulo.core.plugin_registry import get_plugin_registry
 from modulo.core.secrets_backend import create_secrets_backend
@@ -37,6 +39,16 @@ from modulo.db.models.model_backend import ModelBackend
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.model_backends.base import HEALTH_CHECK_TIMEOUT
 from modulo.settings import Settings, get_settings
+
+_CODE_MODEL_BACKENDS_LIST_MODEL = "model_backends.list_model_backends_endpoint"
+_MSG_MODEL_BACKENDS_NOT_AVAILABLE = "Model backends are not available. Run database migrations to enable this feature."
+_CODE_MODEL_BACKENDS_CREATE_MODEL = "model_backends.create_model_backend_endpoint"
+_CODE_MODEL_BACKENDS_GET_MODEL = "model_backends.get_model_backend_endpoint"
+_MSG_MODEL_BACKEND_NOT_FOUND = "Model backend not found"
+_CODE_MODEL_BACKENDS_UPDATE_MODEL = "model_backends.update_model_backend_endpoint"
+_CODE_MODEL_BACKENDS_DELETE_MODEL = "model_backends.delete_model_backend_endpoint"
+_CODE_MODEL_BACKENDS_RECHECK_MODEL = "model_backends.recheck_model_backend_health_endpoint"
+
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +173,19 @@ async def _run_health_check_on_save_and_persist(
     return status_, detail
 
 
+def _audit_safe_backend_fields(updates: dict[str, Any]) -> dict[str, Any]:
+    """Return the non-credential update fields, UUID values stringified, for audit payloads."""
+    safe: dict[str, Any] = {}
+    for key, value in updates.items():
+        if key == "credentials_ciphertext":
+            continue
+        if isinstance(value, uuid.UUID):
+            safe[key] = str(value)
+        else:
+            safe[key] = value
+    return safe
+
+
 class ModelBackendCreate(TeamVisibilityMixin):
     name: str = Field(..., min_length=1, max_length=255)
     display_name: str = Field(..., min_length=1, max_length=255)
@@ -244,7 +269,7 @@ def _to_response(mb: Any) -> ModelBackendResponse:
 
 
 @router.get("", response_model=ModelBackendListResponse, responses={401: {"description": "Unauthorized"}})
-@handle_db_errors("model_backends.list_model_backends_endpoint")
+@handle_db_errors(_CODE_MODEL_BACKENDS_LIST_MODEL)
 async def list_model_backends_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -266,19 +291,19 @@ async def list_model_backends_endpoint(
                 excluded_tiers=[] if include_in_dev else None,
             )
     except IntegrityError:
-        logger.exception("model_backends.list_model_backends_endpoint")
+        logger.exception(_CODE_MODEL_BACKENDS_LIST_MODEL)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        logger.exception("model_backends.list_model_backends_endpoint")
+        logger.exception(_CODE_MODEL_BACKENDS_LIST_MODEL)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Model backends are not available. Run database migrations to enable this feature.",
+            detail=_MSG_MODEL_BACKENDS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("model_backends.list_model_backends_endpoint")
+        logger.exception(_CODE_MODEL_BACKENDS_LIST_MODEL)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while listing model backends.",
@@ -419,7 +444,7 @@ def _validate_provider(provider: str) -> None:
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(deny_break_glass_mint)],
 )
-@handle_db_errors("model_backends.create_model_backend_endpoint")
+@handle_db_errors(_CODE_MODEL_BACKENDS_CREATE_MODEL)
 async def create_model_backend_endpoint(
     req: ModelBackendCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -490,20 +515,40 @@ async def create_model_backend_endpoint(
             user_id=principal.account_id,
             org_role=principal.org_role,
         )
+
+        # PRD §8.12 audit trail: backend registration was previously invisible.
+        # Written in a fresh transaction (the create above already committed)
+        # and failure-isolated so a broken append never fails a completed create.
+        await append_audit_event_isolated(
+            session,
+            principal,
+            resource_type="model_backend",
+            event_type="model_backend.created",
+            resource_id=mb.id,
+            payload={
+                "name": mb.name,
+                "provider": mb.provider,
+                "model_id": mb.model_id,
+                "tier": mb.tier,
+                "fallback_backend_ids": [str(fid) for fid in (mb.fallback_backend_ids or [])],
+                "has_credentials": bool(mb.credentials_ciphertext),
+            },
+            log_key="model_backends.audit_append_failed",
+        )
     except IntegrityError:
-        logger.exception("model_backends.create_model_backend_endpoint")
+        logger.exception(_CODE_MODEL_BACKENDS_CREATE_MODEL)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        logger.exception("model_backends.create_model_backend_endpoint")
+        logger.exception(_CODE_MODEL_BACKENDS_CREATE_MODEL)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Model backends are not available. Run database migrations to enable this feature.",
+            detail=_MSG_MODEL_BACKENDS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("model_backends.create_model_backend_endpoint")
+        logger.exception(_CODE_MODEL_BACKENDS_CREATE_MODEL)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while creating model backend.",
@@ -520,7 +565,7 @@ async def create_model_backend_endpoint(
 
 
 @router.get("/{backend_id}", response_model=ModelBackendResponse)
-@handle_db_errors("model_backends.get_model_backend_endpoint")
+@handle_db_errors(_CODE_MODEL_BACKENDS_GET_MODEL)
 async def get_model_backend_endpoint(
     backend_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -532,19 +577,19 @@ async def get_model_backend_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             mb = await get_model_backend(session, backend_id)
     except IntegrityError:
-        logger.exception("model_backends.get_model_backend_endpoint")
+        logger.exception(_CODE_MODEL_BACKENDS_GET_MODEL)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        logger.exception("model_backends.get_model_backend_endpoint")
+        logger.exception(_CODE_MODEL_BACKENDS_GET_MODEL)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Model backends are not available. Run database migrations to enable this feature.",
+            detail=_MSG_MODEL_BACKENDS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("model_backends.get_model_backend_endpoint")
+        logger.exception(_CODE_MODEL_BACKENDS_GET_MODEL)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching model backend.",
@@ -558,12 +603,12 @@ async def get_model_backend_endpoint(
             detail="An unexpected error occurred while fetching model backend.",
         ) from None
     if mb is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_MODEL_BACKEND_NOT_FOUND)
     return _to_response(mb)
 
 
 @router.patch("/{backend_id}", response_model=ModelBackendResponse, dependencies=[Depends(deny_break_glass_mint)])
-@handle_db_errors("model_backends.update_model_backend_endpoint")
+@handle_db_errors(_CODE_MODEL_BACKENDS_UPDATE_MODEL)
 async def update_model_backend_endpoint(
     backend_id: uuid.UUID,
     req: ModelBackendUpdate,
@@ -589,7 +634,7 @@ async def update_model_backend_endpoint(
                 updates["fallback_backend_ids"] = [str(fid) for fid in fallback_ids]
             mb = await update_model_backend(session, backend_id, updates)
             if mb is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_MODEL_BACKEND_NOT_FOUND)
             await session.refresh(mb)
             if req.api_key is not None:
                 secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
@@ -612,20 +657,53 @@ async def update_model_backend_endpoint(
                 user_id=principal.account_id,
                 org_role=principal.org_role,
             )
+
+        # PRD §8.12 audit trail: backend edits and credential rotation were
+        # previously invisible. Written in fresh transactions (the update above
+        # already committed) and failure-isolated so a broken append never fails
+        # a completed update. ``model_backend_credentials_updated`` fires under
+        # its exact PRD name when an API key is supplied; the generic edit event
+        # carries only the non-credential fields that actually changed.
+        changed_fields = _audit_safe_backend_fields(updates)
+        if changed_fields:
+            await append_audit_event_isolated(
+                session,
+                principal,
+                resource_type="model_backend",
+                event_type="model_backend.updated",
+                resource_id=mb.id,
+                payload={"backend_id": str(mb.id), "changed_fields": changed_fields},
+                log_key="model_backends.audit_append_failed",
+            )
+        if req.api_key is not None:
+            await append_audit_event_isolated(
+                session,
+                principal,
+                resource_type="model_backend",
+                event_type="model_backend_credentials_updated",
+                resource_id=mb.id,
+                payload={
+                    "backend_id": str(mb.id),
+                    "name": mb.name,
+                    "provider": mb.provider,
+                    "model_id": mb.model_id,
+                },
+                log_key="model_backends.audit_append_failed",
+            )
     except IntegrityError:
-        logger.exception("model_backends.update_model_backend_endpoint")
+        logger.exception(_CODE_MODEL_BACKENDS_UPDATE_MODEL)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        logger.exception("model_backends.update_model_backend_endpoint")
+        logger.exception(_CODE_MODEL_BACKENDS_UPDATE_MODEL)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Model backends are not available. Run database migrations to enable this feature.",
+            detail=_MSG_MODEL_BACKENDS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("model_backends.update_model_backend_endpoint")
+        logger.exception(_CODE_MODEL_BACKENDS_UPDATE_MODEL)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating model backend.",
@@ -642,7 +720,7 @@ async def update_model_backend_endpoint(
 
 
 @router.post("/{backend_id}/health-check", response_model=ModelBackendHealthCheckResponse)
-@handle_db_errors("model_backends.recheck_model_backend_health_endpoint")
+@handle_db_errors(_CODE_MODEL_BACKENDS_RECHECK_MODEL)
 async def recheck_model_backend_health_endpoint(
     backend_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -682,19 +760,19 @@ async def recheck_model_backend_health_endpoint(
             org_role=principal.org_role,
         )
     except IntegrityError:
-        logger.exception("model_backends.recheck_model_backend_health_endpoint")
+        logger.exception(_CODE_MODEL_BACKENDS_RECHECK_MODEL)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
-        logger.exception("model_backends.recheck_model_backend_health_endpoint")
+        logger.exception(_CODE_MODEL_BACKENDS_RECHECK_MODEL)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Model backends are not available. Run database migrations to enable this feature.",
         ) from None
     except SQLAlchemyError:
-        logger.exception("model_backends.recheck_model_backend_health_endpoint")
+        logger.exception(_CODE_MODEL_BACKENDS_RECHECK_MODEL)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while re-checking model backend health.",
@@ -712,12 +790,13 @@ async def recheck_model_backend_health_endpoint(
 
 
 @router.delete("/{backend_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(deny_break_glass_mint)])
-@handle_db_errors("model_backends.delete_model_backend_endpoint")
+@handle_db_errors(_CODE_MODEL_BACKENDS_DELETE_MODEL)
 async def delete_model_backend_endpoint(
     backend_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("model_backend.delete"),
 ) -> None:
+    audit_payload: dict[str, Any] | None = None
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -731,21 +810,31 @@ async def delete_model_backend_endpoint(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=(f"Cannot delete model backend: it is referenced as a fallback by backend(s): {names}"),
                 )
+            # Capture the entity details BEFORE the delete so the audit event can
+            # survive the row (a post-delete read would return nothing).
+            existing = await get_model_backend(session, backend_id)
+            if existing is not None:
+                audit_payload = {
+                    "name": existing.name,
+                    "provider": existing.provider,
+                    "model_id": existing.model_id,
+                    "tier": existing.tier,
+                }
             deleted = await delete_model_backend(session, backend_id)
     except IntegrityError:
-        logger.exception("model_backends.delete_model_backend_endpoint")
+        logger.exception(_CODE_MODEL_BACKENDS_DELETE_MODEL)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        logger.exception("model_backends.delete_model_backend_endpoint")
+        logger.exception(_CODE_MODEL_BACKENDS_DELETE_MODEL)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Model backends are not available. Run database migrations to enable this feature.",
+            detail=_MSG_MODEL_BACKENDS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("model_backends.delete_model_backend_endpoint")
+        logger.exception(_CODE_MODEL_BACKENDS_DELETE_MODEL)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while deleting model backend.",
@@ -759,4 +848,18 @@ async def delete_model_backend_endpoint(
             detail="An unexpected error occurred while deleting model backend.",
         ) from None
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_MODEL_BACKEND_NOT_FOUND)
+
+    # PRD §8.12 audit trail: backend deletion was previously invisible. Written
+    # in a fresh transaction (the delete above already committed) and
+    # failure-isolated so a broken append never fails a completed delete.
+    if audit_payload is not None:
+        await append_audit_event_isolated(
+            session,
+            principal,
+            resource_type="model_backend",
+            event_type="model_backend.deleted",
+            resource_id=backend_id,
+            payload=audit_payload,
+            log_key="model_backends.audit_append_failed",
+        )

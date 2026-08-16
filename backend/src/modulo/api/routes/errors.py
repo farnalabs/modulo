@@ -42,6 +42,15 @@ from modulo.db.models.error_group import ErrorGroup
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
+_CODE_ERRORS_RESOLVE = "errors.resolve"
+_CODE_ERRORS_INGEST_ERRORS = "errors.ingest_errors"
+_MSG_ERROR_TRACKING_NOT_AVAILABLE = "Error tracking is not available. Run database migrations to enable it."
+_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE = "Error tracking is temporarily unavailable. Please try again."
+_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE = "An unexpected error occurred while processing your request."
+_CODE_ERRORS_INGEST_ERRORS_PUBLIC = "errors.ingest_errors_public"
+_MSG_NO_ORGANISATION = "No organisation"
+
+
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/errors", tags=["errors"])
@@ -111,7 +120,7 @@ def _get_key_store(settings: Settings | None = None) -> SessionKeyStore:
 @router.post("/session-key", response_model=SessionKeyResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("errors.create_session_key")
 async def create_session_key(
-    principal: TenantPrincipal = require_permission("errors.resolve"),
+    principal: TenantPrincipal = require_permission(_CODE_ERRORS_RESOLVE),
 ) -> dict[str, Any]:
     """Generate a per-session HMAC key for signing error ingest requests.
 
@@ -125,11 +134,11 @@ async def create_session_key(
 
 
 @router.post("/ingest", response_model=ErrorIngestResponse, status_code=status.HTTP_201_CREATED)
-@handle_db_errors("errors.ingest_errors")
+@handle_db_errors(_CODE_ERRORS_INGEST_ERRORS)
 async def ingest_errors(
     request: Request,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("errors.resolve"),
+    principal: TenantPrincipal = require_permission(_CODE_ERRORS_RESOLVE),
 ) -> dict[str, Any]:
     """Ingest one or more error events.
 
@@ -165,7 +174,7 @@ async def ingest_errors(
     try:
         ingest_request = ErrorIngestRequest(**data)
     except Exception as exc:
-        _log.exception("errors.ingest_errors")
+        _log.exception(_CODE_ERRORS_INGEST_ERRORS)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
@@ -185,30 +194,30 @@ async def ingest_errors(
     except HTTPException:
         raise
     except ProgrammingError as exc:
-        _log.exception("errors.ingest_errors")
+        _log.exception(_CODE_ERRORS_INGEST_ERRORS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Error tracking is not available. Run database migrations to enable it.",
+            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        _log.exception("errors.ingest_errors")
+        _log.exception(_CODE_ERRORS_INGEST_ERRORS)
         _log.warning("error_tracking.db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Error tracking is temporarily unavailable. Please try again.",
+            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except Exception as exc:
         _log.exception("error_tracking.ingest_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while processing your request.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
 
     return {"results": [ErrorGroupResult(**r) for r in results]}
 
 
 @router.post("/ingest/public", response_model=ErrorIngestResponse, status_code=status.HTTP_201_CREATED)
-@handle_db_errors("errors.ingest_errors_public")
+@handle_db_errors(_CODE_ERRORS_INGEST_ERRORS_PUBLIC)
 async def ingest_errors_public(
     request: Request,
     session: AsyncSession = Depends(get_db_session),
@@ -256,7 +265,7 @@ async def ingest_errors_public(
     try:
         ingest_request = ErrorIngestRequest(**data)
     except Exception as exc:
-        _log.exception("errors.ingest_errors_public")
+        _log.exception(_CODE_ERRORS_INGEST_ERRORS_PUBLIC)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
@@ -285,23 +294,23 @@ async def ingest_errors_public(
         async with session.begin():
             results = await _service.ingest_batch(session, ORPHAN_ORG_ID, events_data)
     except ProgrammingError as exc:
-        _log.exception("errors.ingest_errors_public")
+        _log.exception(_CODE_ERRORS_INGEST_ERRORS_PUBLIC)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Error tracking is not available. Run database migrations to enable it.",
+            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        _log.exception("errors.ingest_errors_public")
+        _log.exception(_CODE_ERRORS_INGEST_ERRORS_PUBLIC)
         _log.warning("error_tracking.public_ingest_db_error", extra={"ip": client_ip})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Error tracking is temporarily unavailable. Please try again.",
+            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except Exception as exc:
         _log.exception("error_tracking.public_ingest_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while processing your request.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
 
     # Update daily cap count after successful ingest
@@ -370,11 +379,11 @@ async def list_error_groups(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("errors.resolve"),
+    principal: TenantPrincipal = require_permission(_CODE_ERRORS_RESOLVE),
 ) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organisation")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_NO_ORGANISATION)
 
     try:
         async with session.begin():
@@ -420,20 +429,20 @@ async def list_error_groups(
         _log.exception("errors.list_error_groups")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Error tracking is not available. Run database migrations to enable it.",
+            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("errors.list_error_groups")
         _log.warning("error_tracking.list_groups_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Error tracking is temporarily unavailable. Please try again.",
+            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except Exception as exc:
         _log.exception("error_tracking.list_groups_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while processing your request.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
 
     return {"items": items, "total": total, "limit": limit, "offset": offset}
@@ -444,11 +453,11 @@ async def list_error_groups(
 async def get_error_group_detail(
     error_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("errors.resolve"),
+    principal: TenantPrincipal = require_permission(_CODE_ERRORS_RESOLVE),
 ) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organisation")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_NO_ORGANISATION)
 
     try:
         async with session.begin():
@@ -463,20 +472,20 @@ async def get_error_group_detail(
         _log.exception("errors.get_error_group_detail")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Error tracking is not available. Run database migrations to enable it.",
+            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("errors.get_error_group_detail")
         _log.warning("error_tracking.get_group_detail_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Error tracking is temporarily unavailable. Please try again.",
+            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except Exception as exc:
         _log.exception("error_tracking.get_group_detail_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while processing your request.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
 
     return {
@@ -498,11 +507,11 @@ async def patch_error_group(
     error_id: uuid.UUID,
     req: ErrorGroupUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("errors.resolve"),
+    principal: TenantPrincipal = require_permission(_CODE_ERRORS_RESOLVE),
 ) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organisation")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_NO_ORGANISATION)
 
     try:
         async with session.begin():
@@ -525,20 +534,20 @@ async def patch_error_group(
         _log.exception("errors.patch_error_group")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Error tracking is not available. Run database migrations to enable it.",
+            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("errors.patch_error_group")
         _log.warning("error_tracking.patch_group_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Error tracking is temporarily unavailable. Please try again.",
+            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except Exception as exc:
         _log.exception("error_tracking.patch_group_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while processing your request.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
 
     return {
@@ -561,11 +570,11 @@ async def list_error_events(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("errors.resolve"),
+    principal: TenantPrincipal = require_permission(_CODE_ERRORS_RESOLVE),
 ) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organisation")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_NO_ORGANISATION)
 
     try:
         async with session.begin():
@@ -584,20 +593,20 @@ async def list_error_events(
         _log.exception("errors.list_error_events")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Error tracking is not available. Run database migrations to enable it.",
+            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("errors.list_error_events")
         _log.warning("error_tracking.list_events_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Error tracking is temporarily unavailable. Please try again.",
+            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except Exception as exc:
         _log.exception("error_tracking.list_events_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while processing your request.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
 
     items = [_serialize_error_event_detail(e) for e in events]

@@ -26,6 +26,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 
 _MIGRATION_0006 = "0108_schema_org_identity"
 _MIGRATION_0008 = "0110_schema_pipeline_runtime"
+_HEAD_MIGRATION = "0111_run_blocked_partial_summary"
 
 
 def _source(name: str) -> str:
@@ -41,7 +42,7 @@ def _script() -> ScriptDirectory:
 class TestReconciliationChain:
     def test_single_linear_head(self) -> None:
         heads = _script().get_heads()
-        assert heads == [_MIGRATION_0008], f"expected a single head, got {heads}"
+        assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
 
 
 class TestMcpSetupTokensSurface:

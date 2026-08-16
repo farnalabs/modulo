@@ -30,6 +30,7 @@ import pytest
 from alembic.script import ScriptDirectory
 
 _MIGRATION_0008 = "0110_schema_pipeline_runtime"
+_HEAD_MIGRATION = "0111_run_blocked_partial_summary"
 
 _VERSIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 
@@ -58,8 +59,8 @@ def _script() -> ScriptDirectory:
 class TestReconciliationChain:
     def test_single_head_is_0008(self) -> None:
         script = _script()
-        assert script.get_heads() == [_MIGRATION_0008], (
-            f"expected a single head {_MIGRATION_0008}, got {script.get_heads()}"
+        assert script.get_heads() == [_HEAD_MIGRATION], (
+            f"expected a single head {_HEAD_MIGRATION}, got {script.get_heads()}"
         )
 
     def test_0008_owns_trigger_and_run_vocabulary(self, migration_0008: ModuleType) -> None:

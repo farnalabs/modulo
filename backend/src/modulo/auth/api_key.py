@@ -220,7 +220,7 @@ async def update_api_key(
     *,
     name: str | None = None,
     role: str | None = None,
-    team_id: uuid.UUID | None | object = _UNSET,
+    team_id: uuid.UUID | object | None = _UNSET,
     expires_at: datetime | None = None,
 ) -> OrgApiKey | None:
     """Update an API key's metadata. Returns None if the key was not found.

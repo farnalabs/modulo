@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_THIS_FEATURE_NOT_AVAILABLE
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission, require_team_membership_or_admin
 from modulo.api.models.team_visibility import TeamVisibilityMixin
@@ -80,6 +81,14 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.schema import Schema
 from modulo.db.rls import set_rls_org, set_rls_user_context
+
+_CODE_PIPELINE_LIST = "pipeline.list"
+_CODE_ROUTES_PIPELINES = "routes.pipelines"
+_MSG_PIPELINE_NOT_FOUND = "Pipeline not found"
+_CODE_PIPELINE_GRAPH_UPDATE = "pipeline.graph.update"
+_CODE_PIPELINE_UPDATE = "pipeline.update"
+_MSG_SNAPSHOT_NOT_FOUND = "Snapshot not found"
+
 
 logger = logging.getLogger(__name__)
 
@@ -785,7 +794,7 @@ async def list_pipelines_endpoint(
     include_archived: bool = Query(default=False),
     folder_id: uuid.UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("pipeline.list"),
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_LIST),
 ) -> PipelineListResponse:
     try:
         async with session.begin():
@@ -800,10 +809,10 @@ async def list_pipelines_endpoint(
                 folder_id=folder_id,
             )
     except ProgrammingError:
-        logger.exception("routes.pipelines")
+        logger.exception(_CODE_ROUTES_PIPELINES)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
     return PipelineListResponse(
@@ -849,11 +858,11 @@ async def create_pipeline_endpoint(
                 # is persisted on the returned ORM row within this transaction.
                 pipeline.retry_policy = req.retry_policy
     except ProgrammingError:
-        logger.exception("routes.pipelines")
+        logger.exception(_CODE_ROUTES_PIPELINES)
 
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
     return PipelineResponse.model_validate(pipeline)
@@ -864,7 +873,7 @@ async def create_pipeline_endpoint(
 async def get_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("pipeline.list"),
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_LIST),
 ) -> PipelineResponse:
     try:
         async with session.begin():
@@ -872,15 +881,15 @@ async def get_pipeline_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             pipeline = await get_pipeline(session, pipeline_id)
     except ProgrammingError:
-        logger.exception("routes.pipelines")
+        logger.exception(_CODE_ROUTES_PIPELINES)
 
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
     if pipeline is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
     return PipelineResponse.model_validate(pipeline)
 
 
@@ -897,15 +906,15 @@ async def get_pipeline_graph_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             graph = await get_pipeline_graph(session, pipeline_id)
     except ProgrammingError:
-        logger.exception("routes.pipelines")
+        logger.exception(_CODE_ROUTES_PIPELINES)
 
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
     if graph is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
     nodes, edges = graph
     return _graph_response(nodes, edges)
 
@@ -916,7 +925,7 @@ async def replace_pipeline_graph_endpoint(
     pipeline_id: uuid.UUID,
     req: PipelineGraphUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("pipeline.graph.update"),
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_GRAPH_UPDATE),
     _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> PipelineGraphResponse:
     # Route layer carries the operator baseline ("pipeline.graph.update") for
@@ -965,7 +974,7 @@ async def replace_pipeline_graph_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             pipeline = await get_pipeline(session, pipeline_id)
             if pipeline is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
             await _enforce_connector_team_bindings(
                 session,
                 principal.organisation_id,
@@ -1023,15 +1032,15 @@ async def replace_pipeline_graph_endpoint(
             request_id=getattr(principal, "request_id", None),
         )
     except ProgrammingError:
-        logger.exception("routes.pipelines")
+        logger.exception(_CODE_ROUTES_PIPELINES)
 
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
     if graph is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
     nodes, edges = graph
     issues = [
         GraphValidationIssue(
@@ -1114,7 +1123,7 @@ async def update_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     req: PipelineUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("pipeline.update"),
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
     _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> PipelineResponse:
     updates = req.model_dump(exclude_unset=True)
@@ -1126,7 +1135,7 @@ async def update_pipeline_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             current = await get_pipeline(session, pipeline_id)
             if current is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
             await _assert_team_transition_allowed(session, principal, current, updates)
             ownership_changed = "owner_team_id" in updates and updates["owner_team_id"] != current.owner_team_id
             if "default_autonomy_level" in updates:
@@ -1165,7 +1174,7 @@ async def update_pipeline_endpoint(
                 graph_bindings = extract_connector_bindings(node_data)
                 existing = await get_pipeline(session, pipeline_id)
                 if existing is None:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
                 effective_owner_team_id = updates.get("owner_team_id", existing.owner_team_id)
                 await _enforce_connector_team_bindings(
                     session,
@@ -1190,7 +1199,7 @@ async def update_pipeline_endpoint(
                     account_id=principal.account_id,
                 )
                 if graph is None:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
             pipeline = await update_pipeline(
                 session,
                 pipeline_id,
@@ -1216,15 +1225,15 @@ async def update_pipeline_endpoint(
             "cannot change ownership while any run is active",
         ) from None
     except ProgrammingError:
-        logger.exception("routes.pipelines")
+        logger.exception(_CODE_ROUTES_PIPELINES)
 
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
     if pipeline is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
     response = PipelineResponse.model_validate(pipeline)
     response.connector_rebind_required = ownership_changed
     return response
@@ -1244,15 +1253,15 @@ async def delete_pipeline_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             deleted = await soft_delete_pipeline(session, pipeline_id)
     except ProgrammingError:
-        logger.exception("routes.pipelines")
+        logger.exception(_CODE_ROUTES_PIPELINES)
 
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
 
 
 @router.post("/{pipeline_id}/restore", response_model=PipelineResponse)
@@ -1260,7 +1269,7 @@ async def delete_pipeline_endpoint(
 async def restore_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("pipeline.update"),
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
 ) -> PipelineResponse:
     try:
         async with session.begin():
@@ -1268,13 +1277,13 @@ async def restore_pipeline_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             pipeline = await restore_pipeline(session, pipeline_id)
     except ProgrammingError:
-        logger.exception("routes.pipelines")
+        logger.exception(_CODE_ROUTES_PIPELINES)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
     if pipeline is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
     return PipelineResponse.model_validate(pipeline)
 
 
@@ -1283,7 +1292,7 @@ async def restore_pipeline_endpoint(
 async def archive_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("pipeline.update"),
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
 ) -> PipelineResponse:
     try:
         async with session.begin():
@@ -1291,13 +1300,13 @@ async def archive_pipeline_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             pipeline = await archive_pipeline(session, pipeline_id)
     except ProgrammingError:
-        logger.exception("routes.pipelines")
+        logger.exception(_CODE_ROUTES_PIPELINES)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
     if pipeline is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
     return PipelineResponse.model_validate(pipeline)
 
 
@@ -1306,7 +1315,7 @@ async def archive_pipeline_endpoint(
 async def unarchive_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("pipeline.update"),
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
 ) -> PipelineResponse:
     try:
         async with session.begin():
@@ -1314,13 +1323,13 @@ async def unarchive_pipeline_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             pipeline = await unarchive_pipeline(session, pipeline_id)
     except ProgrammingError:
-        logger.exception("routes.pipelines")
+        logger.exception(_CODE_ROUTES_PIPELINES)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
     if pipeline is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
     return PipelineResponse.model_validate(pipeline)
 
 
@@ -1429,11 +1438,11 @@ async def clone_pipeline_endpoint(
                 },
             )
     except ProgrammingError:
-        logger.exception("routes.pipelines")
+        logger.exception(_CODE_ROUTES_PIPELINES)
 
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
     logger.info("Copy complete: %s -> %s (%s)", pipeline_id, cloned.id, target_name)
@@ -1469,7 +1478,7 @@ async def save_as_composite_endpoint(
 
             pipeline = await get_pipeline(session, pipeline_id)
             if pipeline is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
 
             all_nodes = pipeline.graph_nodes_json
             selected_ids_str = {str(nid) for nid in req.selected_node_ids}
@@ -1540,11 +1549,11 @@ async def save_as_composite_endpoint(
             )
 
     except ProgrammingError:
-        logger.exception("routes.pipelines")
+        logger.exception(_CODE_ROUTES_PIPELINES)
 
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
     return {
@@ -1577,7 +1586,7 @@ class QualityReportResponse(BaseModel):
 async def trigger_quality_report(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("pipeline.update"),
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
 ) -> QualityReportResponse:
     try:
         async with session.begin():
@@ -1586,7 +1595,7 @@ async def trigger_quality_report(
 
             pipeline = await get_pipeline(session, pipeline_id)
             if pipeline is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
 
             report = await generate_quality_report(session, principal.organisation_id)
 
@@ -1615,11 +1624,11 @@ async def trigger_quality_report(
             if recipient_urls:
                 deliveries = await deliver_quality_report(report, {"webhook_urls": recipient_urls})
     except ProgrammingError:
-        logger.exception("routes.pipelines")
+        logger.exception(_CODE_ROUTES_PIPELINES)
 
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
     return QualityReportResponse(
@@ -1723,7 +1732,7 @@ async def list_snapshot_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("pipeline.list"),
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_LIST),
 ) -> SnapshotListResponse:
     try:
         async with session.begin():
@@ -1731,11 +1740,11 @@ async def list_snapshot_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             snapshots, total = await list_snapshots(session, pipeline_id, page=page, page_size=page_size)
     except ProgrammingError:
-        logger.exception("routes.pipelines")
+        logger.exception(_CODE_ROUTES_PIPELINES)
 
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
     return SnapshotListResponse(
@@ -1750,7 +1759,7 @@ async def get_snapshot_detail_endpoint(
     pipeline_id: uuid.UUID,
     snapshot_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("pipeline.list"),
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_LIST),
 ) -> SnapshotDetailResponse:
     try:
         async with session.begin():
@@ -1763,15 +1772,15 @@ async def get_snapshot_detail_endpoint(
                 pipeline_id=pipeline_id,
             )
     except ProgrammingError:
-        logger.exception("routes.pipelines")
+        logger.exception(_CODE_ROUTES_PIPELINES)
 
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
     if snapshot is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SNAPSHOT_NOT_FOUND)
     return _snapshot_to_detail_response(snapshot)
 
 
@@ -1782,7 +1791,7 @@ async def tag_snapshot_endpoint(
     snapshot_id: uuid.UUID,
     req: SnapshotTagUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("pipeline.update"),
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
 ) -> SnapshotResponse:
     try:
         async with session.begin():
@@ -1790,15 +1799,15 @@ async def tag_snapshot_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             snapshot = await tag_snapshot(session, snapshot_id, tag=req.tag, notes=req.notes)
     except ProgrammingError:
-        logger.exception("routes.pipelines")
+        logger.exception(_CODE_ROUTES_PIPELINES)
 
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
     if snapshot is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SNAPSHOT_NOT_FOUND)
     return _snapshot_to_response(snapshot)
 
 
@@ -1808,7 +1817,7 @@ async def rollback_snapshot_endpoint(
     pipeline_id: uuid.UUID,
     snapshot_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("pipeline.graph.update"),
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_GRAPH_UPDATE),
 ) -> SnapshotResponse:
     # Route layer carries the operator baseline ("pipeline.graph.update") for
     # defense-in-depth breadth; actual gate-weakening enforcement is the
@@ -1839,11 +1848,11 @@ async def rollback_snapshot_endpoint(
             request_id=getattr(principal, "request_id", None),
         )
     except ProgrammingError:
-        logger.exception("routes.pipelines")
+        logger.exception(_CODE_ROUTES_PIPELINES)
 
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
     if new_snapshot is None:
@@ -1873,11 +1882,11 @@ async def delete_snapshot_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             deleted = await delete_snapshot(session, snapshot_id)
     except ProgrammingError:
-        logger.exception("routes.pipelines")
+        logger.exception(_CODE_ROUTES_PIPELINES)
 
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
     if not deleted:
@@ -1893,7 +1902,7 @@ async def diff_snapshot_endpoint(
     pipeline_id: uuid.UUID,
     req: SnapshotDiffQuery,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("pipeline.list"),
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_LIST),
 ) -> SnapshotDiffResponse:
     try:
         async with session.begin():
@@ -1901,11 +1910,11 @@ async def diff_snapshot_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             result = await diff_snapshots(session, req.snapshot_a_id, req.snapshot_b_id)
     except ProgrammingError:
-        logger.exception("routes.pipelines")
+        logger.exception(_CODE_ROUTES_PIPELINES)
 
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
     if result is None:
@@ -1931,7 +1940,7 @@ async def move_pipeline_to_folder_endpoint(
     pipeline_id: uuid.UUID,
     req: PipelineFolderMoveRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("pipeline.update"),
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
 ) -> PipelineResponse:
     try:
         async with session.begin():
@@ -1944,13 +1953,13 @@ async def move_pipeline_to_folder_endpoint(
             detail=str(e),
         ) from None
     except ProgrammingError:
-        logger.exception("routes.pipelines")
+        logger.exception(_CODE_ROUTES_PIPELINES)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
     if pipeline is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
     return PipelineResponse.model_validate(pipeline)
 
 
@@ -1975,7 +1984,7 @@ async def convert_node_to_agent_endpoint(
     node_id: uuid.UUID,
     req: ConvertToAgentRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("pipeline.graph.update"),
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_GRAPH_UPDATE),
 ) -> PipelineGraphResponse:
     try:
         async with session.begin():
@@ -1986,7 +1995,7 @@ async def convert_node_to_agent_endpoint(
                 await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update())
             ).scalar_one_or_none()
             if pipeline_row is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
             nodes = list(pipeline_row.graph_nodes_json) if pipeline_row.graph_nodes_json else []
             edges = list(
                 (await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))).scalars()
@@ -2080,15 +2089,15 @@ async def convert_node_to_agent_endpoint(
             request_id=getattr(principal, "request_id", None),
         )
     except ProgrammingError:
-        logger.exception("routes.pipelines")
+        logger.exception(_CODE_ROUTES_PIPELINES)
 
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
     if saved is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
     saved_nodes, saved_edges = saved
     return _graph_response(saved_nodes, saved_edges)
 
@@ -2103,7 +2112,7 @@ async def revert_node_to_manual_endpoint(
     node_id: uuid.UUID,
     snapshot_id: uuid.UUID = Query(...),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("pipeline.graph.update"),
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_GRAPH_UPDATE),
 ) -> PipelineGraphResponse:
     try:
         async with session.begin():
@@ -2114,7 +2123,7 @@ async def revert_node_to_manual_endpoint(
                 await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update())
             ).scalar_one_or_none()
             if pipeline_row is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
             nodes = list(pipeline_row.graph_nodes_json) if pipeline_row.graph_nodes_json else []
             edges = list(
                 (await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))).scalars()
@@ -2136,7 +2145,7 @@ async def revert_node_to_manual_endpoint(
                 pipeline_id=pipeline_id,
             )
             if snapshot is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SNAPSHOT_NOT_FOUND)
 
             snapshot_nodes = snapshot.graph_json.get("nodes", [])
             snapshot_node = _find_node_in_list(snapshot_nodes, node_id)
@@ -2199,15 +2208,15 @@ async def revert_node_to_manual_endpoint(
             request_id=getattr(principal, "request_id", None),
         )
     except ProgrammingError:
-        logger.exception("routes.pipelines")
+        logger.exception(_CODE_ROUTES_PIPELINES)
 
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
     if saved is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
     saved_nodes, saved_edges = saved
     return _graph_response(saved_nodes, saved_edges)
 
