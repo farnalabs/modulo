@@ -1561,7 +1561,7 @@ async def admin_delete_team(
                 details = "; ".join(f"{count} {label}(s)" for label, count in resource_checks)
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Cannot delete team: still has resources — {details}",
+                    detail=f"team_has_resources: Cannot delete team: still has resources — {details}",
                 )
 
             deleted = await delete_team(session, team_id)
