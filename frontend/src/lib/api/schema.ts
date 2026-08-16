@@ -1677,6 +1677,34 @@ export interface paths {
         patch: operations["update_team_endpoint_api_v1_teams__team_id__patch"];
         trace?: never;
     };
+    "/api/v1/teams/{team_id}/reassign-org": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reassign Team Resources Endpoint
+         * @description Reassign every team-owned resource to org-wide (PRD §9.3 Team Deletion Policy).
+         *
+         *     Sets ``owner_team_id = NULL`` (and flips ``visibility`` to ``'org'``, keeping
+         *     the ``ck_*_team_owner`` CHECK constraints satisfied) on every pipeline,
+         *     connector instance, model backend and library primitive currently owned by
+         *     the team, so the team can then be deleted (deletion is blocked while
+         *     ``owner_team_id`` references the team). Admin-only (``team.delete``).
+         *     Idempotent: re-running after a successful reassignment finds zero owned
+         *     rows and returns ``reassigned=0``.
+         */
+        post: operations["reassign_team_resources_endpoint_api_v1_teams__team_id__reassign_org_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teams/{team_id}/members": {
         parameters: {
             query?: never;
@@ -14093,6 +14121,13 @@ export interface components {
             /** Team Role */
             team_role: string;
         };
+        /** TeamReassignResponse */
+        TeamReassignResponse: {
+            /** Team Id */
+            team_id: string;
+            /** Reassigned */
+            reassigned: number;
+        };
         /** TeamResponse */
         TeamResponse: {
             /** Id */
@@ -19277,6 +19312,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TeamResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reassign_team_resources_endpoint_api_v1_teams__team_id__reassign_org_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamReassignResponse"];
                 };
             };
             /** @description Validation Error */
