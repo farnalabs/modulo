@@ -180,11 +180,11 @@ class TestRunEventBrokerReplay:
         broker = RunEventBroker(run_id=uuid.uuid4())
         broker.publish("run_completed", {})
 
-        assert broker.replay_since(1) == []
+        assert not broker.replay_since(1)
 
     def test_replay_empty_buffer_returns_empty(self) -> None:
         broker = RunEventBroker(run_id=uuid.uuid4())
-        assert broker.replay_since(0) == []
+        assert not broker.replay_since(0)
 
     def test_replay_requested_seq_older_than_buffer_returns_empty(self) -> None:
         from collections import deque
@@ -195,7 +195,7 @@ class TestRunEventBrokerReplay:
         # Simulate a ring buffer where seq 1..4 were evicted and the oldest
         # retained event is seq 5 — replaying from seq 1 must return [].
         broker._buffer = deque([RunEvent(seq=5, event_type="node_started", run_id=uuid.uuid4(), payload={})])
-        assert broker.replay_since(1) == []
+        assert not broker.replay_since(1)
 
 
 class TestOutputSchemaValidation:
@@ -207,7 +207,7 @@ class TestOutputSchemaValidation:
 
     def test_valid_output_passes(self) -> None:
         schema = {"required": ["name", "status"]}
-        _validate_against_schema({"name": "x", "status": "done"}, schema)
+        assert _validate_against_schema({"name": "x", "status": "done"}, schema) is None
 
     def test_error_is_a_value_error_subclass(self) -> None:
         with pytest.raises(ValueError):
