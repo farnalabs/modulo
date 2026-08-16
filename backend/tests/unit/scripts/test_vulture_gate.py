@@ -75,7 +75,7 @@ def _run_gate() -> subprocess.CompletedProcess[str]:
 def test_gate_passes_on_clean_tree() -> None:
     result = _run_gate()
     assert result.returncode == 0, f"vulture gate reported blocking findings on the clean tree:\n{result.stdout}"
-    assert result.stdout.strip() == ""
+    assert not result.stdout.strip()
 
 
 def test_gate_blocks_new_dead_function() -> None:
@@ -95,7 +95,7 @@ def test_gate_blocks_new_dead_function() -> None:
 
     clean = _run_gate()
     assert clean.returncode == 0, f"gate did not return to a clean pass after removing the probe:\n{clean.stdout}"
-    assert clean.stdout.strip() == ""
+    assert not clean.stdout.strip()
 
 
 def test_gate_blocks_unused_import_and_unreachable() -> None:
