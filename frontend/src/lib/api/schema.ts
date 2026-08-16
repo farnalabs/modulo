@@ -1620,6 +1620,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teams/my": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * My Teams Endpoint
+         * @description List the current user's team memberships with team names (profile "My Teams").
+         */
+        get: operations["my_teams_endpoint_api_v1_teams_my_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teams": {
         parameters: {
             query?: never;
@@ -7518,8 +7538,18 @@ export interface components {
              * @default 0
              */
             member_count: number;
+            /**
+             * Owned Resource Count
+             * @default 0
+             */
+            owned_resource_count: number;
             /** Created At */
             created_at: string;
+            /**
+             * Updated At
+             * @default
+             */
+            updated_at: string;
         };
         /** AdminTeamListResponse */
         AdminTeamListResponse: {
@@ -7538,6 +7568,8 @@ export interface components {
             name?: string | null;
             /** Description */
             description?: string | null;
+            /** Expected Updated At */
+            expected_updated_at?: string | null;
         };
         /** AgentCreate */
         AgentCreate: {
@@ -10960,6 +10992,15 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** MyTeamResponse */
+        MyTeamResponse: {
+            /** Team Id */
+            team_id: string;
+            /** Team Name */
+            team_name: string;
+            /** Role */
+            role: string;
+        };
         /** NodeCategoryCreate */
         NodeCategoryCreate: {
             /** Name */
@@ -14290,6 +14331,8 @@ export interface components {
             name?: string | null;
             /** Description */
             description?: string | null;
+            /** Expected Updated At */
+            expected_updated_at?: string | null;
         };
         /** UpdateUserRequest */
         UpdateUserRequest: {
@@ -18947,6 +18990,37 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    my_teams_endpoint_api_v1_teams_my_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MyTeamResponse"][];
+                };
             };
             /** @description Validation Error */
             422: {

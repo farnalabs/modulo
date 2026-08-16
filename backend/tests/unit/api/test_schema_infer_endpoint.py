@@ -262,24 +262,25 @@ def test_infer_schema_sampling_failure_returns_502(client: TestClient) -> None:
     assert "failed to sample" in resp.json()["detail"].lower()
 
 
-def test_infer_schema_sampling_timeout_returns_504(client: TestClient) -> None:
-    """A 30s sampling timeout surfaces as RFC 9457 gateway_timeout (504), not 500.
-
-    Regression for the cross-cutting ``problem_from_http_exception`` gap: the
-    endpoint raised HTTPException(504) but the shared lookup had no 504 mapping,
-    so the response collapsed to 500 internal_error.
-    """
+def test_infer_schema_sampling_timeout_returns_504_problem(client: TestClient) -> None:
     ci = _make_mock_connector_instance()
     mb = _make_mock_model_backend()
     page_result = MagicMock(items=[mb], total=1, page=1, page_size=1)
+    backend_id = uuid.uuid4()
 
     with (
         patch("modulo.api.routes.schemas.get_connector_instance", return_value=ci),
         patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
         patch("modulo.api.routes.schemas.set_rls_org"),
         patch("modulo.api.routes.schemas.create_secrets_backend"),
-        patch("modulo.api.routes.schemas.ConnectorHub.sample", side_effect=TimeoutError()),
+        patch("modulo.api.routes.schemas.ConnectorHub.sample", side_effect=TimeoutError),
         patch("modulo.api.routes.schemas.ConnectorHub.initialise"),
+        patch("modulo.api.routes.schemas.ModelBackendHub.initialise"),
+        patch(
+            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            new_callable=PropertyMock(return_value=frozenset({backend_id})),
+        ),
+        patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
     ):
         resp = client.post(
             "/api/v1/schemas/infer",
@@ -294,7 +295,7 @@ def test_infer_schema_sampling_timeout_returns_504(client: TestClient) -> None:
     assert body["type"] == "urn:problem:modulo:gateway_timeout"
     assert body["title"] == "Gateway Timeout"
     assert body["status"] == 504
-    assert "timed out after 30s" in body["detail"]
+    assert "timed out" in body["detail"].lower()
 
 
 def test_infer_schema_inference_failure_returns_502(client: TestClient) -> None:

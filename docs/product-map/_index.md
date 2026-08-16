@@ -120,6 +120,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-evals-feedback-proposals](evals/feedback-proposals.md) => PRD 8.20
 - [feat-evals-feedback-records](evals/feedback-records.md) => PRD 8.20
 - [feat-evals-feedback-routing](evals/feedback-routing.md) => PRD 8.20
+- [feat-evals-guardrails](evals/guardrails.md) => PRD 8.17
 - [feat-evals-okr-eval-alignment](evals/okr-eval-alignment.md) => PRD 8.17
 - [feat-evals-system](evals/eval-system.md) => PRD 8.17
 - [feat-evals-variant-coverage](evals/variant-coverage.md) => PRD 8.19

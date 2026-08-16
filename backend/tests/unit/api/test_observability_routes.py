@@ -353,6 +353,7 @@ class TestObservabilityPutEndpoint:
         assert resp.status_code == 504
         body = resp.json()
         assert body["type"] == "urn:problem:modulo:gateway_timeout"
+        assert body["title"] == "Gateway Timeout"
         assert body["status"] == 504
 
     def test_put_reraises_on_generic_error(self, free_client: TestClient) -> None:
