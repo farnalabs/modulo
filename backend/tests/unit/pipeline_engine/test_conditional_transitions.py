@@ -10,7 +10,6 @@ from typing import Any
 
 import pytest
 from langgraph.errors import GraphInterrupt
-from langgraph.types import Interrupt
 
 from modulo.core.eval_engine import EvalDefinition, EvalType
 from modulo.core.pipeline_engine.graph_cache import (
@@ -430,16 +429,6 @@ async def test_conditional_graph_accepts_mixed_naming():
 # ---------------------------------------------------------------------------
 # Conditional HITL — failure semantics (eval-system.md coverage, 2026-08-15)
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def _interrupt_without_graph_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Interrupt() outside a LangGraph runtime raises GraphInterrupt."""
-
-    def raise_interrupt(value: Any) -> None:
-        raise GraphInterrupt((Interrupt(value=value),))
-
-    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner.interrupt", raise_interrupt)
 
 
 async def test_condition_syntax_error_fails_closed():

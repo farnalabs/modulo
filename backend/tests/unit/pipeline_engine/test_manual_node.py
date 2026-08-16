@@ -13,18 +13,16 @@ from typing import Any
 
 import pytest
 from langgraph.errors import GraphInterrupt
-from langgraph.types import Interrupt
 
 from modulo.core.pipeline_engine.graph_cache import _CACHE, build_graph_from_json
 from modulo.core.pipeline_engine.node_runner import make_manual_node_fn
 
 
 @pytest.fixture(autouse=True)
-def _interrupt_without_graph_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
-    def raise_interrupt(value: object) -> None:
-        raise GraphInterrupt((Interrupt(value=value),))
+def _interrupt_without_graph_runtime_autouse(_interrupt_without_graph_runtime: None) -> None:
+    """Apply the shared Interrupt()-shim fixture to every test in this module."""
 
-    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner.interrupt", raise_interrupt)
+    assert _interrupt_without_graph_runtime is None
 
 
 def _clear_cache() -> None:
