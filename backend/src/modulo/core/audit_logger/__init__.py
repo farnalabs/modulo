@@ -18,7 +18,9 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.auth.jwt import TenantPrincipal
 from modulo.db.models.audit_event import AuditChainHead, AuditEvent
+from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _log = logging.getLogger(__name__)
 
@@ -33,6 +35,7 @@ BATCH_MAX_SIZE = 100
 
 __all__ = [
     "append_audit_event",
+    "append_audit_event_isolated",
     "export_chain",
     "get_audit_events_batch",
     "get_chain_head",
@@ -233,6 +236,53 @@ async def append_audit_event(
             )
             raise
     raise RuntimeError("append_audit_event: unexpected fallthrough")
+
+
+async def append_audit_event_isolated(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    *,
+    resource_type: str,
+    resource_id: uuid.UUID,
+    event_type: str,
+    payload: dict[str, Any],
+    log_key: str,
+) -> None:
+    """Append an audit event in a fresh post-commit transaction, failure-isolated.
+
+    Routes use this to emit PRD §8.12 audit events AFTER the primary write
+    transaction has already committed. RLS context (SET LOCAL) reverts on COMMIT,
+    so it must be re-established in this fresh transaction or the STRICT-RLS
+    audit INSERT is rejected. A broken append is logged under ``log_key`` and
+    never fails the completed operation (CancelledError always propagates).
+
+    Shared by the api_keys, feedback and model_backends route modules, which
+    previously each re-implemented this block.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await append_audit_event(
+                session,
+                org_id=principal.organisation_id,
+                event_type=event_type,
+                actor_user_id=principal.account_id,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                payload_json=payload,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            log_key,
+            extra={
+                "org_id": str(principal.organisation_id),
+                "resource_id": str(resource_id),
+                "event_type": event_type,
+            },
+        )
 
 
 async def _get_chain_head_locked(session: AsyncSession, org_id: uuid.UUID) -> AuditChainHead | None:

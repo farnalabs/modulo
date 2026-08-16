@@ -664,7 +664,7 @@ def test_create_model_backend_emits_model_backend_created_audit(client: TestClie
         patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.append_audit_event", new=audit),
+        patch("modulo.core.audit_logger.append_audit_event", new=audit),
     ):
         resp = client.post("/api/v1/model-backends", json=_CREATE_BODY)
     assert resp.status_code == 201
@@ -693,7 +693,7 @@ def test_create_model_backend_audit_failure_does_not_block_creation(client: Test
         patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.append_audit_event", side_effect=_raise_audit),
+        patch("modulo.core.audit_logger.append_audit_event", side_effect=_raise_audit),
     ):
         resp = client.post("/api/v1/model-backends", json=_CREATE_BODY)
     assert resp.status_code == 201
@@ -708,7 +708,7 @@ def test_update_model_backend_emits_model_backend_updated_audit(client: TestClie
         patch("modulo.api.routes.model_backends.update_model_backend", return_value=backend),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.append_audit_event", new=audit),
+        patch("modulo.core.audit_logger.append_audit_event", new=audit),
     ):
         resp = client.patch(f"/api/v1/model-backends/{_BACKEND_ID}", json={"display_name": "GPT-4o"})
     assert resp.status_code == 200
@@ -727,7 +727,7 @@ def test_update_model_backend_credentials_emits_prd_credentials_audit(client: Te
         patch("modulo.api.routes.model_backends.update_model_backend", return_value=backend),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.append_audit_event", new=audit),
+        patch("modulo.core.audit_logger.append_audit_event", new=audit),
     ):
         resp = client.patch(f"/api/v1/model-backends/{_BACKEND_ID}", json={"api_key": "sk-new"})
     assert resp.status_code == 200
@@ -752,7 +752,7 @@ def test_update_model_backend_audit_failure_does_not_block_update(client: TestCl
         patch("modulo.api.routes.model_backends.update_model_backend", return_value=backend),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.append_audit_event", side_effect=_raise_audit),
+        patch("modulo.core.audit_logger.append_audit_event", side_effect=_raise_audit),
     ):
         resp = client.patch(f"/api/v1/model-backends/{_BACKEND_ID}", json={"display_name": "GPT-4o"})
     assert resp.status_code == 200
@@ -765,7 +765,7 @@ def test_update_model_backend_404_does_not_emit_audit(client: TestClient) -> Non
         patch("modulo.api.routes.model_backends.update_model_backend", return_value=None),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.append_audit_event", new=audit),
+        patch("modulo.core.audit_logger.append_audit_event", new=audit),
     ):
         resp = client.patch(f"/api/v1/model-backends/{uuid.uuid4()}", json={"display_name": "GPT-4o"})
     assert resp.status_code == 404
@@ -785,7 +785,7 @@ def test_delete_model_backend_emits_model_backend_deleted_audit(client: TestClie
         ),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.append_audit_event", new=audit),
+        patch("modulo.core.audit_logger.append_audit_event", new=audit),
     ):
         resp = client.delete(f"/api/v1/model-backends/{_BACKEND_ID}")
     assert resp.status_code == 204
@@ -815,7 +815,7 @@ def test_delete_model_backend_audit_failure_does_not_block_delete(client: TestCl
         ),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.append_audit_event", side_effect=_raise_audit),
+        patch("modulo.core.audit_logger.append_audit_event", side_effect=_raise_audit),
     ):
         resp = client.delete(f"/api/v1/model-backends/{_BACKEND_ID}")
     assert resp.status_code == 204
@@ -828,7 +828,7 @@ def test_delete_model_backend_404_does_not_emit_audit(client: TestClient) -> Non
         patch("modulo.api.routes.model_backends.delete_model_backend", return_value=False),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.append_audit_event", new=audit),
+        patch("modulo.core.audit_logger.append_audit_event", new=audit),
     ):
         resp = client.delete(f"/api/v1/model-backends/{uuid.uuid4()}")
     assert resp.status_code == 404

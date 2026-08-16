@@ -141,7 +141,7 @@ def test_create_api_key_emits_api_key_created_audit(client: TestClient) -> None:
         patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_test_key")),
         patch("modulo.api.routes.api_keys.set_rls_org"),
         patch("modulo.api.routes.api_keys.set_rls_user_context"),
-        patch("modulo.api.routes.api_keys.append_audit_event", new=audit),
+        patch("modulo.core.audit_logger.append_audit_event", new=audit),
     ):
         resp = client.post("/api/v1/api-keys", json={"name": "Test Key", "role": "operator"})
     assert resp.status_code == 201
@@ -166,7 +166,7 @@ def test_create_api_key_audit_failure_does_not_block_creation(client: TestClient
         patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_test_key")),
         patch("modulo.api.routes.api_keys.set_rls_org"),
         patch("modulo.api.routes.api_keys.set_rls_user_context"),
-        patch("modulo.api.routes.api_keys.append_audit_event", side_effect=_raise_audit),
+        patch("modulo.core.audit_logger.append_audit_event", side_effect=_raise_audit),
     ):
         resp = client.post("/api/v1/api-keys", json={"name": "Test Key", "role": "operator"})
     assert resp.status_code == 201
@@ -244,7 +244,7 @@ def test_revoke_api_key_emits_api_key_revoked_audit(client: TestClient) -> None:
         patch("modulo.api.routes.api_keys.revoke_api_key", return_value=True),
         patch("modulo.api.routes.api_keys.set_rls_org"),
         patch("modulo.api.routes.api_keys.set_rls_user_context"),
-        patch("modulo.api.routes.api_keys.append_audit_event", new=audit),
+        patch("modulo.core.audit_logger.append_audit_event", new=audit),
     ):
         resp = client.delete(f"/api/v1/api-keys/{_KEY_ID}")
     assert resp.status_code == 200
@@ -265,7 +265,7 @@ def test_revoke_api_key_not_found_does_not_emit_audit(client: TestClient) -> Non
         patch("modulo.api.routes.api_keys.revoke_api_key", return_value=False),
         patch("modulo.api.routes.api_keys.set_rls_org"),
         patch("modulo.api.routes.api_keys.set_rls_user_context"),
-        patch("modulo.api.routes.api_keys.append_audit_event", new=audit),
+        patch("modulo.core.audit_logger.append_audit_event", new=audit),
     ):
         resp = client.delete(f"/api/v1/api-keys/{uuid.uuid4()}")
     assert resp.status_code == 404
@@ -282,7 +282,7 @@ def test_revoke_api_key_audit_failure_does_not_fail_revocation(client: TestClien
         patch("modulo.api.routes.api_keys.revoke_api_key", return_value=True),
         patch("modulo.api.routes.api_keys.set_rls_org"),
         patch("modulo.api.routes.api_keys.set_rls_user_context"),
-        patch("modulo.api.routes.api_keys.append_audit_event", side_effect=_raise_audit),
+        patch("modulo.core.audit_logger.append_audit_event", side_effect=_raise_audit),
     ):
         resp = client.delete(f"/api/v1/api-keys/{_KEY_ID}")
     assert resp.status_code == 200
@@ -417,14 +417,18 @@ def test_create_api_key_calls_set_rls_user_context(client: TestClient) -> None:
         patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_key")),
         patch("modulo.api.routes.api_keys.set_rls_org") as mock_org,
         patch("modulo.api.routes.api_keys.set_rls_user_context") as mock_ctx,
+        patch("modulo.core.audit_logger.set_rls_org") as mock_audit_org,
+        patch("modulo.core.audit_logger.set_rls_user_context") as mock_audit_ctx,
     ):
         client.post("/api/v1/api-keys", json={"name": "k", "role": "operator"})
-    # set_rls_* is re-established in the fresh audit transaction (SET LOCAL
-    # reverts on COMMIT), so each helper is awaited twice: the main create tx
-    # and the api_key_created audit tx.
-    assert mock_org.await_count == 2
-    assert mock_ctx.await_count == 2
-    mock_ctx.assert_awaited_with(ANY, _USER_ID, "admin")
+    # The main create tx establishes RLS via the route-module helpers...
+    mock_org.assert_awaited_once()
+    mock_ctx.assert_awaited_once_with(ANY, _USER_ID, "admin")
+    # ...and the shared append_audit_event_isolated helper re-establishes RLS in
+    # the fresh api_key_created audit transaction (SET LOCAL reverts on COMMIT),
+    # so the audit-logger helpers are each awaited once with the same identity.
+    mock_audit_org.assert_awaited_once()
+    mock_audit_ctx.assert_awaited_once_with(ANY, _USER_ID, "admin")
 
 
 def test_list_api_keys_calls_set_rls_user_context(client: TestClient) -> None:
