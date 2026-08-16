@@ -101,8 +101,8 @@ The Feedback System treats every human rejection as structured signal. Handles F
 - [x] get_eval_proposals returns paginated FeedbackRecords with eval_gap = True and status in [pending, routing]
 - [ ] AI correction agent (or dedicated eval-proposal agent) drafts new eval case for eval_gap records � not implemented
 - [ ] Eval proposals queue UI with draft eval editor � not implemented
-- [ ] Human reviews, edits, and publishes proposed evals � not implemented
-- [ ] Published evals immediately active for future runs � not implemented
+- [x] Human publishes proposed evals � backend publish endpoint creates a live EvalDefinition (`POST /feedback/proposals/{record_id}/publish`, PRD §8.20 ¶Eval suite growth #3); draft-eval review/edit editor UI remains a gap
+- [x] Published evals immediately active for future runs � the published EvalDefinition is node+pipeline scoped and loaded by the run-time eval loader (`executor.py` filters `node_id.isnot(None)`) and by gap detection, so it fires on the next run of that pipeline
 - [ ] Library contribution (v2): curated evals contributed to community library � deferred to v2
 
 ### Persona scenario
@@ -123,7 +123,7 @@ The Feedback System treats every human rejection as structured signal. Handles F
 - [x] run_post_correction_eval raises specific exceptions: FeedbackRecordNotFoundError, InvalidTransitionError for each precondition violation
 - [x] run_post_correction_eval catches exceptions from engine.standalone_evaluate() � calls _escalate_record on eval crash (fixed in earlier QA sweep)
 - [x] spawn_correction_run raises FeedbackRecordNotFoundError for missing record AND FeedbackManagerError for missing run
-- [x] All 9 API routes have ProgrammingError ? 501 mapping, tested in test_error_handling.py
+- [x] All 10 feedback API routes have ProgrammingError � 501 mapping, tested in test_error_handling.py
 - [x] Create feedback validates empty rejection_reason (ValidationError) and unknown handler_type (ValidationError)
 - [x] update_status validates transitions via _VALID_STATUS_TRANSITIONS with descriptive error message
 - [x] HITL reject path (/hitl/{gate_id}/reject) does NOT create a FeedbackRecord � feedback records are created exclusively via the explicit POST /runs/{run_id}/feedback endpoint
@@ -151,7 +151,7 @@ The Feedback System treats every human rejection as structured signal. Handles F
 - [Removed 2026-08-15] Correction-run checkpoint seeding was listed as a gap, but PRD 8.20 explicitly specifies correction runs as fresh runs — this is the intended design, not a gap
 - No feedback_handler supersedes reject_target enforcement at validation/gate level
 - ~~No audit events recorded for FeedbackRecord status transitions~~ **RESOLVED (2026-08-15)**: `feedback.status_changed` is dispatched from the update-status and review routes (fresh post-commit transaction, RLS re-established, failure-isolated), plus `feedback.created` on record creation. Both documented in `core/audit-trail.md` implemented-event list.
-- No eval proposal curation UI (draft eval editor, publish, immediate activation) — the queue view exists (EvalProposalsQueueView.vue) but has no editor and "Publish" does not create an eval definition
+- No eval proposal curation editor UI (draft eval editor, review/edit) — the queue view exists (EvalProposalsQueueView.vue) and the backend publish endpoint (`POST /feedback/proposals/{record_id}/publish`, added 2026-08-15) now creates a live EvalDefinition, but the frontend draft editor and the "Publish" button wiring remain gaps
 - Review endpoint catches FeedbackManagerError (base class) as 404 � too broad, should be narrowed to specific subclasses
 - run_post_correction_eval escalates the FeedbackRecord on eval failure (implemented); it is not yet wired into the run completion lifecycle so the escalation never auto-triggers in production
 - No advisory lock cross-session coordination on FeedbackRecord rows
@@ -159,6 +159,11 @@ The Feedback System treats every human rejection as structured signal. Handles F
 - CASCADE deletion of FeedbackRecord when parent run is deleted
 
 ## QA History
+
+### 2026-08-15 — Coverage-completion (FAR-232/233, partial-evals-b)
+- **Implemented (PRD §8.20 ¶Eval suite growth #3)**: `POST /api/v1/feedback/proposals/{record_id}/publish` — human curation's publish step. Creates a node-scoped `EvalDefinition` on the proposal record's pipeline (node resolved from explicit `node_id`, else `producing_node_id` parsed as UUID, else matched against the run snapshot's graph nodes by id/name/label), transitions the record to `resolved`, and appends a `feedback.proposal_published` audit event. Published evals are immediately active because the run-time eval loader (`executor.py` filters `node_id.isnot(None)`) and gap detection fetch definitions by `pipeline_id` at run time. 9 new endpoint unit tests + 2 new ProgrammingError→501/SQLAlchemyError→503 cases in `test_error_handling.py` (feedback routes now 10).
+- **Marked `[x]` (implemented + tested)**: "Human publishes proposed evals" and "Published evals immediately active for future runs". The AI-correction-agent draft-generation step, the draft-eval editor UI, and library contribution (v2) remain genuine gaps.
+- **Verified (still gaps, kept `[ ]`)**: pipeline/gate-level `default_feedback_handler` consumption (PRD 8.20 explicitly documents runtime does not use it yet), gate-level `feedback_handler` sub-field, `reject_routing_conflict`, correction-proposal accept/reject UI, post-correction eval auto-wiring into the run-completion lifecycle, review-endpoint broad `FeedbackManagerError → 404`, advisory-lock/retry/sequential-eval gaps, and the listed edge cases.
 
 ### 2026-08-15 — improve-architecture (feedback audit gaps)
 - **RESOLVED the "No audit events recorded for FeedbackRecord status transitions" known gap** (`api/routes/feedback.py`).

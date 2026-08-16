@@ -790,3 +790,266 @@ class TestListEvalProposals:
 
         assert resp.status_code == 200
         assert resp.json()["total"] == 0
+
+
+class TestPublishEvalProposal:
+    """PRD §8.20 ¶Eval suite growth #3 — publishing an eval proposal creates a live
+    EvalDefinition scoped to the pipeline + node, immediately active for future runs."""
+
+    def _make_run_session(self, pipeline_id: uuid.UUID) -> AsyncMock:
+        mock_session = _make_mock_session()
+        run_mock = MagicMock()
+        run_mock.pipeline_id = pipeline_id
+        run_mock.snapshot_id = None
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = run_mock
+        mock_session.execute = AsyncMock(return_value=result)
+        return mock_session
+
+    def _override_session(self, mock_session: AsyncMock) -> None:
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+
+    def test_publishes_proposal_with_explicit_node_id(self, client: TestClient) -> None:
+        pipeline_id = uuid.uuid4()
+        node_id = uuid.uuid4()
+        mock_session = self._make_run_session(pipeline_id)
+        self._override_session(mock_session)
+
+        mock_record = _make_mock_record(eval_gap=True, feedback_status="pending")
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("modulo.api.routes.feedback.append_audit_event", new=AsyncMock(return_value=MagicMock())),
+        ):
+            mock_get.return_value = mock_record
+            mock_update.return_value = _make_mock_record(feedback_status="resolved")
+
+            resp = client.post(
+                f"/api/v1/feedback/proposals/{_RECORD_ID}/publish",
+                json={
+                    "name": "answer-must-mention-42",
+                    "eval_type": "regex",
+                    "config": {"pattern": "42", "field": "answer"},
+                    "node_id": str(node_id),
+                },
+            )
+
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["pipeline_id"] == str(pipeline_id)
+        assert body["node_id"] == str(node_id)
+        assert body["eval_type"] == "regex"
+        assert body["feedback_status"] == "resolved"
+
+        created = mock_session.add.call_args.args[0]
+        assert created.pipeline_id == pipeline_id
+        assert created.node_id == node_id
+        assert created.name == "answer-must-mention-42"
+        assert created.eval_type == "regex"
+        assert created.config_json == {"pattern": "42", "field": "answer"}
+
+    def test_publishes_resolves_producing_node_id_as_uuid(self, client: TestClient) -> None:
+        pipeline_id = uuid.uuid4()
+        node_id = uuid.uuid4()
+        mock_session = self._make_run_session(pipeline_id)
+        self._override_session(mock_session)
+
+        mock_record = _make_mock_record(eval_gap=True, feedback_status="pending", producing_node_id=str(node_id))
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("modulo.api.routes.feedback.append_audit_event", new=AsyncMock(return_value=MagicMock())),
+        ):
+            mock_get.return_value = mock_record
+            mock_update.return_value = _make_mock_record(feedback_status="resolved")
+
+            resp = client.post(
+                f"/api/v1/feedback/proposals/{_RECORD_ID}/publish",
+                json={"name": "mentions-42", "eval_type": "regex", "config": {"pattern": "42", "field": "answer"}},
+            )
+
+        assert resp.status_code == 201
+        assert resp.json()["node_id"] == str(node_id)
+        created = mock_session.add.call_args.args[0]
+        assert created.node_id == node_id
+
+    def test_publish_transitions_record_to_resolved(self, client: TestClient) -> None:
+        pipeline_id = uuid.uuid4()
+        node_id = uuid.uuid4()
+        mock_session = self._make_run_session(pipeline_id)
+        self._override_session(mock_session)
+
+        mock_record = _make_mock_record(eval_gap=True, feedback_status="routing")
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("modulo.api.routes.feedback.append_audit_event", new=AsyncMock(return_value=MagicMock())),
+        ):
+            mock_get.return_value = mock_record
+            mock_update.return_value = _make_mock_record(feedback_status="resolved")
+
+            resp = client.post(
+                f"/api/v1/feedback/proposals/{_RECORD_ID}/publish",
+                json={
+                    "name": "mentions-42",
+                    "eval_type": "json_schema",
+                    "config": {"schema": {"type": "object"}},
+                    "node_id": str(node_id),
+                },
+            )
+
+        assert resp.status_code == 201
+        call_args, _kwargs = mock_update.call_args
+        assert call_args[1] == "resolved"
+
+    def test_publish_resolves_producing_node_from_snapshot_graph(self, client: TestClient) -> None:
+        pipeline_id = uuid.uuid4()
+        node_id = uuid.uuid4()
+        mock_session = _make_mock_session()
+
+        run_mock = MagicMock()
+        run_mock.pipeline_id = pipeline_id
+        run_mock.snapshot_id = uuid.uuid4()
+        run_result = MagicMock()
+        run_result.scalar_one_or_none.return_value = run_mock
+
+        snap_mock = MagicMock()
+        snap_mock.graph_json = {"nodes": [{"id": str(node_id), "name": "node-b", "label": "node-b"}]}
+        snap_result = MagicMock()
+        snap_result.scalar_one_or_none.return_value = snap_mock
+
+        def execute_side_effect(stmt: object, *args: object, **kwargs: object) -> MagicMock:
+            if "pipeline_snapshots" in str(stmt):
+                return snap_result
+            return run_result
+
+        mock_session.execute = AsyncMock(side_effect=execute_side_effect)
+        self._override_session(mock_session)
+
+        mock_record = _make_mock_record(eval_gap=True, feedback_status="pending", producing_node_id="node-b")
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("modulo.api.routes.feedback.append_audit_event", new=AsyncMock(return_value=MagicMock())),
+        ):
+            mock_get.return_value = mock_record
+            mock_update.return_value = _make_mock_record(feedback_status="resolved")
+
+            resp = client.post(
+                f"/api/v1/feedback/proposals/{_RECORD_ID}/publish",
+                json={"name": "mentions-42", "eval_type": "regex", "config": {"pattern": "42", "field": "answer"}},
+            )
+
+        assert resp.status_code == 201
+        assert resp.json()["node_id"] == str(node_id)
+
+    def test_publish_emits_proposal_published_audit(self, client: TestClient) -> None:
+        pipeline_id = uuid.uuid4()
+        node_id = uuid.uuid4()
+        mock_session = self._make_run_session(pipeline_id)
+        self._override_session(mock_session)
+        audit = AsyncMock(return_value=MagicMock())
+
+        mock_record = _make_mock_record(eval_gap=True, feedback_status="pending")
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("modulo.api.routes.feedback.append_audit_event", new=audit),
+        ):
+            mock_get.return_value = mock_record
+            mock_update.return_value = _make_mock_record(feedback_status="resolved")
+
+            resp = client.post(
+                f"/api/v1/feedback/proposals/{_RECORD_ID}/publish",
+                json={
+                    "name": "mentions-42",
+                    "eval_type": "regex",
+                    "config": {"pattern": "42", "field": "answer"},
+                    "node_id": str(node_id),
+                },
+            )
+
+        assert resp.status_code == 201
+        audit.assert_awaited_once()
+        kwargs = audit.await_args.kwargs
+        assert kwargs["event_type"] == "feedback.proposal_published"
+        assert kwargs["resource_id"] == _RECORD_ID
+        assert kwargs["payload_json"]["pipeline_id"] == str(pipeline_id)
+        assert kwargs["payload_json"]["node_id"] == str(node_id)
+        assert kwargs["payload_json"]["eval_type"] == "regex"
+
+    def test_publish_requires_eval_gap_record(self, client: TestClient) -> None:
+        mock_record = _make_mock_record(eval_gap=False, feedback_status="pending")
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+        ):
+            mock_get.return_value = mock_record
+            resp = client.post(
+                f"/api/v1/feedback/proposals/{_RECORD_ID}/publish",
+                json={"name": "x", "eval_type": "regex", "config": {"pattern": "42", "field": "answer"}},
+            )
+        assert resp.status_code == 422
+
+    def test_publish_rejects_non_pending_status(self, client: TestClient) -> None:
+        mock_record = _make_mock_record(eval_gap=True, feedback_status="resolved")
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+        ):
+            mock_get.return_value = mock_record
+            resp = client.post(
+                f"/api/v1/feedback/proposals/{_RECORD_ID}/publish",
+                json={"name": "x", "eval_type": "regex", "config": {"pattern": "42", "field": "answer"}},
+            )
+        assert resp.status_code == 409
+
+    def test_publish_returns_404_when_record_missing(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+        ):
+            mock_get.return_value = None
+            resp = client.post(
+                f"/api/v1/feedback/proposals/{uuid.uuid4()}/publish",
+                json={"name": "x", "eval_type": "regex", "config": {"pattern": "42", "field": "answer"}},
+            )
+        assert resp.status_code == 404
+
+    def test_publish_422_when_node_unresolvable(self, client: TestClient) -> None:
+        pipeline_id = uuid.uuid4()
+        mock_session = self._make_run_session(pipeline_id)
+        self._override_session(mock_session)
+
+        mock_record = _make_mock_record(eval_gap=True, feedback_status="pending", producing_node_id="node-b")
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+        ):
+            mock_get.return_value = mock_record
+            resp = client.post(
+                f"/api/v1/feedback/proposals/{_RECORD_ID}/publish",
+                json={"name": "x", "eval_type": "regex", "config": {"pattern": "42", "field": "answer"}},
+            )
+        assert resp.status_code == 422
+
+    def test_publish_rejects_invalid_eval_type(self, client: TestClient) -> None:
+        resp = client.post(
+            f"/api/v1/feedback/proposals/{_RECORD_ID}/publish",
+            json={"name": "x", "eval_type": "guardrail", "config": {}},
+        )
+        assert resp.status_code == 422

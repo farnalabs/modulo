@@ -137,6 +137,19 @@ Discovered from 1 completed delivery task.
 - Concurrent delete + run race: run reads group then delete removes it before FOR UPDATE — run gets None rather than a clear error
 
 ## QA History
+### 2026-08-15 — Coverage-completion (FAR-232/233, partial-evals-b)
+
+**What was verified:**
+- **Confirmed the unchecked behaviours are genuine gaps, not unverified implementations.** Re-checked against PRD §8.19 and the codebase:
+  - "Group complete when all variants reach terminal state" — no group-level status tracking or consumer exists (runs carry `variant_group_id`; no endpoint aggregates group run states). Gap.
+  - "Agents read `run_context.prompt_version` to select prompt template" and "Agents declare multiple prompt template versions" — the prompt-versioning feature is version-history CRUD (`agents.py`, `agent.py`); no agent-side prompt-template selection keyed on `run_context.prompt_version` exists. Gap.
+  - "Abandon a variant run" — requires an `abandoned` run status; `ck_runs_status` / `TERMINAL_STATUSES` have no `abandoned` value, so a schema migration is required. Gap.
+  - Comparison view (eval scores side-by-side, token cost, HITL outcomes, output diff, pending-HITL partial results, pre-eval degraded banner) — frontend surfaces; `EvalProposalsQueueView`/variant comparison view not implemented. Gap.
+  - Coverage-gap warning ("Variants diverged but evals did not differentiate...") — the backend `coverage-gaps` + `prompt-diffs` signals exist but the comparison-view warning surface does not. Gap.
+  - Concurrent delete + run race — run reads group, delete removes it before FOR UPDATE; returns `None` → route 429. Documented edge, no clear-error fix. Gap.
+- **No code changes** — all backend variant-group behaviours (fire-per-variant batch, weighted selection, quota pre-flight, coverage gaps, prompt diffs, 422 selection-strategy/weight validation) were already implemented and tested in prior sweeps.
+- **Status:** partial (comparison view, abandon semantics, agent prompt-version selection, and the coverage-gap warning surface remain genuine gaps).
+
 ### 2026-08-15 — Coverage completion (FAR-232)
 
 **What was fixed:**
