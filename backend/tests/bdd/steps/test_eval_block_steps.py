@@ -83,7 +83,10 @@ def suite_has_pass_threshold(threshold: float, ctx):
     ctx["pass_threshold"] = float(threshold)
 
 
-@given(parsers.parse("{passed_count} of {total_count} evals pass"))
+@given(
+    parsers.parse("{passed_count} of {total_count} evals pass"),
+    converters={"passed_count": int, "total_count": int},
+)
 def some_evals_pass(passed_count: int, total_count: int, ctx):
     ctx["total_evals"] = total_count
     ctx["passed_count"] = passed_count
@@ -163,6 +166,7 @@ def eval_engine_evaluates(ctx):
 def eval_engine_raises_blocked(ctx):
     ctx["eval_blocked"] = True
     ctx["eval_blocked_detail"] = ctx.get("eval_name", "no-secrets")
+    ctx["error_code"] = "eval_blocked"
 
 
 @when("the run completes")
@@ -292,7 +296,17 @@ def eval_blocked_on(eval_name: str, ctx):
 
 @then("remaining evals are not evaluated")
 def remaining_not_evaluated(ctx):
+    """Only evals AFTER the failing one are guaranteed un-evaluated.
+
+    Evals before the failure in the scenario were deliberately evaluated
+    (``And eval "no-secrets" passes``), so the "remaining" guard applies
+    strictly to the evals that come after the blocked eval.
+    """
     failed_one = ctx.get("eval_blocked_detail")
+    failed_seen = False
     for name, data in ctx.get("eval_defs", {}).items():
-        if name != failed_one:
+        if name == failed_one:
+            failed_seen = True
+            continue
+        if failed_seen:
             assert not data.get("evaluated"), f"Eval {name!r} was evaluated but should not have been"
