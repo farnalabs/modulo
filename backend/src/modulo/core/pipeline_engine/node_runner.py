@@ -53,6 +53,7 @@ import urllib.request
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
+from contextvars import ContextVar
 from typing import Any
 
 import jinja2
@@ -956,6 +957,178 @@ def _evaluate_eval_condition(score: float, threshold: float, operator: str) -> b
             return False
 
 
+# FAR-215 mid-run conformance re-check context. Set per-run by the executor
+# (before graph streaming) so the node builders — created at graph-compile time
+# via build_graph_from_json — can perform the capability re-check at NODE RUN
+# TIME against the live manifest without threading the session factory / org /
+# environment profile through every node builder signature.
+_conformance_ctx_cv: ContextVar[tuple[Any, Any, Any, Any] | None] = ContextVar("_conformance_ctx", default=None)
+
+
+def set_conformance_ctx(
+    session_factory: Any,
+    org_id: Any,
+    environment_profile_id: Any,
+    pipeline_id: Any,
+) -> None:
+    """Set the run-scoped conformance context (executor calls before streaming)."""
+    _conformance_ctx_cv.set((session_factory, org_id, environment_profile_id, pipeline_id))
+
+
+def get_conformance_ctx() -> tuple[Any, Any, Any, Any] | None:
+    return _conformance_ctx_cv.get()
+
+
+def _parse_uuid_opt(value: Any) -> uuid.UUID | None:
+    """Parse a UUID (or str) to a UUID, or None when absent/unparseable."""
+    if value is None:
+        return None
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, TypeError):
+        return None
+
+
+async def _run_conformance_gate(
+    state: dict[str, Any],
+    *,
+    node_id: str,
+    connector_instance_ids: list[uuid.UUID] | None = None,
+    agent_id: uuid.UUID | None = None,
+) -> bool:
+    """FAR-215 mid-run capability re-check at node start (block -> HITL).
+
+    Returns True when the node was interrupted (caller must return immediately
+    so the LangGraph checkpoint pauses the run at this node). Returns False when
+    the node should proceed with normal execution.
+
+    Reads the run-scoped conformance context (session_factory, org_id,
+    environment_profile_id, pipeline_id) set by the executor; the node's bound
+    connector instance ids and agent id come from the node definition.
+
+    Behaviour:
+      - On resume (``state`` carries ``_hitl_decision``) the check is skipped —
+        the conformance block was already routed to a human and reviewed.
+      - No bound guardrail with a conformance claim -> fast path (no DB).
+      - ``absent``/``unknown`` on a ``block``-action guardrail -> raise a HITL
+        interrupt (the run transitions to ``awaiting_human`` with a
+        machine-readable reason), never silent abort, never fail open.
+      - ``absent``/``unknown`` on warn/observe -> log + audit warning, continue.
+      - ``present`` -> continue.
+
+    An audit event is appended for the block before the interrupt. The audit
+    write is best-effort (failure-isolated) and never carries raw payloads.
+    """
+    ctx = _conformance_ctx_cv.get()
+    if ctx is None:
+        return False
+    session_factory, org_id_raw, environment_profile_id, pipeline_id_raw = ctx
+    if session_factory is None or not pipeline_id_raw:
+        return False
+    if state.get("_hitl_decision") is not None:
+        # Resumed after a human reviewed the conformance block -> continue.
+        return False
+    try:
+        org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
+    except (TypeError, ValueError):
+        org_uuid = None
+    if org_uuid is None:
+        return False
+    try:
+        pipeline_uuid = uuid.UUID(str(pipeline_id_raw))
+    except (TypeError, ValueError):
+        return False
+    env_profile_uuid: uuid.UUID | None = None
+    if environment_profile_id is not None:
+        try:
+            env_profile_uuid = uuid.UUID(str(environment_profile_id))
+        except (TypeError, ValueError):
+            env_profile_uuid = None
+
+    from modulo.core.guardrails.conformance import check_node_start
+
+    result = await check_node_start(
+        session_factory,
+        org_id=org_uuid,
+        pipeline_id=pipeline_uuid,
+        node_id=node_id,
+        connector_instance_ids=list(connector_instance_ids or []),
+        environment_profile_id=env_profile_uuid,
+        agent_id=agent_id,
+    )
+    if result.blocked:
+        await _append_conformance_audit(
+            session_factory,
+            org_id=org_uuid,
+            run_id=state.get("_run_id"),
+            node_id=node_id,
+            detail=result.detail,
+            state=result.state,
+            event_type="guardrail.conformance_blocked_midrun",
+        )
+        interrupt(
+            {
+                "gate_id": result.gate_id,
+                "reason": result.detail,
+                "node_id": node_id,
+                "conformance_state": result.state,
+                "conformance_blocked": True,
+            }
+        )
+        return True
+    if result.warned:
+        # Advisory (warn/observe) guardrails never block — log + audit only.
+        await _append_conformance_audit(
+            session_factory,
+            org_id=org_uuid,
+            run_id=state.get("_run_id"),
+            node_id=node_id,
+            detail=result.detail,
+            state=result.state,
+            event_type="guardrail.conformance_warned_midrun",
+        )
+    return False
+
+
+async def _append_conformance_audit(
+    session_factory: Callable[..., Any],
+    *,
+    org_id: uuid.UUID,
+    run_id: Any,
+    node_id: str,
+    detail: str,
+    state: str,
+    event_type: str,
+) -> None:
+    """Best-effort audit event for a mid-run conformance outcome (never raises)."""
+    try:
+        async with session_factory() as session, session.begin():
+            from modulo.db.rls import set_rls_org
+
+            await set_rls_org(session, org_id)
+            from modulo.core.audit_logger import append_audit_event
+
+            await append_audit_event(
+                session,
+                org_id=org_id,
+                event_type=event_type,
+                resource_type="run",
+                resource_id=uuid.UUID(str(run_id)) if run_id else None,
+                payload_json={
+                    "node_id": node_id,
+                    "conformance_state": state,
+                    "detail": detail[:5000],
+                },
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "guardrail.conformance_audit_failed",
+            extra={"org_id": str(org_id), "node_id": node_id},
+        )
+
+
 def make_node_fn(
     node_def: dict[str, Any],
     *,
@@ -984,6 +1157,16 @@ def make_node_fn(
 
     @cancellable_node(timeout=timeout, role=role)
     async def _node(state: dict[str, Any]) -> dict[str, Any]:
+        # FAR-215: mid-run capability re-check at node start. If a bound
+        # block-action guardrail's conformance claim is absent/unknown against
+        # the live manifest, the node is blocked and routed to HITL.
+        agent_id_raw = node_def.get("agent_id")
+        agent_id = _parse_uuid_opt(agent_id_raw)
+        if await _run_conformance_gate(state, node_id=node_id, agent_id=agent_id):
+            return {
+                "artifacts": [{"node_id": node_id, "status": "awaiting_human", "conformance_blocked": True}],
+                "output": {},
+            }
         run_context: dict[str, Any] = state.get("run_context") or {}
         raw_input = run_context.get("input", {})
 
@@ -1379,6 +1562,15 @@ def make_connector_fn(
 
     @cancellable_node(timeout=timeout)
     async def _connector_node(state: dict[str, Any]) -> dict[str, Any]:
+        # FAR-215: mid-run capability re-check at node start (block -> HITL).
+        instance_id = _parse_uuid_opt(binding.get("instance_id"))
+        if await _run_conformance_gate(
+            state,
+            node_id=node_id,
+            connector_instance_ids=[instance_id] if instance_id is not None else [],
+        ):
+            return {"artifacts": [{"node_id": node_id, "status": "awaiting_human", "conformance_blocked": True}]}
+
         from modulo.connectors.base import ConnectorPayload, ConnectorQuery
         from modulo.core.pipeline_engine.decorator import get_connector_hub
 
@@ -1593,6 +1785,14 @@ def make_sandbox_agent_fn(
         role="sandbox_agent",
     )
     async def _sandbox_agent(state: dict[str, Any]) -> dict[str, Any]:
+
+        # FAR-215: mid-run capability re-check at node start (block -> HITL).
+        agent_id = _parse_uuid_opt(node_def.get("agent_id"))
+        if await _run_conformance_gate(state, node_id=node_id, agent_id=agent_id):
+            return {
+                "artifacts": [{"node_id": node_id, "status": "awaiting_human", "conformance_blocked": True}],
+                "output": {},
+            }
 
         run_context: dict[str, Any] = state.get("run_context") or {}
         raw_input: Any = run_context.get("input", {})

@@ -83,6 +83,7 @@ from modulo.core.pipeline_engine.node_runner import (
     SupersededNodeError,
     _idempotency_gate_skipped_envelope,
     _marker_delivery_done_for_node,
+    set_conformance_ctx,
 )
 from modulo.core.pipeline_engine.output_filter import OutputRejectedError
 from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
@@ -1368,6 +1369,16 @@ class PipelineExecutor:
             str(n["id"]): n["token_budget"] for n in graph_json.get("nodes", []) if n.get("token_budget") is not None
         }
 
+        # FAR-215: seed the run-scoped conformance context on resume too, so a
+        # node re-check fires after the run pauses/reviews (the manifest may
+        # have changed between the original run and the resume).
+        set_conformance_ctx(
+            self._session_factory,
+            org_id,
+            snapshot.environment_profile_id,
+            pipeline_id,
+        )
+
         final_status: str = "failed"
         error_code: str | None = None
         error_detail: str | None = None
@@ -1677,6 +1688,15 @@ class PipelineExecutor:
                 for n in graph_json.get("nodes", [])
                 if n.get("token_budget") is not None
             }
+
+            # FAR-215: seed the run-scoped conformance context so every node
+            # re-validates its bound guardrail conformance at node start.
+            set_conformance_ctx(
+                self._session_factory,
+                org_id,
+                snapshot.environment_profile_id,
+                pipeline_id,
+            )
 
             # Count this REAL node-execution attempt (post capacity-check,
             # post compile, pre-stream). The NodeCancelledError retry budget
