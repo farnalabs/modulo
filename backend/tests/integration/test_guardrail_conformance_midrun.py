@@ -443,6 +443,63 @@ async def test_check_node_start_zero_claim_fast_path(db_engine: AsyncEngine, tes
     assert result.claimed is False
 
 
+async def test_check_node_start_rls_same_org_visible(
+    db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
+):
+    """A block guardrail bound to the org's OWN pipeline is visible under the
+    non-superuser RLS role — ``set_rls_org`` inside the transaction scopes the
+    read correctly so the org's own guardrails are enforced."""
+    pipe = await _seed_pipeline(db_engine, test_org, "CNS-RLS-Own", test_user)
+    profile = await _seed_environment_profile(db_engine, test_org, test_user, capabilities=["git"])
+    await _seed_guardrail(
+        db_engine, test_org, pipe, test_user, name="block-cap", action="block", required_capabilities=["sandbox.e2b"]
+    )
+    factory = await _make_session_factory(app_engine)  # non-superuser role: RLS filters rows
+    result = await check_node_start(
+        factory,
+        org_id=test_org,
+        pipeline_id=pipe,
+        node_id="n1",
+        connector_instance_ids=[],
+        environment_profile_id=profile,
+        agent_id=None,
+    )
+    assert result.blocked is True
+    assert result.claimed is True
+
+
+async def test_check_node_start_rls_cross_org_hidden(
+    db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
+):
+    """A block guardrail bound to ANOTHER org's pipeline is invisible to this
+    org's node-start check under the RLS role — no cross-tenant leakage, so the
+    check falls through to the zero-claim fast path instead of blocking on a
+    foreign guardrail."""
+    pipe = await _seed_pipeline(db_engine, test_org, "CNS-RLS-Foreign", test_user)
+    profile = await _seed_environment_profile(db_engine, test_org, test_user, capabilities=["git"])
+    await _seed_guardrail(
+        db_engine, test_org, pipe, test_user, name="block-cap", action="block", required_capabilities=["sandbox.e2b"]
+    )
+    other_org = await _seed_org(db_engine, "CNS-RLS-Other")
+    other_user = await _seed_account(db_engine, other_org, "cns-rls-other@test.local")
+    other_pipe = await _seed_pipeline(db_engine, other_org, "CNS-RLS-Other-Pipe", other_user)
+
+    # The check is scoped to other_org; the block guardrail belongs to test_org.
+    # RLS must hide the foreign guardrail -> not claimed, not blocked.
+    factory = await _make_session_factory(app_engine)
+    result = await check_node_start(
+        factory,
+        org_id=other_org,
+        pipeline_id=other_pipe,
+        node_id="n1",
+        connector_instance_ids=[],
+        environment_profile_id=profile,
+        agent_id=None,
+    )
+    assert result.blocked is False
+    assert result.claimed is False
+
+
 # ---------------------------------------------------------------------------
 # 2. Full executor run: block -> awaiting_human (HITL), never fail-open
 # ---------------------------------------------------------------------------

@@ -438,3 +438,77 @@ async def test_check_node_start_load_failure_fails_closed(monkeypatch: pytest.Mo
     )
     assert result.blocked is True
     assert result.state == "unknown"
+
+
+async def test_check_node_start_zero_claim_no_manifest_roundtrip(monkeypatch: pytest.MonkeyPatch):
+    """Zero conformance claims -> fast path without a manifest DB round-trip.
+
+    ``build_live_manifest`` must never be called when no guardrail carries a
+    conformance claim — otherwise the check pays an avoidable DB read on every
+    node start for pipelines that never use conformance guardrails.
+    """
+    import modulo.core.guardrails.conformance as mod
+
+    async def _fake_load(*args: Any, **kwargs: Any) -> list[Any]:
+        return [_gr("g1", "block", []), _gr("g2", "warn", None)]
+
+    async def _noop_rls(session: Any, org_id: uuid.UUID) -> None:
+        return None
+
+    async def _boom_manifest(*args: Any, **kwargs: Any) -> dict[str, bool | None]:
+        raise AssertionError("build_live_manifest must not be called on zero-claim fast path")
+
+    monkeypatch.setattr(mod, "load_node_guardrails", _fake_load)
+    monkeypatch.setattr(mod, "_set_rls", _noop_rls)
+    monkeypatch.setattr(mod, "build_live_manifest", _boom_manifest)
+    session = _manifest_session()
+    session.begin = MagicMock(return_value=session)
+    factory = MagicMock()
+    factory.return_value = session
+    factory.return_value.__aenter__ = AsyncMock(return_value=session)
+    factory.return_value.__aexit__ = AsyncMock(return_value=None)
+    result = await check_node_start(
+        factory,
+        org_id=_ORG_ID,
+        pipeline_id=uuid.uuid4(),
+        node_id="node-1",
+        connector_instance_ids=[],
+        environment_profile_id=None,
+        agent_id=None,
+    )
+    assert result.blocked is False
+    assert result.claimed is False
+
+
+async def test_build_live_manifest_unreadable_surface_fails_closed(monkeypatch: pytest.MonkeyPatch):
+    """An unreadable capability source contributes nothing (unknown), so a
+    block-action guardrail fails CLOSED — never fail-open."""
+    import modulo.core.guardrails.conformance as mod
+
+    session = AsyncMock()
+
+    async def _boom_execute(stmt: Any) -> Any:
+        raise RuntimeError("db connection lost")
+
+    session.execute = AsyncMock(side_effect=_boom_execute)
+
+    def _fake_select(entity: Any) -> Any:
+        stmt = MagicMock()
+        stmt._conformance_entity = "connector"  # type: ignore[attr-defined]
+        return stmt
+
+    monkeypatch.setattr(mod, "select", _fake_select)
+    registered = await build_live_manifest(
+        session,
+        org_id=_ORG_ID,
+        connector_instance_ids=[uuid.uuid4()],
+        environment_profile_id=None,
+        agent_id=None,
+    )
+    # Reader degrades to unknown: no capabilities confirmed -> block fails closed.
+    assert registered == {}
+    derivation = decide_conformance(["github.write"], registered)
+    assert derivation.state == "unknown"
+    result = evaluate_conformance([_gr("g_block", "block", ["github.write"])], registered)
+    assert result.blocked is True
+    assert result.state == "unknown"
