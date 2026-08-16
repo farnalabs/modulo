@@ -1178,3 +1178,19 @@ class TestCronTimezoneValidation:
 
         assert resp.status_code == 422
         mock_next.assert_not_called()
+
+
+class TestRunRetentionValidation:
+    """Run-retention config must be bounded — a 0-day or >365-day retention is rejected."""
+
+    @pytest.mark.parametrize("retention_days", [0, -1, 366, 1000])
+    def test_out_of_range_retention_days_returns_422(self, client: TestClient, retention_days: int) -> None:
+        resp = client.put("/api/v1/admin/runs/retention", json={"retention_days": retention_days})
+        assert resp.status_code == 422
+
+    def test_valid_retention_days_accepted_by_validation(self) -> None:
+        from modulo.api.routes.admin import UpdateRetentionRequest
+
+        for days in (7, 90, 365):
+            req = UpdateRetentionRequest(retention_days=days)
+            assert req.retention_days == days

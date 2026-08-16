@@ -1,5 +1,6 @@
 """Saved View CRUD REST API — persisted filters and display preferences."""
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime
@@ -97,6 +98,8 @@ async def list_views_endpoint(
         ) from None
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         logger.exception("views.list.unexpected_error")
         raise HTTPException(
@@ -152,6 +155,8 @@ async def create_view_endpoint(
         ) from None
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         logger.exception("views.create.unexpected_error")
         raise HTTPException(
@@ -185,6 +190,8 @@ async def get_view_endpoint(
             detail="Database operation failed. Please try again later.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception as e:
         logger.exception("views.get.unexpected_error")
@@ -224,6 +231,8 @@ async def update_view_endpoint(
         ) from None
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         logger.exception("views.update.unexpected_error")
         raise HTTPException(
@@ -260,6 +269,8 @@ async def delete_view_endpoint(
         ) from None
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         logger.exception("views.delete.unexpected_error")
         raise HTTPException(
@@ -294,6 +305,8 @@ async def restore_view_endpoint(
             detail="Database operation failed. Please try again later.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception as e:
         logger.exception("views.restore.unexpected_error")
