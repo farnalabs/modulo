@@ -206,7 +206,7 @@ async def _do_list_runs(
                     "created_at": run.created_at.isoformat() if run.created_at else None,
                     "started_at": run.started_at.isoformat() if run.started_at else None,
                     "completed_at": run.completed_at.isoformat() if run.completed_at else None,
-                    "error_code": run.error_code,
+                    "error_code": _error_code,
                     "error_detail": error_detail,
                     "total_cost_usd": run.total_cost_usd,
                     "child_runs_cost_usd": child_cost,

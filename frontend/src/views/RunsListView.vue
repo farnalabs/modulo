@@ -74,12 +74,12 @@
             </span>
           </template>
           <template #cell-error="{ row }">
-            <span
+            <RunErrorTag
               v-if="row.error_code"
+              :code="(row.error_code as string | null | undefined)"
+              :detail="(row.error_detail as string | null | undefined)?.slice(0, 200)"
               :data-testid="`runs-list-error-${row.run_id}`"
-              class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize"
-              :title="(row.error_detail as string | null | undefined)?.slice(0, 200) || '—'"
-            >{{ row.error_code }}</span>
+            />
             <span v-else>—</span>
           </template>
           <template #cell-trigger_type="{ value }">
@@ -174,6 +174,7 @@
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
+import RunErrorTag from '../components/shared/RunErrorTag.vue'
 import { ref, computed, watch, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { fetchRuns, requestRunCancellation, type RunListItem, type FetchRunsParams } from '../lib/api/runs'

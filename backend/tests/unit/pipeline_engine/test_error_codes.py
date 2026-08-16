@@ -165,10 +165,19 @@ def test_sanitize_coerces_non_str():
     assert sanitize_error_text(b"bytes") == "b'bytes'"
 
 
-def test_present_error_passes_code_through_raw():
-    # P2 dropped: codes stay raw on every wire surface.
+def test_present_error_canonicalizes_code_via_map_legacy_code():
+    # Legacy codes are canonicalized to the dotted taxonomy on every read surface.
+    code, detail = present_error("executor_stalled", "detail", 5000)
+    assert code == "agent.stall"
+    assert detail == "detail"
+
+    # Already-dotted registry codes pass through unchanged.
+    code, _ = present_error("agent.failed", "detail", 5000)
+    assert code == "agent.failed"
+
+    # Unmapped legacy codes resolve to the harness.unknown fallback.
     code, detail = present_error("rate_limited", "LLM provider returned 429 Too Many Requests", 5000)
-    assert code == "rate_limited"
+    assert code == "harness.unknown"
     assert detail == "LLM provider returned 429 Too Many Requests"
 
 
@@ -178,9 +187,17 @@ def test_present_error_none_detail_returns_none():
     assert detail is None
 
 
+def test_present_error_none_code_preserved_when_detail_present():
+    # A missing code is never turned into harness.unknown — the (None, detail)
+    # contract keeps error_code absent on the wire.
+    code, detail = present_error(None, "boom", 5000)
+    assert code is None
+    assert detail == "boom"
+
+
 def test_present_error_truncates_codepoint_safely_with_ellipsis():
     code, detail = present_error("task_failure", "e" * 300, 200)
-    assert code == "task_failure"
+    assert code == "harness.worker_failed"
     assert detail.endswith("…")
     assert len(detail) == 201
 
@@ -194,5 +211,5 @@ def test_present_error_sanitizes_before_truncate():
 
 def test_present_error_coerces_non_str_detail():
     code, detail = present_error("task_failure", 12345, 5000)
-    assert code == "task_failure"
+    assert code == "harness.worker_failed"
     assert detail == "12345"

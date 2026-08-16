@@ -408,7 +408,12 @@ def sanitize_error_text(text: Any) -> str:
 def present_error(code: str | None, detail: Any, limit: int) -> tuple[str | None, str | None]:
     """Present one run's error for a read surface (sanitize + truncate).
 
-    * ``code`` passes through RAW (no mapping — codes stay raw on the wire).
+    * ``code`` is canonicalized to the dotted taxonomy via
+      :func:`map_legacy_code` so every read surface presents a resolvable
+      dotted code (legacy ``executor_stalled`` → ``agent.stall``, unmapped
+      codes → ``harness.unknown``). ``None`` stays ``None`` — a missing code
+      is never turned into ``harness.unknown`` (callers rely on error_code
+      being absent).
     * ``detail``: ``None`` → ``None``; otherwise :func:`sanitize_error_text`
       then a code-point-safe truncate to *limit* with a ``…`` suffix when cut.
       Python ``str`` slicing never splits a multi-byte character.
@@ -416,6 +421,8 @@ def present_error(code: str | None, detail: Any, limit: int) -> tuple[str | None
 
     Returns ``(code, detail)`` ready for the response dict.
     """
+    if code is not None:
+        code = map_legacy_code(code)
     if detail is None:
         return code, None
     cleaned = sanitize_error_text(detail)

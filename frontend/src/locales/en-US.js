@@ -2787,5 +2787,56 @@ export default {
     "dismiss": "Dismiss",
     "seed_examples": "Seed example primitives",
     "dismiss_hint": "Click anywhere to dismiss this guide"
+  },
+  "errorCodes": {
+    "_unknown": "Unknown error",
+    "agent": {
+      "failed": "Agent failed",
+      "no_op": "No output",
+      "stall": "Agent stalled"
+    },
+    "contract": {
+      "schema": "Output rejected",
+      "no_output": "No output"
+    },
+    "harness": {
+      "unknown": "Unknown error",
+      "db": { "connection_lost": "Database connection lost" },
+      "state_serialization": "State serialization error",
+      "sdk_task_cancelled": "Agent task cancelled",
+      "executor_failed": "Executor failed",
+      "executor_heartbeat_lost": "Executor heartbeat lost",
+      "dispatch_failed": "Dispatch failed",
+      "worker_failed": "Worker failed",
+      "node_cancelled": "Node cancelled",
+      "gate_creation_failed": "Gate creation failed",
+      "late_write": "Late state write",
+      "idempotency_gate": "Retry blocked"
+    },
+    "sandbox": {
+      "no_output_json": "No structured output",
+      "spawn": "Sandbox failed to start",
+      "network": "Sandbox network error"
+    },
+    "node": {
+      "timeout": "Node timed out",
+      "runaway": "Runaway node",
+      "cancelled": "Node cancelled"
+    },
+    "run": { "superseded": "Run superseded" },
+    "connector": {
+      "invalid_key": "Invalid connector key",
+      "permission": "Connector permission denied",
+      "rate_limit": "Connector rate limited",
+      "network": "Connector network error"
+    },
+    "capacity": {
+      "org": "Org at capacity",
+      "pipeline": "Pipeline at capacity",
+      "claim": "Capacity claim exhausted",
+      "timeout": "Capacity wait timed out"
+    },
+    "eval": { "blocked": "Eval blocked", "failed": "Eval failed" },
+    "config": { "error": "Configuration error", "invalid": "Invalid configuration" }
   }
 }

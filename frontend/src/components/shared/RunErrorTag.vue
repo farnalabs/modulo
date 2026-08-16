@@ -1,0 +1,49 @@
+<script setup lang="ts">
+import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const props = defineProps<{
+  code?: string | null
+  detail?: string | null
+}>()
+
+const { t } = useI18n()
+
+// Error-class → pill styling. The first dotted segment of a canonical code is
+// its class (agent / harness / sandbox / node / connector / capacity / eval /
+// config / contract / run). Unknown classes fall back to muted.
+const CLASS_STYLES: Record<string, string> = {
+  agent: 'bg-destructive/10 text-destructive',
+  harness: 'bg-muted text-muted-foreground',
+  sandbox: 'bg-warning/10 text-warning',
+  node: 'bg-warning/10 text-warning',
+  connector: 'bg-warning/10 text-warning',
+  capacity: 'bg-primary/10 text-primary',
+  eval: 'bg-destructive/10 text-destructive',
+  config: 'bg-warning/10 text-warning',
+  contract: 'bg-warning/10 text-warning',
+  run: 'bg-muted text-muted-foreground',
+}
+
+const normalized = computed(() => props.code ?? '')
+const label = computed(() => {
+  if (!normalized.value) return ''
+  const key = `errorCodes.${normalized.value}`
+  const translated = t(key)
+  return translated === key ? t('errorCodes._unknown') : translated
+})
+const pillClass = computed(() => {
+  const cls = normalized.value.split('.')[0]
+  return CLASS_STYLES[cls] ?? 'bg-muted text-muted-foreground'
+})
+</script>
+
+<template>
+  <span
+    v-if="code"
+    class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium"
+    :class="pillClass"
+    :title="detail || label"
+  >{{ label }}</span>
+  <span v-else>—</span>
+</template>
