@@ -106,6 +106,7 @@ _SOURCE_ERROR_CLASSES: frozenset[str] = frozenset(
         "harness",
         "node",
         "connector",
+        "provider",
         "capacity",
         "config",
         "contract",

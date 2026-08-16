@@ -390,6 +390,21 @@ class TestReasons:
         result = classify_run("stalled", "node_timeout")
         assert result.reason == REASON_SOURCE_ERROR
 
+    def test_failed_provider_unavailable_source_error(self) -> None:
+        result = classify_run("failed", "provider.unavailable")
+        assert result.value == RunClassificationValue.no_delivery
+        assert result.reason == REASON_SOURCE_ERROR
+
+    def test_failed_provider_rate_limited_source_error(self) -> None:
+        result = classify_run("failed", "provider.rate_limited")
+        assert result.value == RunClassificationValue.no_delivery
+        assert result.reason == REASON_SOURCE_ERROR
+
+    def test_failed_legacy_provider_code_resolved_to_source_error(self) -> None:
+        # Legacy alias: raw exception class name -> provider.rate_limited.
+        result = classify_run("failed", "RateLimitError")
+        assert result.reason == REASON_SOURCE_ERROR
+
     def test_failed_needs_human(self) -> None:
         result = classify_run("failed", "harness.gate_creation_failed")
         assert result.reason == REASON_NEEDS_HUMAN
