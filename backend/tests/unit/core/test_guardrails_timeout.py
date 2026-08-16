@@ -126,6 +126,44 @@ async def test_detection_error_fails_closed_for_block_guardrail():
     assert "mechanism error" in outcome.block_message
 
 
+async def test_malformed_shape_guardrail_skipped_not_aborting_pass():
+    """A guardrail whose config fails SHAPE validation (a bad ``action`` value
+    → pydantic.ValidationError) is handled exactly like the other mechanism
+    errors: log-and-continued for observe, and its redaction-phase
+    re-validation must SKIP it rather than abort the whole pass — sibling
+    redact guardrails still apply their masks."""
+    bad = _def("bad-action", "observe", config={"action": "not-an-action"})
+    ok = _def("ok", "redact", config={"redaction": [{"path": "credentials.api_key", "mode": "transform"}]})
+    outcome = await run_interception_pass_async(
+        EvalEngine(),
+        [ok, bad],
+        {"credentials": {"api_key": "sk-live-123"}, "body": "clean"},
+        timeout_seconds=5.0,
+    )
+    assert outcome.blocked is False
+    # The valid redact guardrail's mask was NOT lost to the sibling's failure.
+    assert outcome.payload["credentials"]["api_key"] == "\u2022\u2022\u2022\u2022\u2022\u2022"
+    # The malformed row is recorded as a failed result (log-and-continue).
+    assert len(outcome.results) == 2
+    assert any(r.passed is False and "mechanism error" in r.detail for r in outcome.results)
+
+
+async def test_malformed_shape_block_guardrail_fails_closed():
+    """A block-action guardrail with a shape-invalid config (timeout 0) fails
+    closed at detection, and its redaction-phase re-validation is skipped —
+    never re-raising and killing the pass."""
+    bad = _def("bad-timeout", "block", config={"guardrail_timeout_seconds": 0})
+    outcome = await run_interception_pass_async(
+        EvalEngine(),
+        [bad],
+        {"body": "clean"},
+        timeout_seconds=5.0,
+    )
+    assert outcome.blocked is True
+    assert outcome.blocking_eval_name == "bad-timeout"
+    assert "mechanism error" in outcome.block_message
+
+
 async def test_timeout_log_and_continue_for_observe_guardrail(caplog):
     slow = _def("slow-observe", "observe", timeout=0.05)
     outcome = await run_interception_pass_async(

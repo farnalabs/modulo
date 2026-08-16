@@ -48,7 +48,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from modulo.core.eval_engine import (
     EvalBlockedError,
@@ -556,12 +556,16 @@ def _apply_redaction_phase(
     for eval_def in definitions:
         try:
             cfg = _validate_guardrail_definition(eval_def)
-        except (GuardrailConfigError, GuardrailMisroutedError):
+        except (GuardrailConfigError, GuardrailMisroutedError, ValidationError):
             # A malformed guardrail already failed at the evaluation stage
             # (mechanism error handled by the caller: fail-closed for
             # block/redact, log-and-continue for observe/warn). Re-validating
             # here must NOT re-raise and kill the whole pass — skip the
             # redaction phase for it so the caller's decided outcome stands.
+            # ValidationError covers the shape-level failures (a bad
+            # ``action`` value, a non-positive timeout, a malformed redaction
+            # rule) that ``GuardrailConfig.from_eval_config`` raises when the
+            # guardrail-rule checks above pass.
             _log.warning(
                 "guardrails.redaction_phase_skip",
                 extra={"guardrail": eval_def.name},
