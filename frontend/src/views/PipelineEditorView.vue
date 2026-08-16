@@ -846,7 +846,7 @@
                 <SelectValue :placeholder="$t('views.PipelineEditorView.select_agent_placeholder')" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="__all__">{{ $t('views.PipelineEditorView.select_agent_placeholder') }}</SelectItem>
+                <SelectItem value="__all__">{{ $t('common.none') }}</SelectItem>
                 <SelectItem v-for="a in agents" :key="a.id" :value="a.id">{{ a.name }}</SelectItem>
               </SelectContent>
             </Select>
@@ -858,7 +858,7 @@
                 <SelectValue :placeholder="$t('views.PipelineEditorView.select_connector_placeholder')" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="__all__">{{ $t('views.PipelineEditorView.select_connector_placeholder') }}</SelectItem>
+                <SelectItem value="__all__">{{ $t('common.none') }}</SelectItem>
                 <SelectItem v-for="c in eligibleConnectors" :key="c.id" :value="c.id">{{ c.name }} ({{ c.connector_type_id }})</SelectItem>
               </SelectContent>
             </Select>
@@ -904,7 +904,7 @@
               <SelectValue :placeholder="$t('views.PipelineEditorView.select_snapshot_placeholder')" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="__all__">{{ $t('views.PipelineEditorView.select_snapshot_placeholder') }}</SelectItem>
+              <SelectItem value="__all__">{{ $t('common.none') }}</SelectItem>
               <SelectItem
                 v-for="s in snapshots"
                 :key="s.id"
