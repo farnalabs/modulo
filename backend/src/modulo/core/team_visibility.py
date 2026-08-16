@@ -12,6 +12,7 @@ organisation, so they never produce a mismatch.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -141,6 +142,61 @@ def model_backend_team_mismatch_detail(mismatches: list[ModelBackendTeamMismatch
     return f"{MODEL_BACKEND_TEAM_MISMATCH}: " + "; ".join(parts)
 
 
+async def _find_team_scope_mismatches[MismatchT](
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    pipeline_owner_team_id: uuid.UUID | None,
+    entries: list[dict[str, Any]],
+    id_key: str,
+    model: type[Any],
+    check_mismatch: Callable[[str | None, uuid.UUID | None, uuid.UUID | None], bool],
+    build_mismatch: Callable[[Any, uuid.UUID | None, str | None], MismatchT],
+) -> list[MismatchT]:
+    """Shared fetch-and-filter pattern for team-scoped binding enforcement.
+
+    Looks up the org-scoped resource rows referenced by ``entries`` and keeps
+    only those that the team-scope rule flags as cross-team. Resources that
+    cannot be resolved (missing, or in another org) are ignored — the graph
+    validator reports them separately.
+    """
+    if not entries:
+        return []
+
+    raw_ids = [entry.get(id_key) for entry in entries]
+    parsed_ids, _ = try_parse_uuids(raw_ids)
+    if not parsed_ids:
+        return []
+
+    rows = (
+        (
+            await session.execute(
+                select(model).where(
+                    model.organisation_id == org_id,
+                    model.id.in_(parsed_ids),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    found: dict[uuid.UUID, Any] = {r.id: r for r in rows}
+
+    mismatches: list[MismatchT] = []
+    for entry in entries:
+        node_id = str(entry.get("node_id")) if entry.get("node_id") else None
+        rid = try_parse_uuid(entry.get(id_key))
+        if rid is None:
+            continue
+        resource = found.get(rid)
+        if resource is None:
+            continue
+        if not check_mismatch(resource.visibility, resource.owner_team_id, pipeline_owner_team_id):
+            continue
+        mismatches.append(build_mismatch(resource, pipeline_owner_team_id, node_id))
+    return mismatches
+
+
 async def find_model_backend_team_mismatches(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -154,49 +210,16 @@ async def find_model_backend_team_mismatches(
     cannot be resolved (missing, or in another org) are ignored — the graph
     validator reports them separately.
     """
-    if not model_backend_pins:
-        return []
-
-    raw_ids = [pin.get("model_backend_id") for pin in model_backend_pins]
-    backend_ids, _ = try_parse_uuids(raw_ids)
-    if not backend_ids:
-        return []
-
-    rows = (
-        (
-            await session.execute(
-                select(ModelBackend).where(
-                    ModelBackend.organisation_id == org_id,
-                    ModelBackend.id.in_(backend_ids),
-                )
-            )
-        )
-        .scalars()
-        .all()
+    return await _find_team_scope_mismatches(
+        session,
+        org_id=org_id,
+        pipeline_owner_team_id=pipeline_owner_team_id,
+        entries=model_backend_pins,
+        id_key="model_backend_id",
+        model=ModelBackend,
+        check_mismatch=model_backend_team_mismatch,
+        build_mismatch=_build_model_backend_mismatch,
     )
-    found: dict[uuid.UUID, ModelBackend] = {r.id: r for r in rows}
-
-    mismatches: list[ModelBackendTeamMismatch] = []
-    for pin in model_backend_pins:
-        node_id = str(pin.get("node_id")) if pin.get("node_id") else None
-        backend_id = try_parse_uuid(pin.get("model_backend_id"))
-        if backend_id is None:
-            continue
-        backend = found.get(backend_id)
-        if backend is None:
-            continue
-        if not model_backend_team_mismatch(backend.visibility, backend.owner_team_id, pipeline_owner_team_id):
-            continue
-        mismatches.append(
-            ModelBackendTeamMismatch(
-                model_backend_id=backend.id,
-                model_backend_name=backend.name,
-                model_backend_owner_team_id=backend.owner_team_id,
-                pipeline_owner_team_id=pipeline_owner_team_id,
-                node_id=node_id,
-            )
-        )
-    return mismatches
 
 
 async def find_connector_team_mismatches(
@@ -212,46 +235,37 @@ async def find_connector_team_mismatches(
     Connectors that cannot be resolved (missing, or in another org) are ignored —
     the graph validator reports them separately as ``CONNECTOR_NOT_FOUND``.
     """
-    if not connector_bindings:
-        return []
-
-    raw_ids = [b.get("connector_instance_id") for b in connector_bindings]
-    instance_ids, _ = try_parse_uuids(raw_ids)
-    if not instance_ids:
-        return []
-
-    rows = (
-        (
-            await session.execute(
-                select(ConnectorInstance).where(
-                    ConnectorInstance.organisation_id == org_id,
-                    ConnectorInstance.id.in_(instance_ids),
-                )
-            )
-        )
-        .scalars()
-        .all()
+    return await _find_team_scope_mismatches(
+        session,
+        org_id=org_id,
+        pipeline_owner_team_id=pipeline_owner_team_id,
+        entries=connector_bindings,
+        id_key="connector_instance_id",
+        model=ConnectorInstance,
+        check_mismatch=connector_team_mismatch,
+        build_mismatch=_build_connector_mismatch,
     )
-    found: dict[uuid.UUID, ConnectorInstance] = {r.id: r for r in rows}
 
-    mismatches: list[ConnectorTeamMismatch] = []
-    for binding in connector_bindings:
-        node_id = str(binding.get("node_id")) if binding.get("node_id") else None
-        cid = try_parse_uuid(binding.get("connector_instance_id"))
-        if cid is None:
-            continue
-        instance = found.get(cid)
-        if instance is None:
-            continue
-        if not connector_team_mismatch(instance.visibility, instance.owner_team_id, pipeline_owner_team_id):
-            continue
-        mismatches.append(
-            ConnectorTeamMismatch(
-                connector_id=instance.id,
-                connector_name=instance.name,
-                connector_owner_team_id=instance.owner_team_id,
-                pipeline_owner_team_id=pipeline_owner_team_id,
-                node_id=node_id,
-            )
-        )
-    return mismatches
+
+def _build_model_backend_mismatch(
+    backend: Any, pipeline_owner_team_id: uuid.UUID | None, node_id: str | None
+) -> ModelBackendTeamMismatch:
+    return ModelBackendTeamMismatch(
+        model_backend_id=backend.id,
+        model_backend_name=backend.name,
+        model_backend_owner_team_id=backend.owner_team_id,
+        pipeline_owner_team_id=pipeline_owner_team_id,
+        node_id=node_id,
+    )
+
+
+def _build_connector_mismatch(
+    instance: Any, pipeline_owner_team_id: uuid.UUID | None, node_id: str | None
+) -> ConnectorTeamMismatch:
+    return ConnectorTeamMismatch(
+        connector_id=instance.id,
+        connector_name=instance.name,
+        connector_owner_team_id=instance.owner_team_id,
+        pipeline_owner_team_id=pipeline_owner_team_id,
+        node_id=node_id,
+    )

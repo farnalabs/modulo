@@ -650,11 +650,13 @@ async def _resolve_graph_references(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Validate tenant-owned graph references and derive validator pins.
 
-    When ``pipeline_owner_team_id`` is supplied (the graph-save path), the
-    resolved model-backend pins are also checked against the pipeline's team:
-    a team-private model backend pinned by a different team's pipeline raises
-    409 ``model_backend_team_mismatch`` (PRD §9.3). Callers that only want
-    reference resolution (no team gate) omit the owner team.
+    Whenever the graph resolves model-backend pins, they are checked against
+    the pipeline's team: a team-private model backend pinned by a pipeline owned
+    by a different team (or by no team at all) raises 409
+    ``model_backend_team_mismatch`` (PRD §9.3), mirroring the connector rule
+    which is also enforced unconditionally. The mismatch rule itself decides
+    whether an org-owned pipeline (``owner_team_id=None``) may pin a team-private
+    backend.
     """
     agent_ids = {node.agent_id for node in nodes if node.agent_id is not None}
     agents = (
@@ -764,7 +766,7 @@ async def _resolve_graph_references(
                         "schema_id": str(node.output_schema_id),
                     }
                 )
-    if pipeline_owner_team_id is not None and model_backend_pins:
+    if model_backend_pins:
         await _enforce_model_backend_team_bindings(
             session,
             org_id=org_id,
