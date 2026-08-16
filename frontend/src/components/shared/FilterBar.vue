@@ -66,6 +66,9 @@ const filterValues = computed(() => props.filterValues ?? {})
 
 function allLabel(filter: { key: string; label: string }): string {
   const label = filter.label.trim()
+  if (!label) {
+    return t('common.all')
+  }
   if (label.toLowerCase() === 'all') {
     const noun = filter.key.replace(/[_-]+/g, ' ').trim()
     return noun ? `${t('common.all')} ${noun}` : t('common.all')

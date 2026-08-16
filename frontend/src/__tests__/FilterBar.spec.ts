@@ -57,4 +57,40 @@ describe('FilterBar', () => {
       expect(option.text()).not.toBe('Status')
     }
   })
+
+  it('derives the noun from the filter key when the label is bare "All"', () => {
+    const wrapper = mount(FilterBar, {
+      global: { stubs: selectStubs },
+      props: {
+        filters: [
+          {
+            key: 'status',
+            label: 'All',
+            options: [{ value: 'running', label: 'Running' }],
+          },
+        ],
+        filterValues: { status: '' },
+      },
+    })
+    const allOption = wrapper.findAll('[data-testid="select-option"]').find((o) => o.attributes('data-value') === '__all__')
+    expect(allOption!.text()).toBe('All status')
+  })
+
+  it('keeps an already-prefixed "All ..." label verbatim', () => {
+    const wrapper = mount(FilterBar, {
+      global: { stubs: selectStubs },
+      props: {
+        filters: [
+          {
+            key: 'level',
+            label: 'All levels',
+            options: [{ value: 'error', label: 'Error' }],
+          },
+        ],
+        filterValues: { level: '' },
+      },
+    })
+    const allOption = wrapper.findAll('[data-testid="select-option"]').find((o) => o.attributes('data-value') === '__all__')
+    expect(allOption!.text()).toBe('All levels')
+  })
 })

@@ -366,6 +366,9 @@ export default {
     },
     "NotificationsPage": {
       "title": "Notifications",
+      "level": "Level",
+      "scope": "Scope",
+      "status": "Status",
       "all_status": "All Status",
       "all_scopes": "All Scopes",
       "dismissed_self": "Dismissed (self)",
