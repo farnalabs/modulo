@@ -73,6 +73,7 @@ from modulo.api.routes.errors import router as errors_router
 from modulo.api.routes.evals import router as evals_router
 from modulo.api.routes.events import router as events_router
 from modulo.api.routes.feedback import router as feedback_router
+from modulo.api.routes.guardrail_config import router as guardrail_config_router
 from modulo.api.routes.health import router as health_router
 from modulo.api.routes.hitl import router as hitl_router
 from modulo.api.routes.in_app_notifications import router as in_app_notifications_router
@@ -1278,6 +1279,7 @@ app.include_router(sensitive_router)
 app.include_router(observability_router)
 app.include_router(variants_router)
 app.include_router(feedback_router)
+app.include_router(guardrail_config_router)
 app.include_router(plugins_router)
 app.include_router(scim_router)
 app.include_router(templates_router)

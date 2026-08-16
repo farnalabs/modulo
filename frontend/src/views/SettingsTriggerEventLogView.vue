@@ -8,7 +8,7 @@
           <label for="settingstriggereventlogview-trigger-type" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.SettingsTriggerEventLogView.trigger_type') }}</label>
           <Select aria-label="Trigger type" v-model="filterTriggerType">
             <SelectTrigger id="settingstriggereventlogview-trigger-type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" aria-label="Trigger type" data-testid="settings-trigger-event-log-trigger-type">
-              <SelectValue :placeholder="$t('views.AdminNotificationDeliveryLogView.all_types')" />
+              <SelectValue :placeholder="$t('views.SettingsTriggerEventLogView.trigger_type')" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="__all__">{{ $t('views.AdminNotificationDeliveryLogView.all_types') }}</SelectItem>
@@ -25,7 +25,7 @@
           <label for="settingstriggereventlogview-result" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.SettingsTriggerEventLogView.result') }}</label>
           <Select aria-label="Result" v-model="filterResult">
             <SelectTrigger id="settingstriggereventlogview-result" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" aria-label="Result" data-testid="settings-trigger-event-log-result">
-              <SelectValue :placeholder="$t('views.SettingsTriggerEventLogView.all_results')" />
+              <SelectValue :placeholder="$t('views.SettingsTriggerEventLogView.result')" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="__all__">{{ $t('views.SettingsTriggerEventLogView.all_results') }}</SelectItem>

@@ -515,3 +515,150 @@ class TestDeleteOrgImmediate:
         ):
             resp = client.delete(self.URL)
         assert resp.status_code == 409
+
+
+class TestBillingOverviewAggregation:
+    """GET /api/v1/admin/billing/overview must aggregate counts across the org:
+    memberships (users), teams, pipelines, and runs created this month."""
+
+    URL = "/api/v1/admin/billing/overview"
+
+    def test_aggregates_org_counts(self, client: TestClient) -> None:
+        fake_org = MagicMock()
+        fake_org.plan_id = "pro_monthly"
+        fake_org.daily_spend_limit = 250.0
+        fake_org.settings_json = {"license_key": "LIC-1234-ABCD"}
+
+        counts = [7, 3, 12, 41]
+        call_index = 0
+
+        async def _execute(*_args, **_kwargs):
+            nonlocal call_index
+            result = MagicMock()
+            result.scalar.return_value = counts[call_index]
+            call_index += 1
+            return result
+
+        mock_session = AsyncMock()
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_session.begin = MagicMock(return_value=begin_cm)
+        mock_session.execute = _execute
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+
+        plan_ctx = MagicMock()
+        plan_ctx.tier.return_value = "community"
+
+        try:
+            with (
+                patch("modulo.api.routes.admin.set_rls_org"),
+                patch("modulo.api.routes.admin.get_organisation", AsyncMock(return_value=fake_org)),
+                patch("modulo.api.routes.admin.resolve_plan_context", new_callable=AsyncMock, return_value=plan_ctx),
+            ):
+                resp = client.get(self.URL)
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total_users"] == 7
+        assert body["total_teams"] == 3
+        assert body["total_pipelines"] == 12
+        assert body["total_runs_this_month"] == 41
+        assert body["daily_spend_limit"] == 250.0
+
+    def test_zero_counts_when_org_empty(self, client: TestClient) -> None:
+        fake_org = MagicMock()
+        fake_org.plan_id = "community"
+        fake_org.daily_spend_limit = None
+        fake_org.settings_json = {}
+
+        async def _execute(_stmt, *args, **kwargs):
+            result = MagicMock()
+            result.scalar.return_value = 0
+            return result
+
+        mock_session = AsyncMock()
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_session.begin = MagicMock(return_value=begin_cm)
+        mock_session.execute = _execute
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+
+        plan_ctx = MagicMock()
+        plan_ctx.tier.return_value = "community"
+
+        try:
+            with (
+                patch("modulo.api.routes.admin.set_rls_org"),
+                patch("modulo.api.routes.admin.get_organisation", AsyncMock(return_value=fake_org)),
+                patch("modulo.api.routes.admin.resolve_plan_context", new_callable=AsyncMock, return_value=plan_ctx),
+            ):
+                resp = client.get(self.URL)
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total_users"] == 0
+        assert body["total_teams"] == 0
+        assert body["total_pipelines"] == 0
+        assert body["total_runs_this_month"] == 0
+        assert body["daily_spend_limit"] is None
+
+
+class TestOrgSlugImmutability:
+    """The org slug is immutable once set — the profile update endpoint
+    (PUT /api/v1/admin/org) must never change it."""
+
+    URL = "/api/v1/admin/org"
+
+    def test_update_org_ignores_slug_changes(self, client: TestClient) -> None:
+        fake_org = MagicMock()
+        fake_org.id = _ORG_ID
+        fake_org.name = "Test Org"
+        fake_org.slug = "immutable-slug"
+        fake_org.settings_json = {}
+        fake_org.plan_id = None
+        fake_org.created_at = _NOW
+
+        with (
+            patch("modulo.api.routes.admin.set_rls_org"),
+            patch(
+                "modulo.api.routes.admin.get_organisation",
+                AsyncMock(return_value=fake_org),
+            ),
+            patch(
+                "modulo.api.routes.admin.update_organisation",
+                AsyncMock(return_value=fake_org),
+            ) as mock_update,
+        ):
+            resp = client.put(self.URL, json={"name": "Renamed", "slug": "hacked-slug"})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        # The response keeps the immutable slug.
+        assert body["slug"] == "immutable-slug"
+        # The update call must never carry a slug key.
+        for call in mock_update.call_args_list:
+            updates = call.args[2]
+            assert "slug" not in updates, f"update_organisation must not receive slug: {updates}"
+            assert updates.get("name") == "Renamed"
+
+    def test_update_org_model_has_no_slug_field(self) -> None:
+        """The request model exposes no slug field — a client cannot even
+        express a slug change."""
+        from modulo.api.routes.admin import UpdateOrgRequest
+
+        assert "slug" not in UpdateOrgRequest.model_fields
+        assert set(UpdateOrgRequest.model_fields) <= {"name", "logo_url", "plan_id"}

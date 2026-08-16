@@ -7,7 +7,8 @@ with the ORM model:
   ``auto_deactivated`` and the ORM CHECK constraint reflects it,
 * the migration's hardcoded vocabulary stays in sync with the model (the
   single source of truth),
-* the migration is the SOLE head with ``down_revision=0103_lifecycle_map_version_actor``,
+* the migration sits on ``0103_lifecycle_map_version_actor`` and is revised by
+  the FAR-219 head ``0105_guardrail_pins`` (the sole head),
 * the migration's Postgres DDL widens the constraint to the FULL 20-value set
   (NOT VALID + VALIDATE, 0069-pattern) and the downgrade restores the 19-value
   set,
@@ -40,6 +41,9 @@ _MIGRATION_NAME = "0104_trigger_event_auto_deactivated"
 _MIGRATION_PATH = (
     Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 )
+
+# The FAR-219 migration that revises 0104 and is the current head of the chain.
+_HEAD_MIGRATION_NAME = "0105_guardrail_pins"
 
 # The 19-value vocabulary BEFORE this migration (what 0069 created).
 _OLD_VALIDATION_RESULT_VALUES = tuple(v for v in VALIDATION_RESULT_VALUES if v != "auto_deactivated")
@@ -105,15 +109,20 @@ class TestModelVocabulary:
 
 
 class TestMigrationChain:
-    def test_migration_is_sole_head_revising_0103(self) -> None:
+    def test_migration_is_revised_by_head_0105(self) -> None:
         migration = _load_migration()
         assert migration.revision == _MIGRATION_NAME
         assert migration.down_revision == "0103_lifecycle_map_version_actor"
         assert migration.branch_labels is None
         script = _script()
         heads = script.get_heads()
-        assert heads == [_MIGRATION_NAME], f"expected a single head, got {heads}"
-        assert migration.revision in {rev.revision for rev in script.walk_revisions()}
+        assert heads == [_HEAD_MIGRATION_NAME], f"expected a single head, got {heads}"
+        revisions = {rev.revision for rev in script.walk_revisions()}
+        assert migration.revision in revisions
+        assert _HEAD_MIGRATION_NAME in revisions
+        head = script.get_revision(_HEAD_MIGRATION_NAME)
+        assert head is not None
+        assert head.down_revision == _MIGRATION_NAME
 
     def test_migration_vocabulary_matches_model(self) -> None:
         """The migration's hardcoded vocabulary must equal the ORM single source

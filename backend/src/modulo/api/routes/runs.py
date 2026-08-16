@@ -1,7 +1,6 @@
 """POST /api/v1/runs — manual pipeline trigger and run lifecycle endpoints."""
 
 import asyncio
-import difflib
 import json
 import logging
 import uuid
@@ -31,6 +30,7 @@ from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.dispatch import dispatch_run
 from modulo.core.exceptions import OrgDeletedError
+from modulo.core.line_diff import iter_line_diffs
 from modulo.core.node_output_split import node_return, node_telemetry
 from modulo.core.pipeline_engine.classify import REASON_DELIVERED_EMAIL, _any_marker_delivery_done
 from modulo.core.pipeline_engine.error_codes import present_error, sanitize_error_text
@@ -2004,7 +2004,7 @@ async def diff_node_output(
 
     Accepts two (run_id, node_id) pairs, fetches each node's output,
     applies sensitive masking, and returns a structured line-level diff
-    using difflib.SequenceMatcher.
+    via the shared modulo.core.line_diff helper.
     """
     try:
         async with session.begin():
@@ -2077,71 +2077,15 @@ async def diff_node_output(
     lines_a = text_a.splitlines(keepends=True)
     lines_b = text_b.splitlines(keepends=True)
 
-    differ = difflib.SequenceMatcher(None, lines_a, lines_b)
-    diff_lines: list[NodeOutputDiffLine] = []
-    line_a = 1
-    line_b = 1
-
-    for op, i1, i2, j1, j2 in differ.get_opcodes():
-        if op == "equal":
-            for idx in range(i1, i2):
-                diff_lines.append(
-                    NodeOutputDiffLine(
-                        type="unchanged",
-                        content=lines_a[idx].rstrip("\n"),
-                        line_a=line_a,
-                        line_b=line_b,
-                    )
-                )
-                line_a += 1
-                line_b += 1
-        elif op == "replace":
-            for _ in range(i2 - i1):
-                diff_lines.append(
-                    NodeOutputDiffLine(
-                        type="removed",
-                        content=lines_a[i1].rstrip("\n"),
-                        line_a=line_a,
-                        line_b=None,
-                    )
-                )
-                line_a += 1
-                i1 += 1
-            for _ in range(j2 - j1):
-                diff_lines.append(
-                    NodeOutputDiffLine(
-                        type="added",
-                        content=lines_b[j1].rstrip("\n"),
-                        line_a=None,
-                        line_b=line_b,
-                    )
-                )
-                line_b += 1
-                j1 += 1
-        elif op == "delete":
-            for _ in range(i2 - i1):
-                diff_lines.append(
-                    NodeOutputDiffLine(
-                        type="removed",
-                        content=lines_a[i1].rstrip("\n"),
-                        line_a=line_a,
-                        line_b=None,
-                    )
-                )
-                line_a += 1
-                i1 += 1
-        elif op == "insert":
-            for _ in range(j2 - j1):
-                diff_lines.append(
-                    NodeOutputDiffLine(
-                        type="added",
-                        content=lines_b[j1].rstrip("\n"),
-                        line_a=None,
-                        line_b=line_b,
-                    )
-                )
-                line_b += 1
-                j1 += 1
+    diff_lines = [
+        NodeOutputDiffLine(
+            type=kind,
+            content=content,
+            line_a=line_a,
+            line_b=line_b,
+        )
+        for kind, content, line_a, line_b in iter_line_diffs(lines_a, lines_b)
+    ]
 
     has_diff = any(d.type != "unchanged" for d in diff_lines)
 

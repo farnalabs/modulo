@@ -47,3 +47,6 @@ class Organisation(Base):
     deletion_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
     deletion_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     export_bundle_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True, default=None)
+    # Guardrail config-as-code snapshot pin (FAR-219 T3): applied/proposed
+    # content hashes, serialized YAML and status. Absence = never applied.
+    guardrail_pins_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True, default=None)
