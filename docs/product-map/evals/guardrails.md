@@ -7,7 +7,7 @@ code:
   - backend/src/modulo/db/crud/guardrail_config.py
   - backend/src/modulo/api/routes/guardrail_config.py
   - backend/src/modulo/db/models/organisation.py
-  - backend/src/modulo/db/migrations/versions/0105_guardrail_pins.py
+  - backend/src/modulo/db/migrations/versions/0110_schema_pipeline_runtime.py
   - backend/src/modulo/api/main.py
 unit-tests:
   - backend/tests/unit/core/test_guardrails.py

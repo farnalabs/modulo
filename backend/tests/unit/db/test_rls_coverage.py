@@ -36,11 +36,13 @@ _MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" 
 
 _RLS_ENABLE_MARKER = "ENABLE ROW LEVEL SECURITY"
 
-# Matches a literal DDL enable, e.g. ALTER TABLE "foo" ENABLE ROW LEVEL SECURITY.
-# The loop-based migrations use an f-string placeholder ("{table}") that this
-# regex intentionally does not match — those are handled via constant import.
+# Matches a literal DDL enable, e.g. ALTER TABLE "foo" ENABLE ROW LEVEL SECURITY
+# or ALTER TABLE public.foo ENABLE ROW LEVEL SECURITY (the reconciliation chain
+# prefixes the schema). The loop-based migrations use an f-string placeholder
+# ("{table}") that this regex intentionally does not match — those are handled
+# via constant import.
 _RLS_ENABLE_RE = re.compile(
-    r'ALTER\s+TABLE\s+"?(?P<table>[a-z_][a-z0-9_]*)"?\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY',
+    r'ALTER\s+TABLE\s+(?:public\.)?"?(?P<table>[a-z_][a-z0-9_]*)"?\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY',
     re.IGNORECASE,
 )
 

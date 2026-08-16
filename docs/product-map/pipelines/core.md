@@ -12,7 +12,7 @@ code:
   - backend/src/modulo/db/models/pipeline_folder.py
   - backend/src/modulo/db/models/pipeline_edge.py
   - backend/src/modulo/db/crud/pipeline_folder.py
-  - backend/src/modulo/db/migrations/versions/0007_pipeline_folders.py
+  - backend/src/modulo/db/migrations/versions/0110_schema_pipeline_runtime.py
   - backend/src/modulo/core/graph_validator/__init__.py
   - backend/src/modulo/core/graph_validator/category_validator.py
   - frontend/src/views/PipelineEditorView.vue

@@ -1,18 +1,18 @@
 """Unit tests for FAR-152 work_intact terminalization + migration 0087.
 
 work_intact is computed AT TERMINALIZATION from completed-node artifacts + the
-full DAG ran (§15.3) — never from the async evidence probe. It restores the
+full DAG ran (��15.3) �?" never from the async evidence probe. It restores the
 false-failure banner for harness-crash incidents #1/#3, and is suppressed
 (False) for A1-elevated runs (a run that self-reported failure is not
-complete, §15.4). Also covers migration 0087 (run_evidence table +
-runs.work_intact) and the executor's post-commit evidence-probe wiring.
+complete, ��15.4). Also covers the reconciliation chain's run_evidence table +
+runs.work_intact surface (0110_schema_pipeline_runtime) and the executor's
+post-commit evidence-probe wiring.
 """
 
-import importlib.util
 import uuid
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import select, text
@@ -178,63 +178,37 @@ class TestApplyWorkIntact:
 
 
 # ---------------------------------------------------------------------------
-# migration 0091 — run_evidence table + runs.work_intact
+# migration 0008 — run_evidence table + runs.work_intact (reconciliation chain)
 # ---------------------------------------------------------------------------
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 
 
-def _load_migration(filename: str, module_name: str):
-    spec = importlib.util.spec_from_file_location(module_name, _VERSIONS / filename)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+class TestMigrationRunEvidenceFinalState:
+    """The run_evidence surface now ships in the reconciliation chain
+    (``0110_schema_pipeline_runtime``) instead of the deleted ``0091_run_evidence``
+    migration. Assert the reconciliation DDL creates the run_evidence table with
+    its evidence columns and adds ``runs.work_intact``."""
 
+    def _source(self) -> str:
+        path = _VERSIONS / "0110_schema_pipeline_runtime.py"
+        assert path.exists(), f"Migration file missing: {path}"
+        return path.read_text(encoding="utf-8")
 
-class TestMigration0091:
-    def test_revision_chain(self) -> None:
-        migration = _load_migration("0091_run_evidence.py", "migration_0091_evidence")
-        assert migration.revision == "0091_run_evidence"
-        # Chains off main's current head 0090 (add_budget_exceeded_status).
-        assert migration.down_revision == "0090_add_budget_exceeded_status"
+    def test_0008_creates_run_evidence_table(self) -> None:
+        source = self._source()
+        assert "CREATE TABLE IF NOT EXISTS public.run_evidence" in source
+        for column in ("run_id", "node_id", "evidence_state", "evidence_detail", "evidence_written_at"):
+            assert f'"{column}"' in source, f"0008 run_evidence missing column {column}"
 
-    def test_upgrade_adds_work_intact_and_evidence_table(self) -> None:
-        migration = _load_migration("0091_run_evidence.py", "migration_0091_evidence_up")
-        mock_op = MagicMock()
-        with patch.object(migration, "op", mock_op):
-            migration.upgrade()
+    def test_0008_creates_run_evidence_pk_and_fk(self) -> None:
+        source = self._source()
+        assert "pk_run_evidence_run_node" in source
+        assert "run_evidence_run_id_fkey" in source
 
-        add_calls = [c for c in mock_op.add_column.call_args_list if c.args and c.args[0] == "runs"]
-        assert len(add_calls) == 1
-        col = add_calls[0].args[1]
-        assert col.name == "work_intact"
-        assert col.nullable is True
-
-        create_calls = [c for c in mock_op.create_table.call_args_list if c.args and c.args[0] == "run_evidence"]
-        assert len(create_calls) == 1
-        table_name, *columns = create_calls[0].args
-        assert table_name == "run_evidence"
-        column_names = {col.name for col in columns if hasattr(col, "name")}
-        assert {
-            "run_id",
-            "node_id",
-            "evidence_state",
-            "evidence_detail",
-            "evidence_written_at",
-        } <= column_names
-
-    def test_downgrade_drops_table_and_column(self) -> None:
-        migration = _load_migration("0091_run_evidence.py", "migration_0091_evidence_down")
-        mock_op = MagicMock()
-        with patch.object(migration, "op", mock_op):
-            migration.downgrade()
-
-        assert any(c.args and c.args[0] == "run_evidence" for c in mock_op.drop_table.call_args_list)
-        assert any(
-            c.args and c.args[0] == "runs" and c.args[1] == "work_intact" for c in mock_op.drop_column.call_args_list
-        )
+    def test_0008_adds_runs_work_intact(self) -> None:
+        source = self._source()
+        assert 'ADD COLUMN IF NOT EXISTS "work_intact" boolean' in source
 
 
 # ---------------------------------------------------------------------------
