@@ -211,17 +211,27 @@ regression that silently weakens the suite:
   evaluate at collection time and are the legitimate form, and the
   skip-without-reason lens already owns the missing-``reason`` half of the
   marker
-- ``pytest.raises(Exception)`` / ``pytest.raises(BaseException)`` — the
-  catch-all form of an exception assertion. Naming the top of the exception
-  hierarchy verifies only that *something* went wrong: any exception
-  satisfies it, including the ``AssertionError`` of a misbehaving assertion
-  inside the block or an unrelated ``KeyError`` from a bug, so the test
-  reports green when the code under test raised the wrong error type. A
-  ``match=`` narrows the message, not the type, so it does not rescue the
-  call. The same catch-all applies to ``@pytest.mark.xfail(raises=...)``
-  markers, which then xfail on *any* exception. Attribute-qualified classes
-  (``pytest.skip.Exception``) and concrete named exceptions are left alone —
-  they are the specific form this lens exists to force
+- ``pytest.raises``/``pytest.warns`` whose expected exception is a *broad*
+  class — ``Exception``, ``BaseException``, or ``AssertionError`` (for
+  ``raises``) without a ``match=`` narrow. ``pytest.raises(Exception)``
+  catches every failure — including a regression that raises the *wrong*
+  exception and the test's own assertion errors — so the test reports green
+  when the behaviour it guards silently changes to raise something else;
+  ``pytest.raises(BaseException)`` widens that mask to
+  ``KeyboardInterrupt``/``SystemExit``. ``pytest.raises(AssertionError)``
+  without ``match=`` is the sharpest form of the hazard: an *internal* assert
+  bug in the code under test is swallowed as the expected exception and the
+  test passes. A ``match=`` narrows the message, not the type, so it does not
+  rescue the call. The same catch-all applies to ``@pytest.mark.xfail(raises=...)``
+  markers, which then xfail on *any* exception. Name the specific exception
+  the code is documented to raise (``ValueError``, ``KeyError``, ...); when
+  the code under test is an assert-based validator that must trip, pin the
+  failure with ``match=`` so the check cannot silently absorb a different
+  error. Attribute-qualified classes (``pytest.skip.Exception`` /
+  ``pytest.xfail.Exception``) and concrete named exceptions are left alone —
+  they are the specific form this lens exists to force, and a union of
+  *specific* exceptions (``(ValueError, TypeError)``) is the intentional
+  "either of these" form
 - ``assert <mock>.assert_*()`` / ``assert not <mock>.assert_*()`` — using a
   unittest.mock verification method *as* the assertion's test expression.
   Every ``assert_called``/``assert_called_with``/``assert_awaited*``/
@@ -3776,43 +3786,84 @@ def test_constant_condition_skip_lens_flags_deterministic_skips():
         assert not _constant_condition_skip_violations(tree), f"lens should NOT flag:\n{source}"
 
 
-def _broad_exception_raises_violations(tree: ast.AST) -> list[tuple[int, str]]:
-    """Return ``(lineno, detail)`` pairs for every catch-all exception spec in
-    a test module: ``pytest.raises(Exception)`` / ``pytest.raises(BaseException)``
-    calls and ``@pytest.mark.xfail(raises=...)`` markers naming the top of the
-    exception hierarchy.
+_RAISES_CONTEXT_FUNCS = frozenset({"raises", "warns"})
+"""``with`` context-manager names whose expected-exception argument is checked
+for broad classes. Custom helpers (``assert_raises``, ``rejects``, ...) are
+deliberately not matched: their signature does not necessarily take an
+exception class positionally, and only ``pytest.raises``/``pytest.warns``
+have the ``match=`` keyword that narrows an ``AssertionError`` expectation."""
 
-    ``pytest.raises(Exception)`` verifies only that *something* went wrong:
-    any exception satisfies it — including the ``AssertionError`` of a
-    misbehaving assertion inside the block or an unrelated ``KeyError`` from a
-    bug — so the test reports green when the code under test raised the wrong
-    error type. A ``match=`` keyword narrows the message, not the type, so it
-    does not rescue the call. ``@pytest.mark.xfail(raises=Exception)`` is the
+_BROAD_EXCEPTION_CLASSES = frozenset({"Exception", "BaseException"})
+"""Exception classes that can never be a *specific* expected error: ``Exception``
+catches every failure (including ``AssertionError`` and any unrelated bug in
+the code under test) and ``BaseException`` widens that to
+``KeyboardInterrupt``/``SystemExit``."""
+
+
+def _broad_exception_catch_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``pytest.raises`` /
+    ``pytest.warns`` whose expected exception is a broad class — ``Exception``,
+    ``BaseException``, or ``AssertionError`` (raises only) without a ``match=``
+    narrow — plus every ``@pytest.mark.xfail(raises=...)`` marker naming a
+    broad class.
+
+    For ``raises``/``warns`` the expected exception may be given positionally,
+    as an ``expected_exception=`` keyword, or inside a union tuple; any broad
+    class inside a union is flagged. ``@pytest.mark.xfail(raises=...)`` is the
     marker twin: the test then xfails on any exception, so it stays green no
-    matter which error the code raises. Attribute-qualified names
-    (``pytest.skip.Exception``) and any concrete named exception are left
-    alone — they are the specific form this lens exists to force."""
-
-    def _is_broad(expr: ast.AST) -> bool:
-        return isinstance(expr, ast.Name) and expr.id in {"Exception", "BaseException"}
-
+    matter which error the code raises. ``pytest.skip.Exception``/
+    ``pytest.xfail.Exception`` (attribute access) are skipped: those name the
+    precise internal exception ``pytest.skip()``/``pytest.xfail()`` raise and
+    are the deliberate assertion those calls happened. An ``AssertionError``
+    expectation is only flagged when the marker has no ``match=`` keyword —
+    ``match=`` pins the check to a specific message, which is the safe way to
+    test an assert-based validator's contract.
+    """
     found = []
 
+    def _is_broad(expr: ast.AST) -> bool:
+        return isinstance(expr, ast.Name) and expr.id in _BROAD_EXCEPTION_CLASSES
+
+    def _report(lineno: int, detail: str) -> None:
+        found.append((lineno, detail))
+
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+        if not isinstance(node, ast.Call):
             continue
-        if node.func.attr != "raises":
+        f = node.func
+        name = f.attr if isinstance(f, ast.Attribute) else (f.id if isinstance(f, ast.Name) else None)
+        if name not in _RAISES_CONTEXT_FUNCS:
             continue
-        if not node.args or not _is_broad(node.args[0]):
-            continue
-        found.append(
-            (
-                node.lineno,
-                f"pytest.raises({ast.unparse(node.args[0])}) — the top of the exception hierarchy "
-                "matches any failure, so the test only proves *something* went wrong; name the "
-                "concrete exception type (a match= narrows the message, not the type)",
-            )
-        )
+        has_match = any(kw.arg == "match" for kw in node.keywords)
+        exception_args = list(node.args)
+        for kw in node.keywords:
+            if kw.arg == "expected_exception":
+                exception_args.append(kw.value)
+        for arg in exception_args:
+            classes: list[str] = []
+            if isinstance(arg, ast.Name):
+                classes.append(arg.id)
+            elif isinstance(arg, ast.Tuple):
+                classes.extend(el.id for el in arg.elts if isinstance(el, ast.Name))
+            elif isinstance(arg, ast.Attribute):
+                continue
+            for cls in classes:
+                if cls in _BROAD_EXCEPTION_CLASSES:
+                    _report(
+                        node.lineno,
+                        f"pytest.{name}({cls}) catches any {cls} — a regression that raises a "
+                        "different exception (or the test's own assertion error) still reports "
+                        "green; name the specific exception the code is documented to raise",
+                    )
+                    break
+                if cls == "AssertionError" and name == "raises" and not has_match:
+                    _report(
+                        node.lineno,
+                        "pytest.raises(AssertionError) without match= — an internal assert bug in "
+                        "the code under test is swallowed as the expected exception; pin the message "
+                        "with match= or expect the specific error",
+                    )
+                    break
 
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -3821,59 +3872,72 @@ def _broad_exception_raises_violations(tree: ast.AST) -> list[tuple[int, str]]:
             if not isinstance(dec, ast.Call):
                 continue
             func = dec.func
-            name = func.attr if isinstance(func, ast.Attribute) else (func.id if isinstance(func, ast.Name) else None)
-            if name != "xfail":
+            dname = func.attr if isinstance(func, ast.Attribute) else (func.id if isinstance(func, ast.Name) else None)
+            if dname != "xfail":
                 continue
             for kw in dec.keywords:
                 if kw.arg == "raises" and _is_broad(kw.value):
-                    found.append(
-                        (
-                            dec.lineno,
-                            f"@pytest.mark.xfail(raises={ast.unparse(kw.value)}) — xfails on any "
-                            "exception, so the test stays green no matter which error the code "
-                            "raises; name the concrete exception type",
-                        )
+                    _report(
+                        dec.lineno,
+                        f"@pytest.mark.xfail(raises={ast.unparse(kw.value)}) — xfails on any "
+                        "exception, so the test stays green no matter which error the code raises; "
+                        "name the concrete exception type",
                     )
     return found
 
 
-def test_no_broad_exception_raises():
-    """``pytest.raises`` (or ``@pytest.mark.xfail(raises=...)``) naming
-    ``Exception`` or ``BaseException`` verifies only that *something* went
-    wrong: any exception satisfies the assertion, so the test reports green
-    even when the code under test raised the wrong error type — an unrelated
-    ``KeyError`` from a bug, or the ``AssertionError`` of a misbehaving
-    assertion inside the block. A ``match=`` narrows the message, not the
-    type, so it does not rescue the call. Name the concrete exception the
-    behaviour promises to raise, and add ``match=`` to pin the message, so a
-    regression that swaps one error for another fails loudly instead of
-    passing silently."""
+def test_no_broad_exception_catch_asserts():
+    """``pytest.raises``/``pytest.warns`` — and ``@pytest.mark.xfail(raises=...)``
+    markers — naming ``Exception``, ``BaseException``, or ``AssertionError``
+    (raises only, without a ``match=`` narrow) are catch-alls that silently
+    mask regressions. ``Exception`` catches every failure, so a bug that makes
+    the code under test raise the *wrong* exception (or an unrelated error
+    entirely) still reports green; pytest itself documents ``pytest.raises`` as
+    "strongly encouraged" to be used with a specific exception type, precisely
+    because a broad catch turns the test into a smoke test. ``BaseException``
+    widens the mask to ``KeyboardInterrupt``/``SystemExit``. ``AssertionError``
+    without ``match=`` is the sharpest hazard: an *internal* assert bug in the
+    code under test is swallowed as the expected exception, so a validator that
+    regresses to raise for the wrong reason passes. A ``match=`` narrows the
+    message, not the type, so it does not rescue the call. Name the specific
+    exception, and pin assert-based validator contracts with ``match=``
+    instead."""
     violations = []
     for path in _iter_test_modules():
         tree = _parse(path)
         if tree is None:
             continue
         rel = path.relative_to(TESTS)
-        for lineno, detail in _broad_exception_raises_violations(tree):
+        for lineno, detail in _broad_exception_catch_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
     assert not violations, (
-        f"Found {len(violations)} catch-all exception spec(s) in pytest.raises/xfail.\n"
-        "pytest.raises(Exception)/BaseException accepts any exception, so the test only proves "
-        "*something* failed. Name the concrete exception type (and add match= to pin the message).\n"
-        + "\n".join(violations)
+        f"Found {len(violations)} broad-exception pytest.raises/pytest.warns/xfail catch(es).\n"
+        "pytest.raises(Exception)/BaseException catches every failure — a regression that raises\n"
+        "the wrong exception, and the test's own assertion errors — so the test reports green instead\n"
+        "of failing. Name the specific exception the code is documented to raise, and pin assert-based\n"
+        "validators with match= instead of bare pytest.raises(AssertionError).\n" + "\n".join(violations)
     )
 
 
-def test_broad_exception_raises_lens_flags_catch_alls():
-    """Synthetic positive/negative control for the catch-all-raises lens: it
-    must flag ``pytest.raises(Exception)``/``BaseException`` in any call shape
-    (context manager, plain call, keyword-arg ``match=``), plus
-    ``@pytest.mark.xfail(raises=...)`` markers, and ignore concrete exception
-    classes, attribute-qualified names (``pytest.skip.Exception``), and
-    non-``raises``/non-``xfail`` calls."""
+def test_broad_exception_catch_lens_flags_broad_catches():
+    """Synthetic positive/negative control for the broad-exception-catch lens,
+    mirroring the constant-condition-skip lens pattern: it must flag
+    ``pytest.raises``/``pytest.warns`` whose expected exception is ``Exception``
+    or ``BaseException`` (positional, in a union tuple, or via
+    ``expected_exception=``), ``pytest.raises(AssertionError)`` without
+    ``match=``, and ``@pytest.mark.xfail(raises=...)`` markers naming a broad
+    class; and ignore specific exceptions, unioned specific exceptions,
+    ``AssertionError`` narrowed by ``match=``, ``pytest.skip.Exception`` /
+    ``pytest.xfail.Exception`` attribute forms, and arg-less ``pytest.warns()``."""
     positive_sources = [
         "def test_foo():\n    with pytest.raises(Exception):\n        foo()\n",
         "def test_foo():\n    with pytest.raises(BaseException):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(AssertionError):\n        _assert_valid(block)\n",
+        "def test_foo():\n    with pytest.raises(expected_exception=Exception):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises((Exception, ValueError)):\n        foo()\n",
+        "def test_foo():\n    with pytest.warns(Exception):\n        foo()\n",
+        "def test_foo():\n    with pytest.warns(BaseException):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(AssertionError):\n        _validate(record)\n",
         "def test_foo():\n    pytest.raises(Exception)\n",
         "def test_foo():\n    with pytest.raises(Exception, match='boom'):\n        foo()\n",
         "def test_foo():\n    with pytest.raises(BaseException) as exc_info:\n        foo()\n",
@@ -3883,24 +3947,29 @@ def test_broad_exception_raises_lens_flags_catch_alls():
     ]
     for source in positive_sources:
         tree = ast.parse(source)
-        assert _broad_exception_raises_violations(tree), f"lens should flag:\n{source}"
+        assert _broad_exception_catch_violations(tree), f"lens should flag:\n{source}"
 
     negative_sources = [
+        "def test_foo():\n    with pytest.raises(ValueError):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises((ValueError, TypeError)):\n        foo()\n",
         "def test_foo():\n    with pytest.raises(ValueError, match='boom'):\n        foo()\n",
         "def test_foo():\n    with pytest.raises(KeyError):\n        foo()\n",
-        "def test_foo():\n    with pytest.raises(pytest.skip.Exception):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(AssertionError, match='too many context elements'):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(CustomError):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(pytest.skip.Exception):\n        pytest.skip('not implemented')\n",
+        "def test_foo():\n    with pytest.raises(pytest.xfail.Exception):\n        pytest.xfail('known bug')\n",
         "def test_foo():\n    with pytest.raises(asyncio.CancelledError):\n        foo()\n",
         "def test_foo():\n    with pytest.raises(HTTPException):\n        foo()\n",
-        "def test_foo():\n    with pytest.raises((ValueError, KeyError)):\n        foo()\n",
         "def test_foo():\n    with pytest.raises(EXC):\n        foo()\n",
         "def test_foo():\n    with pytest.raises(ExceptionGroup('e', [])):\n        foo()\n",
+        "def test_foo():\n    with pytest.warns(UserWarning):\n        foo()\n",
+        "def test_foo():\n    with pytest.warns():\n        foo()\n",
         "@pytest.mark.xfail(raises=ValueError, reason='known')\ndef test_foo():\n    foo()\n",
         "@pytest.mark.xfail(reason='known')\ndef test_foo():\n    foo()\n",
-        "def test_foo():\n    with pytest.warns(Exception):\n        foo()\n",
     ]
     for source in negative_sources:
         tree = ast.parse(source)
-        assert not _broad_exception_raises_violations(tree), f"lens should NOT flag:\n{source}"
+        assert not _broad_exception_catch_violations(tree), f"lens should NOT flag:\n{source}"
 
 
 _MOCK_CONSTRUCTOR_NAMES = frozenset(
