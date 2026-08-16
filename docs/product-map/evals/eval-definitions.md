@@ -177,7 +177,7 @@ Eval definitions describe automated quality checks that run as a post-node step 
 - [x] pass_threshold has Pydantic Field range validation (ge=0.0, le=1.0) on CreateEvalRequest and UpdateEvalRequest
 - [ ] No uniqueness constraint on eval definition name per pipeline — duplicate eval names possible
 - [ ] EvalResult DB model has no `created_at` timestamp from base (uses `evaluated_at` instead)
-- [ ] Multiple evals with same suite_id but mixed failure_behaviour — block evals are checked before warn evals per the engine's evaluate() call order
+- [ ] Multiple evals with same suite_id but mixed failure_behaviour — evaluation ORDER IS NOT GUARANTEED to be block-before-warn (corrected 2026-08-15): `_build_eval_defs_by_node` preserves DB load order (no ORDER BY, no block-first sort), so a warn eval that fails earlier in the list runs before a later block eval. Block failures always halt the run wherever they appear in the order; warn evals before the block are simply recorded first.
 - [ ] Concurrent eval definition creation has no advisory lock — two admins creating the same eval simultaneously may create duplicates
 
 ### Frontend Error Handling
@@ -186,6 +186,8 @@ Eval definitions describe automated quality checks that run as a post-node step 
 - [x] ErrorAlert component used for page-level errors with retry callback
 
 ### QA History
+- **2026-08-15**: Coverage completion (FAR-231/FAR-233 distribute batch). Corrected the mixed-failure_behaviour ordering claim — `_build_eval_defs_by_node` (executor.py:951-975) preserves DB load order with no block-first sort, so "block evals checked before warn evals" is not guaranteed; the item now describes the real behaviour (block failures halt wherever they occur). The other three unchecked items (name uniqueness constraint, EvalResult `created_at`, advisory-lock on concurrent creation) were re-verified as genuine gaps. All 115 checked items were spot-re-verified against the code paths; no new [x] items this pass.
+
 - **2026-08-15**: Coverage completion (FAR-232). Marked [ ]→[x]: (1) "Block failure recorded in AuditEvent" — wired at executor level (executor.py:1394-1409, 1876-1891 append_audit_event event_type="eval.blocked"); the "not wired" claim was stale. (2) "Deleted eval definition cascades to eval_results" — DB-level CASCADE is configured on eval_results.eval_id FK; added test_eval_result_fk_cascades_on_eval_delete. (3) "Eval from-run with missing run output" — already covered by test_from_run_no_return_node_yields_empty_sample. Remaining unchecked items are genuine gaps (name uniqueness, created_at, mixed-behaviour ordering note, advisory lock).
 - **2026-07-08**: Cross-cutting architecture QA (index 264) by Worker sub-agent (worktree arch-264)
   - **Fixed CRITICAL** — Added `except Exception → 500` catches to all 9 eval route handlers with `except HTTPException: raise` guard (create, list, get, update, delete, coverage, list_run_evals, compare with 2 blocks, from-run with 2 blocks) — previously only caught ProgrammingError→501 and SQLAlchemyError→503, allowing Python-level errors (TypeError, KeyError, AttributeError) to propagate as raw 500 to CatchAllMiddleware

@@ -130,6 +130,10 @@ Core eval engine that evaluates node outputs against eval definitions. Supports 
 - [x] Regression query uses SQLAlchemy text() with bind params (no SQL injection)
 
 ## QA History
+### 2026-08-15 — Coverage completion (FAR-231/FAR-233 distribute batch)
+
+- Confirmed the three Known Gaps are genuine and accurately scoped: (1) eval definition CRUD UI — eval_dashboard.feature is a stub with no concrete selectors; (2) standalone_evaluate creates an ephemeral EvalDefinition per call — no eval-run lifecycle persistence for the standalone path; (3) "No eval run trigger via API" — re-verified that pipelines.py has NO `POST /api/pipelines/{name}/evals` route (the eval_run.feature "Trigger an eval run" scenario is step-stubbed only; this also corrected an overclaim in eval-testing.md). All 89 checked behaviours were spot-re-verified against eval_engine/__init__.py, regression.py, okr.py and the unit tests; no new [x] items this pass.
+
 ### 2026-08-15 — Coverage completion (FAR-232)
 
 **What was fixed:**

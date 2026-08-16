@@ -61,7 +61,7 @@ json_schema, custom_function.
 ### Eval type selection
 
 - [x] Select from: llm_judge, regex, json_schema, custom_function
-- [ ] Config JSON textarea with placeholder per type
+- [ ] Config JSON textarea with placeholder per type — the component reads a single `views.EvalEditorView.config_placeholder` key today; per-type placeholders need new i18n keys in frontend/src/locales/en-US.js, which is outside this worktree's restricted allowlist — deferred (genuine gap)
 - [x] Real-time JSON parse validation; show "Invalid JSON" inline error
 - [x] Disable save button when JSON is invalid
 
@@ -131,6 +131,10 @@ json_schema, custom_function.
 - Smoke test is minimal (renders + text check only, no interaction tests)
 
 ## QA History
+
+### 2026-08-15 — Coverage completion (FAR-231/FAR-233 distribute batch)
+
+- Re-verified the 51 checked behaviours against EvalEditorView.vue and the spec; all accurate. The single unchecked item ("Config JSON textarea with placeholder per type") is a GENUINE gap: the component reads one `views.EvalEditorView.config_placeholder` key, and per-type placeholders require new i18n keys in frontend/src/locales/en-US.js, which is outside this worktree's restricted allowlist (the Conductor discards footprint violations). Implemented + tested the feature locally (EvalEditorView.vue computed, 4 locale keys, passing spec test) but reverted it to respect the scope contract — the change is ready to ship in a follow-up worktree whose allowlist includes the locale file. Status: partial.
 
 ### 2026-07-04 — Cross-cutting QA (index 125)
 
