@@ -403,6 +403,36 @@ class TestExportFilters:
         assert bind["folder_id"] is not None
         assert len(conditions) == 8  # org, date_from, date_to + 5 optional filters
 
+    def test_error_code_aggregate_unknown_filter_matches_complement_of_known_codes(self) -> None:
+        # The export surface must apply the SAME aggregate special-case as the
+        # builder: filtering on the "Unknown error" slice (harness.unknown)
+        # matches every raw code NOT in known_error_codes() via a NOT IN — not
+        # an IN-clause over the literal dotted harness.unknown, which would
+        # match zero rows while the chart shows the slice populated.
+        from modulo.core.pipeline_engine.error_codes import known_error_codes
+
+        from_, to_ = self._bounds()
+        params = svc.AnalyticsParams(error_code="harness.unknown")
+        conditions, bind = _export_filters(org_id=_ORG, params=params, effective_from=from_, effective_to=to_)
+        assert bind["error_codes"] == sorted(known_error_codes() - {"harness.unknown"})
+        assert "harness.unknown" not in bind["error_codes"]
+        assert "task_failure" in bind["error_codes"]
+        cond = conditions[-1]
+        assert "NOT IN" in str(cond.compile()).upper(), "the aggregate unknown filter must be a NOT IN"
+        assert "harness.unknown" not in str(cond.compile()), "excluded codes must be bound, never interpolated"
+
+    def test_error_code_specific_unmapped_input_keeps_in_clause(self) -> None:
+        # A specific unmapped code keeps the expand_code_variants IN-clause
+        # behaviour on the export surface too — it matches only its own literal.
+        from_, to_ = self._bounds()
+        params = svc.AnalyticsParams(error_code="SomeMysteryError")
+        conditions, bind = _export_filters(org_id=_ORG, params=params, effective_from=from_, effective_to=to_)
+        assert set(bind["error_codes"]) == {"SomeMysteryError", "harness.unknown"}
+        cond = conditions[-1]
+        compiled = str(cond.compile())
+        assert "IN" in compiled.upper()
+        assert "NOT IN" not in compiled.upper()
+
 
 class TestSerializeFactRow:
     def _full_row(self, **overrides: Any) -> SimpleNamespace:

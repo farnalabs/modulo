@@ -44,12 +44,12 @@ from modulo.core.analytics.builder import (
     bucket_concurrency_rows,
     bucket_rows,
     build_concurrency_query,
+    build_error_code_condition,
     build_facts_query,
     hour_groupby_span_exceeds,
     resolve_group_by,
     to_utc_aware,
 )
-from modulo.core.pipeline_engine.error_codes import expand_code_variants
 from modulo.db.crud.run import get_org_run_concurrency_limit
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import TERMINAL_STATUSES
@@ -634,8 +634,11 @@ def _export_filters(
     if params.error_code is not None:
         # The facts table stores the RAW DB code while the runs API emits
         # dotted codes — a filter must match every spelling of the same code.
-        conditions.append(RunDailyFact.error_code.in_(sa.bindparam("error_codes", type_=sa.String, expanding=True)))
-        bind["error_codes"] = sorted(expand_code_variants(params.error_code))
+        # The aggregate "Unknown error" slice (harness.unknown) is special:
+        # build_error_code_condition turns it into a NOT IN over the complement
+        # of known_error_codes() so it matches the same raw rows the chart
+        # slice shows (see the helper docstring).
+        conditions.append(build_error_code_condition(bind, params.error_code))
     if params.folder_id is not None:
         conditions.append(RunDailyFact.folder_id == sa.bindparam("folder_id", type_=sa.Uuid))
         bind["folder_id"] = params.folder_id

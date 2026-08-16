@@ -398,6 +398,27 @@ def expand_code_variants(code: str) -> set[str]:
     return variants
 
 
+def known_error_codes() -> set[str]:
+    """All raw DB code spellings that resolve to a KNOWN canonical code.
+
+    The union of every registry key and every legacy alias. Any raw code NOT in
+    this set is exactly what :func:`map_legacy_code` falls back to
+    ``harness.unknown`` — i.e. the raw rows the analytics "Unknown error"
+    dimension slice shows (``bucket_rows`` canonicalizes unmapped raw codes
+    into that slice, and the facts table stores raw codes, never the literal
+    dotted aggregate).
+
+    ``harness.unknown`` itself IS in the set — it is a registry key and passes
+    through ``map_legacy_code`` unchanged. Consumers that need the EXACT raw
+    rows the unknown slice shows must subtract it
+    (``known_error_codes() - {"harness.unknown"}``): a raw literal
+    ``harness.unknown`` row is bucketed into the unknown slice (registry
+    passthrough) and must therefore still match the unknown filter, while
+    every other known spelling is excluded.
+    """
+    return set(ERROR_CODE_REGISTRY) | set(LEGACY_ALIASES)
+
+
 # ---------------------------------------------------------------------------
 # Shared error-text sanitizer + read-surface presenter (run-failure UX)
 # ---------------------------------------------------------------------------

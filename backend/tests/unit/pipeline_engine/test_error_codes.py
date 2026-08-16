@@ -12,6 +12,7 @@ from modulo.core.pipeline_engine.error_codes import (
     class_for,
     expand_code_variants,
     is_retryable,
+    known_error_codes,
     map_legacy_code,
     present_error,
     sanitize_error_text,
@@ -176,6 +177,37 @@ def test_expand_code_variants_legacy_input_includes_canonical():
 def test_expand_code_variants_unmapped_self_only():
     """An unmapped code has no other spellings."""
     assert expand_code_variants("some_mystery_code") == {"some_mystery_code", "harness.unknown"}
+
+
+def test_known_error_codes_is_registry_plus_aliases():
+    """known_error_codes() is exactly the union of registry keys and aliases."""
+    assert known_error_codes() == set(ERROR_CODE_REGISTRY) | set(LEGACY_ALIASES)
+
+
+def test_known_error_codes_complement_is_the_unknown_fallback_set():
+    # The analytics "Unknown error" slice shows every raw code whose
+    # map_legacy_code falls back to harness.unknown — precisely the codes NOT
+    # in known_error_codes(). Known spellings (dotted, legacy, raw class names)
+    # resolve to a known canonical; unmapped spellings resolve to harness.unknown.
+    known = known_error_codes()
+    for code in ("task_failure", "executor_stalled", "agent.failed", "RateLimitError", "harness.unknown"):
+        assert code in known
+        assert map_legacy_code(code) != "harness.unknown" or code == "harness.unknown"
+    for code in ("ValueError", "ConnectionRefusedError", "SomeMysteryError"):
+        assert code not in known
+        assert map_legacy_code(code) == "harness.unknown"
+
+
+def test_known_error_codes_unknown_slice_excludes_harness_unknown_literal():
+    # bucket_rows maps a raw literal "harness.unknown" row into the unknown
+    # slice (registry passthrough), so the aggregate filter must NOT exclude it
+    # — consumers subtract "harness.unknown" from the exclude set. Every other
+    # known spelling IS excluded.
+    exclude = known_error_codes() - {"harness.unknown"}
+    assert "harness.unknown" not in exclude
+    assert "task_failure" in exclude
+    assert "executor_stalled" in exclude
+    assert "agent.failed" in exclude
 
 
 # ---------------------------------------------------------------------------

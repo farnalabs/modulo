@@ -221,6 +221,44 @@ class TestFAR102Filters:
         _concurrency_stmt, concurrency_params = build_concurrency_query(_query(error_code="harness.worker_failed"))
         assert set(concurrency_params["error_codes"]) == {"harness.worker_failed", "task_failure"}
 
+    def test_error_code_aggregate_unknown_filter_matches_complement_of_known_codes(self) -> None:
+        # Filtering on the "Unknown error" slice (harness.unknown) must match
+        # the same raw rows the dimension buckets into that slice — every raw
+        # code NOT in known_error_codes(), since the facts table stores raw
+        # codes and never the literal dotted harness.unknown. A plain IN-clause
+        # over the literal would match zero rows while the chart shows the
+        # slice populated (the QA finding this test pins).
+        from modulo.core.pipeline_engine.error_codes import known_error_codes
+
+        stmt, params = build_facts_query(_query(error_code="harness.unknown"))
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert "NOT IN" in sql.upper(), "the aggregate unknown filter must be a NOT IN over the complement"
+        assert set(params["error_codes"]) == known_error_codes() - {"harness.unknown"}
+        assert "task_failure" in params["error_codes"], "mapped raw codes must be excluded from the unknown slice"
+        assert "executor_stalled" in params["error_codes"]
+        assert "agent.failed" in params["error_codes"]
+        assert "harness.unknown" not in params["error_codes"], "literal harness.unknown rows ARE in the slice"
+        for code in params["error_codes"]:
+            assert code not in sql, f"excluded code {code!r} must be bound, never interpolated"
+
+        # The concurrency query applies the identical aggregate filter.
+        _cstmt, cparams = build_concurrency_query(_query(error_code="harness.unknown"))
+        assert set(cparams["error_codes"]) == known_error_codes() - {"harness.unknown"}
+        assert "NOT IN" in str(_cstmt.compile(dialect=postgresql.dialect())).upper()
+
+    def test_error_code_specific_unmapped_input_keeps_in_clause(self) -> None:
+        # A specific unmapped code keeps the expand_code_variants IN-clause
+        # behaviour: it matches only its own literal rows, never the whole
+        # unknown slice.
+        stmt, params = build_facts_query(_query(error_code="SomeMysteryError"))
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert set(params["error_codes"]) == {"SomeMysteryError", "harness.unknown"}
+        assert "IN" in sql.upper()
+        assert "NOT IN" not in sql.upper()
+
+        _cstmt, cparams = build_concurrency_query(_query(error_code="SomeMysteryError"))
+        assert set(cparams["error_codes"]) == {"SomeMysteryError", "harness.unknown"}
+
     def test_error_code_dimension_selects_raw_key(self) -> None:
         stmt, _ = build_facts_query(_query(dimension=AnalyticsDimension.ERROR_CODE))
         keys = {k.name for k in stmt.selected_columns}

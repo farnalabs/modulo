@@ -31,7 +31,11 @@ from typing import Any
 
 import sqlalchemy as sa
 
-from modulo.core.pipeline_engine.error_codes import expand_code_variants, map_legacy_code
+from modulo.core.pipeline_engine.error_codes import (
+    expand_code_variants,
+    known_error_codes,
+    map_legacy_code,
+)
 from modulo.db.crud.team_scope import team_scope_clause
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run_daily_facts import RunDailyFact
@@ -48,6 +52,7 @@ __all__ = [
     "bucket_concurrency_rows",
     "bucket_rows",
     "build_concurrency_query",
+    "build_error_code_condition",
     "build_facts_query",
     "hour_groupby_span_exceeds",
     "resolve_group_by",
@@ -159,6 +164,35 @@ _DIMENSION_LABELS: dict[AnalyticsDimension, Any] = {
 }
 
 
+def build_error_code_condition(bind: dict[str, Any], error_code: str) -> Any:
+    """WHERE condition for the error-code filter; fills *bind* with the bound list.
+
+    The facts table stores the RAW DB code while the API presents dotted codes,
+    so the specific-code path matches every spelling of the same canonical code
+    via :func:`expand_code_variants` (an IN-clause).
+
+    The ``harness.unknown`` aggregate ("Unknown error" slice) is the exception:
+    ``bucket_rows`` canonicalizes every unmapped raw code through
+    :func:`map_legacy_code` into that slice, but the facts table never stores
+    the literal dotted ``harness.unknown`` — so an IN-clause over the literal
+    matches ZERO rows while the chart shows a populated slice. The aggregate
+    filter must match exactly the raw rows the slice shows: every raw code NOT
+    in :func:`known_error_codes` (a NOT IN over the complement). NULL
+    ``error_code`` rows are NOT in the slice — ``bucket_rows`` sends raw-None
+    to a separate ``None`` key — and SQL ``NOT IN`` excludes NULLs naturally,
+    so no NULL handling is needed. A raw literal ``harness.unknown`` row IS in
+    the slice (registry passthrough), so it must NOT be excluded: subtract it
+    from the exclude set. A specific unmapped input (e.g. ``"SomeMysteryError"``)
+    keeps the IN-clause behaviour and matches only its own literal rows, never
+    the whole unknown slice.
+    """
+    if error_code == "harness.unknown":
+        bind["error_codes"] = sorted(known_error_codes() - {"harness.unknown"})
+        return RunDailyFact.error_code.notin_(sa.bindparam("error_codes", type_=sa.String, expanding=True))
+    bind["error_codes"] = sorted(expand_code_variants(error_code))
+    return RunDailyFact.error_code.in_(sa.bindparam("error_codes", type_=sa.String, expanding=True))
+
+
 def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, Any]]:
     """Build the day-level Core ``select`` + bound params for *query*.
 
@@ -249,8 +283,7 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
         effective_team = sa.func.coalesce(RunDailyFact.team_id, Pipeline.owner_team_id)
         stmt = stmt.where(team_scope_clause(effective_team, sa.bindparam("team_id", type_=sa.Uuid)))
     if query.error_code is not None:
-        params["error_codes"] = sorted(expand_code_variants(query.error_code))
-        stmt = stmt.where(RunDailyFact.error_code.in_(sa.bindparam("error_codes", type_=sa.String, expanding=True)))
+        stmt = stmt.where(build_error_code_condition(params, query.error_code))
     if query.folder_id is not None:
         params["folder_id"] = query.folder_id
         stmt = stmt.where(RunDailyFact.folder_id == sa.bindparam("folder_id", type_=sa.Uuid))
@@ -322,8 +355,7 @@ def build_concurrency_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict
         effective_team = sa.func.coalesce(RunDailyFact.team_id, Pipeline.owner_team_id)
         stmt = stmt.where(team_scope_clause(effective_team, sa.bindparam("team_id", type_=sa.Uuid)))
     if query.error_code is not None:
-        params["error_codes"] = sorted(expand_code_variants(query.error_code))
-        stmt = stmt.where(RunDailyFact.error_code.in_(sa.bindparam("error_codes", type_=sa.String, expanding=True)))
+        stmt = stmt.where(build_error_code_condition(params, query.error_code))
     if query.folder_id is not None:
         params["folder_id"] = query.folder_id
         stmt = stmt.where(RunDailyFact.folder_id == sa.bindparam("folder_id", type_=sa.Uuid))
