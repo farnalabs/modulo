@@ -541,6 +541,19 @@ _MAX_LIVE_ROLE_CACHE = 1024
 _live_role_cache: dict[str, tuple[float, str | None]] = {}
 
 
+def _evict_stale_live_role_cache(now: float) -> None:
+    """Evict expired entries, then drop oldest few if still over capacity."""
+    if len(_live_role_cache) < _MAX_LIVE_ROLE_CACHE:
+        return
+    for key in [k for k, v in _live_role_cache.items() if now - v[0] >= _LIVE_ROLE_TTL_SECONDS]:
+        _live_role_cache.pop(key, None)
+    overflow = len(_live_role_cache) - _MAX_LIVE_ROLE_CACHE + 1
+    if overflow > 0:
+        oldest = sorted(_live_role_cache.items(), key=lambda kv: kv[1][0])[:overflow]
+        for key, _ in oldest:
+            _live_role_cache.pop(key, None)
+
+
 async def _revalidate_live_role(token: str, account_id: uuid.UUID, org_id: uuid.UUID) -> str | None:
     """TTL-bounded live-role re-read for a JWT principal (ADR 017).
 
@@ -566,17 +579,7 @@ async def _revalidate_live_role(token: str, account_id: uuid.UUID, org_id: uuid.
         _log.warning("permission.live_role_read_failed", exc_info=True)
         live_role = None
 
-    if len(_live_role_cache) >= _MAX_LIVE_ROLE_CACHE:
-        # Evict expired entries first; only if still over capacity drop the
-        # oldest few. A wholesale clear thunders every connection back to the
-        # DB simultaneously, and entries otherwise accumulate until the cap.
-        for key in [k for k, v in _live_role_cache.items() if now - v[0] >= _LIVE_ROLE_TTL_SECONDS]:
-            _live_role_cache.pop(key, None)
-        overflow = len(_live_role_cache) - _MAX_LIVE_ROLE_CACHE + 1
-        if overflow > 0:
-            oldest = sorted(_live_role_cache.items(), key=lambda kv: kv[1][0])[:overflow]
-            for key, _ in oldest:
-                _live_role_cache.pop(key, None)
+    _evict_stale_live_role_cache(now)
     _live_role_cache[token] = (now, live_role)
     return live_role
 
