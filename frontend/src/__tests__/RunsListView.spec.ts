@@ -27,6 +27,11 @@ vi.mock('../lib/api/client', () => {
 
 const routerMocks = vi.hoisted(() => ({
   push: vi.fn().mockResolvedValue(undefined),
+  replace: vi.fn().mockResolvedValue(undefined),
+}))
+
+const routeMocks = vi.hoisted(() => ({
+  query: {} as Record<string, unknown>,
 }))
 
 vi.mock('vue-router', () => ({
@@ -34,7 +39,7 @@ vi.mock('vue-router', () => ({
     path: '/runs',
     fullPath: '/runs',
     params: {},
-    query: {},
+    query: routeMocks.query,
     hash: '',
     matched: [],
     name: 'runs-list',
@@ -43,7 +48,7 @@ vi.mock('vue-router', () => ({
   })),
   useRouter: vi.fn(() => ({
     push: routerMocks.push,
-    replace: vi.fn(),
+    replace: routerMocks.replace,
     resolve: vi.fn(),
     go: vi.fn(),
     back: vi.fn(),
@@ -86,6 +91,8 @@ function listWith(items: unknown[]) {
   return { items, total: items.length, page: 1, page_size: 20, next_cursor: null, has_more: false }
 }
 
+const manyRuns = Array.from({ length: 25 }, (_, i) => ({ ...baseRun, run_id: `run${i}` }))
+
 function mountView() {
   return mount(RunsListView, {
     global: {
@@ -102,6 +109,8 @@ function mountView() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  localStorage.clear()
+  routeMocks.query = {}
   mockResponses['/api/v1/runs'] = listWith([])
 })
 
@@ -411,6 +420,67 @@ describe('RunsListView', () => {
     await flushPromises()
     await nextTick()
     expect(wrapper.text()).not.toContain('Reset')
+    wrapper.unmount()
+  })
+
+  it('restores the page from the route query on mount (back-navigation)', async () => {
+    routeMocks.query = { page: '2' }
+    mockResponses['/api/v1/runs'] = listWith(manyRuns)
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    expect(api.GET).toHaveBeenCalledWith('/api/v1/runs', expect.objectContaining({
+      params: { query: expect.objectContaining({ page: 2 }) },
+    }))
+    expect(wrapper.text()).toContain('Page 2')
+    wrapper.unmount()
+  })
+
+  it('falls back to page 1 for invalid or malformed page params', async () => {
+    const badPages: unknown[] = ['abc', '0', '-1', ['2', '3']]
+    for (const badPage of badPages) {
+      routeMocks.query = { page: badPage }
+      const wrapper = mountView()
+      await flushPromises()
+      await nextTick()
+
+      expect(api.GET).toHaveBeenCalledWith('/api/v1/runs', expect.objectContaining({
+        params: { query: expect.objectContaining({ page: 1 }) },
+      }))
+      wrapper.unmount()
+    }
+  })
+
+  it('persists the next page to the route query when paginating', async () => {
+    mockResponses['/api/v1/runs'] = listWith(manyRuns)
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const nextBtn = wrapper.findAll('button').find((b) => b.text().trim() === 'Next')
+    expect(nextBtn).toBeDefined()
+    await nextBtn!.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(api.GET).toHaveBeenCalledWith('/api/v1/runs', expect.objectContaining({
+      params: { query: expect.objectContaining({ page: 2 }) },
+    }))
+    expect(routerMocks.replace).toHaveBeenCalledWith({ query: { page: '2' } })
+    expect(wrapper.text()).toContain('Page 2')
+    wrapper.unmount()
+  })
+
+  it('defaults to page 1 and writes no page query on a bare mount', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    expect(api.GET).toHaveBeenCalledWith('/api/v1/runs', expect.objectContaining({
+      params: { query: expect.objectContaining({ page: 1 }) },
+    }))
+    expect(routerMocks.replace).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 })
