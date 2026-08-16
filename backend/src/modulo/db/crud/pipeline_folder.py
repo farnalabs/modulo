@@ -18,16 +18,40 @@ _MAX_FOLDER_DEPTH = 8
 
 
 async def _compute_folder_depth(session: AsyncSession, folder_id: uuid.UUID | None) -> int:
-    """Compute the nesting depth of a folder by walking parent_id chain."""
+    """Compute the true nesting depth of a folder by walking the parent_id chain.
+
+    Returns the actual ancestor count (0 for a top-level folder) so callers can
+    enforce the ``_MAX_FOLDER_DEPTH`` cap. A pre-existing cycle in the data is
+    bounded by a visited set so corrupted rows can never hang the walk.
+    """
     depth = 0
     current_id = folder_id
+    seen: set[uuid.UUID] = set()
     while current_id is not None:
+        if current_id in seen:
+            break
+        seen.add(current_id)
         depth += 1
-        if depth >= _MAX_FOLDER_DEPTH:
-            return depth
         result = await session.execute(select(PipelineFolder.parent_id).where(PipelineFolder.id == current_id))
         current_id = result.scalar_one_or_none()
     return depth
+
+
+async def _assert_parent_exists(session: AsyncSession, parent_id: uuid.UUID) -> None:
+    """Reject a parent_id that does not resolve to a folder in the caller's org.
+
+    The SELECT runs under the RLS org context set by ``set_rls_org``, so it
+    returns ``None`` both for a missing folder and for a folder owned by
+    another organisation. Rejecting here keeps the folder tree tenant-scoped —
+    a cross-org parent would otherwise be writable while its FK
+    ``ondelete="CASCADE"`` runs as the table owner (bypassing RLS), creating a
+    tenant-boundary data-loss path.
+
+    Raises ``ValueError``; the route layer maps it to 422.
+    """
+    result = await session.execute(select(PipelineFolder.id).where(PipelineFolder.id == parent_id))
+    if result.scalar_one_or_none() is None:
+        raise ValueError(f"Parent folder not found: {parent_id}")
 
 
 async def _assert_valid_parent(
@@ -39,15 +63,18 @@ async def _assert_valid_parent(
 
     Enforces the folder-tree invariants that PRD §8.4 "Pipeline Folders"
     implies for an organisation-scoped nested folder tree:
-    1. A folder cannot be its own parent.
-    2. A folder cannot be moved under one of its own descendants (which would
+    1. The parent must exist in the caller's organisation (a cross-org parent
+       is rejected — referential actions bypass RLS).
+    2. A folder cannot be its own parent.
+    3. A folder cannot be moved under one of its own descendants (which would
        create an ancestry cycle).
-    3. Nesting depth cannot exceed ``_MAX_FOLDER_DEPTH``.
+    4. Nesting depth cannot exceed ``_MAX_FOLDER_DEPTH``.
 
     Raises ``ValueError`` on violation; the route layer maps it to 422.
     """
     if parent_id == folder_id:
         raise ValueError("A folder cannot be its own parent")
+    await _assert_parent_exists(session, parent_id)
     depth = 0
     current_id: uuid.UUID | None = parent_id
     seen: set[uuid.UUID] = set()
@@ -74,6 +101,7 @@ async def create_folder(
     parent_id: uuid.UUID | None = None,
 ) -> PipelineFolder:
     if parent_id is not None:
+        await _assert_parent_exists(session, parent_id)
         depth = await _compute_folder_depth(session, parent_id)
         if depth > _MAX_FOLDER_DEPTH:
             raise ValueError(f"Folder nesting depth would exceed {_MAX_FOLDER_DEPTH} levels")

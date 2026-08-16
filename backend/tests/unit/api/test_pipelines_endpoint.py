@@ -16,7 +16,7 @@ from modulo.api.main import app
 from modulo.api.routes.pipelines import PipelineGraphNode, _resolve_graph_references
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.crud.pipeline_folder import update_folder
+from modulo.db.crud.pipeline_folder import create_folder, update_folder
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -1235,22 +1235,30 @@ def _make_folder(parent_id: uuid.UUID | None = None) -> MagicMock:
 
 
 def _folder_parent_chain_session(parent_chain: dict[uuid.UUID, uuid.UUID | None]) -> AsyncMock:
-    """A mock session whose `execute` resolves parent_id lookups from a chain map.
+    """A mock session whose `execute` resolves folder lookups from a chain map.
 
-    ``parent_chain`` maps folder_id -> parent_id (None for a top-level folder).
-    This lets the folder CRUD cycle/depth validation walk the real code path
-    without a database.
+    ``parent_chain`` maps folder_id -> parent_id (None for a top-level folder);
+    presence in the map means the folder exists in the caller's org. An
+    ``id``-projection query (the org-scope existence check) returns the folder
+    id for an in-org folder and ``None`` for an unknown / other-org folder
+    (RLS); a ``parent_id``-projection query returns that folder's parent. This
+    lets the folder CRUD cycle/depth/existence validation walk the real code
+    path without a database.
     """
     session = AsyncMock()
 
     def _execute(stmt: object, *args: object, **kwargs: object) -> MagicMock:
-        params = stmt.compile().params  # type: ignore[attr-defined]
-        folder_id = next((v for v in params.values() if isinstance(v, uuid.UUID)), None)
+        compiled = stmt.compile()  # type: ignore[attr-defined]
+        folder_id = next((v for v in compiled.params.values() if isinstance(v, uuid.UUID)), None)
         result = MagicMock()
-        result.scalar_one_or_none.return_value = parent_chain.get(folder_id)
+        if "parent_id" in compiled.string:
+            result.scalar_one_or_none.return_value = parent_chain.get(folder_id)
+        else:
+            result.scalar_one_or_none.return_value = folder_id if folder_id in parent_chain else None
         return result
 
     session.execute = AsyncMock(side_effect=_execute)
+    session.add = MagicMock()
     return session
 
 
@@ -1311,6 +1319,70 @@ class TestPipelineFolderCyclePrevention:
         ):
             result = asyncio.run(update_folder(session, folder_id, {"parent_id": parent_id}))
         assert result is folder
+
+    def test_update_folder_rejects_cross_org_parent(self) -> None:
+        """A parent_id resolving to no folder in the caller's org (RLS returns
+        None) must be rejected — it would corrupt the org-scoped tree and
+        expose a CASCADE tenant-boundary data-loss path."""
+        folder_id = uuid.uuid4()
+        foreign_parent_id = uuid.uuid4()
+        session = _folder_parent_chain_session({})  # foreign parent is not in this org
+
+        with (
+            patch("modulo.db.crud.pipeline_folder.get_folder", return_value=self._patch_folder(folder_id)),
+            pytest.raises(ValueError, match="Parent folder not found"),
+        ):
+            asyncio.run(update_folder(session, folder_id, {"parent_id": foreign_parent_id}))
+
+    def test_create_folder_rejects_cross_org_parent(self) -> None:
+        foreign_parent_id = uuid.uuid4()
+        session = _folder_parent_chain_session({})  # foreign parent is not in this org
+
+        with pytest.raises(ValueError, match="Parent folder not found"):
+            asyncio.run(
+                create_folder(
+                    session,
+                    org_id=_ORG_ID,
+                    name="QA Folder",
+                    account_id=_USER_ID,
+                    parent_id=foreign_parent_id,
+                )
+            )
+
+    def test_create_folder_rejects_depth_overflow(self) -> None:
+        """create_folder must enforce the same depth cap as update — a chain of
+        9 ancestors under the new parent exceeds _MAX_FOLDER_DEPTH (8)."""
+        ids = [uuid.uuid4() for _ in range(9)]
+        chain = {ids[i]: ids[i + 1] for i in range(8)}
+        chain[ids[-1]] = None
+        session = _folder_parent_chain_session(chain)
+
+        with pytest.raises(ValueError, match="nesting depth"):
+            asyncio.run(
+                create_folder(
+                    session,
+                    org_id=_ORG_ID,
+                    name="QA Folder",
+                    account_id=_USER_ID,
+                    parent_id=ids[0],
+                )
+            )
+
+    def test_create_folder_allows_valid_parent(self) -> None:
+        parent_id = uuid.uuid4()
+        session = _folder_parent_chain_session({parent_id: None})
+
+        folder = asyncio.run(
+            create_folder(
+                session,
+                org_id=_ORG_ID,
+                name="QA Folder",
+                account_id=_USER_ID,
+                parent_id=parent_id,
+            )
+        )
+        assert folder.parent_id == parent_id
+        assert folder.organisation_id == _ORG_ID
 
 
 class TestPipelineFolderEndpoints:
