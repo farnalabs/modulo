@@ -376,6 +376,44 @@ class TestCheckEvalSuites:
         assert "pass_threshold" in where_sql, f"suite query must filter on pass_threshold, got: {where_sql}"
         assert "IS NOT NULL" in where_sql, f"suite query must filter pass_threshold IS NOT NULL, got: {where_sql}"
 
+    async def test_suite_load_excludes_guardrail_defs(self) -> None:
+        """A guardrail definition (eval_type='guardrail') bound to a suite with a
+        pass_threshold must NEVER gate the run — its inverted passed semantics
+        (regex passed=True = pattern MATCHED = a violation) would corrupt the
+        suite pass-rate. The suite-load query excludes guardrail defs at the SQL
+        level (FAR-223 item 11 §4d consumer contract)."""
+        from modulo.core.pipeline_engine.executor import PipelineExecutor
+
+        pipeline_id = uuid4()
+        run_id = uuid4()
+        suite = "guarded-suite"
+        guardrail_def = _make_eval_row(name="no-secrets", suite_id=suite, pass_threshold=1.0, pipeline_id=pipeline_id)
+        guardrail_def.eval_type = "guardrail"
+        normal_def = _make_eval_row(name="normal", suite_id=suite, pass_threshold=0.8, pipeline_id=pipeline_id)
+
+        executor = PipelineExecutor(MagicMock())
+        # Batch 1 = suite-load query, batch 2 = per-suite defs (empty → no gate).
+        session = self._session_with_rows([[normal_def], []])
+        captured: list[Any] = []
+        orig_execute = session.execute
+
+        async def _capture_execute(stmt: Any) -> Any:
+            captured.append(stmt)
+            return await orig_execute(stmt)
+
+        session.execute = _capture_execute
+        results = await executor._check_eval_suites(session, run_id, pipeline_id)
+        assert results == []
+
+        # The guardrail-exclusion contract lives in the SQL filter, not just the
+        # returned rows — assert the compiled statement renders the predicate so
+        # a dropped filter is detected (mirrors the pass_threshold check above).
+        assert captured, "expected the suite-loading query to be executed"
+        stmt = captured[0]
+        compiled_sql = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+        assert "eval_type" in compiled_sql, f"suite query must filter on eval_type, got: {compiled_sql}"
+        assert "guardrail" in compiled_sql, f"suite query must exclude guardrail defs, got: {compiled_sql}"
+
 
 # ---------------------------------------------------------------------------
 # HITL gate condition edge cases — falsy values and invalid expressions

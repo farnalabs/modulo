@@ -107,18 +107,18 @@ async def _seed_eval_result(
     *,
     passed: bool,
     observed: bool = False,
-) -> None:
-    session.add(
-        EvalResult(
-            organisation_id=_ORG,
-            run_id=run_id,
-            node_id=None,
-            eval_id=eval_id,
-            passed=passed,
-            observed=observed,
-        )
+) -> uuid.UUID:
+    result = EvalResult(
+        organisation_id=_ORG,
+        run_id=run_id,
+        node_id=None,
+        eval_id=eval_id,
+        passed=passed,
+        observed=observed,
     )
+    session.add(result)
     await session.flush()
+    return result.id
 
 
 async def test_get_run_evals_excludes_guardrail_rows(session: AsyncSession):
@@ -146,3 +146,26 @@ async def test_dashboard_eval_rate_window_excludes_guardrail_rows(session: Async
     rate = await _eval_rate_window(session, _ORG, now - timedelta(days=1), now + timedelta(days=1))
     # Only the normal eval counts → 100%.
     assert rate == 100.0
+
+
+async def test_prompt_optimizer_feed_excludes_guardrail_rows(session: AsyncSession):
+    """The prompt-optimizer feed (``get_eval_results_with_defs``) drops
+    guardrail rows even though the fetch is by explicit eval-result id — a
+    guardrail's inverted passed semantics (regex matched = violation) would
+    corrupt the optimizer's failure context. Distinct code path from the SQL
+    clause: this filter runs in Python after the by-id fetch."""
+    from modulo.db.crud.agent import get_eval_results_with_defs
+
+    run_id = await _seed_run(session)
+    guardrail_id = await _seed_eval_def(session, eval_type="guardrail")
+    normal_id = await _seed_eval_def(session, eval_type="regex")
+    guardrail_result_id = await _seed_eval_result(session, run_id, guardrail_id, passed=True)
+    normal_result_id = await _seed_eval_result(session, run_id, normal_id, passed=True)
+
+    results_list, defs_map = await get_eval_results_with_defs(session, [guardrail_result_id, normal_result_id], _ORG)
+    # Only the normal eval reaches the optimizer; the guardrail row is dropped.
+    assert [r["id"] for r in results_list] == [str(normal_result_id)]
+    # The definitions map still carries both eval definitions — only the RESULT
+    # rows are excluded from the feed.
+    assert str(guardrail_id) in defs_map
+    assert str(normal_id) in defs_map

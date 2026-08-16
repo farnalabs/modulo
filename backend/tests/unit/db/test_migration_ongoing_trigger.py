@@ -9,6 +9,7 @@ against ``0110_schema_pipeline_runtime`` — the reconciliation migration that
 owns the trigger/run CHECK vocabulary, the streak-engine partial indexes, the
 guardrail eval vocabulary, and the raw-output markers column:
 
+
 * the wide ``ck_triggers_type`` / ``ck_runs_trigger_type`` vocabularies include
   ``ongoing`` and ``slack_app_mention``,
 * the partial ``ck_triggers_ongoing_spend_limit`` /
@@ -19,6 +20,7 @@ guardrail eval vocabulary, and the raw-output markers column:
   ``eval_results.observed`` columns exist,
 * ``ck_eval_definitions_type`` includes ``guardrail``,
 * the ORM models' CHECK constraints carry the same vocabulary (drift guard).
+
 """
 
 from __future__ import annotations
@@ -29,8 +31,10 @@ from types import ModuleType
 import pytest
 from alembic.script import ScriptDirectory
 
+
 _MIGRATION_0008 = "0110_schema_pipeline_runtime"
 _HEAD_MIGRATION = "0113_guardrail_summary"
+
 
 _VERSIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 
@@ -63,6 +67,8 @@ def migration_0113() -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
 
 
 def _script() -> ScriptDirectory:
@@ -124,9 +130,11 @@ class TestReconciliationChain:
         assert "'guardrail'" in source
 
 
+
 def _source(module: ModuleType) -> str:
     path = _VERSIONS_DIR / f"{module.revision}.py"
     return path.read_text(encoding="utf-8")
+
 
 
 class TestOrmCheckDriftGuard:

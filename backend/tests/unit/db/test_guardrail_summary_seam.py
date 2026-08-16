@@ -19,7 +19,7 @@ from sqlalchemy import Table, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.core import guardrails as guardrails_module
-from modulo.core.guardrails import serialize_guardrail_pin
+from modulo.core.guardrails import GuardrailInterceptionOutcome, GuardrailSkip, serialize_guardrail_pin
 from modulo.db.crud.run import create_run
 from modulo.db.models.account import Account
 from modulo.db.models.audit_event import AuditChainHead, AuditEvent
@@ -281,6 +281,43 @@ async def test_create_run_expected_skip_no_unexpected_alert(session: AsyncSessio
     assert _invariant(s)
     # Expected skip → no unexpected-skip alert.
     assert unexpected_alerts == []
+
+
+async def test_create_run_unexpected_skip_fires_alert(session: AsyncSession, monkeypatch: pytest.MonkeyPatch):
+    """A skip NOT explained by soft-deleted pin state (a reason outside
+    GUARDRAIL_SKIP_EXPECTED_REASONS) fires the guardrail_unexpected_skip alert
+    through the REAL create_run seam — the control silently stopped evaluating
+    and the operator must be paged. The summary records
+    unexpected_skips=1 and the invariant still holds."""
+    unexpected_alerts: list[dict[str, Any]] = []
+
+    async def _fake_unexpected(org_id: uuid.UUID, run_id: uuid.UUID, skip: Any) -> None:
+        unexpected_alerts.append({"guardrail": skip.name, "reason": skip.reason})
+
+    async def _fake_pass(engine: Any, definitions: Any, payload: dict[str, Any], **kwargs: Any) -> Any:
+        return GuardrailInterceptionOutcome(
+            payload=dict(payload),
+            skipped=[GuardrailSkip(name="evaded", reason="cap_evaded")],
+        )
+
+    monkeypatch.setattr(guardrails_module, "alert_unexpected_guardrail_skip", _fake_unexpected)
+    monkeypatch.setattr(guardrails_module, "run_interception_pass_async", _fake_pass)
+
+    await _seed(session)
+    await _seed_guardrail(session, name="no-secrets", action="block")
+    run = await _create(session, input_payload={"body": "clean text"})
+    assert run.status == "pending"
+    s = _summary(run)
+    # bound = 1 live guardrail + 1 unexpected skip; the skip is counted, never
+    # absorbed into errored, so the invariant holds by construction.
+    assert s["bound"] == 2
+    assert s["evaluated"] == 0
+    assert s["skipped"] == 1
+    assert s["expected_skips"] == 0
+    assert s["unexpected_skips"] == 1
+    assert _invariant(s)
+    # The unexpected skip pages the alert with the reason.
+    assert unexpected_alerts == [{"guardrail": "evaded", "reason": "cap_evaded"}]
 
 
 async def test_create_run_emits_fired_signature_log(session: AsyncSession, caplog: pytest.LogCaptureFixture):
