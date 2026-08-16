@@ -587,6 +587,18 @@ Wait-Process -Name "uv" -ErrorAction SilentlyContinue  # doesn't block; just con
 
 ## Lessons Learned
 
+### Canonicalizing a value at an API boundary requires auditing every other consumer of the raw column
+
+When the runs API started canonicalizing run error codes to the dotted taxonomy at the read boundary (present_error / _do_list_runs / MCP), the raw `runs.error_code` column was STILL consumed raw by other surfaces — the analytics facts table stores the raw spelling, so the analytics error-code filter and `dimension=error_code` chart silently disagreed with the runs UI until reconciled in the same change. Two reconciliation patterns shipped (dist #1423): `expand_code_variants()` matches dotted + legacy + class-name spellings of one canonical code (IN clause over the variants), and the `harness.unknown` aggregate filter uses `error_code NOT IN known_error_codes()` to round-trip the dimension's "Unknown error" slice. Rule: any boundary canonicalization must grep for EVERY reader of the raw value (analytics facts/filter/dimension, MCP resources, run classification, notifier events) and reconcile them in the same change — a filter/dimension asymmetry silently returns zero rows or shows keys that no longer match the UI.
+
+### A collapse-to-unknown at a mapping boundary hides the most common failures
+
+The executor writes `type(exc).__name__` as the run error code, so raw exception class names (`RateLimitError`, `ProviderUnavailableError`, `AuthenticationError`, `APIConnectionError`) mapped to `harness.unknown` and rendered as "Unknown error" — hiding the two most common LLM-node failure modes. When a mapping collapses unknown values, extend the taxonomy to cover the values actually written (added the `provider.*` family + LEGACY_ALIASES for the class names) rather than letting them fall into the unknown bucket. Grep the WRITE sites for the raw values the mapper will receive, and keep downstream consumers (e.g. classify.py `_SOURCE_ERROR_CLASSES`) in sync when adding a new error class.
+
+### A pipeline prompt referencing a workflow's dispatch inputs must match them exactly — and the workflow should tolerate single-arg dispatch
+
+The Lifecycle Watchdog re-triggers stale-unreviewed PRs with `gh workflow run pr-review.yml -f pr_number=<n>`, but pr-review.yml declared `head_sha`/`head_branch` as REQUIRED inputs — GitHub rejects the dispatch, so the watchdog's backstop silently never fired and an unreviewed PR sat for 90+ min with no recovery. Fix: make the extra inputs optional and fetch them from the PR via `gh api repos/<repo>/pulls/<n>` inside the workflow, so single-arg dispatch works. When a pipeline prompt (or any automation) calls `gh workflow run`, verify every referenced input name and requiredness against the actual workflow file.
+
 ### Reserved LogRecord keys in `logging.extra={...}` crash at INFO level
 
 Keys like `name`, `msg`, `args`, `exc_info`, `filename`, `module`,
