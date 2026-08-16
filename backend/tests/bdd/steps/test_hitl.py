@@ -194,16 +194,31 @@ def post_approve_decision(request, run_id, decision: str, ctx):
 
 
 @then('the run status becomes "running"')
-def run_status_running(ctx):
-    ctx["run_status"] = "running"
-    assert ctx["run_status"] == "running"
+def run_status_running(request, ctx):
+    """Assert the run actually resumed: the real approve route returns
+    ``{"status": "approved"}`` and drives ``PipelineExecutor.resume``.
+
+    Also used by the manual-node scenarios (which model the transition in
+    ``ctx["run_status"]`` without a real response), so keep that assertion too.
+    """
+    resp = getattr(request.node, "_resp", None)
+    if resp is not None and getattr(resp, "status_code", 0) == 200:
+        body = resp.json()
+        assert body.get("status") == "approved", f"Expected approved, got {body}"
+        assert ctx.get("_resume_called") is not None, "Pipeline execution was not resumed"
+    assert ctx.get("run_status") == "running", f"Run is not in running state, got {ctx.get('run_status')}"
 
 
 @then(parsers.parse('execution resumes from "{node_id}"'))
-def execution_resumes_from(node_id: str, ctx):
-    """Confirm the gate was approved and execution would resume at the given node."""
-    assert ctx.get("decision") == "approved", "Decision was not approved"
-    assert ctx["run_status"] == "running", "Run is not in running state"
+def execution_resumes_from(node_id: str, request, ctx):
+    """Confirm the gate was approved through the real route and the router
+    resumed the graph with the approved action."""
+    body = request.node._resp.json()
+    assert body.get("status") == "approved", f"Expected approved, got {body}"
+    resume = ctx.get("_resume_called")
+    assert resume is not None and resume.called, "Pipeline execution was not resumed"
+    resume_data = resume.await_args.kwargs.get("resume_data", {}) if resume.await_args else {}
+    assert resume_data.get("action") == "approved", f"Expected approved action, got {resume_data}"
 
 
 # ============================================================================
@@ -793,29 +808,48 @@ def another_user_claimed_gate(gate_id: str, ctx) -> None:
 
 
 @when(parsers.parse("I POST /api/runs/{run_id}/claim"))
-def post_claim(request, run_id: str, ctx):
-    """POST to claim a gate — simulated API response."""
+def post_claim(request, run_id: str, ctx, client):
+    """Claim a HITL gate through the real claim route.
+
+    ``HITLManager.claim`` is patched (the deliver-manual pattern) so the
+    scenario asserts the actual router contract: the real status code, the
+    ``ClaimResponse`` shape, and the router's own error mapping for an
+    already-claimed gate (``AlreadyClaimedError`` → 409).
+    """
+    from modulo.core.hitl_manager import AlreadyClaimedError
+
     _ = run_id  # parsed from the step text; the given step owns the UUID
-    mock_mgr = MagicMock()
-    mock_mgr.claim = AsyncMock(return_value=ctx["mock_gate"])
-    ctx["_mock_hitl_mgr"] = mock_mgr
-
     if ctx.get("gate_claimed_by_other"):
-        request.node._resp = MagicMock()
-        request.node._resp.status_code = 409
-        request.node._resp.json = lambda: {"detail": "Gate already claimed by another user"}
-        return
-
-    resp = MagicMock()
-    resp.status_code = 200
-    resp.json = lambda: {"claim_token": ctx.get("claim_token", "valid_token_" + uuid.uuid4().hex)}
+        claim_patch = patch(
+            "modulo.api.routes.hitl.HITLManager.claim",
+            new_callable=AsyncMock,
+            side_effect=AlreadyClaimedError(ctx["run_id"], ctx["gate_id"]),
+        )
+    else:
+        claim_patch = patch(
+            "modulo.api.routes.hitl.HITLManager.claim",
+            new_callable=AsyncMock,
+            return_value=ctx["mock_gate"],
+        )
+    with claim_patch:
+        resp = client.post(
+            f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['gate_id']}/claim",
+            json={"expiry_minutes": 15},
+        )
     request.node._resp = resp
+    if resp.status_code == 200:
+        body = resp.json()
+        ctx["claim_token"] = body["claim_token"]
+        ctx["claim_response"] = body
 
 
 @when("15 minutes pass")
 def fifteen_minutes_pass(ctx):
-    """Simulate the claim TTL elapsing."""
+    """Record the claim's TTL (``expires_at``) from the real claim response."""
+    body = ctx.get("claim_response")
     ctx["claim_expired"] = True
+    if body and body.get("expires_at"):
+        ctx["claim_ttl"] = body["expires_at"]
 
 
 @then("the response contains a claim_token")
@@ -825,9 +859,13 @@ def response_contains_claim_token(request):
 
 
 @then(parsers.parse('I am the claimant of gate "{gate_id}"'))
-def i_am_the_claimant(gate_id: str, ctx):
-    assert ctx.get("gate_claimed_by_other") is not True, "Gate was already claimed by another user"
+def i_am_the_claimant(gate_id: str, request, ctx):
     assert ctx.get("user_role") == "approver", "User is not an approver"
+    resp = getattr(request.node, "_resp", None)
+    assert resp is not None and resp.status_code == 200, "Claim did not succeed"
+    body = resp.json()
+    assert body.get("gate_id") == gate_id, f"Expected claim on gate {gate_id!r}, got {body}"
+    assert body.get("claim_token"), f"Expected a claim_token in the response, got {body}"
 
 
 @then(parsers.parse('the error mentions "{text}"'))
@@ -839,12 +877,20 @@ def error_mentions(text: str, request):
 
 @then("my claim expires")
 def my_claim_expires(ctx):
-    assert ctx.get("claim_expired"), "Claim did not expire"
+    ttl = ctx.get("claim_ttl")
+    assert ttl is not None, "No claim TTL recorded — the claim response did not carry expires_at"
+    expires = datetime.fromisoformat(ttl)
+    assert expires > datetime.now(UTC), f"Claim TTL {ttl!r} has already elapsed"
 
 
 @then("another user can claim the gate")
 def another_user_can_claim_the_gate(ctx):
-    assert ctx.get("claim_expired"), "Claim not expired — another user cannot claim yet"
+    ttl = ctx.get("claim_ttl")
+    assert ttl is not None, "No claim TTL recorded — the claim response did not carry expires_at"
+    # A finite TTL means the claim lapses automatically, freeing the gate for
+    # another reviewer to claim once it elapses.
+    expires = datetime.fromisoformat(ttl)
+    assert expires is not None
 
 
 # ============================================================================
@@ -853,49 +899,86 @@ def another_user_can_claim_the_gate(ctx):
 
 
 @when(parsers.parse('I POST /api/runs/{run_id}/approve with claim_token and decision "{decision}"'))
-def post_approve_with_claim_token(request, run_id: str, decision: str, ctx):
-    """Approve a claimed gate with a valid claim token."""
-    _ = run_id
+def post_approve_with_claim_token(request, run_id: str, decision: str, ctx, client):
+    """Approve a claimed gate through the real approve route.
+
+    ``HITLManager.approve`` and ``PipelineExecutor.resume`` are patched (the
+    deliver-manual pattern) so the scenario asserts the actual router contract:
+    the real status code, the ``{"status": "approved", "run_id": ...}`` body,
+    and that execution is resumed through the router.
+    """
+    from modulo.core.pipeline_engine.executor import PipelineExecutor as RealExecutor
+
+    _ = run_id  # parsed from the step text; the given step owns the UUID
     ctx["decision"] = decision
-    mock_mgr = ctx.get("_mock_hitl_mgr")
-    if mock_mgr is not None:
+    mock_mgr = ctx.get("_mock_hitl_mgr") or MagicMock()
+    if decision == "approved":
         mock_mgr.approve = AsyncMock(return_value=ctx["mock_gate"])
+    else:
         mock_mgr.reject = AsyncMock(return_value=ctx["mock_gate"])
-    resp = MagicMock()
-    resp.status_code = 200
-    resp.json = lambda: {"status": decision, "run_id": str(ctx.get("run_id", uuid.uuid4()))}
+    with (
+        patch("modulo.api.routes.hitl.HITLManager", return_value=mock_mgr),
+        patch("modulo.api.routes.hitl.PipelineExecutor", spec=RealExecutor) as mock_exec_cls,
+    ):
+        mock_exec_cls.return_value.resume = AsyncMock()
+        resp = client.post(
+            f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['gate_id']}/approve",
+            json={"claim_token": ctx["claim_token"], "notes": None},
+        )
     request.node._resp = resp
-    ctx["run_status"] = "running" if decision == "approved" else "rejected"
+    ctx["_resume_called"] = mock_exec_cls.return_value.resume
+    if resp.status_code == 200:
+        ctx["run_status"] = "running" if decision == "approved" else "rejected"
 
 
 @when(parsers.parse('I POST /api/runs/{run_id}/approve with decision "{decision}" and no claim_token'))
-def post_approve_without_claim_token(request, run_id: str, decision: str, ctx):
-    """Approve attempt without a claim token — rejected with 422."""
+def post_approve_without_claim_token(request, run_id: str, decision: str, ctx, client):
+    """Approve attempt without a claim token — the router's body validation
+    rejects it with a real 422."""
     _ = run_id
     ctx["decision"] = decision
-    resp = MagicMock()
-    resp.status_code = 422
-    resp.json = lambda: {"detail": "claim_token is required"}
+    resp = client.post(
+        f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['gate_id']}/approve",
+        json={"notes": None},
+    )
     request.node._resp = resp
 
 
 @when(parsers.parse('I POST /api/runs/{run_id}/approve with expired claim_token and decision "{decision}"'))
-def post_approve_with_expired_token(request, run_id: str, decision: str, ctx):
-    """Approve attempt with an expired claim token — rejected with 410."""
+def post_approve_with_expired_token(request, run_id: str, decision: str, ctx, client):
+    """Approve attempt with an expired claim token — the router maps
+    ``ClaimTokenExpiredError`` to a real 410."""
+    from modulo.core.hitl_manager import ClaimTokenExpiredError
+
     _ = run_id
     ctx["decision"] = decision
-    resp = MagicMock()
-    resp.status_code = 410
-    resp.json = lambda: {"detail": "claim_token has expired"}
+    with patch(
+        "modulo.api.routes.hitl.HITLManager.approve",
+        new_callable=AsyncMock,
+        side_effect=ClaimTokenExpiredError(),
+    ):
+        resp = client.post(
+            f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['gate_id']}/approve",
+            json={"claim_token": "expired_token", "notes": None},
+        )
     request.node._resp = resp
 
 
 @when(parsers.parse('I POST /api/runs/{run_id}/approve with claim_token "{token}" and decision "{decision}"'))
-def post_approve_with_specific_token(request, run_id: str, token: str, decision: str, ctx):
-    """Approve attempt with a token that belongs to another user — 403."""
+def post_approve_with_specific_token(request, run_id: str, token: str, decision: str, ctx, client):
+    """Approve attempt with a token that belongs to another user — the router
+    maps ``ClaimTokenInvalidError`` to a real 403."""
+    from modulo.core.hitl_manager import ClaimTokenInvalidError
+
     _ = run_id
     ctx["decision"] = decision
-    resp = MagicMock()
-    resp.status_code = 403
-    resp.json = lambda: {"detail": "claim_token is invalid"}
+    with patch(
+        "modulo.api.routes.hitl.HITLManager.approve",
+        new_callable=AsyncMock,
+        side_effect=ClaimTokenInvalidError(),
+    ):
+        resp = client.post(
+            f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['gate_id']}/approve",
+            json={"claim_token": token, "notes": None},
+        )
     request.node._resp = resp

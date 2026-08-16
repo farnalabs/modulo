@@ -26,7 +26,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import jwt as pyjwt
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
-from sqlalchemy.exc import IntegrityError
+
+from tests.bdd.conftest import _active_client, _store_response
 
 # ---------------------------------------------------------------------------
 # Register feature files
@@ -66,17 +67,9 @@ def ctx() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Helper — store a response object in all locations expected by the various
-# step files' Then assertions.
+# Response storage is provided by ``_store_response`` from conftest.py (the
+# shared implementation), so this file and sibling step modules stay in sync.
 # ---------------------------------------------------------------------------
-
-
-def _store_response(request: Any, ctx: dict[str, Any], resp: Any) -> None:
-    """Record a response so shared ``@then`` steps can inspect it."""
-    request.node._resp = resp  # test_connectors.py convention
-    request.node.response = resp  # test_auth.py convention
-    ctx["response"] = resp  # test_library.py convention
-
 
 # ===========================================================================
 # auth/login.feature  —  4 scenarios
@@ -217,71 +210,24 @@ def step_hierarchy_strictly_increasing() -> None:
 # ===========================================================================
 # auth/rbac.feature — team CRUD, membership, feature gating, deletion
 #
-# These steps drive the real ``/api/v1/teams`` routes (through the
-# authenticated ``client`` / ``viewer_client`` fixtures from conftest.py) with
-# only the DB CRUD functions patched, so the scenarios assert the actual API
-# contract — status codes, response shapes, and the router's own
-# ``require_permission`` / ``require_feature`` gates — rather than a
-# hand-rolled response.  This mirrors how the sibling team step modules
-# (test_team_crud.py, test_team_membership.py) implement the same step text.
+# The shared team CRUD / membership steps (``a team ... exists``, ``I create a
+# team ...``, ``I list teams``, ``I get team ...``, ``I rename team ...``,
+# ``I add user ... to team ...``, ``I remove user ... from team ...``, and the
+# response Then steps) live in conftest.py — the ancestor of every BDD module
+# — so each step text is defined exactly once instead of being redefined here
+# and in test_team_crud.py / test_team_membership.py / test_team_create.py.
+# Those steps drive the real ``/api/v1/teams`` routes with only the DB CRUD
+# functions patched, so the scenarios assert the actual API contract — status
+# codes, response shapes, and the router's own ``require_permission`` /
+# ``require_feature`` gates — rather than a hand-rolled response.  This file
+# keeps only the rbac.feature steps that are NOT shared with the sibling
+# modules.
 # ===========================================================================
-
-
-def _active_client(request: Any, client: Any) -> Any:
-    """Return the client matching the active auth Given step.
-
-    The conftest auth steps stash the principal client on
-    ``request.node._client`` (``viewer_client`` for viewer scenarios, the
-    admin ``client`` otherwise), so steps never branch on scenario names.
-    """
-    return getattr(request.node, "_client", client)
-
-
-def _make_mock_team(name: str, description: str = "") -> MagicMock:
-    team = MagicMock()
-    team.id = uuid.uuid4()
-    team.organisation_id = ORG_ID
-    team.name = name
-    team.description = description
-    team.account_id = USER_ID
-    team.created_at = datetime(2025, 1, 1, tzinfo=UTC)
-    team.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
-    return team
-
-
-def _make_mock_membership(team_id: uuid.UUID, user_id: uuid.UUID, role: str) -> MagicMock:
-    membership = MagicMock()
-    membership.id = uuid.uuid4()
-    membership.team_id = team_id
-    membership.account_id = user_id
-    membership.role = role
-    membership.created_at = datetime(2025, 1, 1, tzinfo=UTC)
-    return membership
 
 
 @given(parsers.parse('a team "{name}" does not exist'))
 def step_team_does_not_exist(name: str, ctx: dict[str, Any]) -> None:
     ctx.setdefault("teams", {}).pop(name, None)
-
-
-@given(parsers.parse('a team "{name}" exists'))
-def step_team_exists(name: str, ctx: dict[str, Any]) -> None:
-    ctx.setdefault("teams", {})[name] = _make_mock_team(name)
-
-
-@given(parsers.parse('a user "{name}" exists'))
-def step_user_exists(name: str, ctx: dict[str, Any]) -> None:
-    ctx.setdefault("users", {})[name] = {"id": uuid.uuid4(), "org_role": "admin"}
-
-
-@given(parsers.parse('a user "{name}" exists with org role "{role}"'))
-def step_user_exists_with_role(name: str, role: str, ctx: dict[str, Any]) -> None:
-    ctx.setdefault("users", {})[name] = {"id": uuid.uuid4(), "org_role": role}
-
-
-@given(parsers.parse('user "{name}" is already a member of team "{team}"'))
-def step_user_already_member(name: str, team: str, ctx: dict[str, Any]) -> None:
-    ctx.setdefault("members", {}).setdefault(team, set()).add(name)
 
 
 @given("the team has no resources")
@@ -307,147 +253,13 @@ def step_no_team_license(ctx: dict[str, Any]) -> None:
     ctx["team_license"] = False
 
 
-@when(parsers.re(r'I create a team with name "(?P<name>[^"]*)" and description "(?P<desc>[^"]*)"'))
-def step_create_team(request: Any, client: Any, name: str, desc: str, ctx: dict[str, Any]) -> None:
-    """POST /api/v1/teams — the route's ``require_permission("team.create")``
-    gate returns 403 for the viewer principal and its ``CreateTeamRequest``
-    validation returns 422 for empty names, so no scenario-name matching is
-    needed here."""
-    existing = ctx.get("teams", {}).get(name)
-    created = _make_mock_team(name, desc)
-    with (
-        patch("modulo.api.routes.teams.get_team_by_name", new_callable=AsyncMock, return_value=existing),
-        patch("modulo.api.routes.teams.create_team", new_callable=AsyncMock, return_value=created),
-    ):
-        resp = _active_client(request, client).post("/api/v1/teams", json={"name": name, "description": desc})
-    _store_response(request, ctx, resp)
-
-
-@when("I list teams")
-def step_list_teams(request: Any, client: Any, ctx: dict[str, Any]) -> None:
-    teams = list(ctx.get("teams", {}).values())
-    page = SimpleNamespace(items=teams, total=len(teams), page=1, page_size=20)
-    with patch("modulo.api.routes.teams.list_teams", new_callable=AsyncMock, return_value=page):
-        resp = _active_client(request, client).get("/api/v1/teams")
-    _store_response(request, ctx, resp)
-
-
-@when(parsers.parse('I get team "{name}"'))
-def step_get_team(request: Any, client: Any, name: str, ctx: dict[str, Any]) -> None:
-    team = ctx.get("teams", {}).get(name)
-    team_id = team.id if team is not None else uuid.uuid4()
-    with patch("modulo.api.routes.teams.get_team", new_callable=AsyncMock, return_value=team):
-        resp = _active_client(request, client).get(f"/api/v1/teams/{team_id}")
-    _store_response(request, ctx, resp)
-
-
-@when(parsers.parse('I get team by id "{team_id}"'))
-def step_get_team_by_id(request: Any, client: Any, team_id: str, ctx: dict[str, Any]) -> None:
-    with patch("modulo.api.routes.teams.get_team", new_callable=AsyncMock, return_value=None):
-        resp = _active_client(request, client).get(f"/api/v1/teams/{team_id}")
-    _store_response(request, ctx, resp)
-
-
-@when(parsers.parse('I delete team by id "{team_id}"'))
-def step_delete_team_by_id(request: Any, client: Any, team_id: str, ctx: dict[str, Any]) -> None:
-    with patch("modulo.api.routes.teams.delete_team", new_callable=AsyncMock, return_value=False):
-        resp = _active_client(request, client).delete(f"/api/v1/teams/{team_id}")
-    _store_response(request, ctx, resp)
-
-
-@when(parsers.parse('I rename team "{name}" to "{new_name}"'))
-def step_rename_team(request: Any, client: Any, name: str, new_name: str, ctx: dict[str, Any]) -> None:
-    team = ctx.get("teams", {}).get(name, _make_mock_team(name))
-    conflict = ctx.get("teams", {}).get(new_name)
-    if conflict is not None and conflict.id != team.id:
-        with patch("modulo.api.routes.teams.get_team_by_name", new_callable=AsyncMock, return_value=conflict):
-            resp = _active_client(request, client).patch(f"/api/v1/teams/{team.id}", json={"name": new_name})
-    else:
-        updated = _make_mock_team(new_name)
-        updated.id = team.id
-        with (
-            patch("modulo.api.routes.teams.get_team_by_name", new_callable=AsyncMock, return_value=None),
-            patch("modulo.api.routes.teams.update_team", new_callable=AsyncMock, return_value=updated),
-        ):
-            resp = _active_client(request, client).patch(f"/api/v1/teams/{team.id}", json={"name": new_name})
-    _store_response(request, ctx, resp)
-
-
 @when(parsers.parse('I delete the team "{name}"'))
-def step_delete_team(request: Any, client: Any, name: str, ctx: dict[str, Any]) -> None:
+def step_delete_team(request: Any, name: str, ctx: dict[str, Any], client: Any = None) -> None:
+    from tests.bdd.conftest import _make_mock_team
+
     team = ctx.get("teams", {}).get(name, _make_mock_team(name))
     with patch("modulo.api.routes.teams.delete_team", new_callable=AsyncMock, return_value=True):
         resp = _active_client(request, client).delete(f"/api/v1/teams/{team.id}")
-    _store_response(request, ctx, resp)
-
-
-@when(parsers.parse('I add user "{name}" to team "{team}" with role "{role}"'))
-def step_add_user_to_team(request: Any, client: Any, name: str, team: str, role: str, ctx: dict[str, Any]) -> None:
-    teams = ctx.get("teams", {})
-    team_mock = teams.get(team)
-    user = ctx.get("users", {}).get(name, {})
-    user_id = user.get("id", uuid.uuid4())
-
-    if team_mock is None:
-        with (
-            patch("modulo.api.routes.teams.get_team", new_callable=AsyncMock, return_value=None),
-            patch("modulo.api.routes.teams.add_team_member", new_callable=AsyncMock),
-        ):
-            resp = _active_client(request, client).post(
-                f"/api/v1/teams/{uuid.uuid4()}/members",
-                json={"user_id": str(user_id), "role": role},
-            )
-        _store_response(request, ctx, resp)
-        return
-
-    already_member = name in ctx.setdefault("members", {}).get(team, set())
-    target_membership = MagicMock()
-    target_membership.role = user.get("org_role", "admin")
-    account = MagicMock()
-    account.id = user_id
-    membership = _make_mock_membership(team_mock.id, user_id, role)
-    duplicate_error = {"side_effect": IntegrityError("stmt", {}, Exception("duplicate member"))}
-    membership_value = {"return_value": membership}
-    with (
-        patch("modulo.api.routes.teams.get_team", new_callable=AsyncMock, return_value=team_mock),
-        patch("modulo.db.crud.account.get_account_by_id", new_callable=AsyncMock, return_value=account),
-        patch(
-            "modulo.db.crud.org_membership.get_membership_by_account_and_org",
-            new_callable=AsyncMock,
-            return_value=target_membership,
-        ),
-        patch(
-            "modulo.api.routes.teams.add_team_member",
-            new_callable=AsyncMock,
-            **(duplicate_error if already_member else membership_value),
-        ),
-    ):
-        resp = _active_client(request, client).post(
-            f"/api/v1/teams/{team_mock.id}/members",
-            json={"user_id": str(user_id), "role": role},
-        )
-    _store_response(request, ctx, resp)
-
-
-@when(parsers.parse('I remove user "{name}" from team "{team}"'))
-def step_remove_user_from_team(request: Any, client: Any, name: str, team: str, ctx: dict[str, Any]) -> None:
-    team_mock = ctx.get("teams", {}).get(team)
-    user = ctx.get("users", {}).get(name, {})
-    user_id = user.get("id", uuid.uuid4())
-    if team_mock is None:
-        with (
-            patch("modulo.api.routes.teams.get_membership", new_callable=AsyncMock, return_value=None),
-            patch("modulo.api.routes.teams.remove_team_member", new_callable=AsyncMock),
-        ):
-            resp = _active_client(request, client).delete(f"/api/v1/teams/{uuid.uuid4()}/members/{uuid.uuid4()}")
-        _store_response(request, ctx, resp)
-        return
-    membership = _make_mock_membership(team_mock.id, user_id, "viewer")
-    with (
-        patch("modulo.api.routes.teams.get_membership", new_callable=AsyncMock, return_value=membership),
-        patch("modulo.api.routes.teams.remove_team_member", new_callable=AsyncMock),
-    ):
-        resp = _active_client(request, client).delete(f"/api/v1/teams/{team_mock.id}/members/{membership.id}")
     _store_response(request, ctx, resp)
 
 
@@ -480,37 +292,6 @@ def step_get_teams_gated(request: Any, client: Any, ctx: dict[str, Any]) -> None
         app.dependency_overrides.clear()
         app.dependency_overrides.update(previous)
     _store_response(request, ctx, resp)
-
-
-@then(parsers.parse('the response contains a team with name "{name}"'))
-def step_response_contains_team(request: Any, name: str) -> None:
-    body = request.node._resp.json()
-    items = body.get("items")
-    if items is None:
-        assert body.get("name") == name, f"Expected team {name!r}, got {body.get('name')!r}"
-        return
-    names = [item.get("name") for item in items]
-    assert name in names, f"Expected team {name!r} in response, got: {names}"
-
-
-@then("the team has an account_id")
-def step_team_has_account_id(request: Any) -> None:
-    body = request.node._resp.json()
-    assert body.get("account_id") is not None, f"Team missing account_id: {body}"
-
-
-@then("the response contains a list of teams")
-def step_response_contains_team_list(request: Any) -> None:
-    body = request.node._resp.json()
-    assert "items" in body, f"Response missing items list: {body}"
-    assert isinstance(body["items"], list)
-
-
-@then(parsers.parse('the error detail mentions "{text}"'))
-def step_error_detail_mentions(text: str, request: Any) -> None:
-    body = request.node._resp.json()
-    detail = body.get("detail", "")
-    assert text in detail, f"Expected the error detail to mention {text!r}, got {detail!r}"
 
 
 @then("the error indicates the team still has resources")

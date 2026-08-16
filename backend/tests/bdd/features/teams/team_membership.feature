@@ -8,7 +8,7 @@ Feature: Team Membership Management
     And a team "engineering" exists
     And a user "alice" exists
     When I add user "alice" to team "engineering" with role "operator"
-    Then the response status is 200
+    Then the response status is 201
     And user "alice" is a member of team "engineering"
 
   Scenario: Team operator adds a member to their own team
@@ -16,14 +16,15 @@ Feature: Team Membership Management
     And a team "engineering" exists
     And a user "bob" exists
     When I add user "bob" to team "engineering" with role "viewer"
-    Then the response status is 200
+    Then the response status is 201
 
-  Scenario: Team operator cannot promote beyond their own role
-    Given I am authenticated as a team operator of team "engineering"
+  Scenario: A user cannot be granted a team role above their org role
+    Given I am authenticated as an admin in org "acme"
     And a team "engineering" exists
-    And a user "charlie" exists
+    And a user "charlie" exists with org role "viewer"
     When I add user "charlie" to team "engineering" with role "operator"
-    Then the response status is 403
+    Then the response status is 422
+    And the error detail mentions "exceeds"
 
   Scenario: Remove a user from a team revokes access
     Given I am authenticated as an admin in org "acme"
@@ -31,7 +32,7 @@ Feature: Team Membership Management
     And user "alice" is a member of team "engineering"
     And a team-scoped pipeline "secret-pipeline" is owned by team "engineering"
     When I remove user "alice" from team "engineering"
-    Then the response status is 200
+    Then the response status is 204
     And user "alice" cannot access team "engineering" resources
 
   Scenario: Add user to non-existent team returns 404
