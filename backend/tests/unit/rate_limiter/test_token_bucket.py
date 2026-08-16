@@ -1,10 +1,23 @@
 """Unit tests for the in-memory TokenBucket and TokenBucketRegistry."""
 
-import asyncio
-
 import pytest
 
 from modulo.core.rate_limiter import TokenBucket, TokenBucketRegistry
+
+
+class FakeClock:
+    """Deterministic ``time.monotonic`` replacement: time only advances when
+    the test explicitly calls ``advance``, so refill math is exact and the
+    test never depends on real wall-clock sleeping."""
+
+    def __init__(self, start: float = 0.0) -> None:
+        self.now = float(start)
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+    def __call__(self) -> float:
+        return self.now
 
 
 class TestTokenBucket:
@@ -22,19 +35,20 @@ class TestTokenBucket:
         assert await bucket.consume() is False
 
     async def test_refills_over_time(self) -> None:
-        bucket = TokenBucket(rate=2.0, burst=10)
+        clock = FakeClock()
+        bucket = TokenBucket(rate=2.0, burst=10, clock=clock)
         for _ in range(10):
             assert await bucket.consume() is True
         assert await bucket.consume() is False
 
-        refill = 0.5 + 1 / 2.0  # enough wall time for 1+ tokens at rate 2/s
-        await asyncio.sleep(refill)
+        clock.advance(0.5 + 1 / 2.0)  # enough time for 1+ tokens at rate 2/s
         assert await bucket.consume() is True
 
     async def test_never_exceeds_burst_ceiling(self) -> None:
-        bucket = TokenBucket(rate=100.0, burst=5)
+        clock = FakeClock()
+        bucket = TokenBucket(rate=100.0, burst=5, clock=clock)
         assert await bucket.consume() is True
-        await asyncio.sleep(0.05)
+        clock.advance(0.05)
         bucket.reset()
         for _ in range(5):
             assert await bucket.consume() is True
