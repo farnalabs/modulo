@@ -1,5 +1,7 @@
 """Unit tests for the in-memory TokenBucket and TokenBucketRegistry."""
 
+import asyncio
+
 import pytest
 
 from modulo.core.rate_limiter import TokenBucket, TokenBucketRegistry
