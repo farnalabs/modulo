@@ -12,7 +12,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError, make_sandbox_agent_fn
+from modulo.core.pipeline_engine.node_runner import (
+    SandboxNodeFailedError,
+    _is_sandbox_session_lost_echo,
+    make_sandbox_agent_fn,
+)
 
 _AGENT_COMMAND = "opencode run --auto --format json < /home/user/prompt.md"
 
@@ -244,3 +248,64 @@ async def test_genuine_verdict_no_marker():
     assert result["output"]["agent_status"] == "failed"
     assert "sandbox_session_lost" not in result["output"]
     assert result["artifacts"][0]["output"]["agent_status"] == "failed"
+
+
+# ---------------------------------------------------------------------------
+# FAR-227 — detection variants ("after 3 attempts", error field)
+# ---------------------------------------------------------------------------
+
+
+def test_session_lost_detection_matches_summary_variants():
+    """FAR-227 spec point 5: the detector matches BOTH the base summary and the
+    '...after 3 attempts' variant — the match is a substring, so a suffix on the
+    base string still fires."""
+    assert (
+        _is_sandbox_session_lost_echo({"status": "failed", "summary": "No output from agent - session interrupted"})
+        is True
+    )
+    assert (
+        _is_sandbox_session_lost_echo(
+            {"status": "failed", "summary": "No output from agent - session interrupted after 3 attempts"}
+        )
+        is True
+    )
+
+
+def test_session_lost_detection_matches_error_field_and_rejects_ordinary_output():
+    """The detector also reads the ``error`` field (a wrapper may echo the
+    placeholder there), and never misreads ordinary summaries/errors as a dead
+    session."""
+    assert (
+        _is_sandbox_session_lost_echo({"status": "failed", "error": "No output from agent - session interrupted"})
+        is True
+    )
+    assert _is_sandbox_session_lost_echo({"status": "failed", "summary": "the task is impossible because X"}) is False
+    assert _is_sandbox_session_lost_echo({"status": "completed", "summary": "all good"}) is False
+    assert _is_sandbox_session_lost_echo({"status": "failed", "summary": 42}) is False
+    assert _is_sandbox_session_lost_echo("not-a-dict") is False
+    assert _is_sandbox_session_lost_echo(None) is False
+
+
+async def test_fallback_echo_after_3_attempts_variant_stamped():
+    """The '...after 3 attempts' echo variant stamps the same session-lost
+    marker and suppresses the fabricated agent verdict."""
+    echo = '{"status": "failed", "summary": "No output from agent - session interrupted after 3 attempts"}'
+    result = await _run_node(echo, exit_code=0)
+
+    assert result["output"]["sandbox_session_lost"] is True
+    assert result["output"]["agent_status"] is None
+    assert result["output"]["status"] == "failed"
+    assert result["artifacts"][0]["output"]["sandbox_session_lost"] is True
+
+
+async def test_fallback_echo_in_error_field_stamped():
+    """When the wrapper echoes the placeholder into the ``error`` field (no
+    summary), the marker still fires and no agent verdict is fabricated — the
+    failure detail falls back to the command error for display."""
+    echo = '{"status": "failed", "error": "No output from agent - session interrupted"}'
+    result = await _run_node(echo, exit_code=0)
+
+    assert result["output"]["sandbox_session_lost"] is True
+    assert result["output"]["agent_status"] is None
+    assert result["output"]["status"] == "failed"
+    assert result["output"]["summary"]

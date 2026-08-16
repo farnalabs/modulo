@@ -387,6 +387,15 @@ class TestReasons:
         assert result.value == RunClassificationValue.no_delivery
         assert result.reason == REASON_SOURCE_ERROR
 
+    def test_failed_sandbox_no_output_json_source_error(self) -> None:
+        """FAR-227: a sandbox session-lost run (the fallback echo) classifies as
+        a COUNTABLE no_delivery with reason source_error — the sandbox class is
+        in ``_SOURCE_ERROR_CLASSES``, so a transient session death counts (and is
+        retryable)."""
+        result = classify_run("failed", "sandbox.no_output_json")
+        assert result.value == RunClassificationValue.no_delivery
+        assert result.reason == REASON_SOURCE_ERROR
+
     def test_failed_legacy_code_resolved_to_source_error(self) -> None:
         result = classify_run("stalled", "node_timeout")
         assert result.reason == REASON_SOURCE_ERROR

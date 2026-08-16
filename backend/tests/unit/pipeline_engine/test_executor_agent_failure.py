@@ -423,6 +423,21 @@ def test_work_intact_false_when_elevated_to_agent_failed():
     assert work_intact is False
 
 
+def test_work_intact_false_for_sandbox_no_output_json():
+    """FAR-227: a sandbox session-lost run (failed + sandbox.no_output_json) is
+    NOT complete — the agent produced no output at all (the E2B wrapper's
+    fallback echo), so the honest work verdict is False just like the A1
+    elevation."""
+    executor = _executor_instance()
+    work_intact = executor._compute_run_work_intact(
+        "failed",
+        "sandbox.no_output_json",
+        {"node-a": {"output": {"status": "failed", "summary": "No output from agent - session interrupted"}}},
+        {"node-a"},
+    )
+    assert work_intact is False
+
+
 def test_work_intact_computed_for_harness_failure_with_full_dag():
     """A harness crash after a completed node with the full DAG ran keeps
     work_intact True — restores the false-failure banner for #1/#3."""
