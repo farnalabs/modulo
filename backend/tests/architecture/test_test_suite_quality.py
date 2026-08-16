@@ -211,6 +211,17 @@ regression that silently weakens the suite:
   evaluate at collection time and are the legitimate form, and the
   skip-without-reason lens already owns the missing-``reason`` half of the
   marker
+- ``pytest.raises(Exception)`` / ``pytest.raises(BaseException)`` — the
+  catch-all form of an exception assertion. Naming the top of the exception
+  hierarchy verifies only that *something* went wrong: any exception
+  satisfies it, including the ``AssertionError`` of a misbehaving assertion
+  inside the block or an unrelated ``KeyError`` from a bug, so the test
+  reports green when the code under test raised the wrong error type. A
+  ``match=`` narrows the message, not the type, so it does not rescue the
+  call. The same catch-all applies to ``@pytest.mark.xfail(raises=...)``
+  markers, which then xfail on *any* exception. Attribute-qualified classes
+  (``pytest.skip.Exception``) and concrete named exceptions are left alone —
+  they are the specific form this lens exists to force
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -3745,3 +3756,130 @@ def test_constant_condition_skip_lens_flags_deterministic_skips():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _constant_condition_skip_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _broad_exception_raises_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every catch-all exception spec in
+    a test module: ``pytest.raises(Exception)`` / ``pytest.raises(BaseException)``
+    calls and ``@pytest.mark.xfail(raises=...)`` markers naming the top of the
+    exception hierarchy.
+
+    ``pytest.raises(Exception)`` verifies only that *something* went wrong:
+    any exception satisfies it — including the ``AssertionError`` of a
+    misbehaving assertion inside the block or an unrelated ``KeyError`` from a
+    bug — so the test reports green when the code under test raised the wrong
+    error type. A ``match=`` keyword narrows the message, not the type, so it
+    does not rescue the call. ``@pytest.mark.xfail(raises=Exception)`` is the
+    marker twin: the test then xfails on any exception, so it stays green no
+    matter which error the code raises. Attribute-qualified names
+    (``pytest.skip.Exception``) and any concrete named exception are left
+    alone — they are the specific form this lens exists to force."""
+
+    def _is_broad(expr: ast.AST) -> bool:
+        return isinstance(expr, ast.Name) and expr.id in {"Exception", "BaseException"}
+
+    found = []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr != "raises":
+            continue
+        if not node.args or not _is_broad(node.args[0]):
+            continue
+        found.append(
+            (
+                node.lineno,
+                f"pytest.raises({ast.unparse(node.args[0])}) — the top of the exception hierarchy "
+                "matches any failure, so the test only proves *something* went wrong; name the "
+                "concrete exception type (a match= narrows the message, not the type)",
+            )
+        )
+
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        for dec in node.decorator_list:
+            if not isinstance(dec, ast.Call):
+                continue
+            func = dec.func
+            name = func.attr if isinstance(func, ast.Attribute) else (func.id if isinstance(func, ast.Name) else None)
+            if name != "xfail":
+                continue
+            for kw in dec.keywords:
+                if kw.arg == "raises" and _is_broad(kw.value):
+                    found.append(
+                        (
+                            dec.lineno,
+                            f"@pytest.mark.xfail(raises={ast.unparse(kw.value)}) — xfails on any "
+                            "exception, so the test stays green no matter which error the code "
+                            "raises; name the concrete exception type",
+                        )
+                    )
+    return found
+
+
+def test_no_broad_exception_raises():
+    """``pytest.raises`` (or ``@pytest.mark.xfail(raises=...)``) naming
+    ``Exception`` or ``BaseException`` verifies only that *something* went
+    wrong: any exception satisfies the assertion, so the test reports green
+    even when the code under test raised the wrong error type — an unrelated
+    ``KeyError`` from a bug, or the ``AssertionError`` of a misbehaving
+    assertion inside the block. A ``match=`` narrows the message, not the
+    type, so it does not rescue the call. Name the concrete exception the
+    behaviour promises to raise, and add ``match=`` to pin the message, so a
+    regression that swaps one error for another fails loudly instead of
+    passing silently."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _broad_exception_raises_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} catch-all exception spec(s) in pytest.raises/xfail.\n"
+        "pytest.raises(Exception)/BaseException accepts any exception, so the test only proves "
+        "*something* failed. Name the concrete exception type (and add match= to pin the message).\n"
+        + "\n".join(violations)
+    )
+
+
+def test_broad_exception_raises_lens_flags_catch_alls():
+    """Synthetic positive/negative control for the catch-all-raises lens: it
+    must flag ``pytest.raises(Exception)``/``BaseException`` in any call shape
+    (context manager, plain call, keyword-arg ``match=``), plus
+    ``@pytest.mark.xfail(raises=...)`` markers, and ignore concrete exception
+    classes, attribute-qualified names (``pytest.skip.Exception``), and
+    non-``raises``/non-``xfail`` calls."""
+    positive_sources = [
+        "def test_foo():\n    with pytest.raises(Exception):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(BaseException):\n        foo()\n",
+        "def test_foo():\n    pytest.raises(Exception)\n",
+        "def test_foo():\n    with pytest.raises(Exception, match='boom'):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(BaseException) as exc_info:\n        foo()\n",
+        "class TestFoo:\n    def test_bar(self):\n        with pytest.raises(Exception):\n            foo()\n",
+        "@pytest.mark.xfail(raises=Exception, reason='known')\ndef test_foo():\n    foo()\n",
+        "@pytest.mark.xfail(raises=BaseException, reason='known')\ndef test_foo():\n    foo()\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _broad_exception_raises_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    with pytest.raises(ValueError, match='boom'):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(KeyError):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(pytest.skip.Exception):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(asyncio.CancelledError):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(HTTPException):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises((ValueError, KeyError)):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(EXC):\n        foo()\n",
+        "def test_foo():\n    with pytest.raises(ExceptionGroup('e', [])):\n        foo()\n",
+        "@pytest.mark.xfail(raises=ValueError, reason='known')\ndef test_foo():\n    foo()\n",
+        "@pytest.mark.xfail(reason='known')\ndef test_foo():\n    foo()\n",
+        "def test_foo():\n    with pytest.warns(Exception):\n        foo()\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _broad_exception_raises_violations(tree), f"lens should NOT flag:\n{source}"
