@@ -239,7 +239,9 @@ async def test_timeout_applies_per_guardrail_not_pass_wide():
         {"body": "leak SECRET_ABC12345"},
         timeout_seconds=1.0,
     )
-    # The slow block guardrail timed out → fail closed.
+    # The slow block guardrail timed out → fail closed. The FAST guardrail
+    # evaluated cleanly (no timeout, no violation), which is what proves the
+    # budget is PER-GUARDRAIL, not pass-wide.
     assert outcome.blocked is True
     assert outcome.blocking_eval_name == "slow"
     # The fast guardrail COMPLETED: a real result (clean payload → passed

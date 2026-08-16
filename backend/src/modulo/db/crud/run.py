@@ -450,7 +450,7 @@ async def create_run(
     # to the live rows.
     pinned_defs: list[Any] = []
     skipped_guardrails: list[GuardrailSkip] = []
-    snap_pins: Any = None
+    snap_pins: list[dict[str, Any]] | None = None
     if is_replay and snapshot_id is not None:
         try:
             snap_pins = (

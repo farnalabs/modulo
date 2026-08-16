@@ -534,6 +534,41 @@ async def test_create_run_replay_skips_soft_deleted_pinned_guardrail(session: As
     assert audit[0].payload_json["reason"] == "soft_deleted"
 
 
+async def test_create_run_replay_all_pins_soft_deleted_never_falls_back_to_live_rows(session: AsyncSession):
+    """A replay whose pinned set is FULLY soft-deleted must NOT evaluate the live rows.
+
+    The single-pin regression test only deletes the one live row it pins, so it
+    cannot catch a fallback-to-live. Here a DIFFERENT live guardrail also
+    exists at replay time: if the replay silently evaluated it, the live
+    guardrail's detection would run against the payload. It must not — the
+    skip-audit + enforcement-gap alert remains the sole signal (item 10).
+    """
+    await _seed(session)
+    pinned = await _seed_guardrail(session, name="ghost-block", action="block")
+    pinned_row = await _get_guardrail_row(session, pinned)
+    await _seed_snapshot_with_pins(session, guardrail_defs=[pinned_row])
+    # A DIFFERENT live guardrail exists that was NOT pinned at snapshot time.
+    await _seed_guardrail(session, name="live-only", action="block")
+    # Delete the pinned guardrail's live row BEFORE the replay.
+    await session.execute(EvalDefinition.__table__.delete().where(EvalDefinition.__table__.c.id == pinned))
+    await session.flush()
+
+    run = await _create(session, input_payload={"body": "clean"}, is_replay=True)
+    assert run.status == "pending"
+    assert run.error_code is None
+    # The replay evaluated NOTHING — not the pinned ghost (gone) and not the
+    # live-only row (never in the pinned set).
+    rows = (await session.execute(select(EvalResult).where(EvalResult.run_id == run.id))).scalars().all()
+    assert rows == []
+    # The skip is audited (guardrail.skipped) so the enforcement gap is visible.
+    audit = (
+        (await session.execute(select(AuditEvent).where(AuditEvent.event_type == "guardrail.skipped"))).scalars().all()
+    )
+    assert len(audit) == 1
+    assert audit[0].payload_json["guardrail"] == "ghost-block"
+    assert audit[0].payload_json["reason"] == "soft_deleted"
+
+
 async def test_create_run_replay_without_pins_falls_back_to_live_rows(session: AsyncSession):
     await _seed(session)
     # A snapshot with NO pins (pre-pinning snapshot) falls back to live rows.
