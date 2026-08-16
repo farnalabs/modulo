@@ -65,6 +65,9 @@ from modulo.db.settings_resolver import ensure_triggers_resumable
 from modulo.settings import get_settings
 from modulo.version import get_version
 
+_CODE_SLACK_RECEIVE_EVENT = "slack.receive_event"
+
+
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/triggers", tags=["slack"])
@@ -144,7 +147,7 @@ async def _load_trigger_and_org(
 
 
 @router.post("/{trigger_id}/slack", status_code=status.HTTP_202_ACCEPTED)
-@handle_db_errors("slack.receive_event")
+@handle_db_errors(_CODE_SLACK_RECEIVE_EVENT)
 async def receive_slack_event(
     trigger_id: uuid.UUID,
     request: Request,
@@ -175,7 +178,7 @@ async def receive_slack_event(
         if not isinstance(raw_payload, dict):
             raise TypeError("not a JSON object")
     except Exception as exc:
-        _log.exception("slack.receive_event")
+        _log.exception(_CODE_SLACK_RECEIVE_EVENT)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Request body must be a JSON object",
@@ -290,13 +293,13 @@ async def receive_slack_event(
             detail=str(exc),
         ) from exc
     except ProgrammingError:
-        _log.exception("slack.receive_event")
+        _log.exception(_CODE_SLACK_RECEIVE_EVENT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.exception("slack.receive_event")
+        _log.exception(_CODE_SLACK_RECEIVE_EVENT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",

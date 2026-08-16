@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR, MSG_RESOURCE_ALREADY_EXISTS
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_feature, require_permission
 from modulo.api.middleware.sensitive_mask import SensitiveValue
@@ -25,6 +26,11 @@ from modulo.db.crud.sso_provider import (
     update_provider,
 )
 from modulo.settings import Settings, get_settings
+
+_CODE_SSO_MANAGE = "sso.manage"
+_MSG_DATABASE_ERROR_PLEASE_TRY = "Database error. Please try again."
+_MSG_SSO_PROVIDER_NOT_FOUND = "SSO provider not found"
+
 
 _log = logging.getLogger(__name__)
 
@@ -116,7 +122,7 @@ class SsoProviderTestResult(BaseModel):
 @handle_db_errors("admin.sso.get_providers")
 async def get_providers(
     _: object = require_feature("sso"),
-    current_user: TenantPrincipal = require_permission("sso.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_SSO_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[SsoProviderResponse]:
     try:
@@ -127,13 +133,13 @@ async def get_providers(
         _log.warning("SSO providers table not available: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.warning("SSO providers DB error on list: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -141,7 +147,7 @@ async def get_providers(
         _log.exception("Unexpected error in get_providers")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
 
@@ -155,7 +161,7 @@ async def get_providers(
 async def create_provider_endpoint(
     req: SsoProviderCreate,
     _: object = require_feature("sso"),
-    current_user: TenantPrincipal = require_permission("sso.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_SSO_MANAGE),
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> SsoProviderResponse:
@@ -190,13 +196,13 @@ async def create_provider_endpoint(
         _log.warning("SSO providers table not available on create: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.warning("SSO providers DB error on create: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -204,7 +210,7 @@ async def create_provider_endpoint(
         _log.exception("Unexpected error in create_provider_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     return SsoProviderResponse.model_validate(provider)
 
@@ -219,7 +225,7 @@ async def update_provider_endpoint(
     provider_id: uuid.UUID,
     req: SsoProviderUpdate,
     _: object = require_feature("sso"),
-    current_user: TenantPrincipal = require_permission("sso.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_SSO_MANAGE),
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> SsoProviderResponse:
@@ -248,13 +254,13 @@ async def update_provider_endpoint(
         _log.warning("SSO providers table not available on update: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.warning("SSO providers DB error on update: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -262,12 +268,12 @@ async def update_provider_endpoint(
         _log.exception("Unexpected error in update_provider_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     if provider is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="SSO provider not found",
+            detail=_MSG_SSO_PROVIDER_NOT_FOUND,
         )
     return SsoProviderResponse.model_validate(provider)
 
@@ -281,7 +287,7 @@ async def update_provider_endpoint(
 async def delete_provider_endpoint(
     provider_id: uuid.UUID,
     _: object = require_feature("sso"),
-    current_user: TenantPrincipal = require_permission("sso.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_SSO_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     try:
@@ -291,19 +297,19 @@ async def delete_provider_endpoint(
         _log.exception("admin_sso.delete_provider_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available on delete: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.warning("SSO providers DB error on delete: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -311,12 +317,12 @@ async def delete_provider_endpoint(
         _log.exception("Unexpected error in delete_provider_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="SSO provider not found",
+            detail=_MSG_SSO_PROVIDER_NOT_FOUND,
         )
 
 
@@ -325,7 +331,7 @@ async def delete_provider_endpoint(
 async def test_provider_connection(
     provider_id: uuid.UUID,
     _: object = require_feature("sso"),
-    current_user: TenantPrincipal = require_permission("sso.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_SSO_MANAGE),
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> SsoProviderTestResult:
@@ -336,19 +342,19 @@ async def test_provider_connection(
         _log.exception("admin_sso.test_provider_connection")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available on test connection: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.warning("SSO providers DB error on test connection: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -356,12 +362,12 @@ async def test_provider_connection(
         _log.exception("Unexpected error in test_provider_connection")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     if provider is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="SSO provider not found",
+            detail=_MSG_SSO_PROVIDER_NOT_FOUND,
         )
 
     try:
@@ -505,7 +511,7 @@ async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
 async def toggle_provider_endpoint(
     provider_id: uuid.UUID,
     _: object = require_feature("sso"),
-    current_user: TenantPrincipal = require_permission("sso.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_SSO_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> SsoProviderResponse:
     try:
@@ -515,19 +521,19 @@ async def toggle_provider_endpoint(
         _log.exception("admin_sso.toggle_provider_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available on toggle: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.warning("SSO providers DB error on toggle: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -535,12 +541,12 @@ async def toggle_provider_endpoint(
         _log.exception("Unexpected error in toggle_provider_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     if provider is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="SSO provider not found",
+            detail=_MSG_SSO_PROVIDER_NOT_FOUND,
         )
     return SsoProviderResponse.model_validate(provider)
 
@@ -565,7 +571,7 @@ async def set_group_mappings_endpoint(
     provider_id: uuid.UUID,
     req: GroupMappingsRequest,
     _: object = require_feature("sso"),
-    current_user: TenantPrincipal = require_permission("sso.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_SSO_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> GroupMappingsResponse:
     mappings_dict = [m.model_dump() for m in req.mappings]
@@ -576,19 +582,19 @@ async def set_group_mappings_endpoint(
         _log.exception("admin_sso.set_group_mappings_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available on set_group_mappings: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.warning("SSO providers DB error on set_group_mappings: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -596,12 +602,12 @@ async def set_group_mappings_endpoint(
         _log.exception("Unexpected error in set_group_mappings_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     if provider is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="SSO provider not found",
+            detail=_MSG_SSO_PROVIDER_NOT_FOUND,
         )
     return GroupMappingsResponse(mappings=[GroupMappingItem(**m) for m in provider.group_mappings])
 
@@ -611,7 +617,7 @@ async def set_group_mappings_endpoint(
 async def get_group_mappings_endpoint(
     provider_id: uuid.UUID,
     _: object = require_feature("sso"),
-    current_user: TenantPrincipal = require_permission("sso.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_SSO_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> GroupMappingsResponse:
     try:
@@ -621,13 +627,13 @@ async def get_group_mappings_endpoint(
         _log.warning("SSO providers table not available on get_group_mappings: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.warning("SSO providers DB error on get_group_mappings: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -635,11 +641,11 @@ async def get_group_mappings_endpoint(
         _log.exception("Unexpected error in get_group_mappings_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     if provider is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="SSO provider not found",
+            detail=_MSG_SSO_PROVIDER_NOT_FOUND,
         )
     return GroupMappingsResponse(mappings=[GroupMappingItem(**m) for m in provider.group_mappings])

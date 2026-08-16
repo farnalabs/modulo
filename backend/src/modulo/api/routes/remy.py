@@ -42,6 +42,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.api.mcp_tool_registry import build_tool_registry, get_mcp_tool_definitions
@@ -64,6 +65,13 @@ from modulo.db.models.remy_session import ChatSession
 from modulo.db.rls import set_rls_org
 from modulo.model_backends.base import ModelBackendBase
 from modulo.settings import Settings, get_settings
+
+_MSG_SESSION_NOT_FOUND = "Session not found"
+_CODE_REMY_DATABASE_ERROR = "remy.database_error"
+_MSG_DATABASE_ERROR_PLEASE_TRY = "Database error. Please try again later."
+_MSG_UI_DRIVING_DISABLED_ORGANISATION = "UI driving is disabled by your organisation."
+_SSE_ERROR_PREFIX = "event: error\ndata: "
+
 
 logger = logging.getLogger(__name__)
 
@@ -448,7 +456,7 @@ async def _validate_session_ownership(
 ) -> ChatSession:
     chat_session = await db.get(ChatSession, session_id)
     if chat_session is None or chat_session.user_id != principal.account_id:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail=_MSG_SESSION_NOT_FOUND)
     return chat_session
 
 
@@ -637,19 +645,19 @@ async def list_sessions(
         logger.exception("remy.list_sessions")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("remy.database_error")
+        logger.exception(_CODE_REMY_DATABASE_ERROR)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
     except Exception:
         logger.exception("remy.list_sessions.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
 
@@ -715,19 +723,19 @@ async def create_session(
         logger.exception("remy.create_session")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("remy.database_error")
+        logger.exception(_CODE_REMY_DATABASE_ERROR)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
     except Exception:
         logger.exception("remy.create_session.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
 
@@ -743,7 +751,7 @@ async def get_session(
             await set_rls_org(session, principal.organisation_id)
             chat_session = await session.get(ChatSession, session_id)
             if chat_session is None or chat_session.user_id != principal.account_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SESSION_NOT_FOUND)
 
             count_q = select(func.count(ChatMessage.id)).where(ChatMessage.session_id == session_id)
             count_result = await session.execute(count_q)
@@ -754,19 +762,19 @@ async def get_session(
         logger.exception("remy.get_session")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("remy.database_error")
+        logger.exception(_CODE_REMY_DATABASE_ERROR)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
     except Exception:
         logger.exception("remy.get_session.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
 
@@ -783,7 +791,7 @@ async def rename_session(
             await set_rls_org(session, principal.organisation_id)
             chat_session = await session.get(ChatSession, session_id)
             if chat_session is None or chat_session.user_id != principal.account_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SESSION_NOT_FOUND)
 
             chat_session.name = req.name
             await session.flush()
@@ -793,19 +801,19 @@ async def rename_session(
         logger.exception("remy.rename_session")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("remy.database_error")
+        logger.exception(_CODE_REMY_DATABASE_ERROR)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
     except Exception:
         logger.exception("remy.rename_session.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
 
@@ -821,7 +829,7 @@ async def delete_session(
             await set_rls_org(session, principal.organisation_id)
             chat_session = await session.get(ChatSession, session_id)
             if chat_session is None or chat_session.user_id != principal.account_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SESSION_NOT_FOUND)
 
             await session.delete(chat_session)
 
@@ -848,19 +856,19 @@ async def delete_session(
         logger.exception("remy.delete_session")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("remy.database_error")
+        logger.exception(_CODE_REMY_DATABASE_ERROR)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
     except Exception:
         logger.exception("remy.delete_session.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
 
@@ -881,7 +889,7 @@ async def list_messages(
             await set_rls_org(session, principal.organisation_id)
             chat_session = await session.get(ChatSession, session_id)
             if chat_session is None or chat_session.user_id != principal.account_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SESSION_NOT_FOUND)
 
             total_q = select(func.count(ChatMessage.id)).where(ChatMessage.session_id == session_id)
             total_result = await session.execute(total_q)
@@ -907,19 +915,19 @@ async def list_messages(
         logger.exception("remy.list_messages")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("remy.database_error")
+        logger.exception(_CODE_REMY_DATABASE_ERROR)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
     except Exception:
         logger.exception("remy.list_messages.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
 
@@ -936,7 +944,7 @@ async def append_message(
             await set_rls_org(session, principal.organisation_id)
             chat_session = await session.get(ChatSession, session_id)
             if chat_session is None or chat_session.user_id != principal.account_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SESSION_NOT_FOUND)
 
             msg = ChatMessage(
                 organisation_id=principal.organisation_id,
@@ -956,19 +964,19 @@ async def append_message(
         logger.exception("remy.append_message")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("remy.database_error")
+        logger.exception(_CODE_REMY_DATABASE_ERROR)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
     except Exception:
         logger.exception("remy.append_message.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
 
@@ -991,18 +999,18 @@ async def stream_chat(
             await set_rls_org(session, principal.organisation_id)
             chat_session = await session.get(ChatSession, session_id)
             if chat_session is None or chat_session.user_id != principal.account_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SESSION_NOT_FOUND)
     except ProgrammingError:
         logger.exception("remy.stream_chat")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("remy.database_error")
+        logger.exception(_CODE_REMY_DATABASE_ERROR)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
 
     mcp_base_url = settings.modulo_public_url.rstrip("/")
@@ -1313,7 +1321,7 @@ async def stream_chat(
                         ui_driving_error = (
                             "UI driving is not available in this view"
                             if req.exclude_ui_tools
-                            else "UI driving is disabled by your organisation."
+                            else _MSG_UI_DRIVING_DISABLED_ORGANISATION
                         )
                         for tc in ui_tool_calls:
                             tool_results.append(
@@ -1430,7 +1438,7 @@ async def stream_chat(
                                 _rate_limiters[session_id_str] = rate_limiter
                             if not rate_limiter.check():
                                 yield (
-                                    "event: error\ndata: "
+                                    _SSE_ERROR_PREFIX
                                     + json.dumps({"detail": "Rate limited. Too many UI actions in quick succession."})
                                     + "\n\n"
                                 )
@@ -1543,14 +1551,10 @@ async def stream_chat(
             yield f"event: error\ndata: {json.dumps({'detail': exc.detail})}\n\n"
         except ProgrammingError:
             logger.exception("Remy streaming error — missing DB table or schema")
-            yield (
-                "event: error\ndata: "
-                + json.dumps({"detail": "Feature is not available. Run database migrations to enable it."})
-                + "\n\n"
-            )
+            yield (_SSE_ERROR_PREFIX + json.dumps({"detail": MSG_FEATURE_NOT_AVAILABLE}) + "\n\n")
         except SQLAlchemyError:
-            logger.exception("remy.database_error")
-            yield ("event: error\ndata: " + json.dumps({"detail": "Database error. Please try again later."}) + "\n\n")
+            logger.exception(_CODE_REMY_DATABASE_ERROR)
+            yield (_SSE_ERROR_PREFIX + json.dumps({"detail": _MSG_DATABASE_ERROR_PLEASE_TRY}) + "\n\n")
         except Exception:
             logger.exception("Remy streaming error")
             yield f"event: error\ndata: {json.dumps({'detail': 'An unexpected error occurred. Please try again.'})}\n\n"
@@ -1580,7 +1584,7 @@ async def submit_permission_response(
     if not await _is_ui_driving_enabled(principal.organisation_id, session):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="UI driving is disabled by your organisation.",
+            detail=_MSG_UI_DRIVING_DISABLED_ORGANISATION,
         )
     try:
         async with session.begin():
@@ -1590,19 +1594,19 @@ async def submit_permission_response(
         logger.exception("remy.submit_permission_response")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("remy.database_error")
+        logger.exception(_CODE_REMY_DATABASE_ERROR)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
     except Exception:
         logger.exception("remy.submit_permission_response.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
     registry = _get_registry()
@@ -1639,7 +1643,7 @@ async def submit_ui_command_results(
     if not await _is_ui_driving_enabled(principal.organisation_id, session):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="UI driving is disabled by your organisation.",
+            detail=_MSG_UI_DRIVING_DISABLED_ORGANISATION,
         )
     try:
         async with session.begin():
@@ -1649,13 +1653,13 @@ async def submit_ui_command_results(
         logger.exception("remy.submit_ui_command_results")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("remy.database_error")
+        logger.exception(_CODE_REMY_DATABASE_ERROR)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
     except HTTPException:
         raise
@@ -1663,7 +1667,7 @@ async def submit_ui_command_results(
         logger.exception("remy.submit_ui_command_results.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
     sid = str(session_id)
@@ -1696,13 +1700,13 @@ async def reset_session_permissions(
         logger.exception("remy.reset_session_permissions")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("remy.database_error")
+        logger.exception(_CODE_REMY_DATABASE_ERROR)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
     except HTTPException:
         raise
@@ -1710,7 +1714,7 @@ async def reset_session_permissions(
         logger.exception("remy.reset_session_permissions.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
     session_id_str = str(session_id)
@@ -1734,19 +1738,19 @@ async def resume_session(
         logger.exception("remy.resume_session")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("remy.database_error")
+        logger.exception(_CODE_REMY_DATABASE_ERROR)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
     except Exception:
         logger.exception("remy.resume_session.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
     sid = str(session_id)
@@ -1775,19 +1779,19 @@ async def stop_session(
         logger.exception("remy.stop_session")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("remy.database_error")
+        logger.exception(_CODE_REMY_DATABASE_ERROR)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
     except Exception:
         logger.exception("remy.stop_session.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
     sid = str(session_id)
@@ -1859,19 +1863,19 @@ async def get_audit_trail(
         logger.exception("remy.get_audit_trail")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("remy.database_error")
+        logger.exception(_CODE_REMY_DATABASE_ERROR)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
     except Exception:
         logger.exception("remy.get_audit_trail.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
 
@@ -1933,17 +1937,17 @@ async def undo_last_action(
         logger.exception("remy.undo_last_action")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("remy.database_error")
+        logger.exception(_CODE_REMY_DATABASE_ERROR)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
     except Exception:
         logger.exception("remy.undo_last_action.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None

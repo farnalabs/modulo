@@ -25,6 +25,13 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.db.models.error_notification_rule import ErrorNotificationRule
 from modulo.db.rls import set_rls_org
 
+_MSG_NO_ORGANISATION = "No organisation"
+_MSG_ERROR_TRACKING_NOT_AVAILABLE = "Error tracking is not available. Run database migrations to enable it."
+_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE = "Error tracking is temporarily unavailable. Please try again."
+_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE = "An unexpected error occurred while processing your request."
+_CODE_ERROR_NOTIFICATION_MANAGE = "error_notification.manage"
+
+
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/errors/notification-rules", tags=["error-notification-rules"])
@@ -59,7 +66,7 @@ async def list_notification_rules(
 ) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organisation")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_NO_ORGANISATION)
 
     try:
         async with session.begin():
@@ -84,20 +91,20 @@ async def list_notification_rules(
         _log.exception("error_notification_rules.list_notification_rules")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Error tracking is not available. Run database migrations to enable it.",
+            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("error_notification_rules.list_notification_rules")
         _log.warning("error_tracking.list_rules_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Error tracking is temporarily unavailable. Please try again.",
+            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except Exception as exc:
         _log.exception("error_tracking.list_rules_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while processing your request.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
 
     return {
@@ -113,11 +120,11 @@ async def list_notification_rules(
 async def create_notification_rule(
     req: ErrorNotificationRuleCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("error_notification.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ERROR_NOTIFICATION_MANAGE),
 ) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organisation")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_NO_ORGANISATION)
 
     max_rules = _MAX_RULES_COMMUNITY if principal.org_role == "runner" else _MAX_RULES_PER_ORG
 
@@ -155,20 +162,20 @@ async def create_notification_rule(
         _log.exception("error_notification_rules.create_notification_rule")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Error tracking is not available. Run database migrations to enable it.",
+            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("error_notification_rules.create_notification_rule")
         _log.warning("error_tracking.create_rule_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Error tracking is temporarily unavailable. Please try again.",
+            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except Exception as exc:
         _log.exception("error_tracking.create_rule_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while processing your request.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
 
     return _serialize_rule(rule)
@@ -180,11 +187,11 @@ async def update_notification_rule(
     rule_id: uuid.UUID,
     req: ErrorNotificationRuleUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("error_notification.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ERROR_NOTIFICATION_MANAGE),
 ) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organisation")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_NO_ORGANISATION)
 
     try:
         async with session.begin():
@@ -226,20 +233,20 @@ async def update_notification_rule(
         _log.exception("error_notification_rules.update_notification_rule")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Error tracking is not available. Run database migrations to enable it.",
+            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("error_notification_rules.update_notification_rule")
         _log.warning("error_tracking.update_rule_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Error tracking is temporarily unavailable. Please try again.",
+            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except Exception as exc:
         _log.exception("error_tracking.update_rule_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while processing your request.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
 
     return _serialize_rule(rule)
@@ -250,11 +257,11 @@ async def update_notification_rule(
 async def delete_notification_rule(
     rule_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("error_notification.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ERROR_NOTIFICATION_MANAGE),
 ) -> None:
     org_id = principal.organisation_id
     if org_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organisation")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_NO_ORGANISATION)
 
     try:
         async with session.begin():
@@ -278,18 +285,18 @@ async def delete_notification_rule(
         _log.exception("error_notification_rules.delete_notification_rule")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Error tracking is not available. Run database migrations to enable it.",
+            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("error_notification_rules.delete_notification_rule")
         _log.warning("error_tracking.delete_rule_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Error tracking is temporarily unavailable. Please try again.",
+            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except Exception as exc:
         _log.exception("error_tracking.delete_rule_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while processing your request.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc

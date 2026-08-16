@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_DB_OPERATION_FAILED, MSG_UNEXPECTED_ERROR_NO_PERIOD
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.view import (
@@ -21,6 +22,12 @@ from modulo.db.crud.view import (
     update_view,
 )
 from modulo.db.rls import set_rls_org, set_rls_user_context
+
+_CODE_VIEWS_TABLE_MISSING = "views.table_missing"
+_MSG_SAVED_VIEWS_FEATURE_NOT = "The saved_views feature is not available. Run database migrations to enable it."
+_CODE_VIEW_MANAGE = "view.manage"
+_MSG_VIEW_NOT_FOUND = "View not found"
+
 
 logger = logging.getLogger(__name__)
 
@@ -84,16 +91,16 @@ async def list_views_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             result = await list_views(session, view_type=view_type, page=page, page_size=page_size)
     except ProgrammingError:
-        logger.exception("views.table_missing")
+        logger.exception(_CODE_VIEWS_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="The saved_views feature is not available. Run database migrations to enable it.",
+            detail=_MSG_SAVED_VIEWS_FEATURE_NOT,
         ) from None
     except SQLAlchemyError:
         logger.exception("views.list.sqlalchemy_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -101,7 +108,7 @@ async def list_views_endpoint(
         logger.exception("views.list.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
     return ViewListResponse(
         items=[ViewResponse.model_validate(v) for v in result.items],
@@ -120,7 +127,7 @@ async def list_views_endpoint(
 async def create_view_endpoint(
     req: ViewCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("view.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_VIEW_MANAGE),
 ) -> ViewResponse:
     try:
         async with session.begin():
@@ -139,16 +146,16 @@ async def create_view_endpoint(
                 sort_order=req.sort_order,
             )
     except ProgrammingError:
-        logger.exception("views.table_missing")
+        logger.exception(_CODE_VIEWS_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="The saved_views feature is not available. Run database migrations to enable it.",
+            detail=_MSG_SAVED_VIEWS_FEATURE_NOT,
         ) from None
     except SQLAlchemyError:
         logger.exception("views.create.sqlalchemy_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -156,7 +163,7 @@ async def create_view_endpoint(
         logger.exception("views.create.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
     return ViewResponse.model_validate(view)
 
@@ -173,16 +180,16 @@ async def get_view_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             view = await get_view(session, view_id)
     except ProgrammingError:
-        logger.exception("views.table_missing")
+        logger.exception(_CODE_VIEWS_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="The saved_views feature is not available. Run database migrations to enable it.",
+            detail=_MSG_SAVED_VIEWS_FEATURE_NOT,
         ) from None
     except SQLAlchemyError:
         logger.exception("views.get.sqlalchemy_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -190,10 +197,10 @@ async def get_view_endpoint(
         logger.exception("views.get.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
     if view is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="View not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_VIEW_NOT_FOUND)
     return ViewResponse.model_validate(view)
 
 
@@ -202,7 +209,7 @@ async def update_view_endpoint(
     view_id: uuid.UUID,
     req: ViewUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("view.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_VIEW_MANAGE),
 ) -> ViewResponse:
     updates = req.model_dump(exclude_unset=True)
     try:
@@ -211,16 +218,16 @@ async def update_view_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             view = await update_view(session, view_id, updates)
     except ProgrammingError:
-        logger.exception("views.table_missing")
+        logger.exception(_CODE_VIEWS_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="The saved_views feature is not available. Run database migrations to enable it.",
+            detail=_MSG_SAVED_VIEWS_FEATURE_NOT,
         ) from None
     except SQLAlchemyError:
         logger.exception("views.update.sqlalchemy_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -228,10 +235,10 @@ async def update_view_endpoint(
         logger.exception("views.update.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
     if view is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="View not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_VIEW_NOT_FOUND)
     return ViewResponse.model_validate(view)
 
 
@@ -239,7 +246,7 @@ async def update_view_endpoint(
 async def delete_view_endpoint(
     view_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("view.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_VIEW_MANAGE),
 ) -> None:
     try:
         async with session.begin():
@@ -247,16 +254,16 @@ async def delete_view_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             deleted = await soft_delete_view(session, view_id)
     except ProgrammingError:
-        logger.exception("views.table_missing")
+        logger.exception(_CODE_VIEWS_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="The saved_views feature is not available. Run database migrations to enable it.",
+            detail=_MSG_SAVED_VIEWS_FEATURE_NOT,
         ) from None
     except SQLAlchemyError:
         logger.exception("views.delete.sqlalchemy_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -264,17 +271,17 @@ async def delete_view_endpoint(
         logger.exception("views.delete.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="View not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_VIEW_NOT_FOUND)
 
 
 @router.post("/{view_id}/restore", response_model=ViewResponse, dependencies=[require_feature("view_modes")])
 async def restore_view_endpoint(
     view_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("view.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_VIEW_MANAGE),
 ) -> ViewResponse:
     try:
         async with session.begin():
@@ -282,16 +289,16 @@ async def restore_view_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             view = await restore_view(session, view_id)
     except ProgrammingError:
-        logger.exception("views.table_missing")
+        logger.exception(_CODE_VIEWS_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="The saved_views feature is not available. Run database migrations to enable it.",
+            detail=_MSG_SAVED_VIEWS_FEATURE_NOT,
         ) from None
     except SQLAlchemyError:
         logger.exception("views.restore.sqlalchemy_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -299,8 +306,8 @@ async def restore_view_endpoint(
         logger.exception("views.restore.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
     if view is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="View not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_VIEW_NOT_FOUND)
     return ViewResponse.model_validate(view)

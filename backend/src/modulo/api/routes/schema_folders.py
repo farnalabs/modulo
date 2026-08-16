@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_THIS_FEATURE_NOT_AVAILABLE
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
@@ -19,6 +20,9 @@ from modulo.db.crud.schema_folder import (
     update_folder,
 )
 from modulo.db.rls import set_rls_org, set_rls_user_context
+
+_MSG_FOLDER_NOT_FOUND = "Folder not found"
+
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +71,7 @@ async def list_folders_endpoint(
         logger.exception("schema_folders.list")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
     return [FolderResponse.model_validate(f) for f in folders]
 
@@ -100,7 +104,7 @@ async def create_folder_endpoint(
         logger.exception("schema_folders.create")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
     return FolderResponse.model_validate(folder)
 
@@ -125,7 +129,7 @@ async def update_folder_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             folder = await update_folder(session, folder_id, updates)
             if folder is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_FOLDER_NOT_FOUND)
             await session.refresh(folder)
             response = FolderResponse.model_validate(folder)
     except ValueError as e:
@@ -138,7 +142,7 @@ async def update_folder_endpoint(
         logger.exception("schema_folders.update(%s)", folder_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
     return response
 
@@ -159,10 +163,10 @@ async def delete_folder_endpoint(
         logger.exception("schema_folders.delete(%s)", folder_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_FOLDER_NOT_FOUND)
 
 
 @router.patch("/{folder_id}/move", response_model=FolderResponse)
@@ -180,13 +184,13 @@ async def reorder_folder_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             folder = await update_folder(session, folder_id, updates)
             if folder is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_FOLDER_NOT_FOUND)
             await session.refresh(folder)
             response = FolderResponse.model_validate(folder)
     except ProgrammingError:
         logger.exception("schema_folders.reorder(%s)", folder_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
     return response

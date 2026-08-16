@@ -50,6 +50,9 @@ from modulo.core.analytics.service import (
 )
 from modulo.settings import Settings, get_settings
 
+_CODE_ANALYTICS_QUERY = "analytics.query"
+
+
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/analytics", tags=["analytics"])
@@ -241,7 +244,7 @@ async def analytics_query(
     date_to: datetime | None = Query(None),
     limit: int = Query(1000, ge=1, le=1000),
     settings: Settings = Depends(get_settings),
-    principal: TenantPrincipal = require_permission("analytics.query"),
+    principal: TenantPrincipal = require_permission(_CODE_ANALYTICS_QUERY),
     _: object = require_feature("analytics_page"),
 ) -> AnalyticsResponse:
     """Bucketed run-facts series over the requested range, grouped hour/day/ISO-week.
@@ -295,7 +298,7 @@ async def analytics_concurrency(
     date_to: datetime | None = Query(None),
     limit: int = Query(1000, ge=1, le=1000),
     settings: Settings = Depends(get_settings),
-    principal: TenantPrincipal = require_permission("analytics.query"),
+    principal: TenantPrincipal = require_permission(_CODE_ANALYTICS_QUERY),
     _: object = require_feature("analytics_page"),
 ) -> ConcurrencyResponse:
     """Slot-utilization series: per-bucket max/avg concurrent active + queued runs.
@@ -352,7 +355,7 @@ async def analytics_export(
     date_from: datetime | None = Query(None),
     date_to: datetime | None = Query(None),
     settings: Settings = Depends(get_settings),
-    principal: TenantPrincipal = require_permission("analytics.query"),
+    principal: TenantPrincipal = require_permission(_CODE_ANALYTICS_QUERY),
     _: object = require_feature("analytics_page"),
 ) -> Response:
     """Raw fact rows (no bucketing) filtered by the same typed params.

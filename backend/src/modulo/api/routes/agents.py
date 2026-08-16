@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_RESOURCE_ALREADY_EXISTS
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
@@ -33,6 +34,16 @@ from modulo.db.crud.agent import (
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.rls import set_rls_org
 from modulo.settings import get_settings
+
+_CODE_AGENT_LIST = "agent.list"
+_MSG_DATABASE_OPERATION_FAILED = "Database operation failed"
+_MSG_DATABASE_OPERATION_FAILED_PLEASE = "Database operation failed. Please try again."
+_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE = "An unexpected error occurred. Please try again."
+_MSG_AGENT_NOT_FOUND = "Agent not found"
+_CODE_AGENT_UPDATE = "agent.update"
+_CODE_AGENTS_UPDATE_AGENT_ENDPOINT = "agents.update_agent_endpoint"
+_CODE_AGENTS_OPTIMIZE_PROMPT = "agents.optimize_prompt"
+
 
 _log = logging.getLogger(__name__)
 
@@ -269,7 +280,7 @@ async def list_agents_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("agent.list"),
+    principal: TenantPrincipal = require_permission(_CODE_AGENT_LIST),
 ) -> AgentListResponse:
     try:
         async with session.begin():
@@ -279,19 +290,19 @@ async def list_agents_endpoint(
         _log.exception("agents.list_agents_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("Database operation failed")
+        _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again.",
+            detail=_MSG_DATABASE_OPERATION_FAILED_PLEASE,
         ) from None
     except Exception:
         _log.exception("Unexpected error listing agents")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred. Please try again.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
     return AgentListResponse(
         items=[AgentResponse.model_validate(a) for a in result.items],
@@ -354,19 +365,19 @@ async def create_agent_endpoint(
         _log.exception("agents.create_agent_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("Database operation failed during agent creation")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again.",
+            detail=_MSG_DATABASE_OPERATION_FAILED_PLEASE,
         ) from None
     except Exception:
         _log.exception("Unexpected error creating agent")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred. Please try again.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
     return AgentResponse.model_validate(agent)
 
@@ -376,7 +387,7 @@ async def create_agent_endpoint(
 async def get_agent_endpoint(
     agent_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("agent.list"),
+    principal: TenantPrincipal = require_permission(_CODE_AGENT_LIST),
 ) -> AgentResponse:
     try:
         async with session.begin():
@@ -386,57 +397,57 @@ async def get_agent_endpoint(
         _log.exception("agents.get_agent_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("Database operation failed")
+        _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again.",
+            detail=_MSG_DATABASE_OPERATION_FAILED_PLEASE,
         ) from None
     except Exception:
         _log.exception("Unexpected error getting agent")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred. Please try again.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
     if agent is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
     return AgentResponse.model_validate(agent)
 
 
 @router.patch("/{agent_id}", response_model=AgentResponse)
-@handle_db_errors("agents.update_agent_endpoint")
+@handle_db_errors(_CODE_AGENTS_UPDATE_AGENT_ENDPOINT)
 async def update_agent_endpoint(
     agent_id: uuid.UUID,
     req: AgentUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("agent.update"),
+    principal: TenantPrincipal = require_permission(_CODE_AGENT_UPDATE),
 ) -> AgentResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             agent = await get_agent(session, agent_id)
     except ProgrammingError:
-        _log.exception("agents.update_agent_endpoint")
+        _log.exception(_CODE_AGENTS_UPDATE_AGENT_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("Database operation failed")
+        _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again.",
+            detail=_MSG_DATABASE_OPERATION_FAILED_PLEASE,
         ) from None
     except Exception:
         _log.exception("Unexpected error updating agent")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred. Please try again.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
     if agent is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
 
     merged_name = req.name if req.name is not None else agent.name
     merged_is_executable = req.is_executable if req.is_executable is not None else agent.is_executable
@@ -456,26 +467,26 @@ async def update_agent_endpoint(
             await set_rls_org(session, principal.organisation_id)
             updated = await update_agent(session, agent_id, updates)
             if updated is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
             await session.refresh(updated)
             response = AgentResponse.model_validate(updated)
     except IntegrityError:
-        _log.exception("agents.update_agent_endpoint")
+        _log.exception(_CODE_AGENTS_UPDATE_AGENT_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("agents.update_agent_endpoint")
+        _log.exception(_CODE_AGENTS_UPDATE_AGENT_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("Database operation failed")
+        _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again.",
+            detail=_MSG_DATABASE_OPERATION_FAILED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -483,19 +494,19 @@ async def update_agent_endpoint(
         _log.exception("Unexpected error updating agent (write path)")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred. Please try again.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
     return response
 
 
 @router.post("/{agent_id}/prompts/{version}/optimize", response_model=PromptOptimizeResponse)
-@handle_db_errors("agents.optimize_prompt")
+@handle_db_errors(_CODE_AGENTS_OPTIMIZE_PROMPT)
 async def optimize_prompt(
     agent_id: uuid.UUID,
     version: str,
     req: PromptOptimizeRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("agent.update"),
+    principal: TenantPrincipal = require_permission(_CODE_AGENT_UPDATE),
 ) -> PromptOptimizeResponse:
     if not req.eval_result_ids:
         raise HTTPException(
@@ -508,20 +519,20 @@ async def optimize_prompt(
             await set_rls_org(session, principal.organisation_id)
             agent = await get_agent(session, agent_id)
     except ProgrammingError:
-        _log.exception("agents.optimize_prompt")
+        _log.exception(_CODE_AGENTS_OPTIMIZE_PROMPT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("Database operation failed")
+        _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again.",
+            detail=_MSG_DATABASE_OPERATION_FAILED_PLEASE,
         ) from None
 
     if agent is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
 
     source_template = _resolve_prompt_template(agent, version)
     if source_template is None:
@@ -537,16 +548,16 @@ async def optimize_prompt(
                 session, req.eval_result_ids, principal.organisation_id
             )
     except ProgrammingError:
-        _log.exception("agents.optimize_prompt")
+        _log.exception(_CODE_AGENTS_OPTIMIZE_PROMPT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("Database operation failed")
+        _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again.",
+            detail=_MSG_DATABASE_OPERATION_FAILED_PLEASE,
         ) from None
 
     if not eval_results:
@@ -567,16 +578,16 @@ async def optimize_prompt(
                 )
             )
     except ProgrammingError:
-        _log.exception("agents.optimize_prompt")
+        _log.exception(_CODE_AGENTS_OPTIMIZE_PROMPT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("Database operation failed")
+        _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again.",
+            detail=_MSG_DATABASE_OPERATION_FAILED_PLEASE,
         ) from None
     mb = mb_result.scalar_one_or_none()
     if mb is None:
@@ -641,7 +652,7 @@ async def apply_optimized_prompt(
     version: str,
     req: ApplyOptimizedPromptRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("agent.update"),
+    principal: TenantPrincipal = require_permission(_CODE_AGENT_UPDATE),
 ) -> AgentResponse:
     try:
         async with session.begin():
@@ -659,28 +670,28 @@ async def apply_optimized_prompt(
         _log.exception("agents.apply_optimized_prompt")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         _log.exception("agents.apply_optimized_prompt")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("Database operation failed")
+        _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again.",
+            detail=_MSG_DATABASE_OPERATION_FAILED_PLEASE,
         ) from None
     except Exception:
         _log.exception("Unexpected error applying optimized prompt")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred. Please try again.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
     if agent is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
     return AgentResponse.model_validate(agent)
 
 
@@ -689,7 +700,7 @@ async def apply_optimized_prompt(
 async def list_prompt_versions(
     agent_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("agent.list"),
+    principal: TenantPrincipal = require_permission(_CODE_AGENT_LIST),
 ) -> list[PromptVersionListEntry]:
     try:
         async with session.begin():
@@ -699,22 +710,22 @@ async def list_prompt_versions(
         _log.exception("agents.list_prompt_versions")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("Database operation failed")
+        _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again.",
+            detail=_MSG_DATABASE_OPERATION_FAILED_PLEASE,
         ) from None
     except Exception:
         _log.exception("Unexpected error listing prompt versions")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred. Please try again.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
     if agent is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
 
     history = list(agent.prompt_version_history or [])
     return [
@@ -735,7 +746,7 @@ async def get_prompt_version_endpoint(
     agent_id: uuid.UUID,
     version: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("agent.list"),
+    principal: TenantPrincipal = require_permission(_CODE_AGENT_LIST),
 ) -> PromptVersionDetail:
     try:
         async with session.begin():
@@ -745,19 +756,19 @@ async def get_prompt_version_endpoint(
         _log.exception("agents.get_prompt_version_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("Database operation failed")
+        _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again.",
+            detail=_MSG_DATABASE_OPERATION_FAILED_PLEASE,
         ) from None
     except Exception:
         _log.exception("Unexpected error getting prompt version")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred. Please try again.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
     if entry is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Version not found")
@@ -777,7 +788,7 @@ async def rollback_prompt(
     agent_id: uuid.UUID,
     version: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("agent.update"),
+    principal: TenantPrincipal = require_permission(_CODE_AGENT_UPDATE),
 ) -> PromptRollbackResponse:
     try:
         async with session.begin():
@@ -787,25 +798,25 @@ async def rollback_prompt(
         _log.exception("agents.rollback_prompt")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         _log.exception("agents.rollback_prompt")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("Database operation failed")
+        _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again.",
+            detail=_MSG_DATABASE_OPERATION_FAILED_PLEASE,
         ) from None
     except Exception:
         _log.exception("Unexpected error rolling back prompt")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred. Please try again.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
     if agent is None:
         raise HTTPException(
@@ -824,7 +835,7 @@ async def diff_prompt_versions(
     agent_id: uuid.UUID,
     req: PromptDiffRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("agent.list"),
+    principal: TenantPrincipal = require_permission(_CODE_AGENT_LIST),
 ) -> PromptDiffResponse:
     try:
         async with session.begin():
@@ -834,22 +845,22 @@ async def diff_prompt_versions(
         _log.exception("agents.diff_prompt_versions")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("Database operation failed")
+        _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again.",
+            detail=_MSG_DATABASE_OPERATION_FAILED_PLEASE,
         ) from None
     except Exception:
         _log.exception("Unexpected error diffing prompt versions")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred. Please try again.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
     if agent is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
 
     template_a = _resolve_prompt_template(agent, req.version_a)
     template_b = _resolve_prompt_template(agent, req.version_b)
@@ -896,25 +907,25 @@ async def delete_agent_endpoint(
         _log.exception("agents.delete_agent_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         _log.exception("agents.delete_agent_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("Database operation failed")
+        _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again.",
+            detail=_MSG_DATABASE_OPERATION_FAILED_PLEASE,
         ) from None
     except Exception:
         _log.exception("Unexpected error deleting agent")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred. Please try again.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)

@@ -12,12 +12,17 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.models.remy_skill import RemySkill
 from modulo.db.models.system_config import SystemConfig
 from modulo.db.rls import set_rls_org
+
+_CODE_ADMIN_REMY_MANAGE = "admin.remy.manage"
+_MSG_CLAUDE_SONNET_4_20250514 = "claude-sonnet-4-20250514"
+
 
 # Labels for all known providers (both native and custom).
 # Derived from the Remy runtime providers and ModelBackendProvider enum (custom).
@@ -71,7 +76,7 @@ class RemyConfigResponse(BaseModel):
     additional_guidance: str | None = None
     access_list: AccessList = Field(default_factory=AccessList)
     default_provider: str = "anthropic"
-    default_model: str = "claude-sonnet-4-20250514"
+    default_model: str = _MSG_CLAUDE_SONNET_4_20250514
     default_context_window: int = 200000
     allowed_providers: list[str] = Field(default_factory=lambda: ["anthropic", "openai", "gemini", "deepseek", "groq"])
     allowed_models: ClassVar[list[str]] = []
@@ -139,7 +144,7 @@ class ContextSourceModeUpdate(BaseModel):
 @handle_db_errors("admin.remy.get_remy_config")
 async def get_remy_config(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("admin.remy.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ADMIN_REMY_MANAGE),
 ) -> RemyConfigResponse:
     try:
         async with session.begin():
@@ -155,7 +160,7 @@ async def get_remy_config(
             additional_guidance=value.get("additional_guidance"),
             access_list=AccessList(**value.get("access_list", {})),
             default_provider=value.get("default_provider", "anthropic"),
-            default_model=value.get("default_model", "claude-sonnet-4-20250514"),
+            default_model=value.get("default_model", _MSG_CLAUDE_SONNET_4_20250514),
             default_context_window=value.get("default_context_window", 200000),
             allowed_providers=value.get("allowed_providers", ["anthropic", "openai", "gemini", "deepseek", "groq"]),
             allowed_models=value.get("allowed_models", []),
@@ -164,7 +169,7 @@ async def get_remy_config(
         logger.exception("admin_remy.get_remy_config")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("admin_remy.get_remy_config")
@@ -178,14 +183,14 @@ async def get_remy_config(
         logger.exception("Unexpected error in get_remy_config")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
 
 @router.get("/available-providers", response_model=AvailableProvidersResponse)
 @handle_db_errors("admin.remy.get_available_providers")
 async def get_available_providers(
-    principal: TenantPrincipal = require_permission("admin.remy.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ADMIN_REMY_MANAGE),
 ) -> AvailableProvidersResponse:
     try:
         from modulo.api.routes.remy import SUPPORTED_PROVIDERS
@@ -208,7 +213,7 @@ async def get_available_providers(
         logger.exception("Unexpected error in get_available_providers")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
 
@@ -217,7 +222,7 @@ async def get_available_providers(
 async def update_remy_config(
     req: RemyConfigUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("admin.remy.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ADMIN_REMY_MANAGE),
 ) -> RemyConfigResponse:
     if req.allowed_providers is not None:
         from modulo.api.routes.remy import SUPPORTED_PROVIDERS
@@ -264,7 +269,7 @@ async def update_remy_config(
             additional_guidance=current.get("additional_guidance"),
             access_list=AccessList(**current.get("access_list", {})),
             default_provider=current.get("default_provider", "anthropic"),
-            default_model=current.get("default_model", "claude-sonnet-4-20250514"),
+            default_model=current.get("default_model", _MSG_CLAUDE_SONNET_4_20250514),
             default_context_window=current.get("default_context_window", 200000),
             allowed_providers=current.get("allowed_providers", ["anthropic", "openai", "gemini", "deepseek", "groq"]),
             allowed_models=current.get("allowed_models", []),
@@ -273,7 +278,7 @@ async def update_remy_config(
         logger.exception("admin_remy.update_remy_config")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("admin_remy.update_remy_config")
@@ -287,7 +292,7 @@ async def update_remy_config(
         logger.exception("Unexpected error in update_remy_config")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
 
@@ -325,7 +330,7 @@ def _skill_to_response(skill: RemySkill) -> SkillResponse:
 @handle_db_errors("admin.remy.list_org_skills")
 async def list_org_skills(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("admin.remy.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ADMIN_REMY_MANAGE),
 ) -> list[SkillResponse]:
     try:
         async with session.begin():
@@ -344,7 +349,7 @@ async def list_org_skills(
         logger.exception("admin_remy.list_org_skills")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("admin_remy.list_org_skills")
@@ -358,7 +363,7 @@ async def list_org_skills(
         logger.exception("Unexpected error in list_org_skills")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
 
@@ -367,7 +372,7 @@ async def list_org_skills(
 async def create_org_skill(
     req: SkillCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("admin.remy.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ADMIN_REMY_MANAGE),
 ) -> SkillResponse:
     try:
         async with session.begin():
@@ -389,7 +394,7 @@ async def create_org_skill(
         logger.exception("admin_remy.create_org_skill")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("admin_remy.create_org_skill")
@@ -403,7 +408,7 @@ async def create_org_skill(
         logger.exception("Unexpected error in create_org_skill")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
 
@@ -413,7 +418,7 @@ async def update_org_skill(
     skill_id: uuid.UUID,
     req: SkillUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("admin.remy.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ADMIN_REMY_MANAGE),
 ) -> SkillResponse:
     try:
         async with session.begin():
@@ -435,7 +440,7 @@ async def update_org_skill(
         logger.exception("admin_remy.update_org_skill")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("admin_remy.update_org_skill")
@@ -449,7 +454,7 @@ async def update_org_skill(
         logger.exception("Unexpected error in update_org_skill")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
 
@@ -458,7 +463,7 @@ async def update_org_skill(
 async def delete_org_skill(
     skill_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("admin.remy.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ADMIN_REMY_MANAGE),
 ) -> None:
     try:
         async with session.begin():
@@ -469,7 +474,7 @@ async def delete_org_skill(
         logger.exception("admin_remy.delete_org_skill")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("admin_remy.delete_org_skill")
@@ -483,7 +488,7 @@ async def delete_org_skill(
         logger.exception("Unexpected error in delete_org_skill")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
 
@@ -494,7 +499,7 @@ async def delete_org_skill(
 @handle_db_errors("admin.remy.get_org_context_sources")
 async def get_org_context_sources(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("admin.remy.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ADMIN_REMY_MANAGE),
 ) -> dict[str, object]:
     try:
         async with session.begin():
@@ -516,7 +521,7 @@ async def get_org_context_sources(
         logger.exception("admin_remy.get_org_context_sources")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("admin_remy.get_org_context_sources")
@@ -530,7 +535,7 @@ async def get_org_context_sources(
         logger.exception("Unexpected error in get_org_context_sources")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
 
@@ -540,7 +545,7 @@ async def set_org_context_source(
     source_key: str,
     req: ContextSourceModeUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("admin.remy.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ADMIN_REMY_MANAGE),
 ) -> dict[str, str]:
     try:
         async with session.begin():
@@ -555,7 +560,7 @@ async def set_org_context_source(
         logger.exception("admin_remy.set_org_context_source")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("admin_remy.set_org_context_source")
@@ -569,7 +574,7 @@ async def set_org_context_source(
         logger.exception("Unexpected error in set_org_context_source")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
 
@@ -577,7 +582,7 @@ async def set_org_context_source(
 @handle_db_errors("admin.remy.reset_org_context_sources")
 async def reset_org_context_sources(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("admin.remy.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_ADMIN_REMY_MANAGE),
 ) -> dict[str, str]:
     try:
         async with session.begin():
@@ -597,7 +602,7 @@ async def reset_org_context_sources(
         logger.exception("admin_remy.reset_org_context_sources")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("admin_remy.reset_org_context_sources")
@@ -611,7 +616,7 @@ async def reset_org_context_sources(
         logger.exception("Unexpected error in reset_org_context_sources")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
 

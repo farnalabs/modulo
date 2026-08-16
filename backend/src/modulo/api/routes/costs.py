@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
@@ -40,6 +41,10 @@ from modulo.db.crud.team import get_team, list_teams
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.scheduled_report import ScheduledReport
 from modulo.db.rls import set_rls_org
+
+_CODE_COST_MANAGE = "cost.manage"
+_MSG_DATABASE_ERROR_OCCURRED_PLEASE = "A database error occurred. Please try again."
+
 
 _log = logging.getLogger(__name__)
 
@@ -171,7 +176,7 @@ class SetSpendLimitRequest(BaseModel):
 async def get_costs(
     group_by: str = Query("team", pattern=r"^(team|org)$"),
     period: str = Query("month", pattern=r"^(day|week|month|year)$"),
-    current_user: TenantPrincipal = require_permission("cost.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> CostReportResponse:
 
@@ -203,13 +208,13 @@ async def get_costs(
         _log.exception("get_costs ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("get_costs SQLAlchemyError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="A database error occurred. Please try again.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -219,7 +224,7 @@ async def get_costs(
         _log.exception("Unexpected error in get_costs")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     components_by_team = buckets.get("components_by_team", {}) if isinstance(buckets, dict) else {}
@@ -254,7 +259,7 @@ async def get_costs(
 async def get_spend_limits(
     _: object = require_feature("admin_spend_limits"),
     __: object = require_feature("admin_cost_controls"),
-    current_user: TenantPrincipal = require_permission("cost.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> SpendLimitResponse:
 
@@ -268,13 +273,13 @@ async def get_spend_limits(
         _log.exception("get_spend_limits ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("get_spend_limits SQLAlchemyError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="A database error occurred. Please try again.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -284,7 +289,7 @@ async def get_spend_limits(
         _log.exception("Unexpected error in get_spend_limits")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     return SpendLimitResponse(
@@ -307,7 +312,7 @@ async def set_org_spend_limit(
     req: SetSpendLimitRequest,
     _: object = require_feature("admin_spend_limits"),
     __: object = require_feature("admin_cost_controls"),
-    current_user: TenantPrincipal = require_permission("cost.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
 
@@ -323,13 +328,13 @@ async def set_org_spend_limit(
         _log.exception("set_org_spend_limit ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("set_org_spend_limit SQLAlchemyError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="A database error occurred. Please try again.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -339,7 +344,7 @@ async def set_org_spend_limit(
         _log.exception("Unexpected error in set_org_spend_limit")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     return {
@@ -355,7 +360,7 @@ async def set_team_spend_limit(
     req: SetSpendLimitRequest,
     _: object = require_feature("admin_spend_limits"),
     __: object = require_feature("admin_cost_controls"),
-    current_user: TenantPrincipal = require_permission("cost.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
 
@@ -371,13 +376,13 @@ async def set_team_spend_limit(
         _log.exception("set_team_spend_limit ProgrammingError (team_id=%s)", team_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("set_team_spend_limit SQLAlchemyError (team_id=%s)", team_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="A database error occurred. Please try again.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -387,7 +392,7 @@ async def set_team_spend_limit(
         _log.exception("Unexpected error in set_team_spend_limit")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     return {
@@ -431,7 +436,7 @@ class UpdateCostControlsRequest(BaseModel):
 @handle_db_errors("costs.get_cost_controls")
 async def get_cost_controls(
     _: object = require_feature("admin_cost_controls"),
-    current_user: TenantPrincipal = require_permission("cost.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> CostControlsResponse:
     try:
@@ -443,13 +448,13 @@ async def get_cost_controls(
         _log.exception("get_cost_controls ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("get_cost_controls SQLAlchemyError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="A database error occurred. Please try again.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -459,7 +464,7 @@ async def get_cost_controls(
         _log.exception("Unexpected error in get_cost_controls")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     return CostControlsResponse(
@@ -484,7 +489,7 @@ async def get_cost_controls(
 async def update_cost_controls(
     req: UpdateCostControlsRequest,
     _: object = require_feature("admin_cost_controls"),
-    current_user: TenantPrincipal = require_permission("cost.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> CostControlsResponse:
     try:
@@ -523,13 +528,13 @@ async def update_cost_controls(
         _log.exception("update_cost_controls ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("update_cost_controls SQLAlchemyError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="A database error occurred. Please try again.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -539,7 +544,7 @@ async def update_cost_controls(
         _log.exception("Unexpected error in update_cost_controls")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     return CostControlsResponse(
@@ -570,7 +575,7 @@ class CircuitBreakerResetResponse(BaseModel):
 async def reset_circuit_breaker(
     pipeline_id: uuid.UUID,
     _: object = require_feature("admin_cost_controls"),
-    current_user: TenantPrincipal = require_permission("cost.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> CircuitBreakerResetResponse:
     """Admin re-enable: clear a tripped pipeline circuit breaker.
@@ -593,13 +598,13 @@ async def reset_circuit_breaker(
         _log.exception("reset_circuit_breaker ProgrammingError (pipeline_id=%s)", pipeline_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("reset_circuit_breaker SQLAlchemyError (pipeline_id=%s)", pipeline_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="A database error occurred. Please try again.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -609,7 +614,7 @@ async def reset_circuit_breaker(
         _log.exception("Unexpected error in reset_circuit_breaker")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     return CircuitBreakerResetResponse(
@@ -629,7 +634,7 @@ async def export_costs(
     group_by: str = Query("team", pattern=r"^(team|pipeline|model)$"),
     format: str = Query("csv", pattern=r"^(csv)$"),
     _: object = require_feature("admin_cost_breakdown"),
-    current_user: TenantPrincipal = require_permission("cost.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> Response:
 
@@ -654,13 +659,13 @@ async def export_costs(
         _log.exception("export_costs ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("export_costs SQLAlchemyError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="A database error occurred. Please try again.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -670,7 +675,7 @@ async def export_costs(
         _log.exception("Unexpected error in export_costs")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     output = io.StringIO()
@@ -731,7 +736,7 @@ def _report_response(report: ScheduledReport) -> ReportResponse:
 async def create_report(
     req: CreateReportRequest,
     _: object = require_feature("admin_cost_controls"),
-    current_user: TenantPrincipal = require_permission("cost.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> ReportResponse:
 
@@ -752,13 +757,13 @@ async def create_report(
         _log.exception("create_report ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("create_report SQLAlchemyError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="A database error occurred. Please try again.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -768,7 +773,7 @@ async def create_report(
         _log.exception("Unexpected error in create_report")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     return _report_response(report)
@@ -778,7 +783,7 @@ async def create_report(
 @handle_db_errors("costs.list_reports")
 async def list_reports(
     _: object = require_feature("admin_cost_controls"),
-    current_user: TenantPrincipal = require_permission("cost.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ReportResponse]:
 
@@ -793,13 +798,13 @@ async def list_reports(
         _log.exception("list_reports ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("list_reports SQLAlchemyError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="A database error occurred. Please try again.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -809,7 +814,7 @@ async def list_reports(
         _log.exception("Unexpected error in list_reports")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     return [_report_response(report) for report in reports]
@@ -820,7 +825,7 @@ async def list_reports(
 async def delete_report(
     report_id: uuid.UUID,
     _: object = require_feature("admin_cost_controls"),
-    current_user: TenantPrincipal = require_permission("cost.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
 
@@ -836,13 +841,13 @@ async def delete_report(
         _log.exception("delete_report ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("delete_report SQLAlchemyError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="A database error occurred. Please try again.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -852,7 +857,7 @@ async def delete_report(
         _log.exception("Unexpected error in delete_report")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     if not deleted:
@@ -876,7 +881,7 @@ class AnomalyResponse(BaseModel):
 @handle_db_errors("costs.get_anomalies")
 async def get_anomalies(
     _: object = require_feature("admin_cost_breakdown"),
-    current_user: TenantPrincipal = require_permission("cost.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[AnomalyResponse]:
 
@@ -963,13 +968,13 @@ async def get_anomalies(
         _log.exception("get_anomalies ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("get_anomalies SQLAlchemyError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="A database error occurred. Please try again.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -979,7 +984,7 @@ async def get_anomalies(
         _log.exception("Unexpected error in get_anomalies")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
 
@@ -988,7 +993,7 @@ async def get_anomalies(
 async def dismiss_anomaly_endpoint(
     anomaly_id: uuid.UUID,
     _: object = require_feature("admin_cost_breakdown"),
-    current_user: TenantPrincipal = require_permission("cost.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
 
@@ -1004,13 +1009,13 @@ async def dismiss_anomaly_endpoint(
         _log.exception("dismiss_anomaly ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("dismiss_anomaly SQLAlchemyError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="A database error occurred. Please try again.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -1020,7 +1025,7 @@ async def dismiss_anomaly_endpoint(
         _log.exception("Unexpected error in dismiss_anomaly_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     if not dismissed:
