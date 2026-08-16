@@ -7,6 +7,7 @@ import pytest
 
 from modulo.core.schema_registry._common import parse_schema_from_response
 from modulo.core.schema_registry.inference import (
+    _INFERENCE_SYSTEM_PROMPT,
     SchemaInferenceError,
     SchemaInferenceService,
     _build_infer_prompt,
@@ -73,9 +74,9 @@ class TestBuildInferPrompt:
         assert "Sample data" in messages[1].content
 
     def test_truncates_large_sample_sets(self) -> None:
-        samples = [{"i": i} for i in range(100)]
+        samples = [{"i": i} for i in range(250)]
         messages = _build_infer_prompt(samples)
-        assert "50 records" in messages[1].content
+        assert "200 records" in messages[1].content
 
     def test_builds_with_empty_samples(self) -> None:
         messages = _build_infer_prompt([])
@@ -87,6 +88,70 @@ class TestBuildInferPrompt:
         messages = _build_infer_prompt(samples, max_records=5)
         assert "5 records" in messages[1].content
         assert "100 records" not in messages[1].content
+
+    def test_issue_tracker_connector_guidance(self) -> None:
+        samples = [{"summary": "bug", "status": "open", "priority": "high"}]
+        messages = _build_infer_prompt(samples, connector_type="jira")
+        assert "issue-tracker" in messages[0].content
+        assert "assignee" in messages[0].content
+        assert "labels" in messages[0].content
+
+    def test_git_host_connector_guidance(self) -> None:
+        samples = [{"repo": "modulo", "branch": "main"}]
+        messages = _build_infer_prompt(samples, connector_type="github")
+        assert "git host" in messages[0].content
+        assert "pull-request metadata" in messages[0].content
+        assert "file paths" in messages[0].content
+
+    def test_ci_runner_connector_guidance(self) -> None:
+        samples = [{"pipeline_id": "1", "status": "success"}]
+        messages = _build_infer_prompt(samples, connector_type="circleci")
+        assert "CI runner" in messages[0].content
+        assert "commit SHA" in messages[0].content
+        assert "duration" in messages[0].content
+
+    def test_chat_connector_guidance(self) -> None:
+        samples = [{"text": "hello", "channel": "general"}]
+        messages = _build_infer_prompt(samples, connector_type="slack")
+        assert "chat tool" in messages[0].content
+        assert "message and channel metadata" in messages[0].content
+
+    def test_document_store_connector_guidance(self) -> None:
+        samples = [{"title": "page", "blocks": ["para"]}]
+        messages = _build_infer_prompt(samples, connector_type="notion")
+        assert "document store" in messages[0].content
+        assert "page structure" in messages[0].content
+
+    def test_generic_connector_guidance(self) -> None:
+        samples = [{"id": 1, "name": "x", "type": "y"}]
+        messages = _build_infer_prompt(samples, connector_type="filesystem")
+        assert "minimal field set" in messages[0].content
+        assert "id, name, and type" in messages[0].content
+
+    def test_unknown_connector_falls_back_to_generic(self) -> None:
+        messages = _build_infer_prompt([{"id": 1}], connector_type="totally-unknown")
+        assert "minimal field set" in messages[0].content
+
+    def test_no_connector_type_keeps_prompt_unchanged(self) -> None:
+        messages = _build_infer_prompt([{"id": 1}])
+        assert messages[0].content == _INFERENCE_SYSTEM_PROMPT
+        assert "minimal field set" not in messages[0].content
+
+    def test_connector_type_case_insensitive(self) -> None:
+        messages = _build_infer_prompt([{"id": 1}], connector_type="GitHub")
+        assert "git host" in messages[0].content
+
+    def test_connector_category_helper(self) -> None:
+        from modulo.core.schema_registry.inference import connector_category
+
+        assert connector_category("jira") == "issue-tracker"
+        assert connector_category("linear") == "issue-tracker"
+        assert connector_category("github") == "git-host"
+        assert connector_category("circleci") == "ci-runner"
+        assert connector_category("slack") == "chat"
+        assert connector_category("notion") == "document-store"
+        assert connector_category("filesystem") == "generic"
+        assert connector_category(None) == "generic"
 
 
 class TestParseSchemaFromResponse:

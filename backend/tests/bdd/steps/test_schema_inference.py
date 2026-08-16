@@ -295,6 +295,8 @@ def step_create_schema_from_draft(name: str, request, client):
     mock_schema.name = name
     mock_schema.description = "Inferred schema"
     mock_schema.abstract_name = None
+    mock_schema.folder_id = None
+    mock_schema.account_id = uuid.UUID("00000000-0000-0000-0000-000000000002")
     mock_schema.created_by = uuid.UUID("00000000-0000-0000-0000-000000000002")
     mock_schema.created_at = datetime.now(UTC)
     mock_schema.updated_at = datetime.now(UTC)
@@ -323,6 +325,8 @@ def step_publish_schema_version(version: str, request, client):
     mock_sv.version_number = 1
     mock_sv.definition_json = request.node._inferred_definition
     mock_sv.published = True
+    mock_sv.folder_id = None
+    mock_sv.account_id = uuid.UUID("00000000-0000-0000-0000-000000000002")
     mock_sv.created_by = uuid.UUID("00000000-0000-0000-0000-000000000002")
     mock_sv.created_at = datetime.now(UTC)
     mock_sv.updated_at = datetime.now(UTC)
@@ -383,11 +387,11 @@ def step_assert_enum_constraint(request):
     assert properties["status"]["enum"]
 
 
-@then("the sample query limit defaults to 10")
+@then("the sample query limit defaults to 200")
 def step_assert_default_limit(request):
     captured = getattr(request.node, "_captured_limit", None)
     assert captured is not None, "No limit was captured from the sample call"
-    assert captured == 10, f"Expected default limit 10, got {captured}"
+    assert captured == 200, f"Expected default limit 200, got {captured}"
 
 
 @then(parsers.parse('the suggestion name mentions "{text}"'))

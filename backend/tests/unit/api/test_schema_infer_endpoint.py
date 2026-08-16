@@ -190,6 +190,83 @@ def test_infer_schema_forwards_filters_to_sampling(client: TestClient) -> None:
     assert mock_sample.await_args.kwargs["limit"] == 5
 
 
+def test_infer_schema_passes_connector_type_to_service(client: TestClient) -> None:
+    """The inference service must be constructed with the connector's type so
+    the prompt applies connector-type-aware field-extraction guidance."""
+    ci = _make_mock_connector_instance()
+    ci.connector_type_id = "jira"
+    mb = _make_mock_model_backend()
+    page_result = MagicMock(items=[mb], total=1, page=1, page_size=1)
+    backend_id = uuid.uuid4()
+
+    with (
+        patch("modulo.api.routes.schemas.get_connector_instance", return_value=ci),
+        patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("modulo.api.routes.schemas.ConnectorHub.sample", return_value=[{"summary": "x"}]),
+        patch("modulo.api.routes.schemas.ConnectorHub.initialise"),
+        patch("modulo.api.routes.schemas.ModelBackendHub.initialise"),
+        patch(
+            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            new_callable=PropertyMock(return_value=frozenset({backend_id})),
+        ),
+        patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
+        patch("modulo.api.routes.schemas.create_secrets_backend"),
+        patch("modulo.api.routes.schemas.SchemaInferenceService", autospec=True) as mock_service_cls,
+    ):
+        mock_service_cls.return_value.infer = AsyncMock(
+            return_value={"type": "object", "properties": {"summary": {"type": "string"}}}
+        )
+        resp = client.post(
+            "/api/v1/schemas/infer",
+            json={
+                "connector_instance_id": str(_CONNECTOR_ID),
+                "sample_query": {"resource": "issues", "filters": {}, "limit": 5},
+            },
+        )
+
+    assert resp.status_code == 200
+    assert mock_service_cls.call_args.kwargs["connector_type"] == "jira"
+
+
+def test_infer_schema_default_limit_is_200(client: TestClient) -> None:
+    """When the client omits ``limit``, the default sample size must be 200
+    per PRD §8.16 (previously 10)."""
+    ci = _make_mock_connector_instance()
+    mb = _make_mock_model_backend()
+    page_result = MagicMock(items=[mb], total=1, page=1, page_size=1)
+    backend_id = uuid.uuid4()
+
+    with (
+        patch("modulo.api.routes.schemas.get_connector_instance", return_value=ci),
+        patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("modulo.api.routes.schemas.ConnectorHub.sample", return_value=[{"id": "1"}]),
+        patch(
+            "modulo.api.routes.schemas.SchemaInferenceService.infer",
+            return_value={"type": "object", "properties": {}},
+        ),
+        patch("modulo.api.routes.schemas.ConnectorHub.initialise"),
+        patch("modulo.api.routes.schemas.ModelBackendHub.initialise"),
+        patch(
+            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            new_callable=PropertyMock(return_value=frozenset({backend_id})),
+        ),
+        patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
+        patch("modulo.api.routes.schemas.create_secrets_backend"),
+    ):
+        resp = client.post(
+            "/api/v1/schemas/infer",
+            json={
+                "connector_instance_id": str(_CONNECTOR_ID),
+                "sample_query": {"resource": "issues"},
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["sample_count"] == 1
+
+
 def test_infer_schema_connector_not_found_returns_404(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.schemas.get_connector_instance", return_value=None),
