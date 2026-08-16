@@ -38,6 +38,12 @@ class PipelineSnapshot(OrgScoped):
     model_backend_pins_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
     composite_bindings_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=True, default=list)
     parameter_bindings_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # Guardrail snapshot pin (FAR-223 item 10): the guardrail set that was
+    # bound at snapshot creation, serialized by ``serialize_guardrail_pin``.
+    # Replays evaluate the PINNED set (the ORIGINAL conditions), not the live
+    # rows; a pinned guardrail whose live row is gone is skipped-with-audit +
+    # enforcement-gap alert. Mirrors the ``composite_bindings_json`` shape.
+    guardrail_pins_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True, default=list)
     tag: Mapped[str | None] = mapped_column(String(100), nullable=True)
     notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     default_autonomy_level: Mapped[str | None] = mapped_column(String(30))

@@ -690,3 +690,148 @@ async def admin_set_org_triggers_paused(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error",
         ) from None
+
+
+# ── Guardrails org-wide kill-switch (FAR-223 item 9) ─────────────────────────
+
+
+class GetOrgGuardrailsKillSwitchResponse(BaseModel):
+    enabled: bool
+    enabled_at: str | None
+
+
+class SetOrgGuardrailsKillSwitchRequest(BaseModel):
+    enabled: bool
+
+
+class SetOrgGuardrailsKillSwitchResponse(BaseModel):
+    enabled: bool
+    enabled_at: str | None
+
+
+@router.get("/{org_id}/guardrails/kill-switch", response_model=GetOrgGuardrailsKillSwitchResponse)
+@handle_db_errors("admin.orgs.get_org_guardrails_kill_switch")
+async def admin_get_org_guardrails_kill_switch(
+    org_id: uuid.UUID,
+    current_user: AuthenticatedPrincipal = require_target_org_role(  # type: ignore[assignment]
+        "org.guardrails.kill_switch.manage", "admin", kill_switch_eligible=False
+    ),
+    session: AsyncSession = Depends(get_db_session),
+) -> GetOrgGuardrailsKillSwitchResponse:
+    """Read the org's guardrails kill-switch state (admin only)."""
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            org = await get_organisation(session, org_id)
+            if org is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+            return GetOrgGuardrailsKillSwitchResponse(
+                enabled=bool(org.guardrails_kill_switch),
+                enabled_at=org.guardrails_kill_switch_at.isoformat() if org.guardrails_kill_switch_at else None,
+            )
+    except ProgrammingError as exc:
+        logger.exception("admin_orgs.admin_get_org_guardrails_kill_switch")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        logger.exception("admin_orgs.admin_get_org_guardrails_kill_switch")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while reading org guardrails kill-switch state.",
+        ) from exc
+    except HTTPException as exc:
+        raise exc
+    except Exception:
+        logger.exception("Unexpected error in admin_get_org_guardrails_kill_switch")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
+
+
+@router.put("/{org_id}/guardrails/kill-switch", response_model=SetOrgGuardrailsKillSwitchResponse)
+@handle_db_errors("admin.orgs.admin_set_org_guardrails_kill_switch")
+async def admin_set_org_guardrails_kill_switch(
+    org_id: uuid.UUID,
+    req: SetOrgGuardrailsKillSwitchRequest,
+    current_user: AuthenticatedPrincipal = require_target_org_role(  # type: ignore[assignment]
+        "org.guardrails.kill_switch.manage", "admin", kill_switch_eligible=False
+    ),
+    session: AsyncSession = Depends(get_db_session),
+) -> SetOrgGuardrailsKillSwitchResponse:
+    """Set the org's guardrails kill-switch (admin only).
+
+    Enabling downgrades every bound guardrail to observe (shadow-only) at run
+    start — never a full disable. Enabling fires an audit event AND a
+    paging Notification (``guardrail_kill_switch``) so the downgrade is never
+    silent. Disabling restores full enforcement.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            org = await get_organisation(session, org_id)
+            if org is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+
+            # Idempotency: toggling to the current state is a no-op (no audit write).
+            if bool(org.guardrails_kill_switch) == req.enabled:
+                return SetOrgGuardrailsKillSwitchResponse(
+                    enabled=bool(org.guardrails_kill_switch),
+                    enabled_at=org.guardrails_kill_switch_at.isoformat() if org.guardrails_kill_switch_at else None,
+                )
+
+            org.guardrails_kill_switch = req.enabled
+            org.guardrails_kill_switch_at = datetime.now(UTC) if req.enabled else None
+            await session.flush()
+
+            # Audit is fail-open-with-alert: the toggle ALWAYS commits; a failed
+            # audit write is loudly logged and never rolls back the toggle.
+            try:
+                await append_audit_event(
+                    session,
+                    org_id=org_id,
+                    event_type="guardrails_kill_switch",
+                    actor_user_id=current_user.user_id,
+                    payload_json={"enabled": req.enabled},
+                )
+            except SQLAlchemyError:
+                logger.exception("admin_orgs.admin_set_org_guardrails_kill_switch audit write failed")
+            except Exception:
+                logger.exception("admin_orgs.admin_set_org_guardrails_kill_switch audit write failed (non-DB)")
+
+            if req.enabled:
+                # Alert on enable — the downgrade-to-observe is never silent.
+                from modulo.core.guardrails import notify_guardrail_event
+
+                await notify_guardrail_event(
+                    org_id,
+                    "guardrail_kill_switch",
+                    {"org_id": str(org_id), "enabled": True},
+                )
+
+            return SetOrgGuardrailsKillSwitchResponse(
+                enabled=org.guardrails_kill_switch,
+                enabled_at=org.guardrails_kill_switch_at.isoformat() if org.guardrails_kill_switch_at else None,
+            )
+    except ProgrammingError as exc:
+        logger.exception("admin_orgs.admin_set_org_guardrails_kill_switch")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        logger.exception("admin_orgs.admin_set_org_guardrails_kill_switch")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while updating org guardrails kill-switch state.",
+        ) from exc
+    except HTTPException as exc:
+        raise exc
+    except Exception:
+        logger.exception("Unexpected error in admin_set_org_guardrails_kill_switch")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None

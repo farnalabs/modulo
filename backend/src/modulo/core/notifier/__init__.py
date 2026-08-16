@@ -47,6 +47,8 @@ __all__ = [
     "EVENT_EVAL_BLOCKED",
     "EVENT_EVAL_REGRESSION",
     "EVENT_FEEDBACK_PENDING",
+    "EVENT_GUARDRAIL_ENFORCEMENT_GAP",
+    "EVENT_GUARDRAIL_KILL_SWITCH",
     "EVENT_HITL_AWAITING",
     "EVENT_HITL_OVERDUE",
     "EVENT_RUN_FAILED",
@@ -108,6 +110,14 @@ EVENT_SYSTEM_ANNOUNCEMENT = "system_announcement"
 # FAR-190 — an ongoing trigger auto-deactivated after N consecutive no-delivery
 # runs. Payload is sanitised (identifiers/titles + allow-listed reason fields).
 EVENT_TRIGGER_DEACTIVATED = "trigger_deactivated"
+# FAR-223 — a pinned guardrail could not be evaluated (soft-deleted live row)
+# or a block-action guardrail is non-conformant: the enforcement gap is a
+# paging alert so the operator sees the control has silently stopped enforcing.
+EVENT_GUARDRAIL_ENFORCEMENT_GAP = "guardrail_enforcement_gap"
+# FAR-223 — the org's guardrails kill-switch was just enabled: all bound
+# guardrails downgraded to observe (shadow-only). Alert on enable so the
+# downgrade is never silent.
+EVENT_GUARDRAIL_KILL_SWITCH = "guardrail_kill_switch"
 
 
 @dataclass
