@@ -135,8 +135,7 @@ class Settings(BaseSettings):
     # PipelineGraphNode.delivery_sentinel). Consumed at BOTH guards: guard A
     # (node_runner early skip) and guard B (executor retry suppression). When
     # disabled the gate never fires and transient node failures retry exactly as
-    # before. NOTE the ``saq_e2b_idempotency`` anti-pattern below (declared,
-    # zero consumers) — this flag MUST stay consumed at both call sites.
+    # before. This flag MUST stay consumed at both call sites.
     modulo_idempotency_gate_enabled: bool = Field(True, alias="MODULO_IDEMPOTENCY_GATE_ENABLED")
     # Web UI auth — FAIL-CLOSED (system worker refuses to boot without both).
     saq_auth_password: str | None = Field(default=None, alias="SAQ_AUTH_PASSWORD", repr=False)
@@ -148,10 +147,6 @@ class Settings(BaseSettings):
     # Per-run execution ceiling for SAQ execute_run (dispatch.py): the job must
     # reach a terminal state within this budget or the worker fails it.
     saq_run_timeout: int = Field(default=7200, alias="SAQ_RUN_TIMEOUT", ge=300, le=86400)
-    # E2B idempotency fence (F3a). The claim token lives in runs.claim_token
-    # (NOT NULL, server-defaulted to gen_random_uuid()::text since migration
-    # 0074) — the old run:{id}:e2b:{claim_token} fence key is retired.
-    saq_e2b_idempotency: bool = Field(default=True, alias="SAQ_E2B_IDEMPOTENCY")
     # Per-claim cap on SAQ claim attempts for dispatcher='saq' runs (F3a).
     # Single source of truth (retro item 9): execute and resume claims in
     # pipeline_execution resolve this value via _resolve_claim_cap; cron_helpers

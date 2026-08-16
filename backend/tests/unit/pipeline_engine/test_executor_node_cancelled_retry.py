@@ -170,7 +170,7 @@ async def test_execute_resets_to_pending_and_reraises_node_cancellation():
     factory = _make_session_factory(session)
     compiled = _mock_compiled_raising(NodeCancelledError("node-a"))
     registry = _mock_registry()
-    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True)
+    settings = MagicMock(saq_run_retries=5)
 
     with (
         patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
@@ -211,7 +211,7 @@ async def test_execute_superseded_skips_pending_reset_and_reraises():
     factory = _make_session_factory(session)
     compiled = _mock_compiled_raising(NodeCancelledError("node-a"))
     registry = _mock_registry()
-    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True)
+    settings = MagicMock(saq_run_retries=5)
 
     with (
         patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
@@ -251,7 +251,7 @@ async def test_execute_reraises_sandbox_node_failed_error():
     factory = _make_session_factory(session)
     compiled = _mock_compiled_raising(SandboxNodeFailedError("stalled"))
     registry = _mock_registry()
-    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True)
+    settings = MagicMock(saq_run_retries=5)
 
     with (
         patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
@@ -293,7 +293,7 @@ async def test_execute_terminal_fails_node_cancellation_when_retries_exhausted()
     compiled = _mock_compiled_raising(NodeCancelledError("node-a"))
     registry = _mock_registry()
     broker = registry.get_or_create.return_value
-    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True)
+    settings = MagicMock(saq_run_retries=5)
 
     with (
         patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
@@ -377,7 +377,7 @@ async def test_execute_terminal_fail_roundtrips_sandbox_diagnostics():
     factory = _make_session_factory(session)
     compiled = _mock_compiled_raising(SandboxNodeFailedError(diagnostic))
     registry = _mock_registry()
-    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True)
+    settings = MagicMock(saq_run_retries=5)
 
     with (
         patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
@@ -427,7 +427,7 @@ async def test_execute_retry_budget_ignores_non_executing_claims():
     compiled = _mock_compiled_raising(NodeCancelledError("node-a"))
     registry = _mock_registry()
     broker = registry.get_or_create.return_value
-    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True)
+    settings = MagicMock(saq_run_retries=5)
 
     with (
         patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
@@ -468,7 +468,7 @@ async def test_execute_non_cancellation_exception_still_terminal_fails():
     factory = _make_session_factory(session)
     compiled = _mock_compiled_raising(RuntimeError("boom"))
     registry = _mock_registry()
-    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True)
+    settings = MagicMock(saq_run_retries=5)
 
     with (
         patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
@@ -624,7 +624,7 @@ async def test_execute_gate_suppresses_retry_when_delivery_marked():
     compiled = _mock_compiled_raising(SandboxNodeFailedError("stalled", node_id="node-a"))
     registry = _mock_registry()
     broker = registry.get_or_create.return_value
-    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True, modulo_idempotency_gate_enabled=True)
+    settings = MagicMock(saq_run_retries=5, modulo_idempotency_gate_enabled=True)
 
     with (
         patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
@@ -676,7 +676,7 @@ async def test_execute_gate_suppresses_retry_when_retries_exhausted():
     compiled = _mock_compiled_raising(SandboxNodeFailedError("stalled", node_id="node-a"))
     registry = _mock_registry()
     broker = registry.get_or_create.return_value
-    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True, modulo_idempotency_gate_enabled=True)
+    settings = MagicMock(saq_run_retries=5, modulo_idempotency_gate_enabled=True)
 
     with (
         patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
@@ -719,7 +719,7 @@ async def test_execute_gate_magicmock_markers_skips_gate():
     factory = _make_session_factory(session)
     compiled = _mock_compiled_raising(SandboxNodeFailedError("stalled", node_id="node-a"))
     registry = _mock_registry()
-    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True, modulo_idempotency_gate_enabled=True)
+    settings = MagicMock(saq_run_retries=5, modulo_idempotency_gate_enabled=True)
 
     with (
         patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
@@ -754,7 +754,7 @@ async def test_execute_gate_kill_switch_off_disables_gate():
     factory = _make_session_factory(session)
     compiled = _mock_compiled_raising(SandboxNodeFailedError("stalled", node_id="node-a"))
     registry = _mock_registry()
-    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True, modulo_idempotency_gate_enabled=False)
+    settings = MagicMock(saq_run_retries=5, modulo_idempotency_gate_enabled=False)
 
     with (
         patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
@@ -789,7 +789,7 @@ async def test_execute_gate_node_id_none_disables_gate():
     factory = _make_session_factory(session)
     compiled = _mock_compiled_raising(SandboxNodeFailedError("stalled"))  # NO node_id
     registry = _mock_registry()
-    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True, modulo_idempotency_gate_enabled=True)
+    settings = MagicMock(saq_run_retries=5, modulo_idempotency_gate_enabled=True)
 
     with (
         patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
@@ -825,7 +825,7 @@ async def test_execute_gate_marker_absent_preserves_retry_path():
     factory = _make_session_factory(session)
     compiled = _mock_compiled_raising(SandboxNodeFailedError("stalled", node_id="node-a"))
     registry = _mock_registry()
-    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True, modulo_idempotency_gate_enabled=True)
+    settings = MagicMock(saq_run_retries=5, modulo_idempotency_gate_enabled=True)
 
     with (
         patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
@@ -862,7 +862,7 @@ async def test_execute_gate_superseded_never_suppresses():
     factory = _make_session_factory(session)
     compiled = _mock_compiled_raising(SandboxNodeFailedError("stalled", node_id="node-a"))
     registry = _mock_registry()
-    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True, modulo_idempotency_gate_enabled=True)
+    settings = MagicMock(saq_run_retries=5, modulo_idempotency_gate_enabled=True)
 
     with (
         patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
@@ -909,7 +909,7 @@ async def test_execute_gate_multi_node_inert():
     factory = _make_session_factory(session)
     compiled = _mock_compiled_raising(SandboxNodeFailedError("stalled", node_id="node-b"))
     registry = _mock_registry()
-    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True, modulo_idempotency_gate_enabled=True)
+    settings = MagicMock(saq_run_retries=5, modulo_idempotency_gate_enabled=True)
 
     with (
         patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
@@ -949,7 +949,7 @@ async def test_execute_gate_prove_the_fix_suppression_requires_decision():
     factory = _make_session_factory(session)
     compiled = _mock_compiled_raising(SandboxNodeFailedError("stalled", node_id="node-a"))
     registry = _mock_registry()
-    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True, modulo_idempotency_gate_enabled=True)
+    settings = MagicMock(saq_run_retries=5, modulo_idempotency_gate_enabled=True)
 
     with (
         patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
