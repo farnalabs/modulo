@@ -472,6 +472,43 @@ describe('RunsListView', () => {
     wrapper.unmount()
   })
 
+  it('preserves an active status filter in the URL when paginating', async () => {
+    routeMocks.query = { status: 'running' }
+    mockResponses['/api/v1/runs'] = listWith(manyRuns)
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const nextBtn = wrapper.findAll('button').find((b) => b.text().trim() === 'Next')
+    expect(nextBtn).toBeDefined()
+    await nextBtn!.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(api.GET).toHaveBeenCalledWith('/api/v1/runs', expect.objectContaining({
+      params: { query: expect.objectContaining({ page: 2, status: 'running' }) },
+    }))
+    expect(routerMocks.replace).toHaveBeenCalledWith({ query: { status: 'running', page: '2' } })
+    wrapper.unmount()
+  })
+
+  it('keeps untracked query params (e.g. theme=agent) in the URL when paginating', async () => {
+    routeMocks.query = { theme: 'agent' }
+    mockResponses['/api/v1/runs'] = listWith(manyRuns)
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const nextBtn = wrapper.findAll('button').find((b) => b.text().trim() === 'Next')
+    expect(nextBtn).toBeDefined()
+    await nextBtn!.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(routerMocks.replace).toHaveBeenCalledWith({ query: { theme: 'agent', page: '2' } })
+    wrapper.unmount()
+  })
+
   it('defaults to page 1 and writes no page query on a bare mount', async () => {
     const wrapper = mountView()
     await flushPromises()

@@ -175,7 +175,7 @@
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import { ref, computed, watch, onUnmounted } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter, type LocationQuery } from 'vue-router'
 import { fetchRuns, requestRunCancellation, type RunListItem, type FetchRunsParams } from '../lib/api/runs'
 import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
@@ -216,12 +216,17 @@ function parsePageParam(raw: unknown): number {
 }
 
 function syncQuery() {
-  const query: Record<string, string> = {}
+  const query: LocationQuery = { ...route.query }
   if (page.value > 1) query.page = String(page.value)
+  else delete query.page
   if (filterStatus.value) query.status = filterStatus.value
+  else delete query.status
   if (filterTriggerType.value) query.trigger_type = filterTriggerType.value
+  else delete query.trigger_type
   if (filterSearch.value) query.search = filterSearch.value
+  else delete query.search
   if (filterPipelineId.value) query.pipeline_id = filterPipelineId.value
+  else delete query.pipeline_id
   router.replace({ query })
 }
 
