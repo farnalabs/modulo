@@ -44,7 +44,7 @@
           <tr>
             <th scope="col" class="sr-only">{{ labelField }}</th>
             <th v-if="descriptionField" scope="col" class="sr-only">{{ descriptionField }}</th>
-            <th scope="col" class="sr-only">Remove</th>
+            <th scope="col" class="sr-only">{{ $t('common.remove') }}</th>
           </tr>
         </thead>
         <tbody class="divide-y">
