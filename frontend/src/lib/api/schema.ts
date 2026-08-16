@@ -5705,6 +5705,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/orgs/{org_id}/guardrails/kill-switch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Get Org Guardrails Kill Switch
+         * @description Read the org's guardrails kill-switch state (admin only).
+         */
+        get: operations["admin_get_org_guardrails_kill_switch_api_v1_admin_orgs__org_id__guardrails_kill_switch_get"];
+        /**
+         * Admin Set Org Guardrails Kill Switch
+         * @description Set the org's guardrails kill-switch (admin only).
+         *
+         *     Enabling downgrades every bound guardrail to observe (shadow-only) at run
+         *     start — never a full disable. Enabling fires an audit event AND a
+         *     paging Notification (``guardrail_kill_switch``) so the downgrade is never
+         *     silent. Disabling restores full enforcement.
+         */
+        put: operations["admin_set_org_guardrails_kill_switch_api_v1_admin_orgs__org_id__guardrails_kill_switch_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/remy/config": {
         parameters: {
             query?: never;
@@ -9817,6 +9846,13 @@ export interface components {
             /** Decision At */
             decision_at?: string | null;
         };
+        /** GetOrgGuardrailsKillSwitchResponse */
+        GetOrgGuardrailsKillSwitchResponse: {
+            /** Enabled */
+            enabled: boolean;
+            /** Enabled At */
+            enabled_at: string | null;
+        };
         /** GraduateStageRequest */
         GraduateStageRequest: {
             /** Pipeline Id */
@@ -13442,6 +13478,18 @@ export interface components {
             org_id: string;
             /** Enforce */
             enforce: boolean;
+        };
+        /** SetOrgGuardrailsKillSwitchRequest */
+        SetOrgGuardrailsKillSwitchRequest: {
+            /** Enabled */
+            enabled: boolean;
+        };
+        /** SetOrgGuardrailsKillSwitchResponse */
+        SetOrgGuardrailsKillSwitchResponse: {
+            /** Enabled */
+            enabled: boolean;
+            /** Enabled At */
+            enabled_at: string | null;
         };
         /** SetOrgLicenseRequest */
         SetOrgLicenseRequest: {
@@ -28587,6 +28635,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SetOrgTriggersPausedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_get_org_guardrails_kill_switch_api_v1_admin_orgs__org_id__guardrails_kill_switch_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GetOrgGuardrailsKillSwitchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_set_org_guardrails_kill_switch_api_v1_admin_orgs__org_id__guardrails_kill_switch_put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetOrgGuardrailsKillSwitchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetOrgGuardrailsKillSwitchResponse"];
                 };
             };
             /** @description Validation Error */
