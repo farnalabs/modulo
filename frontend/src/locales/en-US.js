@@ -369,8 +369,6 @@ export default {
       "level": "Level",
       "scope": "Scope",
       "status": "Status",
-      "all_status": "All Status",
-      "all_scopes": "All Scopes",
       "dismissed_self": "Dismissed (self)",
       "dismissed_scope": "Dismissed (scope)",
       "level_error": "Error",

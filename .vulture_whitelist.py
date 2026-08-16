@@ -180,6 +180,7 @@ __all__ = [
     "entry_point_errors",
     "locks",
     "effective_max_rate_usd",
+    "connector_rebind_required",  # PipelineResponse field set on 9.3 ownership transfer; read via JSON serialization by the frontend
     # --- ORM / framework attributes (SQLAlchemy mapped attrs, protocol attrs, dataclass-like slots) ---
     "blacklisted_at",
     "resolved_at",

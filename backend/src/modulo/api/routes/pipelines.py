@@ -40,6 +40,8 @@ from modulo.core.team_visibility import (
     connector_team_mismatch_detail,
     extract_connector_bindings,
     find_connector_team_mismatches,
+    find_model_backend_team_mismatches,
+    model_backend_team_mismatch_detail,
 )
 from modulo.db.crud.composite_template import create_composite_template
 from modulo.db.crud.hitl_gate_guard import (
@@ -47,6 +49,7 @@ from modulo.db.crud.hitl_gate_guard import (
     denial_http_status,
 )
 from modulo.db.crud.pipeline import (
+    PipelineHasActiveRunsError,
     archive_pipeline,
     check_pipeline_name_available,
     clone_pipeline,
@@ -318,6 +321,10 @@ class PipelineResponse(BaseModel):
     archived_at: datetime | None = None
     owner_team_id: uuid.UUID | None = None
     folder_id: uuid.UUID | None = None
+    # Set on PATCH /pipelines/{id} responses when owner_team_id changed: the
+    # UI warns the user to re-save the graph so connectors/model backends are
+    # rebound for the new team (PRD §9.3 ownership transfer).
+    connector_rebind_required: bool = False
     created_by: uuid.UUID = Field(validation_alias="account_id")
     created_at: datetime
     updated_at: datetime
@@ -610,12 +617,47 @@ async def _enforce_connector_team_bindings(
         )
 
 
+async def _enforce_model_backend_team_bindings(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    pipeline_owner_team_id: uuid.UUID | None,
+    model_backend_pins: list[dict[str, Any]],
+) -> None:
+    """Block graph saves that pin a team-private model backend from another team.
+
+    PRD §9.3: a model backend with ``visibility: team`` is only usable within
+    pipelines owned by the same team, mirroring the connector rule. Violations
+    raise 409 ``model_backend_team_mismatch`` at the pipeline-save command layer.
+    """
+    mismatches = await find_model_backend_team_mismatches(
+        session,
+        org_id=org_id,
+        pipeline_owner_team_id=pipeline_owner_team_id,
+        model_backend_pins=model_backend_pins,
+    )
+    if mismatches:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=model_backend_team_mismatch_detail(mismatches),
+        )
+
+
 async def _resolve_graph_references(
     session: AsyncSession,
     nodes: list[PipelineGraphNode],
     org_id: uuid.UUID,
+    pipeline_owner_team_id: uuid.UUID | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Validate tenant-owned graph references and derive validator pins."""
+    """Validate tenant-owned graph references and derive validator pins.
+
+    Whenever the graph resolves model-backend pins, they are checked against
+    the pipeline's team: a team-private model backend pinned by a pipeline owned
+    by a different team (or by no team at all) raises 409
+    ``model_backend_team_mismatch`` (PRD §9.3), mirroring the connector rule
+    which is also enforced unconditionally. The mismatch rule itself decides
+    whether an org-owned pipeline (``owner_team_id=None``) may pin a team-private
+    backend.
+    """
     agent_ids = {node.agent_id for node in nodes if node.agent_id is not None}
     agents = (
         list(
@@ -724,6 +766,13 @@ async def _resolve_graph_references(
                         "schema_id": str(node.output_schema_id),
                     }
                 )
+    if model_backend_pins:
+        await _enforce_model_backend_team_bindings(
+            session,
+            org_id=org_id,
+            pipeline_owner_team_id=pipeline_owner_team_id,
+            model_backend_pins=model_backend_pins,
+        )
     return schema_pins, model_backend_pins
 
 
@@ -927,6 +976,7 @@ async def replace_pipeline_graph_endpoint(
                 session,
                 req.nodes,
                 principal.organisation_id,
+                pipeline_owner_team_id=pipeline.owner_team_id,
             )
             graph = await replace_pipeline_graph(
                 session,
@@ -1060,6 +1110,7 @@ async def update_pipeline_endpoint(
             if current is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
             await _assert_team_transition_allowed(session, principal, current, updates)
+            ownership_changed = "owner_team_id" in updates and updates["owner_team_id"] != current.owner_team_id
             if "default_autonomy_level" in updates:
                 previous = await get_pipeline(session, pipeline_id)
                 prev_level = previous.default_autonomy_level if previous else None
@@ -1097,11 +1148,18 @@ async def update_pipeline_endpoint(
                 existing = await get_pipeline(session, pipeline_id)
                 if existing is None:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+                effective_owner_team_id = updates.get("owner_team_id", existing.owner_team_id)
                 await _enforce_connector_team_bindings(
                     session,
                     principal.organisation_id,
-                    updates.get("owner_team_id", existing.owner_team_id),
+                    effective_owner_team_id,
                     graph_bindings,
+                )
+                await _resolve_graph_references(
+                    session,
+                    req.graph_json.nodes,
+                    principal.organisation_id,
+                    pipeline_owner_team_id=effective_owner_team_id,
                 )
                 graph = await replace_pipeline_graph(
                     session,
@@ -1115,7 +1173,14 @@ async def update_pipeline_endpoint(
                 )
                 if graph is None:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
-            pipeline = await update_pipeline(session, pipeline_id, updates)
+            pipeline = await update_pipeline(
+                session,
+                pipeline_id,
+                updates,
+                org_id=principal.organisation_id,
+                account_id=principal.account_id,
+                request_id=getattr(principal, "request_id", None),
+            )
     except HitlGateWeakeningDenied as exc:
         await _deny_hitl_gate(
             session,
@@ -1125,6 +1190,13 @@ async def update_pipeline_endpoint(
             exc=exc,
             request_id=getattr(principal, "request_id", None),
         )
+    except PipelineHasActiveRunsError as exc:
+        # PRD §9.3: ownership transfer is blocked while any run is non-terminal.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"pipeline_has_active_runs: {exc.active_run_count} run(s) still in progress; "
+            "cannot change ownership while any run is active",
+        ) from None
     except ProgrammingError:
         logger.exception("routes.pipelines")
 
@@ -1135,7 +1207,9 @@ async def update_pipeline_endpoint(
 
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
-    return PipelineResponse.model_validate(pipeline)
+    response = PipelineResponse.model_validate(pipeline)
+    response.connector_rebind_required = ownership_changed
+    return response
 
 
 @router.delete("/{pipeline_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, status
 from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
@@ -629,6 +629,79 @@ def test_replace_graph_allows_same_team_connector_binding(client: TestClient) ->
     assert resp.status_code == 200
 
 
+def test_replace_graph_org_pipeline_pinning_team_private_model_backend_is_409(client: TestClient) -> None:
+    """An org-owned pipeline (owner_team_id=None) must NOT skip model-backend team scope.
+
+    PRD §9.3: an org pipeline pinning a team-private model backend leaks the
+    private backend to the whole org. Mirror the connector rule: the mismatch
+    check runs even when the pipeline has no owning team.
+    """
+    agent_id = uuid.uuid4()
+    backend_id = uuid.uuid4()
+    team_owner = uuid.uuid4()
+    pipeline = _make_pipeline()  # owner_team_id=None → org-owned
+    node = {
+        "id": str(uuid.uuid4()),
+        "node_type": "agent",
+        "agent_id": str(agent_id),
+        "position": {"x": 10, "y": 20},
+    }
+    agent = MagicMock(
+        id=agent_id,
+        input_schema_id=uuid.uuid4(),
+        output_schema_id=uuid.uuid4(),
+        model_backend_id=backend_id,
+    )
+    backend = MagicMock(
+        id=backend_id,
+        visibility="team",
+        owner_team_id=team_owner,
+        organisation_id=_ORG_ID,
+    )
+    backend.name = "eng-llm"
+
+    session = _make_mock_session()
+    agent_result = MagicMock()
+    agent_result.scalars.return_value = [agent]
+    backend_result = MagicMock()
+    backend_result.scalars.return_value.all.return_value = [backend]
+    authz_result = MagicMock()
+    authz_result.scalar_one_or_none.return_value = None
+
+    async def _execute(query, *args: object, **kwargs: object) -> MagicMock:
+        table = str(query).split("\n", 1)[0].lower()
+        if "organisations.authz_enforce" in table:
+            return authz_result
+        if "model_backends" in table:
+            return backend_result
+        return agent_result
+
+    session.execute = AsyncMock(side_effect=_execute)
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    app.dependency_overrides[get_db_session] = override_session
+    with (
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch(
+            "modulo.api.routes.pipelines.find_connector_team_mismatches",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch("modulo.api.routes.pipelines.replace_pipeline_graph"),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+            json={"nodes": [node], "edges": []},
+        )
+
+    assert resp.status_code == 409
+    assert "model_backend_team_mismatch" in resp.json()["detail"]
+    assert "owned by team None" in resp.json()["detail"]
+
+
 def test_replace_graph_missing_pipeline_returns_404(client: TestClient) -> None:
     connector_id = uuid.uuid4()
     node = _graph_node_with_connector_binding(connector_id)
@@ -700,6 +773,10 @@ def test_update_pipeline_with_graph_uses_effective_owner_team(client: TestClient
             "modulo.api.routes.pipelines.find_connector_team_mismatches",
             new=AsyncMock(return_value=[]),
         ) as find_mismatches,
+        patch(
+            "modulo.api.routes.pipelines._resolve_graph_references",
+            new=AsyncMock(return_value=([], [])),
+        ) as resolve_refs,
         patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=([node], [])),
         patch(
             "modulo.api.routes.pipelines.GraphValidator.validate_definition",
@@ -719,6 +796,49 @@ def test_update_pipeline_with_graph_uses_effective_owner_team(client: TestClient
 
     assert resp.status_code == 200
     assert find_mismatches.await_args.kwargs["pipeline_owner_team_id"] == team_b
+    assert resolve_refs.await_args.kwargs["pipeline_owner_team_id"] == team_b
+
+
+def test_update_pipeline_with_graph_blocks_cross_team_model_backend_binding(client: TestClient) -> None:
+    connector_id = uuid.uuid4()
+    team_a = uuid.uuid4()
+    team_b = uuid.uuid4()
+    pipeline = _make_pipeline()
+    pipeline.owner_team_id = team_a
+    node = _graph_node_with_connector_binding(connector_id)
+
+    with (
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch(
+            "modulo.api.routes.pipelines.find_connector_team_mismatches",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "modulo.api.routes.pipelines._resolve_graph_references",
+            new=AsyncMock(
+                side_effect=HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="model_backend_team_mismatch: model backend 'eng-llm' is team-private "
+                    f"(owner team {team_a}) but pipeline is owned by team {team_b}",
+                )
+            ),
+        ) as resolve_refs,
+        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=([node], [])),
+        patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}",
+            json={
+                "owner_team_id": str(team_b),
+                "graph_json": {"nodes": [node], "edges": []},
+            },
+        )
+
+    assert resp.status_code == 409
+    assert resolve_refs.await_args.kwargs["pipeline_owner_team_id"] == team_b
+    assert "model_backend_team_mismatch" in resp.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -737,8 +857,10 @@ async def test_graph_references_resolve_tenant_owned_agents_and_schemas() -> Non
     agent_result.scalars.return_value = [agent]
     schema_result = MagicMock()
     schema_result.scalars.return_value = [manual_schema_id]
+    backend_result = MagicMock()
+    backend_result.scalars.return_value.all.return_value = []
     session = configure_mock_session(AsyncMock())
-    session.execute = AsyncMock(side_effect=[agent_result, schema_result])
+    session.execute = AsyncMock(side_effect=[agent_result, schema_result, backend_result])
     nodes = [
         PipelineGraphNode.model_validate(
             {
