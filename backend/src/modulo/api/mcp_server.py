@@ -584,6 +584,103 @@ async def _revalidate_live_role(token: str, account_id: uuid.UUID, org_id: uuid.
     return live_role
 
 
+async def _validate_api_key_live(token: str, org_id: uuid.UUID) -> bool:
+    """Re-validate an API-key credential and clamp its role against the live role."""
+    async with _session(org_id) as s:
+        key = await validate_api_key(s, token, org_id)
+    # ADR 017 DECISION 4 — clamp on every per-event re-validation too.
+    # The stored key.role is the minted role; the effective role is
+    # min(minted, live), resolved TTL-bounded through the same cache
+    # the JWT path uses (per-connection keyed by token).
+    account_id = _ctx_user_id.get(None)
+    if account_id is None:
+        return False
+    live_role = await _revalidate_live_role(token, account_id, org_id)
+    if live_role is None:
+        _record_api_key_role_cap(
+            minted_role=key.role,
+            effective_role="",
+            org_id=org_id,
+            degraded=False,
+            key_id=key.id,
+        )
+        return False
+    clamped = _clamp_role(key.role, live_role)
+    if not clamped:
+        _record_api_key_role_cap(
+            minted_role=key.role,
+            effective_role="",
+            org_id=org_id,
+            degraded=False,
+            key_id=key.id,
+        )
+        return False
+    if clamped != key.role:
+        _record_api_key_role_cap(
+            minted_role=key.role,
+            effective_role=clamped,
+            org_id=org_id,
+            degraded=True,
+            key_id=key.id,
+        )
+    _ctx_role.set(clamped)
+    _ctx_team_id.set(key.team_id)
+    return True
+
+
+async def _validate_principal_live(token: str, principal: Any) -> bool:
+    """Re-validate a regular JWT principal's live org role."""
+    if principal.organisation_id is None:
+        return False
+    live_role = await _revalidate_live_role(
+        token,
+        principal.account_id,
+        principal.organisation_id,
+    )
+    if live_role is None:
+        return False
+    _ctx_role.set(live_role)
+    _ctx_team_id.set(None)  # user tokens carry no team boundary
+    return True
+
+
+async def _validate_oauth_live(token: str) -> bool:
+    """Re-validate an OAuth access token credential against its token family."""
+    settings = get_settings()
+    try:
+        claims = decode_oauth_access_token(token, settings.secret_key)
+    except JWTError:
+        # Regular JWT (used by Remy) — skip OAuth token family check
+        try:
+            from modulo.auth.jwt import decode_principal
+
+            principal = decode_principal(token, settings.secret_key)
+        except JWTError:
+            return False
+        return await _validate_principal_live(token, principal)
+    async with _session(claims.organisation_id) as s:
+        if not await check_oauth_token_family_valid(
+            s,
+            family_id=claims.token_family,
+            client_id=claims.client_id,
+            org_id=claims.organisation_id,
+        ):
+            return False
+    # ADR 017: re-resolve the account's LIVE role (TTL-bounded per
+    # connection) and re-apply the scope→live clamp so a demoted
+    # operator loses scope mid-stream too.
+    live_role = await _revalidate_live_role(
+        token,
+        claims.account_id,
+        claims.organisation_id,
+    )
+    if live_role is None:
+        return False
+    _ctx_role.set(clamp_oauth_role(scopes_required_role(claims.scopes), live_role))
+    _ctx_team_id.set(None)  # user tokens carry no team boundary
+    return True
+
+
 async def validate_current_auth() -> bool:
     """Re-validate the current auth credential for per-event SSE enforcement.
 
@@ -610,93 +707,9 @@ async def validate_current_auth() -> bool:
 
     try:
         if auth_type == "api_key":
-            async with _session(org_id) as s:
-                key = await validate_api_key(s, token, org_id)
-            # ADR 017 DECISION 4 — clamp on every per-event re-validation too.
-            # The stored key.role is the minted role; the effective role is
-            # min(minted, live), resolved TTL-bounded through the same cache
-            # the JWT path uses (per-connection keyed by token).
-            account_id = _ctx_user_id.get(None)
-            if account_id is None:
-                return False
-            live_role = await _revalidate_live_role(token, account_id, org_id)
-            if live_role is None:
-                _record_api_key_role_cap(
-                    minted_role=key.role,
-                    effective_role="",
-                    org_id=org_id,
-                    degraded=False,
-                    key_id=key.id,
-                )
-                return False
-            clamped = _clamp_role(key.role, live_role)
-            if not clamped:
-                _record_api_key_role_cap(
-                    minted_role=key.role,
-                    effective_role="",
-                    org_id=org_id,
-                    degraded=False,
-                    key_id=key.id,
-                )
-                return False
-            if clamped != key.role:
-                _record_api_key_role_cap(
-                    minted_role=key.role,
-                    effective_role=clamped,
-                    org_id=org_id,
-                    degraded=True,
-                    key_id=key.id,
-                )
-            _ctx_role.set(clamped)
-            _ctx_team_id.set(key.team_id)
-            return True
-
+            return await _validate_api_key_live(token, org_id)
         if auth_type == "oauth":
-            settings = get_settings()
-            try:
-                claims = decode_oauth_access_token(token, settings.secret_key)
-            except JWTError:
-                # Regular JWT (used by Remy) — skip OAuth token family check
-                try:
-                    from modulo.auth.jwt import decode_principal
-
-                    principal = decode_principal(token, settings.secret_key)
-                except JWTError:
-                    return False
-                if principal.organisation_id is None:
-                    return False
-                live_role = await _revalidate_live_role(
-                    token,
-                    principal.account_id,
-                    principal.organisation_id,
-                )
-                if live_role is None:
-                    return False
-                _ctx_role.set(live_role)
-                _ctx_team_id.set(None)  # user tokens carry no team boundary
-                return True
-            async with _session(claims.organisation_id) as s:
-                if not await check_oauth_token_family_valid(
-                    s,
-                    family_id=claims.token_family,
-                    client_id=claims.client_id,
-                    org_id=claims.organisation_id,
-                ):
-                    return False
-            # ADR 017: re-resolve the account's LIVE role (TTL-bounded per
-            # connection) and re-apply the scope→live clamp so a demoted
-            # operator loses scope mid-stream too.
-            live_role = await _revalidate_live_role(
-                token,
-                claims.account_id,
-                claims.organisation_id,
-            )
-            if live_role is None:
-                return False
-            _ctx_role.set(clamp_oauth_role(scopes_required_role(claims.scopes), live_role))
-            _ctx_team_id.set(None)  # user tokens carry no team boundary
-            return True
-
+            return await _validate_oauth_live(token)
         return False
     except (ApiKeyInvalidError, JWTError):
         return False
