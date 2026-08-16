@@ -34,7 +34,7 @@ Feature: Schema Inference
     And a model backend is configured
     When I POST /api/v1/schemas/infer with the connector instance and no limit
     Then the response status is 200
-    And the sample query limit defaults to 10
+    And the sample query limit defaults to 200
 
   Scenario: Select connector instance by UUID
     Given a connector instance "jira-tasks" with sample data

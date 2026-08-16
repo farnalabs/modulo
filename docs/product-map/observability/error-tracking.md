@@ -167,7 +167,7 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
 - [x] Count threshold: group count >= condition_min_count
 - [x] Cooldown check: per `(rule_id, group_id)` with Redis (or in-memory fallback)
 - [x] in_app action creates NotificationDeliveryLog entry
-- [ ] email action is a placeholder — only logs intent, no actual email sent
+- [x] email action dispatches via SMTP (`send_email` in `core/email_service`) to org admins — SMTP resolved from org `settings_json` with global fallback, send failures raise `EmailSendingError` and record `alert_email_delivery_failed` without blocking other actions (fully covered by `test_error_alerting.py` email suite)
 - [x] webhook action POSTs JSON to configured URL (15s timeout)
 - [x] Slack detection formats message with emoji prefix
 
@@ -179,7 +179,7 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
 - [x] `POST /api/v1/errors/forwarders/{forwarder_type}/test` — test connection
 - [x] Forwarders run independently; single failure does not block others
 - [x] Base forwarder must return bool and never raise
-- [ ] No forwarder configuration UI exists — API-only
+- [x] Forwarder configuration UI exists — `SettingsErrorForwardersView.vue` at `/settings/error-forwarders` (list, enable/disable toggle, per-type config fields, test-connection button, status indicator; Team-tier FeatureGate)
 
 ### Prometheus / OTel Metrics
 
@@ -247,9 +247,8 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
 
 ### Known Gaps
 
-- **Email dispatch placeholder:** `_dispatch_email()` only logs intent — no actual
-  email integration
-- ~~**`condition_window_seconds` unused:** alert evaluation never applied a time-window
+- ~~**Email dispatch placeholder:** `_dispatch_email()` only logs intent — no actual email integration~~ **RESOLVED 2026-08-15**: `_dispatch_email()` in `alert_dispatcher.py` dispatches real SMTP email via `core/email_service.send_email` (org `settings_json` SMTP with global fallback, admin-recipient resolution, `EmailSendingError` → `alert_email_delivery_failed` metric, never blocks other actions); covered by the email dispatch suite in `test_error_alerting.py`
+- ~~**condition_window_seconds unused:** alert evaluation never applied a time-window
   filter — **RESOLVED 2026-07-31**: `AlertEngine.evaluate()` now counts events per
   fingerprint within the window via `_count_events_in_window()` and compares that
   against `condition_min_count`; `0`/`None` falls back to the lifetime group count.
@@ -285,7 +284,7 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
   public ingest fold, serializer read-back + null-context, group-detail endpoint
   round-trip) + 1 BDD scenario with 3 step definitions in `error_ingestion.feature`.~~
 - **No notification rules UI:** API exists but no frontend views for managing rules
-- **No forwarder configuration UI:** Only API CRUD — no frontend views
+- ~~**No forwarder configuration UI:** Only API CRUD — no frontend views~~ **RESOLVED 2026-08-15**: `SettingsErrorForwardersView.vue` ships at `/settings/error-forwarders` with per-forwarder config fields, enable/disable toggle, test-connection button, and status indicator (Team-tier FeatureGate)
 - **In-memory cooldown state lost on restart:** Without Redis, alert cooldown is
   in-memory only, not shared across processes
 - **In-memory session keys non-persistent:** Without Redis, session keys are lost
@@ -295,6 +294,13 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
 - **Public ingest daily cap memory leak (fixed 2026-07-07):** `_public_daily_event_count` entries for stale IPs are now pruned by `_prune_stale_ip_counters()`. See QA History 2026-07-07.
 
 ## QA History
+
+### 2026-08-15 — coverage drive (product-map walk)
+
+- **Marked `[x]`: email action** — `_dispatch_email()` was flagged as a placeholder in the product map, but the dispatcher now sends real SMTP email via `core/email_service.send_email` (org `settings_json` SMTP with global settings fallback, admin-recipient resolution, `EmailSendingError` → failure metric, best-effort never blocks other actions). Verified against `alert_dispatcher.py` and the email dispatch suite in `test_error_alerting.py` (org-SMTP send, settings fallback, no-smtp disable, no-admins, send-failure metric). Removed the stale Known Gap.
+- **Marked `[x]`: forwarder configuration UI** — `SettingsErrorForwardersView.vue` exists at `/settings/error-forwarders` (list all 6, enable/disable toggle, per-type config fields, test-connection, status indicator; Team-tier FeatureGate). Removed the stale Known Gap.
+- **Confirmed genuine gaps** (left unchecked): no user-facing notification-rules UI (API-only), pending queue is in-memory (lost on page reload), BDD step definitions remain mock-based.
+- No source changes required for this entry — all marked behaviours already verified; remaining gaps documented.
 
 ### 2026-08-13 — improve-architecture (breadcrumb-persistence gap→resolved)
 

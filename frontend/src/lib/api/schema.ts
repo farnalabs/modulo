@@ -13310,7 +13310,7 @@ export interface components {
             };
             /**
              * Limit
-             * @default 10
+             * @default 200
              */
             limit: number;
         };

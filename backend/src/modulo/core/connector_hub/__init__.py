@@ -79,7 +79,7 @@ from modulo.db.models.connector_instance import ConnectorInstance
 
 logger = logging.getLogger(__name__)
 
-_SAMPLE_LIMIT: int = 100
+_SAMPLE_LIMIT: int = 200
 _LOCALHOST_8080: str = "http://localhost:8080"
 _LOCALHOST_3000: str = "http://localhost:3000"
 _LOCALHOST_5678: str = "http://localhost:5678"
