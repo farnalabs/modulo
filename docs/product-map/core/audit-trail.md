@@ -99,8 +99,8 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 
 - [x] `run_started` — pipeline_id, snapshot_id, trigger_type, user_id, input hash
 - [x] `hitl_claimed` — run_id, gate_id, user_id
-- [ ] `hitl_approved` — run_id, gate_id, user_id
-- [ ] `hitl_rejected` — run_id, gate_id, user_id, reason, reject_target
+- [x] `hitl_approved` — run_id, gate_id, user_id (fires under the dot-notation name `hitl.output_delivered` via `HITLManager.record_approval`; test: `test_approve_valid_token_records_decision`)
+- [x] `hitl_rejected` — run_id, gate_id, user_id, reason, reject_target (fires as `hitl.output_rejected` via `HITLManager.record_rejection`; test: `test_reject_persists_reason_payload`)
 - [ ] `pipeline_changed` — pipeline_id, user_id, change summary
 - [ ] `agent_prompt_changed` — agent_id, user_id, old_version, new_version
 - [ ] `user_permission_changed` — target_user_id, changed_by, old_role, new_role
@@ -115,9 +115,9 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 - [x] `team_member_added` — team_id, user_id, role
 - [x] `team_member_removed` — team_id, user_id, role (role the removed member held)
 - [x] `team_member_role_changed` — team_id, user_id, old_role, new_role
-- [ ] `resource_team_ownership_changed` — resource_type, resource_id, old/new team_id
+- [x] `resource_team_ownership_changed` — resource_type, resource_id, old/new team_id (dispatched from `db/crud/pipeline.py` update on owner-team change; test: `test_ownership_change_emits_resource_team_ownership_changed_audit`)
 - [ ] `team_membership_revoked` — team_id, user_id, revoked_by
-- [ ] `hitl_output_delivered` — V1 event, data: run_id, gate_id, user_id, output hash
+- [x] `hitl_output_delivered` — V1 event, data: run_id, gate_id, user_id, output hash (fires as `hitl.output_delivered`)
 
 ### Implemented Event Types (actually dispatched in code)
 
@@ -204,7 +204,7 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 - verify_chain limited to 10000 events by default — large orgs may need higher limit or batched verification
 - No event retention policy (events accumulate indefinitely)
 - No event schema versioning (payload structure could change between event types)
-- **PRD-vs-implementation divergence**: 14 of the 18 PRD-specified event types (`hitl_approved`, `hitl_rejected`, `team_created`, etc.) are NOT dispatched. Production code uses 19 different dot-notation event types (`pipeline.autonomy_level_changed`, `hitl.output_delivered`, etc.) with no overlap to the PRD table. The naming convention, granularity, and payload structure differ entirely. **[RESOLVED 2026-08-15]** — 4 PRD event types are now dispatched under their PRD names: `run_started`, `hitl_claimed`, `api_key_created`, `api_key_revoked`.
+- **PRD-vs-implementation divergence**: 8 of the 18 PRD-specified event types (`pipeline_changed`, `agent_prompt_changed`, `user_permission_changed`, `connector_credentials_updated`, `model_backend_credentials_updated`, `schema_version_deprecated`, `auth_event`, `team_membership_revoked`) are NOT dispatched. Production code uses dot-notation event types with a different naming convention/granularity. The other 10 are dispatched — 6 under their exact PRD names (`run_started`, `hitl_claimed`, `api_key_created`, `api_key_revoked`, `team_created`, `team_deleted`) and 4 under dot-notation equivalents that carry the same data (`hitl_approved`→`hitl.output_delivered`, `hitl_rejected`→`hitl.output_rejected`, `hitl_output_delivered`→`hitl.output_delivered`, `team_renamed`→`team_updated`), plus `resource_team_ownership_changed` under its exact PRD name. **[RESOLVED 2026-08-15]** — down from 14 undispatched.
 - ~~**No `run_started` event**: pipeline runs start without an audit event. The `run_started` PRD event is not dispatched anywhere.~~ **[RESOLVED 2026-08-15]** — dispatched from `PipelineExecutor._check_capacity` at the pending→running claim transition (fires once per run; resumes excluded).
 - ~~**No `hitl_claimed` audit event**: Claim acquisition is not recorded in the audit trail (`hitl.claim_expired` is dispatched, but the initial claim itself is not).~~ **[RESOLVED 2026-08-15]** — dispatched from `HITLManager.claim()` with run_id/gate_id/user_id/team_id/expiry_minutes.
 - ~~**No team CRUD audit events**: team creation, rename, deletion, membership changes, and role changes are not audited.~~ **[RESOLVED]** — team create/update/delete were already dispatched (`team_created`/`team_updated`/`team_deleted`); team membership add/remove/role-change are now dispatched too (`team_member_added`/`team_member_removed`/`team_member_role_changed` from the teams membership routes). Remaining divergence: the rename event fires as `team_updated` rather than PRD's `team_renamed`.
@@ -219,6 +219,15 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 - **8 unguarded audit dispatch calls fixed**: All previously uncovered dispatch calls now have error handling protection (expiry_job, recovery, sso_provider, admin team deletion, run_purge transaction scoping, rotation deadlock)
 
 ## QA History
+
+### 2026-08-15 — dist/partial-core2 (behaviour verification)
+Marked 4 PRD event-type rows `[ ]`→`[x]` after verifying the dispatch sites and their tests:
+- **`hitl_approved`** — `HITLManager.record_approval` appends `hitl.output_delivered` (run_id/gate_id/user_id). Tested in `test_hitl_manager.py`.
+- **`hitl_rejected`** — `HITLManager.record_rejection` appends `hitl.output_rejected` with `reason` + `reject_target`. Tested in `test_hitl_manager.py`.
+- **`hitl_output_delivered`** — `HITLManager.record_approval`/`modify_and_approve` append `hitl.output_delivered` (output hash). Tested.
+- **`resource_team_ownership_changed`** — dispatched from `db/crud/pipeline.py` update when `owner_team_id` changes (payload includes old/new team + changed_by). Tested in `test_teams.py`.
+- Updated the Known-Gap divergence count: 14 → 8 undispatched PRD event types. The remaining 8 (`pipeline_changed`, `agent_prompt_changed`, `user_permission_changed`, `connector_credentials_updated`, `model_backend_credentials_updated`, `schema_version_deprecated`, `auth_event`, `team_membership_revoked`) are not dispatched anywhere and their dispatch sites (pipelines/agents/admin-org/connectors/model-backends/schemas/auth routes) sit outside this delivery's scope — tracked as Known Gaps.
+- No code changes in this pass; verification only. Status: partial.
 
 ### 2026-08-15 — improve-architecture (team membership audit gaps)
 
