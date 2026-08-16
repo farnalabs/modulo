@@ -7,6 +7,7 @@ from typing import Any, cast
 import httpx
 
 from modulo.connectors._safe_int import safe_int as _safe_int
+from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -19,19 +20,34 @@ from modulo.connectors.base import (
 _BASE = "https://api.pagerduty.com"
 
 
-def _paging_total(body: dict[str, Any]) -> int | None:
+def _paging_total(body: object) -> int | None:
     """Extract PagerDuty's ``total`` as a safe int.
 
     Guards against non-finite floats (``inf``/``nan``) which otherwise poison
     aggregation — Python's json parser produces ``inf`` for overflowing
     literals such as ``1e999``, so a corrupt or hostile PagerDuty response
     must not be able to poison the reported total. A missing ``total`` keeps
-    the historical ``None`` behaviour.
+    the historical ``None`` behaviour. A non-dict body (list, string, number,
+    ...) from a corrupt response is treated as absent.
     """
+    if not isinstance(body, dict):
+        return None
     raw = body.get("total")
     if raw is None:
         return None
     return _safe_int(raw)
+
+
+def _body_field(body: object, key: str, default: object) -> object:
+    """Return ``body[key]``, or *default* for a non-dict body.
+
+    List endpoints read cursor/offset fields straight off the response body,
+    so a corrupt or hostile non-dict body (list, string, number, ...) must
+    not crash the parse with ``AttributeError`` on ``body.get()``.
+    """
+    if not isinstance(body, dict):
+        return default
+    return body.get(key, default)
 
 
 def _next_offset_cursor(offset: object, records: list[Any], more: object) -> str | None:
@@ -40,7 +56,9 @@ def _next_offset_cursor(offset: object, records: list[Any], more: object) -> str
     Emits a cursor only when PagerDuty's ``more`` flag is truthy (the API
     omits it — or sets ``false`` — on the final page). The offset is coerced
     via the shared ``safe_int`` so a corrupt value (non-finite float, bool, or
-    garbage) can neither crash the parse nor poison the next request.
+    garbage) can neither crash the parse nor poison the next request. A
+    non-dict ``more`` value — possible in a corrupt response — is treated as
+    absent so it cannot trigger an unbounded pagination loop.
     """
     if not more:
         return None
@@ -128,11 +146,11 @@ class PagerDutyConnector(ConnectorBase):
         resp = await c.get("/incidents", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records: list[dict[str, Any]] = body.get("incidents", [])
+        records = _safe_records(body, "incidents")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=_paging_total(body),
-            next_cursor=_next_offset_cursor(offset, records, body.get("more")),
+            next_cursor=_next_offset_cursor(offset, records, _body_field(body, "more", None)),
         )
 
     async def _list_services(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -148,11 +166,11 @@ class PagerDutyConnector(ConnectorBase):
         resp = await c.get("/services", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = body.get("services", [])
+        records = _safe_records(body, "services")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=_paging_total(body),
-            next_cursor=_next_offset_cursor(body.get("offset", 0), records, body.get("more")),
+            next_cursor=_next_offset_cursor(_body_field(body, "offset", 0), records, _body_field(body, "more", None)),
         )
 
     async def _list_teams(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -166,11 +184,11 @@ class PagerDutyConnector(ConnectorBase):
         resp = await c.get("/teams", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = body.get("teams", [])
+        records = _safe_records(body, "teams")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=_paging_total(body),
-            next_cursor=_next_offset_cursor(body.get("offset", 0), records, body.get("more")),
+            next_cursor=_next_offset_cursor(_body_field(body, "offset", 0), records, _body_field(body, "more", None)),
         )
 
     async def _list_users(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -186,11 +204,11 @@ class PagerDutyConnector(ConnectorBase):
         resp = await c.get("/users", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = body.get("users", [])
+        records = _safe_records(body, "users")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=_paging_total(body),
-            next_cursor=_next_offset_cursor(body.get("offset", 0), records, body.get("more")),
+            next_cursor=_next_offset_cursor(_body_field(body, "offset", 0), records, _body_field(body, "more", None)),
         )
 
     async def _list_escalation_policies(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -206,11 +224,11 @@ class PagerDutyConnector(ConnectorBase):
         resp = await c.get("/escalation_policies", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = body.get("escalation_policies", [])
+        records = _safe_records(body, "escalation_policies")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=_paging_total(body),
-            next_cursor=_next_offset_cursor(body.get("offset", 0), records, body.get("more")),
+            next_cursor=_next_offset_cursor(_body_field(body, "offset", 0), records, _body_field(body, "more", None)),
         )
 
     async def _list_schedules(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -224,11 +242,11 @@ class PagerDutyConnector(ConnectorBase):
         resp = await c.get("/schedules", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = body.get("schedules", [])
+        records = _safe_records(body, "schedules")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=_paging_total(body),
-            next_cursor=_next_offset_cursor(body.get("offset", 0), records, body.get("more")),
+            next_cursor=_next_offset_cursor(_body_field(body, "offset", 0), records, _body_field(body, "more", None)),
         )
 
     async def _list_on_calls(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -243,11 +261,11 @@ class PagerDutyConnector(ConnectorBase):
         resp = await c.get("/oncalls", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = body.get("oncalls", [])
+        records = _safe_records(body, "oncalls")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=_paging_total(body),
-            next_cursor=_next_offset_cursor(body.get("offset", 0), records, body.get("more")),
+            next_cursor=_next_offset_cursor(_body_field(body, "offset", 0), records, _body_field(body, "more", None)),
         )
 
     async def _trigger_incident(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:

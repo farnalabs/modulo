@@ -5,7 +5,7 @@ import pytest
 import respx
 
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.pagerduty import PagerDutyConnector, _next_offset_cursor, _paging_total
+from modulo.connectors.pagerduty import PagerDutyConnector, _body_field, _next_offset_cursor, _paging_total
 
 TOKEN = "pd_test_token"
 _BASE = "https://api.pagerduty.com"
@@ -570,6 +570,21 @@ def test_paging_total_missing() -> None:
     assert _paging_total({}) is None
 
 
+def test_paging_total_non_dict() -> None:
+    assert _paging_total(["garbage"]) is None
+    assert _paging_total("garbage") is None
+    assert _paging_total(None) is None
+
+
+def test_body_field() -> None:
+    assert _body_field({"offset": 25, "more": True}, "offset", 0) == 25
+    assert _body_field({"more": True}, "offset", 0) == 0
+    assert _body_field(["garbage"], "offset", 0) == 0
+    assert _body_field(["garbage"], "more", None) is None
+    assert _body_field("garbage", "offset", 0) == 0
+    assert _body_field(None, "offset", 0) == 0
+
+
 def test_paging_total_valid() -> None:
     assert _paging_total({"total": 42}) == 42
 
@@ -662,4 +677,87 @@ async def test_query_teams_final_page_no_cursor(connector: PagerDutyConnector) -
     result = await connector.query(ConnectorQuery(resource="teams"))
     assert len(result.records) == 1
     assert result.total == 1
+    assert result.next_cursor is None
+
+
+# ── Query: corrupt/non-dict body hardening ────────────────────────────
+
+
+@respx.mock
+async def test_query_incidents_corrupt_body_no_crash(connector: PagerDutyConnector) -> None:
+    """A non-dict incidents body must degrade to an empty page, not crash."""
+    respx.get(f"{_BASE}/incidents").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await connector.query(ConnectorQuery(resource="incidents"))
+    assert not result.records
+    assert result.total is None
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_incidents_non_list_records_no_crash(connector: PagerDutyConnector) -> None:
+    """A corrupt body placing a non-list in ``incidents`` must fall back to an
+    empty page instead of returning a bare string as the records list."""
+    respx.get(f"{_BASE}/incidents").mock(return_value=httpx.Response(200, json={"incidents": "not-a-list"}))
+    result = await connector.query(ConnectorQuery(resource="incidents"))
+    assert not result.records
+    assert result.total is None
+
+
+@respx.mock
+async def test_query_services_corrupt_body_no_crash(connector: PagerDutyConnector) -> None:
+    """A non-dict services body must degrade to an empty page, not crash."""
+    respx.get(f"{_BASE}/services").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await connector.query(ConnectorQuery(resource="services"))
+    assert not result.records
+    assert result.total is None
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_users_corrupt_body_no_crash(connector: PagerDutyConnector) -> None:
+    """A non-dict users body must degrade to an empty page, not crash."""
+    respx.get(f"{_BASE}/users").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await connector.query(ConnectorQuery(resource="users"))
+    assert not result.records
+    assert result.total is None
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_teams_corrupt_body_no_crash(connector: PagerDutyConnector) -> None:
+    """A non-dict teams body must degrade to an empty page, not crash."""
+    respx.get(f"{_BASE}/teams").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await connector.query(ConnectorQuery(resource="teams"))
+    assert not result.records
+    assert result.total is None
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_escalation_policies_corrupt_body_no_crash(connector: PagerDutyConnector) -> None:
+    """A non-dict escalation_policies body must degrade to an empty page, not crash."""
+    respx.get(f"{_BASE}/escalation_policies").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await connector.query(ConnectorQuery(resource="escalation_policies"))
+    assert not result.records
+    assert result.total is None
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_schedules_corrupt_body_no_crash(connector: PagerDutyConnector) -> None:
+    """A non-dict schedules body must degrade to an empty page, not crash."""
+    respx.get(f"{_BASE}/schedules").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await connector.query(ConnectorQuery(resource="schedules"))
+    assert not result.records
+    assert result.total is None
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_on_calls_corrupt_body_no_crash(connector: PagerDutyConnector) -> None:
+    """A non-dict oncalls body must degrade to an empty page, not crash."""
+    respx.get(f"{_BASE}/oncalls").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await connector.query(ConnectorQuery(resource="on_calls"))
+    assert not result.records
+    assert result.total is None
     assert result.next_cursor is None
