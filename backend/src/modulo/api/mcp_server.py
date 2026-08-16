@@ -204,6 +204,14 @@ def _clamp_mcp_number(value: float) -> float:
     return float(d)
 
 
+def _sanitize_mcp_mapping(value: dict) -> dict:
+    return {k: _sanitize_mcp_basis_value(v) for k, v in value.items()}
+
+
+def _sanitize_mcp_sequence(value: list) -> list:
+    return [_sanitize_mcp_basis_value(v) for v in value]
+
+
 def _sanitize_mcp_basis_value(value: Any) -> Any:
     if isinstance(value, str):
         return _sanitize_mcp_string(value)
@@ -212,9 +220,9 @@ def _sanitize_mcp_basis_value(value: Any) -> Any:
     if isinstance(value, (int, float)):
         return _clamp_mcp_number(value)
     if isinstance(value, dict):
-        return {k: _sanitize_mcp_basis_value(v) for k, v in value.items()}
+        return _sanitize_mcp_mapping(value)
     if isinstance(value, list):
-        return [_sanitize_mcp_basis_value(v) for v in value]
+        return _sanitize_mcp_sequence(value)
     if value is None:
         return None
     return _sanitize_mcp_string(str(value))
