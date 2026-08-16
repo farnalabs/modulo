@@ -555,7 +555,7 @@ class TriggerEngine:
                         session,
                         trigger=trigger,
                         org_id=org_id,
-                        payload_hash=payload_hash,
+                        payload_hash=dedup_hash,
                         result="rate_limited",
                     )
                     raise PipelineRateLimitError(trigger.pipeline_id, rate_limit_key, max_triggers, window_seconds)
