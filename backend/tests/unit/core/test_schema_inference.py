@@ -111,7 +111,7 @@ class TestBuildInferPrompt:
 class TestFlagRareFields:
     def test_no_fields_when_all_common(self) -> None:
         records = [{"id": 1, "title": "a"}, {"id": 2, "title": "b"}]
-        assert flag_rare_fields(records) == []
+        assert not flag_rare_fields(records)
 
     def test_flags_fields_below_default_threshold(self) -> None:
         records = [{"common": i} for i in range(11)]
@@ -131,23 +131,23 @@ class TestFlagRareFields:
 
     def test_empty_containers_count_as_present(self) -> None:
         records = [{"id": 1, "tags": []}, {"id": 2, "tags": ["x"]}]
-        assert flag_rare_fields(records) == []
+        assert not flag_rare_fields(records)
 
     def test_empty_records_return_empty(self) -> None:
-        assert flag_rare_fields([]) == []
+        assert not flag_rare_fields([])
 
     def test_non_dict_records_are_ignored(self) -> None:
         records = [{"id": 1}, "not-a-dict", 42]
-        assert flag_rare_fields(records) == []
+        assert not flag_rare_fields(records)
 
     def test_custom_threshold(self) -> None:
         records = [{"a": 1, "b": 2}, {"a": 3, "b": 4}, {"a": 5, "b": 6}, {"a": 7}]
-        assert flag_rare_fields(records, threshold=0.5) == []
+        assert not flag_rare_fields(records, threshold=0.5)
         assert flag_rare_fields(records, threshold=0.8) == ["b"]
 
     def test_zero_threshold_flags_nothing(self) -> None:
         records = [{"a": 1}, {"b": 2}]
-        assert flag_rare_fields(records, threshold=0.0) == []
+        assert not flag_rare_fields(records, threshold=0.0)
 
     def test_invalid_thresholds_raise(self) -> None:
         with pytest.raises(ValueError, match="threshold"):

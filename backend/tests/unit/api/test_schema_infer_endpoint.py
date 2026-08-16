@@ -484,7 +484,7 @@ def test_infer_schema_response_does_not_contain_or_persist_sample_records(client
     }
     assert secret_ish not in resp.text
     assert data["definition_json"] == expected_schema
-    assert data["rare_fields"] == []
+    assert not data["rare_fields"]
 
 
 def test_infer_schema_flags_rare_fields_in_response(client: TestClient) -> None:
@@ -562,7 +562,7 @@ def test_infer_schema_rare_fields_empty_when_all_fields_common(client: TestClien
         )
 
     assert resp.status_code == 200
-    assert resp.json()["rare_fields"] == []
+    assert not resp.json()["rare_fields"]
 
 
 def test_infer_schema_programming_error_returns_501(client: TestClient) -> None:
