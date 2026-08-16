@@ -130,7 +130,7 @@ class DatadogConnector(ConnectorBase):
         resp = await c.get("/api/v1/events", params=params)
         resp.raise_for_status()
         body = resp.json()
-        events: list[dict[str, Any]] = body.get("events", [])
+        events: list[dict[str, Any]] = _safe_records(body, "events")
         return ConnectorResult(records=events[: q.limit], total=len(events))
 
     async def _query_metrics(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:

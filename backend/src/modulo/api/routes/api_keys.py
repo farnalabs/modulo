@@ -322,7 +322,7 @@ async def update_api_key_endpoint(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="API key name must not be blank",
             )
-    team_id: uuid.UUID | None | object = _UNSET
+    team_id: uuid.UUID | object | None = _UNSET
     if "team_id" in req.model_fields_set:
         if req.team_id is not None:
             await _require_team_rbac(settings, session)
