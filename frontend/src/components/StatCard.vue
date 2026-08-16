@@ -13,6 +13,7 @@
           fill="none"
           stroke="currentColor"
           stroke-width="2"
+          aria-hidden="true"
         >
           <slot name="icon" />
         </svg>
