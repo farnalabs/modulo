@@ -33,11 +33,11 @@ from modulo.db.crud.hitl_gate_guard import (
     resolve_effective_privilege,
 )
 from modulo.db.crud.pagination import CursorPaginator
+from modulo.db.crud.run import count_active_runs_for_pipeline
 from modulo.db.crud.team_scope import team_scope_clause
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import ACTIVE_RUN_STATUSES, Run
 from modulo.db.models.snapshot_schema_pin import SnapshotSchemaPin
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
@@ -221,7 +221,7 @@ async def update_pipeline(
     apply_updates(pipeline, updates)
     new_team_id = pipeline.owner_team_id
     if org_id is not None and account_id is not None and new_team_id != old_team_id:
-        active_runs = await _count_pipeline_active_runs(session, pipeline_id)
+        active_runs = await count_active_runs_for_pipeline(session, pipeline_id, include_pending=True)
         if active_runs:
             raise PipelineHasActiveRunsError(active_runs)
         await append_audit_event(
@@ -242,14 +242,6 @@ async def update_pipeline(
         )
     await session.flush()
     return pipeline
-
-
-async def _count_pipeline_active_runs(session: AsyncSession, pipeline_id: uuid.UUID) -> int:
-    """Count non-terminal runs for a pipeline (PRD §9.3 ownership-transfer guard)."""
-    result = await session.execute(
-        select(func.count()).select_from(Run).where(Run.pipeline_id == pipeline_id, Run.status.in_(ACTIVE_RUN_STATUSES))
-    )
-    return int(result.scalar() or 0)
 
 
 async def soft_delete_pipeline(session: AsyncSession, pipeline_id: uuid.UUID) -> Pipeline | None:

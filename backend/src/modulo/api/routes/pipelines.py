@@ -1141,11 +1141,18 @@ async def update_pipeline_endpoint(
                 existing = await get_pipeline(session, pipeline_id)
                 if existing is None:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+                effective_owner_team_id = updates.get("owner_team_id", existing.owner_team_id)
                 await _enforce_connector_team_bindings(
                     session,
                     principal.organisation_id,
-                    updates.get("owner_team_id", existing.owner_team_id),
+                    effective_owner_team_id,
                     graph_bindings,
+                )
+                await _resolve_graph_references(
+                    session,
+                    req.graph_json.nodes,
+                    principal.organisation_id,
+                    pipeline_owner_team_id=effective_owner_team_id,
                 )
                 graph = await replace_pipeline_graph(
                     session,

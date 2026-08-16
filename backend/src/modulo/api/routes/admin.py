@@ -1559,7 +1559,7 @@ async def admin_reassign_all_team_resources(
             await set_rls_user_context(session, current_user.account_id, current_user.org_role)
 
             team = await get_team(session, team_id)
-            if team is None:
+            if team is None or team.organisation_id != current_user.organisation_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
 
             reassigned = 0
@@ -1575,7 +1575,7 @@ async def admin_reassign_all_team_resources(
                     .where(model_cls.__table__.c.owner_team_id == team_id)
                     .values(owner_team_id=None, visibility="org")
                 )
-                count = int(result.rowcount or 0)  # type: ignore[attr-defined]
+                count = max(int(result.rowcount or 0), 0)  # type: ignore[attr-defined]
                 if count:
                     reassigned += count
                     touched.append(label)

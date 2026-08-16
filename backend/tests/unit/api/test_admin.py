@@ -388,6 +388,7 @@ class TestAdminReassignAllTeamResources:
         session.execute.side_effect = _execute
         team = MagicMock()
         team.id = _ORG_ID
+        team.organisation_id = _ORG_ID
         with (
             patch("modulo.api.routes.admin.get_team", return_value=team),
             patch("modulo.api.routes.admin.set_rls_org"),
@@ -406,6 +407,7 @@ class TestAdminReassignAllTeamResources:
         session.execute.side_effect = lambda *_a, **_k: MagicMock(rowcount=0)
         team = MagicMock()
         team.id = _ORG_ID
+        team.organisation_id = _ORG_ID
         with (
             patch("modulo.api.routes.admin.get_team", return_value=team),
             patch("modulo.api.routes.admin.set_rls_org"),
@@ -423,6 +425,22 @@ class TestAdminReassignAllTeamResources:
         client, _session = admin_client_and_session
         with (
             patch("modulo.api.routes.admin.get_team", return_value=None),
+            patch("modulo.api.routes.admin.set_rls_org"),
+            patch("modulo.api.routes.admin.set_rls_user_context"),
+        ):
+            resp = client.post(self.URL)
+        assert resp.status_code == 404
+
+    def test_reassign_all_foreign_org_team_returns_404(
+        self, admin_client_and_session: tuple[TestClient, AsyncMock]
+    ) -> None:
+        client, session = admin_client_and_session
+        session.execute.side_effect = lambda *_a, **_k: MagicMock(rowcount=0)
+        team = MagicMock()
+        team.id = uuid.uuid4()
+        team.organisation_id = uuid.uuid4()
+        with (
+            patch("modulo.api.routes.admin.get_team", return_value=team),
             patch("modulo.api.routes.admin.set_rls_org"),
             patch("modulo.api.routes.admin.set_rls_user_context"),
         ):

@@ -822,7 +822,7 @@ class TestPipelineOwnershipTransferCrud:
     async def test_ownership_change_blocked_while_active_runs(self) -> None:
         session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         count_result = MagicMock()
-        count_result.scalar.return_value = 3
+        count_result.scalar_one_or_none.return_value = 3
         session.execute.return_value = count_result
         pipeline = self._make_crud_pipeline(_TEAM_ID)
         with (
@@ -837,6 +837,26 @@ class TestPipelineOwnershipTransferCrud:
                 account_id=_USER_ID,
             )
         assert exc_info.value.active_run_count == 3
+
+    @pytest.mark.asyncio
+    async def test_ownership_guard_uses_canonical_pipeline_active_run_counter(self) -> None:
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        pipeline = self._make_crud_pipeline(_TEAM_ID)
+        count = AsyncMock(return_value=0)
+        with (
+            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("modulo.db.crud.pipeline.count_active_runs_for_pipeline", new=count),
+            patch("modulo.db.crud.pipeline.append_audit_event", new=AsyncMock(return_value=MagicMock())),
+        ):
+            result = await update_pipeline(
+                session,
+                pipeline.id,
+                {"owner_team_id": None, "visibility": "org"},
+                org_id=_ORG_ID,
+                account_id=_USER_ID,
+            )
+        assert result is pipeline
+        count.assert_awaited_once_with(session, pipeline.id, include_pending=True)
 
     @pytest.mark.asyncio
     async def test_ownership_change_emits_resource_team_ownership_changed_audit(self) -> None:
