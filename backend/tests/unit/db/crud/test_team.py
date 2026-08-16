@@ -169,6 +169,64 @@ class TestDeleteTeam:
         assert result is False
 
 
+class TestReassignTeamResourcesToOrg:
+    """reassign_team_resources_to_org bulk UPDATE contract (PRD §9.3)."""
+
+    async def test_clears_owner_team_and_flips_visibility_to_org(self, mock_session: AsyncMock) -> None:
+        """Each UPDATE must clear owner_team_id AND flip visibility to 'org'.
+
+        Clearing ownership without flipping visibility would violate the
+        ``ck_*_team_owner`` CHECK constraints (``visibility = 'org' OR
+        owner_team_id IS NOT NULL``) on real team-private rows.
+        """
+        from sqlalchemy.sql import Update
+
+        updates: list[Update] = []
+        rowcounts = iter([3, 1, 0, 2])
+
+        async def _execute(stmt, *_args: object, **_kwargs: object):
+            if isinstance(stmt, Update):
+                updates.append(stmt)
+            return MagicMock(rowcount=next(rowcounts, 0))
+
+        mock_session.execute = AsyncMock(side_effect=_execute)
+
+        from modulo.db.crud.team import reassign_team_resources_to_org
+
+        count, touched = await reassign_team_resources_to_org(
+            mock_session,
+            org_id=_ORG_ID,
+            team_id=_TEAM_ID,
+        )
+        assert count == 6
+        assert touched == ["pipeline", "connector", "library primitive"]
+        assert len(updates) == 4
+        for stmt in updates:
+            values = {column.key: bind.value for column, bind in stmt._values.items()}
+            assert values["owner_team_id"] is None
+            assert values["visibility"] == "org"
+
+    async def test_idempotent_when_team_owns_nothing(self, mock_session: AsyncMock) -> None:
+        from sqlalchemy.sql import Update
+
+        async def _execute(stmt, *_args: object, **_kwargs: object):
+            if isinstance(stmt, Update):
+                return MagicMock(rowcount=0)
+            return MagicMock(rowcount=0)
+
+        mock_session.execute = AsyncMock(side_effect=_execute)
+
+        from modulo.db.crud.team import reassign_team_resources_to_org
+
+        count, touched = await reassign_team_resources_to_org(
+            mock_session,
+            org_id=_ORG_ID,
+            team_id=_TEAM_ID,
+        )
+        assert count == 0
+        assert touched == []
+
+
 class TestGetTeamByName:
     async def test_returns_team_when_found(self, mock_session: AsyncMock) -> None:
         team = _make_team(name="Unique Team")
