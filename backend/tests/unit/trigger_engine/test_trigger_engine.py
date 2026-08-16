@@ -1172,7 +1172,11 @@ async def test_handle_webhook_event_value_filter_absent_unchanged() -> None:
 
 
 async def test_handle_webhook_rate_limit_exceeded() -> None:
-    """Pipeline rate limit exceeded -> PipelineRateLimitError + rate_limited event logged."""
+    """Pipeline rate limit exceeded -> PipelineRateLimitError + rate_limited event logged.
+
+    The rate_limited event is a POST-guardrail event (the pass ran and the dedup
+    slot was consumed before the rate-limit check), so its raw_payload_hash is
+    the canonical POST-guardrail payload hash — not the raw-body hash (FAR-214)."""
     trigger = _make_trigger()
     session = _make_session(
         trigger=trigger,
@@ -1199,7 +1203,14 @@ async def test_handle_webhook_rate_limit_exceeded() -> None:
     assert exc_info.value.pipeline_id == trigger.pipeline_id
     assert exc_info.value.max_triggers == 1
     assert exc_info.value.window_seconds == 3600
-    assert any(getattr(c[0][0], "validation_result", None) == "rate_limited" for c in session.add.call_args_list)
+    rate_limited = [
+        c[0][0] for c in session.add.call_args_list if getattr(c[0][0], "validation_result", None) == "rate_limited"
+    ]
+    assert len(rate_limited) == 1
+    from modulo.core.trigger_engine.pre_guardrail import canonical_payload_hash
+
+    assert rate_limited[0].raw_payload_hash == canonical_payload_hash(_RAW_PAYLOAD)
+    assert rate_limited[0].raw_payload_hash != sha256_hex(_RAW_BODY)
 
 
 async def test_handle_webhook_rate_limit_pass_through_sets_key() -> None:

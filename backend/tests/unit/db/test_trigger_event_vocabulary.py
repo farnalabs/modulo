@@ -155,6 +155,77 @@ class TestMigrationChain:
         assert "auto_deactivated" not in old
 
 
+class TestGuardrailBlockedMigration0106:
+    """FAR-214 vocabulary twin for migration 0106 (the current head).
+
+    0106 widens the constraint with ``guardrail_blocked``. Its hardcoded
+    ``_VALIDATION_RESULT_VALUES`` must equal the FULL model vocabulary (a value
+    added to one side and not the other breaks the CHECK on real Postgres and
+    silently rolls back the block transaction — the FAR-190 hard-DB-gate)."""
+
+    _MIGRATION_PATH = (
+        Path(__file__).resolve().parents[3]
+        / "src"
+        / "modulo"
+        / "db"
+        / "migrations"
+        / "versions"
+        / "0106_trigger_event_guardrail_blocked.py"
+    )
+
+    def test_migration_0106_is_sole_head(self) -> None:
+        migration = self._load_0106()
+        assert migration.revision == "0106_trigger_event_guardrail_blocked"
+        assert migration.down_revision == "0105_guardrail_pins"
+        assert _script().get_heads() == ["0106_trigger_event_guardrail_blocked"]
+
+    def test_0106_vocabulary_matches_full_model(self) -> None:
+        """0106's hardcoded twin equals the FULL model vocabulary — including
+        ``guardrail_blocked`` (unlike 0104's, which predates it)."""
+        migration = self._load_0106()
+        assert tuple(migration._VALIDATION_RESULT_VALUES) == VALIDATION_RESULT_VALUES, (
+            "0106 _VALIDATION_RESULT_VALUES must equal the model vocabulary "
+            f"(missing: {sorted(set(VALIDATION_RESULT_VALUES) - set(migration._VALIDATION_RESULT_VALUES))}, "
+            f"extra: {sorted(set(migration._VALIDATION_RESULT_VALUES) - set(VALIDATION_RESULT_VALUES))})"
+        )
+        assert "guardrail_blocked" in migration._VALIDATION_RESULT_VALUES
+
+    def test_0106_old_vocabulary_is_20_values(self) -> None:
+        migration = self._load_0106()
+        old = tuple(migration._OLD_VALIDATION_RESULT_VALUES)
+        assert len(old) == 20
+        assert "guardrail_blocked" not in old
+
+    def test_0106_upgrade_adds_guardrail_blocked_constraint(self) -> None:
+        migration = self._load_0106()
+        mock_op = _run_on_mock_postgres(migration, "upgrade")
+        sql = _executed_sql(mock_op)
+        add = next(s for s in sql if "ADD CONSTRAINT" in s and "CHECK (validation_result IN" in s)
+        for value in VALIDATION_RESULT_VALUES:
+            assert value in add, f"0106 upgrade constraint missing {value!r}"
+        assert "NOT VALID" in add
+        assert "VALIDATE CONSTRAINT" in "\n".join(sql)
+
+    def test_0106_downgrade_restores_20_value_vocabulary(self) -> None:
+        migration = self._load_0106()
+        mock_op = _run_on_mock_postgres(migration, "downgrade")
+        sql = _executed_sql(mock_op)
+        add = next(s for s in sql if "ADD CONSTRAINT" in s and "CHECK (validation_result IN" in s)
+        for value in ("auto_deactivated", "paused"):
+            assert value in add, f"0106 downgrade constraint missing {value!r}"
+        assert "guardrail_blocked" not in add
+        assert "NOT VALID" not in add
+
+    def _load_0106(self) -> ModuleType:
+        assert self._MIGRATION_PATH.exists(), f"Migration file missing: {self._MIGRATION_PATH}"
+        spec = importlib.util.spec_from_file_location("migration_0106", self._MIGRATION_PATH)
+        assert spec is not None
+        assert spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+
 class TestMigrationDdl:
     def test_upgrade_drops_then_adds_full_vocabulary_not_valid_then_validates(self) -> None:
         migration = _load_migration()
