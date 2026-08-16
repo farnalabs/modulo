@@ -33,7 +33,7 @@ from modulo.core.exceptions import OrgDeletedError
 from modulo.core.line_diff import iter_line_diffs
 from modulo.core.node_output_split import node_return, node_telemetry
 from modulo.core.pipeline_engine.classify import REASON_DELIVERED_EMAIL, _any_marker_delivery_done
-from modulo.core.pipeline_engine.error_codes import present_error, sanitize_error_text
+from modulo.core.pipeline_engine.error_codes import map_legacy_code, present_error, sanitize_error_text
 from modulo.core.pipeline_engine.event_broker import get_registry
 from modulo.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
@@ -206,7 +206,7 @@ async def _do_list_runs(
                     "created_at": run.created_at.isoformat() if run.created_at else None,
                     "started_at": run.started_at.isoformat() if run.started_at else None,
                     "completed_at": run.completed_at.isoformat() if run.completed_at else None,
-                    "error_code": run.error_code,
+                    "error_code": _error_code,
                     "error_detail": error_detail,
                     "total_cost_usd": run.total_cost_usd,
                     "child_runs_cost_usd": child_cost,
@@ -380,7 +380,10 @@ def _run_gate_fired(run: Any) -> bool:
     or (c) any raw-output marker carries ``delivery_done is True`` (guard A /
     success-path stamp / cancelled-retention). Never raises on non-dict columns.
     """
-    if getattr(run, "error_code", None) == "harness.idempotency_gate":
+    # The DB stores the RAW spelling for legacy rows (``idempotency_gate``) and
+    # the dotted registry code (``harness.idempotency_gate``) for new writes, so
+    # the read is routed through ``map_legacy_code`` to match both.
+    if map_legacy_code(getattr(run, "error_code", None)) == "harness.idempotency_gate":
         return True
     classification = getattr(run, "run_classification", None)
     if isinstance(classification, dict) and classification.get("reason") == REASON_DELIVERED_EMAIL:

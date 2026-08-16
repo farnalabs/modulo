@@ -177,7 +177,7 @@ class TestGetRunStatus(_AuthContext):
         assert result["created_at"] == run.created_at.isoformat()
         assert result["started_at"] == run.started_at.isoformat()
         assert result["completed_at"] == run.completed_at.isoformat()
-        assert result["error_code"] == "timeout"
+        assert result["error_code"] == "harness.unknown"
         assert "nodes" not in result
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -196,7 +196,7 @@ class TestGetRunStatus(_AuthContext):
 
         result = await get_run_status(run_id=str(run.id))
 
-        assert result["error_code"] == "task_failure"
+        assert result["error_code"] == "harness.worker_failed"
         assert result["error_detail"] == "boom: worker crashed"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -237,7 +237,7 @@ class TestGetRunStatus(_AuthContext):
 
         result = await get_run_status(run_id=str(run.id))
 
-        assert result["error_code"] == "task_failure"
+        assert result["error_code"] == "harness.worker_failed"
         assert "sk-abcdefghijkl1234" not in json.dumps(result)
         assert "Bearer xyz123abc" not in json.dumps(result)
         assert "<redacted>" in result["error_detail"]
