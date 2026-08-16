@@ -24,8 +24,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 
 from modulo.db.crud import run as run_crud
 from modulo.db.crud.run import _allocate_run_number
-from modulo.db.models.base import Base
-from modulo.db.models.run import RunNumberCounter
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _ORG2 = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -122,7 +120,13 @@ async def file_engine(tmp_path) -> AsyncGenerator[AsyncEngine, None]:
         connect_args={"timeout": 10},
     )
     async with engine.begin() as conn:
-        await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=[RunNumberCounter.__table__]))
+        # Raw DDL matching migration 0093_run_number_sequence — the ORM
+        # RunNumberCounter model no longer exists (FAR-253 dead-code cleanup).
+        await conn.exec_driver_sql(
+            "CREATE TABLE run_number_counters ("
+            "organisation_id VARCHAR(32) NOT NULL PRIMARY KEY, "
+            "next_run_number INTEGER NOT NULL DEFAULT 1)"
+        )
         await conn.exec_driver_sql(
             "CREATE TABLE runs (organisation_id VARCHAR(32) NOT NULL, run_number INTEGER NOT NULL)"
         )

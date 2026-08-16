@@ -446,7 +446,7 @@ class TestErrorIngestResponse:
 class TestRateLimitRule:
     def test_error_ingest_rule_exists(self) -> None:
         rules = RateLimitMiddleware.RULES
-        rule = next((r for r in rules if r[0] == "/api/v1/errors/ingest"), None)
+        rule = next((r for r in rules if r.path_prefix == "/api/v1/errors/ingest"), None)
         assert rule is not None, "Rate limit rule for /api/v1/errors/ingest not found"
-        assert rule[1] == 10, "Expected 10 requests per window"
-        assert rule[2] == 60, "Expected 60-second window"
+        assert rule.max_requests == 10, "Expected 10 requests per window"
+        assert rule.window_s == 60, "Expected 60-second window"

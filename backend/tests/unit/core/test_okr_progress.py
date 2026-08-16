@@ -21,7 +21,6 @@ from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.eval_engine.okr import (
     OkrProgress,
-    OkrSuite,
     OkrTrendPoint,
     _compute_trend_direction,
     _days_between,
@@ -108,14 +107,9 @@ class TestAlertOnBreach:
         assert alert_on_breach(1.0, 1.0) is False
 
     def test_alert_on_breach_from_suite_threshold(self) -> None:
-        suite = OkrSuite(
-            id="s1",
-            name="test",
-            pass_threshold=0.8,
-            eval_definition_ids=[_EVAL_ID_1],
-        )
-        assert alert_on_breach(suite.pass_threshold, 0.6) is True
-        assert alert_on_breach(suite.pass_threshold, 0.9) is False
+        pass_threshold = 0.8
+        assert alert_on_breach(pass_threshold, 0.6) is True
+        assert alert_on_breach(pass_threshold, 0.9) is False
 
 
 class TestDaysBetween:
@@ -414,34 +408,6 @@ class TestTrackOkrProgressDirect:
         assert progress.current_score == 0.0
         # 0.0 < 0.5 threshold, so breach is True
         assert progress.breach is True
-
-
-class TestOkrSuiteModel:
-    def test_minimal_suite(self) -> None:
-        suite = OkrSuite(
-            id="s1",
-            name="test",
-            pass_threshold=0.8,
-            eval_definition_ids=[_EVAL_ID_1],
-        )
-        assert suite.id == "s1"
-        assert suite.name == "test"
-        assert suite.pass_threshold == pytest.approx(0.8)
-        assert suite.eval_definition_ids == [_EVAL_ID_1]
-        assert suite.target_date is None
-        assert suite.owner is None
-
-    def test_full_suite(self) -> None:
-        suite = OkrSuite(
-            id="s1",
-            name="test",
-            pass_threshold=0.8,
-            eval_definition_ids=[_EVAL_ID_1, _EVAL_ID_2],
-            target_date="2026-09-30",
-            owner="alice",
-        )
-        assert suite.target_date == "2026-09-30"
-        assert suite.owner == "alice"
 
 
 # ── OkrProgress model tests ──────────────────────────────────────────────

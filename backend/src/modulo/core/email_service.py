@@ -31,14 +31,6 @@ class EmailSendingError(Exception):
     pass
 
 
-class EmailTestSendRateError(Exception):
-    """Raised by :class:`EmailSendLimiter` when an org has exhausted its test-send budget."""
-
-    def __init__(self, retry_after_seconds: int) -> None:
-        super().__init__(f"Test-send rate limit exceeded; retry in {retry_after_seconds}s")
-        self.retry_after_seconds = retry_after_seconds
-
-
 class EmailSendLimiter:
     """In-memory fixed-window test-send budget, keyed per organisation.
 
