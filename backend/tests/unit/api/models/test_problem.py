@@ -67,6 +67,7 @@ def _body(resp: Any) -> Any:
         (ProblemType.MIGRATION_REQUIRED, 501, "Migration Required"),
         (ProblemType.BAD_GATEWAY, 502, "Bad Gateway"),
         (ProblemType.SERVICE_UNAVAILABLE, 503, "Service Unavailable"),
+        (ProblemType.GATEWAY_TIMEOUT, 504, "Gateway Timeout"),
         (ProblemType.INTERNAL_ERROR, 500, "Internal Error"),
     ],
 )
@@ -175,6 +176,7 @@ class TestProblemFromHttpException:
             501: ProblemType.MIGRATION_REQUIRED,
             502: ProblemType.BAD_GATEWAY,
             503: ProblemType.SERVICE_UNAVAILABLE,
+            504: ProblemType.GATEWAY_TIMEOUT,
         }.items():
             problem = _problem_from_http_exception("r", status, "d")
             assert problem.type == f"urn:problem:modulo:{expected.value}", f"status {status}"

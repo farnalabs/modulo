@@ -2023,8 +2023,8 @@ async def fire_due_triggers() -> dict[str, Any]:
             pause_rows = (
                 await session.execute(select(Organisation.id, Organisation.triggers_paused, Organisation.status))
             ).all()
-        for oid, triggers_paused, status in pause_rows:
-            pause_by_org[oid] = org_row_is_paused(status, triggers_paused)
+        for oid, triggers_paused, org_status in pause_rows:
+            pause_by_org[oid] = org_row_is_paused(org_status, triggers_paused)
     except ProgrammingError:
         _log.exception("fire_due_triggers: pause-column read failed — treating all orgs as not-paused (legacy schema)")
         summary["pause_read"] = "degraded"
@@ -3582,4 +3582,4 @@ def func_now_minus(seconds: int) -> Any:
     """SQLAlchemy expression ``now() - interval`` for staleness predicates."""
     from sqlalchemy import text as _text
 
-    return _text(f"now() - interval '{seconds} seconds'")
+    return _text("now() - :seconds * interval '1 second'").bindparams(seconds=seconds)

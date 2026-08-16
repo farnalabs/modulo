@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import logging
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -20,6 +21,7 @@ from modulo.core.reports.scheduler import (
     _fire_scheduled_report,
     _get_engine,
     _parse_retry_after,
+    _webhook_url_error,
     compute_next_send,
     get_deliverer,
     get_formatter,
@@ -597,6 +599,138 @@ class TestCoerceTimeout:
         assert _coerce_timeout("abc") is None
         assert _coerce_timeout(None) is None
         assert _coerce_timeout(object()) is None
+
+
+# ---------------------------------------------------------------------------
+# _webhook_url_error tests — pre-flight URL validation gate
+# ---------------------------------------------------------------------------
+
+
+class TestWebhookUrlError:
+    @pytest.mark.parametrize(
+        ("url", "expected"),
+        [
+            ("https://hooks.slack.com/services/T1/B1/xxx", None),
+            ("http://hooks.example.com/report", None),
+            ("https://hooks.example.com:8443/x?y=1", None),
+            ("  https://hooks.example.com/x  ", None),
+            (None, "url_not_a_string"),
+            (123, "url_not_a_string"),
+            ("", "url_empty"),
+            ("   ", "url_empty"),
+            (" \t ", "url_empty"),
+            ("https://exa mple.com/x", "url_contains_whitespace"),
+            ("http://[::1", "url_malformed"),
+            ("ftp://hooks.example.com/x", "url_scheme_not_http"),
+            ("file:///etc/passwd", "url_scheme_not_http"),
+            ("//hooks.example.com/x", "url_scheme_not_http"),
+            ("notaurl", "url_scheme_not_http"),
+            ("https://", "url_missing_host"),
+            ("https://#fragment", "url_missing_host"),
+            ("https://user:pass@hooks.example.com/x", "url_contains_credentials"),
+            ("https://user@hooks.example.com/x", "url_contains_credentials"),
+            ("https://hooks.example.com:abc/x", "url_malformed"),
+            ("https://hooks.example.com:99999/x", "url_malformed"),
+        ],
+    )
+    def test_validation_matrix(self, url: object, expected: str | None) -> None:
+        assert _webhook_url_error(url) == expected
+
+
+class TestDeliverToUrlsRejectsInvalid:
+    async def _spy_client(self) -> MagicMock:
+        """Build a client whose ``post`` fails the test if ever called."""
+        client = AsyncMock()
+        client.post = AsyncMock(side_effect=AssertionError("post() must not be called for an invalid URL"))
+        return client
+
+    async def test_invalid_url_fails_fast_without_network_or_sleep(self) -> None:
+        """A permanently-invalid URL must not enter the retry/backoff loop:
+        no HTTP attempt, no exponential-backoff sleeps, just a typed failure."""
+        client = await self._spy_client()
+        with (
+            patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
+            patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls,
+        ):
+            client_cls.return_value.__aenter__.return_value = client
+            results = await _deliver_to_urls(["ftp://hooks.example.com/x"], {"a": 1})
+
+        assert results[0]["status"] == "failed"
+        assert results[0]["status_code"] is None
+        assert results[0]["error"] == "invalid_webhook_url: url_scheme_not_http"
+        sleep.assert_not_awaited()
+        client.post.assert_not_awaited()
+
+    async def test_missing_host_and_embedded_credentials_are_rejected(self) -> None:
+        client = await self._spy_client()
+        urls = ["https://", "https://user:pass@hooks.example.com/x", ""]
+        with patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls:
+            client_cls.return_value.__aenter__.return_value = client
+            results = await _deliver_to_urls(urls, {"a": 1})
+
+        assert [r["error"] for r in results] == [
+            "invalid_webhook_url: url_missing_host",
+            "invalid_webhook_url: url_contains_credentials",
+            "invalid_webhook_url: url_empty",
+        ]
+        client.post.assert_not_awaited()
+
+    async def test_invalid_url_does_not_block_valid_siblings(self) -> None:
+        """Per-URL isolation: one bad URL must not prevent delivery to good URLs."""
+        url = "https://hooks.example.com/x"
+        good_client = _deliver_client([_ok_resp(200)])
+        with (
+            patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls,
+        ):
+            client_cls.return_value.__aenter__.return_value = good_client
+            results = await _deliver_to_urls(["notaurl", url, "file:///tmp/x"], {"a": 1})
+
+        assert [r["status"] for r in results] == ["failed", "delivered", "failed"]
+        assert results[0]["error"] == "invalid_webhook_url: url_scheme_not_http"
+        assert results[2]["error"] == "invalid_webhook_url: url_scheme_not_http"
+        assert results[0]["status_code"] is None
+        assert results[2]["status_code"] is None
+
+    async def test_bad_port_urls_fail_fast_without_retry(self) -> None:
+        """``urlsplit`` accepts ``host:abc`` and ``host:99999``, but httpx
+        would raise ``InvalidURL`` — a permanent config error that must be
+        caught pre-flight so it never enters the retry/backoff loop."""
+        client = await self._spy_client()
+        urls = ["https://hooks.example.com:abc/x", "https://hooks.example.com:99999/x"]
+        with (
+            patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
+            patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls,
+        ):
+            client_cls.return_value.__aenter__.return_value = client
+            results = await _deliver_to_urls(urls, {"a": 1})
+
+        assert [r["error"] for r in results] == [
+            "invalid_webhook_url: url_malformed",
+            "invalid_webhook_url: url_malformed",
+        ]
+        assert all(r["status_code"] is None for r in results)
+        sleep.assert_not_awaited()
+        client.post.assert_not_awaited()
+
+    async def test_credentialed_url_is_redacted_in_result_and_log(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A credentialed URL must not leak its ``user:pass`` into the result
+        ``url`` field (which flows into the quality-report API and the SAQ job
+        result) or into the warning log."""
+        client = await self._spy_client()
+        credentialed = "https://user:secret@hooks.example.com/x"
+        with (
+            caplog.at_level(logging.WARNING, logger="modulo.core.reports.scheduler"),
+            patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls,
+        ):
+            client_cls.return_value.__aenter__.return_value = client
+            results = await _deliver_to_urls([credentialed], {"a": 1})
+
+        assert results[0]["error"] == "invalid_webhook_url: url_contains_credentials"
+        assert results[0]["url"] == "https://hooks.example.com/x"
+        assert "secret" not in results[0]["url"]
+        assert "user:secret" not in caplog.text
+        assert "https://hooks.example.com/x" in caplog.text
+        client.post.assert_not_awaited()
 
 
 class TestDeliverToUrlsTimeout:

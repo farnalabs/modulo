@@ -1620,6 +1620,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/teams/my": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * My Teams Endpoint
+         * @description List the current user's team memberships with team names (profile "My Teams").
+         */
+        get: operations["my_teams_endpoint_api_v1_teams_my_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teams": {
         parameters: {
             query?: never;
@@ -1670,11 +1690,13 @@ export interface paths {
          * Reassign Team Resources Endpoint
          * @description Reassign every team-owned resource to org-wide (PRD §9.3 Team Deletion Policy).
          *
-         *     Sets ``owner_team_id = NULL`` on every pipeline, connector instance, model
-         *     backend and library primitive currently owned by the team, so the team can
-         *     then be deleted (deletion is blocked while ``owner_team_id`` references the
-         *     team). Admin-only (``team.delete``). Idempotent: re-running after a
-         *     successful reassignment finds zero owned rows and returns ``reassigned=0``.
+         *     Sets ``owner_team_id = NULL`` (and ``visibility = 'org'`` so the
+         *     ``ck_*_team_owner`` check constraints are satisfied) on every pipeline,
+         *     connector instance, model backend and library primitive currently owned by
+         *     the team, so the team can then be deleted (deletion is blocked while
+         *     ``owner_team_id`` references the team). Admin-only (``team.delete``).
+         *     Idempotent: re-running after a successful reassignment finds zero owned
+         *     rows and returns ``reassigned=0``.
          */
         post: operations["reassign_team_resources_endpoint_api_v1_teams__team_id__reassign_org_post"];
         delete?: never;
@@ -7544,8 +7566,18 @@ export interface components {
              * @default 0
              */
             member_count: number;
+            /**
+             * Owned Resource Count
+             * @default 0
+             */
+            owned_resource_count: number;
             /** Created At */
             created_at: string;
+            /**
+             * Updated At
+             * @default
+             */
+            updated_at: string;
         };
         /** AdminTeamListResponse */
         AdminTeamListResponse: {
@@ -7564,6 +7596,8 @@ export interface components {
             name?: string | null;
             /** Description */
             description?: string | null;
+            /** Expected Updated At */
+            expected_updated_at?: string | null;
         };
         /** AgentCreate */
         AgentCreate: {
@@ -10986,6 +11020,15 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** MyTeamResponse */
+        MyTeamResponse: {
+            /** Team Id */
+            team_id: string;
+            /** Team Name */
+            team_name: string;
+            /** Role */
+            role: string;
+        };
         /** NodeCategoryCreate */
         NodeCategoryCreate: {
             /** Name */
@@ -14323,6 +14366,8 @@ export interface components {
             name?: string | null;
             /** Description */
             description?: string | null;
+            /** Expected Updated At */
+            expected_updated_at?: string | null;
         };
         /** UpdateUserRequest */
         UpdateUserRequest: {
@@ -18980,6 +19025,37 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    my_teams_endpoint_api_v1_teams_my_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MyTeamResponse"][];
+                };
             };
             /** @description Validation Error */
             422: {

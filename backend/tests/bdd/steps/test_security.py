@@ -144,7 +144,7 @@ def check_plaintext_received(decrypted_value: str) -> None:
 # -- Wrong FERNET_KEY cannot decrypt ---------------------------------------
 
 
-@given(
+@when(
     "the service restarts with key B",
     target_fixture="wrong_key",
 )
@@ -333,7 +333,9 @@ def step_access_pipelines(org: str, client, alt_org_client, mock_session):
 
     test_client = alt_org_client if org == "other-org" else client
     with patch("modulo.api.routes.pipelines.list_pipelines") as mock_list:
-        mock_list.return_value = SimpleNamespace(items=[], total=0, page=1, page_size=20)
+        mock_list.return_value = SimpleNamespace(
+            items=[], total=0, page=1, page_size=20, next_cursor=None, has_more=False
+        )
         return test_client.get("/api/v1/pipelines")
 
 
@@ -390,20 +392,18 @@ def step_status_401(pipeline_response) -> None:
     parsers.parse("a viewer tries to create a pipeline named {name}"),
     target_fixture="create_response",
 )
-def step_viewer_create_pipeline(name: str, client):
-    """POST /api/v1/pipelines as viewer — expecting rejection."""
-    from unittest.mock import patch
+def step_viewer_create_pipeline(name: str, viewer_client):
+    """POST /api/v1/pipelines as viewer — expecting 403.
 
-    with patch("modulo.api.dependencies.get_current_user") as mock_user:
-        mock_user.return_value = {
-            "org_id": str(uuid.UUID("00000000-0000-0000-0000-000000000001")),
-            "user_id": str(uuid.uuid4()),
-            "org_role": "viewer",
-        }
-        return client.post(
-            "/api/v1/pipelines",
-            json={"name": name, "description": ""},
-        )
+    The ``viewer_client`` fixture overrides the app's auth dependencies
+    (``get_current_user`` / ``get_current_tenant_user``) with a viewer
+    ``TenantPrincipal``, so ``require_permission("pipeline.create")`` denies
+    with 403 before the route body runs.
+    """
+    return viewer_client.post(
+        "/api/v1/pipelines",
+        json={"name": name, "description": ""},
+    )
 
 
 @then("the viewer pipeline creation is rejected")
@@ -418,10 +418,15 @@ def step_viewer_rejected(create_response) -> None:
 
 @when("RLS context is set outside a transaction", target_fixture="rls_error")
 def step_rls_outside_tx(mock_session):
-    """Call set_rls_org outside an active transaction and catch RuntimeError."""
+    """Call set_rls_org outside an active transaction and catch RuntimeError.
+
+    ``in_transaction`` must be a SYNC MagicMock — AsyncMock's call returns an
+    unawaited coroutine (truthy), which defeats the ``not session.in_transaction()``
+    guard in ``_ensure_active_transaction``.
+    """
     import asyncio
 
-    mock_session.in_transaction.return_value = False
+    mock_session.in_transaction = MagicMock(return_value=False)
     try:
         asyncio.run(set_rls_org(mock_session, uuid.uuid4()))
         return None
@@ -439,12 +444,19 @@ def step_runtime_error(rls_error) -> None:
 # -- Scenario: set_rls_user_context requires active transaction --------------
 
 
-@when("set_rls_user_context is called outside a transaction", target_fixture="user_context_error")
-async def step_user_context_outside_tx(mock_session):
-    """Call set_rls_user_context outside an active transaction and catch RuntimeError."""
-    mock_session.in_transaction.return_value = False
+@when("set_rls_user_context is called outside a transaction", target_fixture="rls_error")
+def step_user_context_outside_tx(mock_session):
+    """Call set_rls_user_context outside an active transaction and catch RuntimeError.
+
+    Sync def (``asyncio.run``) so pytest-bdd can set the ``rls_error`` target
+    fixture; an ``async def`` step returns a coroutine pytest-bdd never awaits,
+    leaving the fixture unset.
+    """
+    import asyncio
+
+    mock_session.in_transaction = MagicMock(return_value=False)
     try:
-        await set_rls_user_context(mock_session, uuid.uuid4(), "admin")
+        asyncio.run(set_rls_user_context(mock_session, uuid.uuid4(), "admin"))
         return None
     except RuntimeError as exc:
         return exc
@@ -456,7 +468,7 @@ async def step_user_context_outside_tx(mock_session):
 @given("an active transaction", target_fixture="active_tx_session")
 def step_active_tx(mock_session):
     """Mark the mock session as having an active transaction."""
-    mock_session.in_transaction.return_value = True
+    mock_session.in_transaction = MagicMock(return_value=True)
     return mock_session
 
 
@@ -464,12 +476,23 @@ def step_active_tx(mock_session):
     parsers.parse('set_rls_user_context is called with user "{username}" and role "{role}"'),
     target_fixture="user_context_result",
 )
-async def step_set_user_context(username: str, role: str, mock_session):
-    """Call set_rls_user_context and record what was executed."""
+def step_set_user_context(username: str, role: str, mock_session):
+    """Call set_rls_user_context and record what was executed.
+
+    The mock session must report a Postgres dialect so the real
+    ``set_config`` path runs (AsyncMock's default dialect is a MagicMock, which
+    routes into the generic ``session.info`` branch and never calls
+    ``session.execute``).
+    """
     user_id = uuid.uuid5(uuid.NAMESPACE_DNS, username)
     mock_session.info.clear()
+    bind = MagicMock()
+    bind.dialect.name = "postgresql"
+    mock_session.get_bind = AsyncMock(return_value=bind)
     mock_session.execute = AsyncMock()
-    await set_rls_user_context(mock_session, user_id, role)
+    import asyncio
+
+    asyncio.run(set_rls_user_context(mock_session, user_id, role))
     return {"user_id": user_id, "role": role}
 
 
