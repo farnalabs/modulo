@@ -32,7 +32,7 @@
         <SelectValue :placeholder="filter.label" />
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value="__all__">{{ filter.label }}</SelectItem>
+        <SelectItem value="__all__">{{ allLabel(filter) }}</SelectItem>
         <SelectItem v-for="opt in filter.options" :key="opt.value" :value="opt.value">
           {{ opt.label }}
         </SelectItem>
@@ -44,6 +44,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 const props = defineProps<{
@@ -58,6 +59,20 @@ defineEmits<{
   (e: 'update:filter', key: string, value: string): void
 }>()
 
+const { t } = useI18n()
+
 const selectFilters = computed(() => props.filters ?? [])
 const filterValues = computed(() => props.filterValues ?? {})
+
+function allLabel(filter: { key: string; label: string }): string {
+  const label = filter.label.trim()
+  if (label.toLowerCase() === 'all') {
+    const noun = filter.key.replace(/[_-]+/g, ' ').trim()
+    return noun ? `${t('common.all')} ${noun}` : t('common.all')
+  }
+  if (label.toLowerCase().startsWith('all ')) {
+    return label
+  }
+  return `${t('common.all')} ${label}`
+}
 </script>

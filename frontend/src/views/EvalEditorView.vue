@@ -24,7 +24,7 @@
               <SelectValue :placeholder="$t('views.EvalEditorView.select_a_pipeline')" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="__all__">{{ $t('views.EvalEditorView.select_a_pipeline') }}</SelectItem>
+              <SelectItem value="__all__">{{ $t('common.none') }}</SelectItem>
               <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</SelectItem>
             </SelectContent>
           </Select>
@@ -34,7 +34,7 @@
           <label for="evaleditorview-field-7" class="mb-1.5 block text-sm font-medium">{{ $t('views.EvalEditorView.node') }} <span class="text-muted-foreground">({{ $t('views.EvalEditorView.node_optional') }})</span></label>
           <Select :aria-label="$t('views.EvalEditorView.node_aria')" v-model="form.node_id" :disabled="!selectedPipelineId || nodesLoading">
             <SelectTrigger data-testid="eval-editor-node" :aria-label="$t('views.EvalEditorView.node_aria')" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50">
-              <SelectValue :placeholder="$t('views.EvalEditorView.all_pipeline_outputs')" />
+              <SelectValue :placeholder="$t('views.EvalEditorView.select_a_node')" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="__all__">{{ $t('views.EvalEditorView.all_pipeline_outputs') }}</SelectItem>

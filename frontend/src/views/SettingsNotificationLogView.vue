@@ -8,7 +8,7 @@
           <label for="settingsnotificationlogview-status" class="mb-1 block text-xs font-medium text-muted-foreground capitalize">{{ $t('views.SettingsNotificationLogView.status') }}</label>
           <Select aria-label="Status" v-model="filterStatus">
             <SelectTrigger id="settingsnotificationlogview-status" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" aria-label="Status" data-testid="settings-notification-log-status">
-              <SelectValue :placeholder="$t('views.AdminErrorsView.all_statuses')" />
+              <SelectValue :placeholder="$t('views.SettingsNotificationLogView.status')" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="__all__">{{ $t('views.AdminErrorsView.all_statuses') }}</SelectItem>

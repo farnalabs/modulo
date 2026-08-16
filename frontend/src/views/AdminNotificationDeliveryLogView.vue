@@ -1,4 +1,5 @@
 <template>
+  <FeatureGate feature-name="notification_log" required-tier="community" show-disabled>
     <div class="page-wide">
     <PageHeader :title="$t('views.AdminNotificationDeliveryLogView.notification_delivery_log')" :subtitle="$t('views.AdminNotificationDeliveryLogView.admin_view_of_all_webhook_notification_deliveries')" data-test-id="admin-notification-log-title" />
 
@@ -8,7 +9,7 @@
           <label for="adminnotificationdeliverylogview-field-4" class="mb-1 block text-xs font-medium text-muted-foreground capitalize">{{ $t('views.AdminNotificationDeliveryLogView.status') }}</label>
           <Select aria-label="Status" v-model="filterStatus">
             <SelectTrigger data-testid="admin-notification-log-status" aria-label="Status" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-              <SelectValue :placeholder="$t('views.AdminErrorsView.all_statuses')" />
+              <SelectValue :placeholder="$t('views.AdminNotificationDeliveryLogView.status')" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="__all__">{{ $t('views.AdminErrorsView.all_statuses') }}</SelectItem>
@@ -23,7 +24,7 @@
           <label for="adminnotificationdeliverylogview-field-3" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.event_type') }}</label>
           <Select aria-label="Event Type" v-model="filterEventType">
             <SelectTrigger data-testid="admin-notification-log-event-type" aria-label="Event Type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-              <SelectValue :placeholder="$t('views.AdminNotificationDeliveryLogView.all_types')" />
+              <SelectValue :placeholder="$t('views.AdminAuditView.event_type')" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="__all__">{{ $t('views.AdminNotificationDeliveryLogView.all_types') }}</SelectItem>
@@ -243,10 +244,12 @@
       </div>
     </template>
   </div>
+  </FeatureGate>
 </template>
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
+import FeatureGate from '../components/FeatureGate.vue'
 import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
