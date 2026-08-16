@@ -126,7 +126,7 @@ LLM-assisted JSON Schema draft from sampled connector data. Entry point for SDLC
 - [x] No model backends configured → 400
 - [x] Unsupported connector type → 400 with list of supported types
 - [x] Connector sampling failure → 502
-- [ ] Connector sampling timeout → 504 (endpoint raises 504, but the shared `problem_from_http_exception` lookup has no 504 mapping so it surfaces as 500 — see Known Gaps)
+- [x] Connector sampling timeout → 504 (endpoint raises 504; `problem_from_http_exception` now maps 504 to `urn:problem:modulo:gateway_timeout` — added 2026-08-16, previously surfaced as 500)
 - [x] Connector initialise failure → 502
 - [x] Model backend initialise failure → 502
 - [x] Model backend unavailable (get fails) → 502
@@ -204,7 +204,7 @@ LLM-assisted JSON Schema draft from sampled connector data. Entry point for SDLC
 ## Resilience & Integration Robustness
 
 - [x] LLM call timeout: configurable via constructor arg, default 60s, caught as `SchemaInferenceError`
-- [x] Connector sampling timeout: separate 30s `asyncio.timeout` → raises 504 (currently surfaces as 500 — `problem_from_http_exception` has no 504 mapping; see Known Gaps)
+- [x] Connector sampling timeout: separate 30s `asyncio.timeout` → raises 504 (mapped to `gateway_timeout` problem detail since 2026-08-16; previously collapsed to 500 in `problem_from_http_exception`)
 - [x] DB connection failure: `ProgrammingError` → 501, `SQLAlchemyError` → 503 on all DB routes
 - [x] LLM invocation exception caught → `SchemaInferenceError("LLM call failed")`
 - [x] Audit event failure silently logged (non-critical path, does not fail the request)
@@ -227,9 +227,11 @@ LLM-assisted JSON Schema draft from sampled connector data. Entry point for SDLC
 - [x] ~~**No connector-type validation**~~ **RESOLVED 2026-08-15**: duplicate of the resource-type-scope gap above — the endpoint does validate connector type against `supported_inference_types` and rejects unsupported types with 400 (see above)
 - [ ] **OnboardingWizard schema steps lack spec coverage**: `SchemaInferenceView.spec.ts` exists and gained 9 interaction/API-mock tests on 2026-08-15 (connector load, infer call body, draft render, publish envelope+version, navigation, errors); the OnboardingWizard schema steps (2–3) still have no spec
 
-- [ ] **504 status mapped to 500**: the sampling-timeout path raises `HTTPException(504)` but the shared `modulo/api/models/problem.py::problem_from_http_exception` lookup has no 504 mapping (no `GATEWAY_TIMEOUT` ProblemType), so the response surfaces as 500. Needs a `GATEWAY_TIMEOUT` problem type + lookup entry (cross-cutting, touches `problem.py`).
+- [x] ~~**504 status mapped to 500**: the sampling-timeout path raises `HTTPException(504)` but the shared `modulo/api/models/problem.py::problem_from_http_exception` lookup has no 504 mapping (no `GATEWAY_TIMEOUT` ProblemType), so the response surfaces as 500~~ **RESOLVED 2026-08-16**: `problem.py` gained a `GATEWAY_TIMEOUT` ProblemType + 504 lookup entry; `HTTPException(504)` now surfaces as 504 `gateway_timeout`. Locked by `test_problem.py::test_504_maps_to_gateway_timeout_not_internal_error` + endpoint regression `test_schema_infer_endpoint.py::test_infer_schema_sampling_timeout_returns_504`.
 
 ## QA History
+
+- 2026-08-16: improve-architecture — RESOLVED the cross-cutting "504 status mapped to 500" Known Gap. `modulo/api/models/problem.py` gained a `GATEWAY_TIMEOUT` ProblemType (`urn:problem:modulo:gateway_timeout`, title "Gateway Timeout", status 504) + a 504 entry in the `problem_from_http_exception` lookup, so a plain `HTTPException(504)` — e.g. the schema-inference 30s sampling timeout — now surfaces as a proper 504 `gateway_timeout` problem detail instead of collapsing to 500 `internal_error`. Cross-cutting: also fixes `POST /api/v1/errors` (observability.py Gateway timeout) and any future 504 raise site. Added 3 unit-test cases in `test_problem.py` (metadata row, known-status map row, + `test_504_maps_to_gateway_timeout_not_internal_error`) and an endpoint-level regression `test_infer_schema_sampling_timeout_returns_504` in `test_schema_infer_endpoint.py` (asserts 504 + problem type + title + detail; both fail when the lookup entry is removed). 39/39 `test_problem.py` + 14/14 `test_schema_infer_endpoint.py` + 241/241 focused problem/error-handling/request-timeout tests pass, ruff check + format clean, mypy --strict clean on `problem.py`. Status: partial.
 
 - 2026-08-15: improve-architecture coverage drive (FAR-234). Verified and checked off: dry-run migration (endpoint-level coverage in `test_schemas_endpoint.py`), PATCH-clears-nullable-fields (endpoint uses `exclude_unset=True`; new regression test in `test_error_handling.py`), LLM retry/backoff (`_common.invoke_and_parse` 3 attempts + exponential backoff, proven by `test_infer_retries_transient_failures_then_succeeds`). Resolved stale Known Gaps: sampled-data-not-stored (new no-sample-persistence endpoint test), resource-type scope + connector-type validation (endpoint validates `supported_inference_types` whitelist → 400, BDD-covered). Corrected the "Connector sampling timeout → 504" error-handling checkbox: the endpoint raises 504 but `problem_from_http_exception` has no 504 mapping, so it surfaces as 500 — logged as a new cross-cutting Known Gap in `problem.py`. Softened the E2E-integration and frontend-unit gaps to reflect actual coverage. Added ProgrammingError→501 + SQLAlchemyError→503 tests for the infer and generate endpoints. Status: partial.
 

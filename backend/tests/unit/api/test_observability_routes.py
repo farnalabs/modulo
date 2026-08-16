@@ -350,7 +350,10 @@ class TestObservabilityPutEndpoint:
             patch("modulo.api.routes.observability.update_otel_config", side_effect=TimeoutError("db timeout")),
         ):
             resp = free_client.put("/api/v1/settings/observability", json={"otlp_endpoint": "http://e:4318"})
-        assert resp.status_code == 500
+        assert resp.status_code == 504
+        body = resp.json()
+        assert body["type"] == "urn:problem:modulo:gateway_timeout"
+        assert body["status"] == 504
 
     def test_put_reraises_on_generic_error(self, free_client: TestClient) -> None:
         with (
