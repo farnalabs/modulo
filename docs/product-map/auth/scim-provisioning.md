@@ -139,7 +139,7 @@ SCIM-provisioned groups map to Team entities; memberships map to TeamMembership.
 - [x] All SCIM error responses use SCIM Error schema (`urn:ietf:params:scim:api:messages:2.0:Error`) with detail and status
 - [x] IdP sends duplicate PUT within same second → updates applied, no conflict (PUT is idempotent, last-write-wins)
 - [x] SCIM userName with special characters: `user+tag@domain.com` → matched via ILIKE (works with LIKE filter)
-- [ ] Re-provisioning after offboarding: user was hard-deleted, IdP re-sends → new user created (current impl: hard delete, no reactivation)
+- [x] Re-provisioning after offboarding: SCIM DELETE tombstones the membership (`deactivate_at` set via `deactivate_break_glass`, NOT a hard delete) and an IdP re-send of the same userName clears the tombstone, re-activates the account, and resets the SCIM password_hash — verified by integration test `tests/integration/test_break_glass.py::test_scim_deactivate_and_recreate_reversible` and the create_user route's tombstoned-membership re-create path
 - [ ] `externalId` in request not mapped to internal User schema → not available for matching on re-provisioning (gap)
 - [ ] Bulk provisioning: 100 users in rapid succession → no rate limiting, no queuing, all processed concurrently
 - [x] Org mismatch: SCIM token valid but principal org_id differs from targeted data → RLS enforces isolation (no cross-org leak)
@@ -159,12 +159,11 @@ SCIM-provisioned groups map to Team entities; memberships map to TeamMembership.
 - `/Schemas` endpoint
 - Enterprise User Schema extension (`urn:ietf:params:scim:schemas:extension:enterprise:2.0:User`)
 - `externalId` stored on User model and used for re-provisioning matching (currently `externalId` in request body accepted but discarded)
+- SCIM User `emails[]` from request not mapped to User model (Account has a single `email` field, populated from `userName`; the emails array's value/primary flags are ignored)
 - PATCH `path` attribute grammar validation (free-form `path` string, no schema validation)
-- SCIM filter syntax parser (raw string passed to CRUD ILIKE match; silently returns empty on complex filters)
-- Rate limiting / IdP backpressure
-- Soft-delete deactivation on user DELETE (currently OrgMembership only removed, Account preserved — inaccurate map claim fixed)
+- SCIM filter syntax parser (raw string passed to CRUD ILIKE match; silently returns empty on complex filters, `active eq true` treated as substring match, unsupported syntax returns empty list rather than 400 SCIM Error)
+- Rate limiting / IdP backpressure (bulk provisioning — 100 users in rapid succession — has no rate limiting or queuing)
 - User `org_role` mapping from SCIM attributes (all SCIM users default to `runner`)
-- SCIM User `emails[]` from request not mapped to User model (display_name derived from userName parts only)
 - Group `created_by` fallback to uuid zero when no org users exist
 - `members[value eq "..."]` remove path regex extraction fragile — malformed paths silently no-op
 - **Re-provisioning IDP user**: If user exists in another org (same email), `scim_create_user` adds a new membership but preserves the existing account — this re-membership path is undocumented in spec
@@ -176,6 +175,12 @@ SCIM-provisioned groups map to Team entities; memberships map to TeamMembership.
 - **RLS leak (fixed)**: `scim_list_group_members` called outside transaction on `list_groups`, `get_group`, `patch_group` — response construction now inside the transaction block
 
 ## QA History
+
+### 2026-08-15 — drive entry toward covered (distribute partial-auth2)
+- Marked [x] "Re-provisioning after offboarding": the product-map claim ("current impl: hard delete, no reactivation") was STALE. SCIM DELETE now tombstones via `deactivate_break_glass` (soft-delete, membership `deactivated_at` set, account preserved) and `scim_create_user` re-creates/clears the tombstone + reactivates on IdP re-send. Verified by `tests/integration/test_break_glass.py::test_scim_deactivate_and_recreate_reversible` and the create_user route's tombstoned-membership path.
+- Re-verified the remaining unchecked behaviours as GENUINE gaps (kept unchecked): emails array not mapped to Account.email (only userName is used), externalId accepted-but-discarded (create + PUT + group), SCIM filter parser not implemented (complex filters silently empty, `active eq true` is substring match, unsupported syntax returns empty not 400), and bulk provisioning has no rate limiting. All remain in "Not implemented (known gaps)".
+- Updated the known-gaps list to reflect the soft-delete semantics (replaced "Soft-delete deactivation on user DELETE" wording with the tombstone description).
+- Status: partial (genuine gaps remain documented below).
 
 ### Index 126 (2026-07-04)
 - Added ProgrammingError→501 catches to all 12 SCIM route handlers
