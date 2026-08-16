@@ -13,7 +13,7 @@ from fastapi import FastAPI, status
 from fastapi.testclient import TestClient
 
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware
-from modulo.core.rate_limiter import RateLimiterRegistry
+from modulo.core.rate_limiter import RateLimiterRegistry, RateLimitRule
 from modulo.settings import Settings
 
 HITL_ENDPOINTS = [
@@ -55,14 +55,14 @@ class TestHitlReviewRateLimit:
     def test_hitl_rule_is_20_per_min(self) -> None:
         """PRD §7.18 defines a dedicated 20/min rule for HITL review."""
         hitl_rule = RateLimitMiddleware.HITL_RULE
-        assert hitl_rule[1] == 20
-        assert hitl_rule[2] == 60
+        assert hitl_rule.max_requests == 20
+        assert hitl_rule.window_s == 60
 
     def test_hitl_rule_is_more_restrictive_than_runs(self) -> None:
         """HITL review paths must be capped at 20/min, not the runs 60/min."""
-        run_rule = next((r for r in RateLimitMiddleware.RULES if r[0] == "/api/v1/runs"), None)
+        run_rule = next((r for r in RateLimitMiddleware.RULES if r.path_prefix == "/api/v1/runs"), None)
         assert run_rule is not None
-        assert RateLimitMiddleware.HITL_RULE[1] < run_rule[1]
+        assert RateLimitMiddleware.HITL_RULE.max_requests < run_rule.max_requests
 
     @pytest.mark.parametrize("endpoint", HITL_ENDPOINTS)
     def test_hitl_endpoint_is_rate_limited(self, endpoint: str) -> None:
@@ -156,7 +156,7 @@ class TestHitlReviewRateLimit:
 
     def test_hitl_prd_20_per_min_is_enforced(self) -> None:
         """PRD §7.18 specifies 20/min for HITL review and it must be enforced."""
-        assert RateLimitMiddleware.HITL_RULE == ("/hitl/", 20, 60)
+        assert RateLimitRule(path_prefix="/hitl/", max_requests=20, window_s=60) == RateLimitMiddleware.HITL_RULE
 
     def test_rule_for_prefers_hitl_rule_over_runs(self) -> None:
         """_rule_for must resolve HITL paths to the dedicated 20/min rule."""
@@ -164,7 +164,7 @@ class TestHitlReviewRateLimit:
         for endpoint in HITL_ENDPOINTS:
             request = MagicMock()
             request.url.path = endpoint
-            assert instance._rule_for(request)[1] == 20
+            assert instance._rule_for(request).max_requests == 20
 
     def test_rule_for_keeps_runs_rule_for_non_hitl(self) -> None:
         """Non-HITL runs paths must stay under the 60/min runs rule."""
@@ -172,5 +172,5 @@ class TestHitlReviewRateLimit:
         request = MagicMock()
         request.url.path = "/api/v1/runs/run-123/cancel"
         rule = instance._rule_for(request)
-        assert rule[0] == "/api/v1/runs"
-        assert rule[1] == 60
+        assert rule.path_prefix == "/api/v1/runs"
+        assert rule.max_requests == 60

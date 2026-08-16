@@ -18,7 +18,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from modulo.api.models.problem import ProblemDetail, ProblemType
 from modulo.core.rate_limiter import AuthRateLimiter as AuthRateLimiterCls
-from modulo.core.rate_limiter import RateLimiterRegistry
+from modulo.core.rate_limiter import RateLimiterRegistry, RateLimitRule
 from modulo.settings import Settings, get_settings
 
 RATELIMIT_BYPASS_HEADER = "MODULO_RATELIMIT_BYPASS_TOKEN"
@@ -93,11 +93,15 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     and ``_create_registry()`` — this allows tests to inject overrides.
     """
 
-    RULES: ClassVar[list[tuple[str, int, int]]] = [
-        ("/api/v1/runs", 60, 60),  # PRD §7.18: POST /api/v1/runs — 60/min
-        ("/api/v1/triggers", 100, 60),  # PRD §7.18: webhook POST — 100/min
-        ("/api/v1/errors/ingest", 10, 60),  # PRD §7.18: error ingest — 10/min per session
-        ("/mcp", 200, 60),  # PRD §7.18: general MCP tools — 200/min
+    RULES: ClassVar[list[RateLimitRule]] = [
+        # PRD §7.18: POST /api/v1/runs — 60/min
+        RateLimitRule(path_prefix="/api/v1/runs", max_requests=60, window_s=60),
+        # PRD §7.18: webhook POST — 100/min
+        RateLimitRule(path_prefix="/api/v1/triggers", max_requests=100, window_s=60),
+        # PRD §7.18: error ingest — 10/min per session
+        RateLimitRule(path_prefix="/api/v1/errors/ingest", max_requests=10, window_s=60),
+        # PRD §7.18: general MCP tools — 200/min
+        RateLimitRule(path_prefix="/mcp", max_requests=200, window_s=60),
         # NOTE: MCP trigger_pipeline tool has a separate 60/min limit enforced
         # in mcp_server.py at the application level since all MCP tools share
         # the same HTTP path.
@@ -109,10 +113,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     # is matched as a path segment by _rule_for / _should_rate_limit. This is
     # more restrictive than the /api/v1/runs rule (60/min) that would
     # otherwise apply to these paths.
-    HITL_RULE: ClassVar[tuple[str, int, int]] = ("/hitl/", 20, 60)
+    HITL_RULE: ClassVar[RateLimitRule] = RateLimitRule(path_prefix="/hitl/", max_requests=20, window_s=60)
 
     @classmethod
-    def set_rules(cls, rules: list[tuple[str, int, int]]) -> None:
+    def set_rules(cls, rules: list[RateLimitRule]) -> None:
         cls.RULES = rules
 
     def __init__(
@@ -134,8 +138,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             try:
                 allowed = await self._registry.check(
                     client_key,
-                    max_requests=rule[1],
-                    window_s=rule[2],
+                    max_requests=rule.max_requests,
+                    window_s=rule.window_s,
                 )
             except asyncio.CancelledError:
                 raise
@@ -151,7 +155,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 return ProblemDetail.from_type(
                     ProblemType.RATE_LIMITED,
                     detail="Rate limit exceeded. Try again later.",
-                ).to_response(headers={"Retry-After": str(rule[2])})
+                ).to_response(headers={"Retry-After": str(rule.window_s)})
         response: Response = await call_next(request)
         return response
 
@@ -162,18 +166,18 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if _matches_bypass_token(token, self._bypass_token or ""):
             return False
         path = request.url.path
-        if self.HITL_RULE[0] in path:
+        if self.HITL_RULE.path_prefix in path:
             return True
-        return any(path.startswith(p) for p, _, _ in self.RULES)
+        return any(path.startswith(rule.path_prefix) for rule in self.RULES)
 
-    def _rule_for(self, request: Request) -> tuple[str, int, int]:
+    def _rule_for(self, request: Request) -> RateLimitRule:
         path = request.url.path
-        if self.HITL_RULE[0] in path:
+        if self.HITL_RULE.path_prefix in path:
             return self.HITL_RULE
-        for prefix, max_req, window in self.RULES:
-            if path.startswith(prefix):
-                return (prefix, max_req, window)
-        return ("", 0, 0)
+        for rule in self.RULES:
+            if path.startswith(rule.path_prefix):
+                return rule
+        return RateLimitRule(path_prefix="", max_requests=0, window_s=0)
 
     @staticmethod
     def _client_key(request: Request) -> str:

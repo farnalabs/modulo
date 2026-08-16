@@ -247,7 +247,7 @@ describe('RunDetailView', () => {
             run_id: 'test-run-id',
             pipeline_id: 'test-pipeline',
             status: 'pending',
-            error_code: 'org_capacity_limited',
+            error_code: 'capacity.org',
             error_detail: 'Org sandbox concurrency limit reached: 3 active, cap 2',
             total_cost_usd: null,
             token_consumption: null,
@@ -286,7 +286,7 @@ describe('RunDetailView', () => {
             run_id: 'test-run-id',
             pipeline_id: 'test-pipeline',
             status: 'failed',
-            error_code: 'task_failure',
+            error_code: 'harness.worker_failed',
             error_detail: 'boom: worker crashed',
             total_cost_usd: null,
             token_consumption: null,
@@ -310,7 +310,7 @@ describe('RunDetailView', () => {
     await nextTick()
 
     expect(wrapper.text()).toContain('Run Error')
-    expect(wrapper.text()).toContain('task_failure')
+    expect(wrapper.text()).toContain('Worker failed')
     expect(wrapper.text()).toContain('boom: worker crashed')
     wrapper.unmount()
   })

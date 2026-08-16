@@ -205,8 +205,59 @@ class TestFAR102Filters:
         stmt, params = build_facts_query(_query(error_code="executor_stalled"))
         sql = str(stmt.compile(dialect=postgresql.dialect()))
         assert "executor_stalled" not in sql, "error_code must be bound, never interpolated"
-        assert params["error_code"] == "executor_stalled"
+        assert set(params["error_codes"]) == {"executor_stalled", "agent.stall"}
         assert "error_code" in sql
+
+    def test_error_code_filter_expands_dotted_input_to_raw_variants(self) -> None:
+        # The runs API emits dotted codes but the facts table stores the raw DB
+        # value — a dotted filter must also match the legacy alias.
+        stmt, params = build_facts_query(_query(error_code="harness.worker_failed"))
+        assert set(params["error_codes"]) == {"harness.worker_failed", "task_failure"}
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert "task_failure" not in sql, "variants must be bound, never interpolated"
+        assert "harness.worker_failed" not in sql, "variants must be bound, never interpolated"
+        assert "IN" in sql.upper()
+
+        _concurrency_stmt, concurrency_params = build_concurrency_query(_query(error_code="harness.worker_failed"))
+        assert set(concurrency_params["error_codes"]) == {"harness.worker_failed", "task_failure"}
+
+    def test_error_code_aggregate_unknown_filter_matches_complement_of_known_codes(self) -> None:
+        # Filtering on the "Unknown error" slice (harness.unknown) must match
+        # the same raw rows the dimension buckets into that slice — every raw
+        # code NOT in known_error_codes(), since the facts table stores raw
+        # codes and never the literal dotted harness.unknown. A plain IN-clause
+        # over the literal would match zero rows while the chart shows the
+        # slice populated (the QA finding this test pins).
+        from modulo.core.pipeline_engine.error_codes import known_error_codes
+
+        stmt, params = build_facts_query(_query(error_code="harness.unknown"))
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert "NOT IN" in sql.upper(), "the aggregate unknown filter must be a NOT IN over the complement"
+        assert set(params["error_codes"]) == known_error_codes() - {"harness.unknown"}
+        assert "task_failure" in params["error_codes"], "mapped raw codes must be excluded from the unknown slice"
+        assert "executor_stalled" in params["error_codes"]
+        assert "agent.failed" in params["error_codes"]
+        assert "harness.unknown" not in params["error_codes"], "literal harness.unknown rows ARE in the slice"
+        for code in params["error_codes"]:
+            assert code not in sql, f"excluded code {code!r} must be bound, never interpolated"
+
+        # The concurrency query applies the identical aggregate filter.
+        _cstmt, cparams = build_concurrency_query(_query(error_code="harness.unknown"))
+        assert set(cparams["error_codes"]) == known_error_codes() - {"harness.unknown"}
+        assert "NOT IN" in str(_cstmt.compile(dialect=postgresql.dialect())).upper()
+
+    def test_error_code_specific_unmapped_input_keeps_in_clause(self) -> None:
+        # A specific unmapped code keeps the expand_code_variants IN-clause
+        # behaviour: it matches only its own literal rows, never the whole
+        # unknown slice.
+        stmt, params = build_facts_query(_query(error_code="SomeMysteryError"))
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert set(params["error_codes"]) == {"SomeMysteryError", "harness.unknown"}
+        assert "IN" in sql.upper()
+        assert "NOT IN" not in sql.upper()
+
+        _cstmt, cparams = build_concurrency_query(_query(error_code="SomeMysteryError"))
+        assert set(cparams["error_codes"]) == {"SomeMysteryError", "harness.unknown"}
 
     def test_error_code_dimension_selects_raw_key(self) -> None:
         stmt, _ = build_facts_query(_query(dimension=AnalyticsDimension.ERROR_CODE))
@@ -566,6 +617,41 @@ class TestBucketing:
         )
         assert {b["key"] for b in out} == {"Team A", str(team_b)}
         assert sum(b["count"] for b in out) == 2
+
+    def test_error_code_dimension_canonicalizes_keys_to_dotted(self) -> None:
+        # The facts table stores RAW codes; the dimension series must present
+        # dotted codes matching the runs UI, and legacy/dotted variants of the
+        # same code must collapse into one chart slice.
+        rows = [
+            _row(date(2026, 8, 5), count=2, error_code="task_failure"),
+            _row(date(2026, 8, 5), count=1, error_code="harness.worker_failed"),
+            _row(date(2026, 8, 5), count=1, error_code="node_timeout"),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=AnalyticsDimension.ERROR_CODE,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        by_key = {b["key"]: b for b in out}
+        assert set(by_key) == {"harness.worker_failed", "node.timeout"}
+        assert by_key["harness.worker_failed"]["count"] == 3, "raw + dotted variants must collapse into one slice"
+        assert "task_failure" not in by_key, "raw legacy codes must never surface on the wire"
+        assert sum(b["count"] for b in out) == 4
+
+    def test_error_code_dimension_unknown_code_falls_back_to_dotted_unknown(self) -> None:
+        rows = [
+            _row(date(2026, 8, 5), count=1, error_code="some_mystery_code"),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=AnalyticsDimension.ERROR_CODE,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        assert {b["key"] for b in out} == {"harness.unknown"}
 
     def test_dimensioned_empty_range_zero_fills(self) -> None:
         # A dimensioned query over an empty range must still return a zero-filled

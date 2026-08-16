@@ -9,12 +9,18 @@ on:
         type: number
       head_sha:
         description: 'HEAD SHA of the PR'
-        required: true
+        required: false
+        default: ''
         type: string
       head_branch:
         description: 'HEAD branch of the PR'
-        required: true
+        required: false
+        default: ''
         type: string
+
+permissions:
+  contents: read
+  pull-requests: read
 
 jobs:
   trigger-modulo-review:
@@ -24,6 +30,8 @@ jobs:
       - name: Set PR details
         id: pr-details
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
@@ -31,10 +39,19 @@ jobs:
             echo "head_sha=${{ github.event.pull_request.head.sha }}" >> $GITHUB_OUTPUT
             echo "head_branch=${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT
           else
-            echo "pr_number=${{ inputs.pr_number }}" >> $GITHUB_OUTPUT
-            echo "repo=${{ github.repository }}" >> $GITHUB_OUTPUT
-            echo "head_sha=${{ inputs.head_sha }}" >> $GITHUB_OUTPUT
-            echo "head_branch=${{ inputs.head_branch }}" >> $GITHUB_OUTPUT
+            PR_NUM="${{ inputs.pr_number }}"
+            REPO="${{ github.repository }}"
+            HEAD_SHA="${{ inputs.head_sha }}"
+            HEAD_BRANCH="${{ inputs.head_branch }}"
+            if [ -z "$HEAD_SHA" ] || [ -z "$HEAD_BRANCH" ]; then
+              PR_JSON=$(gh api "repos/${REPO}/pulls/${PR_NUM}" --jq '{head_sha: .head.sha, head_branch: .head.ref}')
+              HEAD_SHA=$(printf '%s' "$PR_JSON" | jq -r '.head_sha')
+              HEAD_BRANCH=$(printf '%s' "$PR_JSON" | jq -r '.head_branch')
+            fi
+            echo "pr_number=${PR_NUM}" >> $GITHUB_OUTPUT
+            echo "repo=${REPO}" >> $GITHUB_OUTPUT
+            echo "head_sha=${HEAD_SHA}" >> $GITHUB_OUTPUT
+            echo "head_branch=${HEAD_BRANCH}" >> $GITHUB_OUTPUT
           fi
 
       - name: Send webhook to Modulo PR Review Agent

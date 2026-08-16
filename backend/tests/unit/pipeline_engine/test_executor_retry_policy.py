@@ -278,7 +278,7 @@ async def test_execute_retry_policy_resets_pending_and_reraises():
     session = _make_session(snapshot, statements=statements, retry_policy=retry_policy)
     factory = _make_session_factory(session)
     registry = _mock_registry()
-    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True)
+    settings = MagicMock(saq_run_retries=5)
 
     # _stream_graph raises a transient NodeCancelledError — the run's terminal
     # state then goes through the retry-policy decision point. But a
@@ -381,7 +381,7 @@ async def _run_single_retry_attempt(
     session = _make_session(snapshot, statements=statements, retry_policy=retry_policy)
     factory = _make_session_factory(session)
     registry = _mock_registry()
-    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True)
+    settings = MagicMock(saq_run_retries=5)
     compiled = _make_failure_compiled()
 
     with ExitStack() as stack:
@@ -557,7 +557,7 @@ async def test_execute_retry_policy_applies_backoff_delay():
     session = _make_session(snapshot, statements=statements, retry_policy=retry_policy)
     factory = _make_session_factory(session)
     registry = _mock_registry()
-    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True)
+    settings = MagicMock(saq_run_retries=5)
     compiled = _make_failure_compiled()
 
     sleep_mock = AsyncMock()
@@ -604,7 +604,7 @@ async def test_execute_retry_policy_hang_death_terminal_no_redispatch():
     session = _make_session(snapshot, statements=statements, retry_policy=retry_policy)
     factory = _make_session_factory(session)
     registry = _mock_registry()
-    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True)
+    settings = MagicMock(saq_run_retries=5)
     compiled = _mock_compiled_raising(SandboxNodeFailedError(hang_msg))
 
     sleep_mock = AsyncMock()

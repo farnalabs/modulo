@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,17 +19,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 _log = logging.getLogger(__name__)
 
 TrendDirection = Literal["declining", "stable", "improving"]
-
-
-class OkrSuite(BaseModel):
-    """OKR suite — groups eval definitions under a quality target."""
-
-    id: str
-    name: str
-    pass_threshold: float = Field(ge=0.0, le=1.0)
-    eval_definition_ids: list[UUID]
-    target_date: str | None = None
-    owner: str | None = None
 
 
 class OkrTrendPoint(BaseModel):
