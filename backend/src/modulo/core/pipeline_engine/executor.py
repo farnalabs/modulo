@@ -59,6 +59,7 @@ from modulo.core.graph_validator import GraphValidator
 from modulo.core.graph_validator._types import ValidationResult
 from modulo.core.hitl_manager import HITLManager
 from modulo.core.model_backend_hub import ModelBackendHub
+from modulo.core.notifier import EVENT_HITL_AWAITING
 from modulo.core.pipeline_engine.decorator import (
     RunCancelledError,
     set_audit_hook,
@@ -89,6 +90,7 @@ from modulo.core.pipeline_engine.node_runner import (
 from modulo.core.pipeline_engine.output_filter import OutputRejectedError
 from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
 from modulo.core.trigger_engine.agent_signal import fire_agent_signal
+from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.run import (
     ERROR_CODE_ORG_CAPACITY_LIMITED,
     ERROR_CODE_PIPELINE_CAPACITY,
@@ -635,6 +637,7 @@ class PipelineExecutor:
         *,
         checkpointer_conn_string: str | None = None,
         evidence_provider: EvidenceProvider | None = None,
+        notifier: Any | None = None,
     ) -> None:
         self._engine = db_engine
         self._session_factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
@@ -660,6 +663,12 @@ class PipelineExecutor:
         # from a genuine transient node cancellation and skip the pending-reset.
         self._stall_requested: asyncio.Event | None = None
         self._superseded: asyncio.Event | None = None
+        # HITL-awaiting notifier seam (team-hitl-gates Known Gap, 2026-08-16):
+        # inject the Notifier so the run lifecycle can dispatch the
+        # ``hitl_awaiting`` webhook/in-app notification. Injected by the SAQ
+        # execute/resume path (which already builds a Notifier for the system
+        # worker crons); None skips dispatch (fail-open, never blocks the run).
+        self._notifier: Any | None = notifier
 
     async def _check_capacity(
         self,
@@ -2323,6 +2332,7 @@ class PipelineExecutor:
 
         if pipeline_id is not None and org_id is not None:
             mgr = HITLManager()
+            pipeline_name: str | None = None
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
                 await mgr.create_gate(
@@ -2333,12 +2343,29 @@ class PipelineExecutor:
                     org_id=org_id,
                     required_team_id=required_team_id,
                 )
+                try:
+                    pipeline = await get_pipeline(session, pipeline_id)
+                    pipeline_name = pipeline.name if pipeline is not None else None
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.warning(
+                        "hitl_gate.pipeline_name_lookup_failed",
+                        extra={"pipeline_id": str(pipeline_id), "org_id": str(org_id)},
+                    )
             broker.publish(
                 "hitl_awaiting",
                 {
                     "gate_payload": gate_payload,
                     "team_id": str(required_team_id) if required_team_id else None,
                 },
+            )
+            await self._dispatch_hitl_awaiting(
+                org_id=org_id,
+                run_id=run_id,
+                gate_id=gate_id,
+                pipeline_name=pipeline_name,
+                team_id=required_team_id,
             )
             return "awaiting_human", None, None, node_token_usage or None
 
@@ -2353,6 +2380,50 @@ class PipelineExecutor:
             "Missing pipeline_id or org_id for HITL gate creation",
             node_token_usage or None,
         )
+
+    async def _dispatch_hitl_awaiting(
+        self,
+        *,
+        org_id: uuid.UUID,
+        run_id: uuid.UUID,
+        gate_id: str,
+        pipeline_name: str | None,
+        team_id: uuid.UUID | None,
+    ) -> None:
+        """Dispatch the ``hitl_awaiting`` webhook/in-app notification.
+
+        Closes the team-hitl-gates Known Gap (PRD §8.8 flow step 2): previously
+        the run lifecycle only emitted the WebSocket broker ``hitl_awaiting``
+        event — the HMAC-signed webhook / in-app notification path was never
+        triggered from the executor. Routed through the injected Notifier with
+        ``team_id`` so team-scoped gates reach team notification endpoints
+        first (falling back to org-wide). Failure-isolated: a broken notifier
+        or dispatch is logged and never blocks the run pause.
+        """
+        if self._notifier is None:
+            return
+        payload: dict[str, Any] = {
+            "run_id": str(run_id),
+            "gate_id": gate_id,
+            "team_id": str(team_id) if team_id else None,
+        }
+        if pipeline_name is not None:
+            payload["pipeline_name"] = pipeline_name
+        try:
+            await self._notifier.dispatch_event(
+                org_id=org_id,
+                event_type=EVENT_HITL_AWAITING,
+                payload=payload,
+                run_id=run_id,
+                team_id=team_id,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception(
+                "hitl_gate.awaiting_notification_failed",
+                extra={"run_id": str(run_id), "org_id": str(org_id), "gate_id": gate_id},
+            )
 
     async def _stream_graph(
         self,

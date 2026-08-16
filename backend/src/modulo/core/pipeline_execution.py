@@ -308,7 +308,14 @@ async def load_and_setup(aeng: AsyncEngine, rid: uuid.UUID, oid: uuid.UUID) -> t
 
     settings = get_settings()
     conn_string = str(settings.database_url).replace("+asyncpg", "").replace("+psycopg", "")
-    executor = PipelineExecutor(aeng, checkpointer_conn_string=conn_string)
+    from modulo.core.notifier import Notifier
+
+    notifier: Notifier | None = None
+    try:
+        notifier = Notifier(aeng, settings.fernet_key)
+    except Exception:
+        _log.exception("pipeline_execution.load_and_setup: notifier init failed — run still executes")
+    executor = PipelineExecutor(aeng, checkpointer_conn_string=conn_string, notifier=notifier)
     return cur, executor
 
 
