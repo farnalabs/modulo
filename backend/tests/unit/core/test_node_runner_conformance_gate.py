@@ -63,8 +63,17 @@ def _set_ctx(
     org_id: Any = _ORG_ID,
     env_profile: Any = None,
     pipeline_id: Any = _PIPE_ID,
+    claimed_guardrails: list[Any] | None = None,
+    claims_load_failed: bool = False,
 ) -> None:
-    ctx = (session_factory or _fake_factory(), org_id, env_profile, pipeline_id)
+    ctx = (
+        session_factory or _fake_factory(),
+        org_id,
+        env_profile,
+        pipeline_id,
+        claimed_guardrails,
+        claims_load_failed,
+    )
     monkeypatch.setattr(nr, "get_conformance_ctx", lambda: ctx)
 
 
@@ -348,6 +357,66 @@ async def test_gate_invalid_ctx_values_fast_path(monkeypatch: pytest.MonkeyPatch
     check.assert_not_awaited()
     audit.assert_not_awaited()
     interrupt.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Hoisted claim discovery (FAR-215 MINOR 2): the gate forwards the executor's
+# precomputed claimed-guardrail list + fail-closed marker to check_node_start,
+# so the per-node path pays zero guardrail-load queries.
+# ---------------------------------------------------------------------------
+
+
+async def test_gate_forwards_hoisted_claimed_guardrails(monkeypatch: pytest.MonkeyPatch):
+    """The gate passes the executor's hoisted claimed-guardrail list through to
+    ``check_node_start`` — the per-node path pays no guardrail-load query."""
+    _set_ctx(monkeypatch, claimed_guardrails=["claim-a", "claim-b"], claims_load_failed=False)
+    check = _patch_check_node_start(
+        monkeypatch,
+        ConformanceRecheckResult(blocked=False, gate_id=None, detail="", state="present", warned=False, claimed=True),
+    )
+    audit = _patch_audit(monkeypatch)
+    interrupt = _patch_interrupt(monkeypatch)
+
+    blocked = await nr._run_conformance_gate({"_run_id": _RUN_ID}, node_id=_NODE_ID)
+
+    assert blocked is False
+    check.assert_awaited_once()
+    kwargs = check.await_args.kwargs
+    assert kwargs["claimed_guardrails"] == ["claim-a", "claim-b"]
+    assert kwargs["claims_load_failed"] is False
+    audit.assert_not_awaited()
+    interrupt.assert_not_called()
+
+
+async def test_gate_forwards_claims_load_failed_marker(monkeypatch: pytest.MonkeyPatch):
+    """A run-start claim-discovery failure marker reaches ``check_node_start``
+    so the node fails CLOSED (unknown blocks), never skipping claims."""
+    _set_ctx(monkeypatch, claimed_guardrails=None, claims_load_failed=True)
+    check = _patch_check_node_start(
+        monkeypatch,
+        ConformanceRecheckResult(
+            blocked=True,
+            gate_id="guardrail_conformance_check_failed",
+            detail="could not load bound guardrails; failing closed",
+            state="unknown",
+            warned=False,
+            claimed=True,
+        ),
+    )
+    audit = _patch_audit(monkeypatch)
+    interrupt = _patch_interrupt(monkeypatch)
+    state: dict[str, Any] = {"_run_id": _RUN_ID}
+
+    blocked = await nr._run_conformance_gate(state, node_id=_NODE_ID)
+
+    assert blocked is True
+    check.assert_awaited_once()
+    kwargs = check.await_args.kwargs
+    assert kwargs["claimed_guardrails"] is None
+    assert kwargs["claims_load_failed"] is True
+    assert state["_conformance_blocked_node"] == _NODE_ID
+    audit.assert_awaited_once()
+    interrupt.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
