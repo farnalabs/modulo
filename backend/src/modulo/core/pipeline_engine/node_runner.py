@@ -1792,10 +1792,17 @@ def _is_sandbox_session_lost_echo(output_json: Any) -> bool:
     """True when output.json is the E2B wrapper's fallback echo for a dead session.
 
     Matched on the wrapper's exact placeholder summary (and the ``error`` field
-    as a secondary surface). Non-dict / non-matching output is never misread —
-    a genuine agent verdict (even a failed one) does not carry this signature.
+    as a secondary surface), AND on ``status == "failed"`` — the wrapper always
+    writes ``"status":"failed"`` on the echo. Requiring the failed status is the
+    anti-false-positive guard: a genuine agent verdict that merely MENTIONS
+    session interruption (e.g. "the session was interrupted, here is what I
+    completed") carries a ``summary`` without the dead-session signature, and a
+    non-failed status can never be the wrapper's dead-session echo. Non-dict /
+    non-matching output is never misread.
     """
     if not isinstance(output_json, dict):
+        return False
+    if output_json.get("status") != "failed":
         return False
     summary = output_json.get("summary")
     error = output_json.get("error")
