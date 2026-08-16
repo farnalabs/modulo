@@ -10,6 +10,7 @@ from modulo.core.schema_registry.inference import (
     SchemaInferenceError,
     SchemaInferenceService,
     _build_infer_prompt,
+    flag_rare_fields,
 )
 
 
@@ -87,6 +88,74 @@ class TestBuildInferPrompt:
         messages = _build_infer_prompt(samples, max_records=5)
         assert "5 records" in messages[1].content
         assert "100 records" not in messages[1].content
+
+    def test_rare_fields_are_listed_in_prompt(self) -> None:
+        samples = [{"common": i} for i in range(11)]
+        samples[0]["rare"] = "x"
+        messages = _build_infer_prompt(samples)
+        assert "rarely-used fields" in messages[1].content.lower()
+        assert "rare" in messages[1].content
+        assert "11 samples" in messages[1].content
+
+    def test_rare_fields_omitted_when_all_fields_common(self) -> None:
+        samples = [{"common": 1, "id": 2}, {"common": 3, "id": 4}]
+        messages = _build_infer_prompt(samples)
+        assert "rarely-used fields" not in messages[1].content.lower()
+
+    def test_system_prompt_instructs_rare_field_exclusion(self) -> None:
+        messages = _build_infer_prompt([{"a": 1}])
+        assert "rarely-used fields" in messages[0].content.lower()
+        assert "exclude" in messages[0].content.lower()
+
+
+class TestFlagRareFields:
+    def test_no_fields_when_all_common(self) -> None:
+        records = [{"id": 1, "title": "a"}, {"id": 2, "title": "b"}]
+        assert not flag_rare_fields(records)
+
+    def test_flags_fields_below_default_threshold(self) -> None:
+        records = [{"common": i} for i in range(11)]
+        records[0]["rare"] = 2
+        assert flag_rare_fields(records) == ["rare"]
+
+    def test_result_is_sorted_deterministically(self) -> None:
+        records = [{"mid": i} for i in range(11)]
+        records[0]["zeta"] = 1
+        records[1]["alpha"] = 2
+        assert flag_rare_fields(records) == ["alpha", "zeta"]
+
+    def test_null_values_do_not_count_as_present(self) -> None:
+        records = [{"id": i, "nullable": None} for i in range(11)]
+        records[0]["nullable"] = "x"
+        assert flag_rare_fields(records) == ["nullable"]
+
+    def test_empty_containers_count_as_present(self) -> None:
+        records = [{"id": 1, "tags": []}, {"id": 2, "tags": ["x"]}]
+        assert not flag_rare_fields(records)
+
+    def test_empty_records_return_empty(self) -> None:
+        assert not flag_rare_fields([])
+
+    def test_non_dict_records_are_ignored(self) -> None:
+        records = [{"id": 1}, "not-a-dict", 42]
+        assert not flag_rare_fields(records)
+
+    def test_custom_threshold(self) -> None:
+        records = [{"a": 1, "b": 2}, {"a": 3, "b": 4}, {"a": 5, "b": 6}, {"a": 7}]
+        assert not flag_rare_fields(records, threshold=0.5)
+        assert flag_rare_fields(records, threshold=0.8) == ["b"]
+
+    def test_zero_threshold_flags_nothing(self) -> None:
+        records = [{"a": 1}, {"b": 2}]
+        assert not flag_rare_fields(records, threshold=0.0)
+
+    def test_invalid_thresholds_raise(self) -> None:
+        with pytest.raises(ValueError, match="threshold"):
+            flag_rare_fields([{"a": 1}], threshold=1.5)
+        with pytest.raises(ValueError, match="threshold"):
+            flag_rare_fields([{"a": 1}], threshold=-0.1)
+        with pytest.raises(ValueError, match="threshold"):
+            flag_rare_fields([{"a": 1}], threshold="0.1")
 
 
 class TestParseSchemaFromResponse:

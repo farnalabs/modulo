@@ -13234,6 +13234,8 @@ export interface components {
             suggestion_name: string;
             /** Suggestion Description */
             suggestion_description?: string | null;
+            /** Rare Fields */
+            rare_fields?: string[];
         };
         /** SchemaMigrationPlanRequest */
         SchemaMigrationPlanRequest: {

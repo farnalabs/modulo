@@ -160,6 +160,22 @@ def step_connector_enum_field(request):
     }
 
 
+@given("sample records with a rarely-used field")
+def step_connector_rare_field(request):
+    mock_ci = _make_connector("rare-fields-source")
+    request.node._mock_ci = mock_ci
+    request.node._connector_name = "rare-fields-source"
+    records = [{"id": i, "title": f"Task {i}"} for i in range(11)]
+    records[0]["story_points"] = 5
+    request.node._records = records
+    request.node._model_backend = _make_backend()
+    request.node._expected_schema = {
+        "type": "object",
+        "properties": {"title": {"type": "string"}},
+        "required": ["title"],
+    }
+
+
 @given(parsers.parse('a connector instance "{name}" with sample data'))
 def step_connector_with_samples_alt(name: str, request):
     step_connector_with_samples(name, request)
@@ -261,6 +277,34 @@ def step_infer_schema_by_name(name: str, request, client):
     request.node._connector_name = name
 
 
+@when("I POST /api/v1/schemas/infer with the rarely-used sample data")
+def step_infer_schema_rare_fields(request, client):
+    mock_ci = request.node._mock_ci
+    records = request.node._records
+    mock_mb = request.node._model_backend
+    expected_schema = getattr(
+        request.node,
+        "_expected_schema",
+        {
+            "type": "object",
+            "properties": {"title": {"type": "string"}},
+            "required": ["title"],
+        },
+    )
+    ci_id = str(mock_ci.id) if mock_ci is not None else str(uuid.uuid4())
+
+    with contextlib_patch_multi(_base_infer_patches(mock_ci, mock_mb, records, expected_schema)):
+        resp = client.post(
+            "/api/v1/schemas/infer",
+            json={
+                "connector_instance_id": ci_id,
+                "sample_query": {"resource": "issues", "filters": {}, "limit": 11},
+            },
+        )
+    request.node._resp = resp
+    request.node._inferred_definition = expected_schema
+
+
 @when("I infer a schema from the connector")
 def step_infer_schema_publish_flow(request, client):
     mock_ci = request.node._mock_ci
@@ -359,6 +403,13 @@ def step_response_has_sample_and_name(request):
     assert "suggestion_name" in data, f"Response missing suggestion_name: {data}"
     assert isinstance(data["sample_count"], int)
     assert isinstance(data["suggestion_name"], str)
+
+
+@then(parsers.parse('the response lists the rarely-used field "{field}"'))
+def step_response_lists_rare_field(field: str, request):
+    data = request.node._resp.json()
+    rare_fields = data.get("rare_fields", [])
+    assert field in rare_fields, f"Rarely-used field '{field}' not flagged in response: {data}"
 
 
 @then(parsers.parse('the inferred schema has "{type_name}" type for field "{field_name}"'))
