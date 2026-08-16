@@ -103,7 +103,7 @@ The root `AGENTS.md` has the full non-negotiable rule under **Agent Isolation: A
 
 ## Delivery Workflow for QA
 
-1. Check `docs/delivery-tracker.md` — QA Reviews section.
+1. Check `Repos/devtools/harness/docs/delivery-tracker.md` — QA Reviews section.
 2. Run each QA review using the `qa` skill.
 3. After finishing a review, toggle its checkbox and add the date + outcome.
 4. Do not start QA #N+1 until QA #N is complete.
