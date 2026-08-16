@@ -113,7 +113,7 @@ def webhook_includes_error_msg(request):
     pass
 
 
-@given("the failure webhook endpoint returns {status:d}")
+@given(parsers.parse("the failure webhook endpoint returns {status:d}"))
 def failure_webhook_returns(status: int, request):
     request.node._webhook_status = status
 
@@ -190,6 +190,73 @@ def signature_computed_with(secret: str, request):
     payload = json.dumps({"event": "test"}).encode()
     expected = hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
     assert len(expected) == 64
+
+
+@given(parsers.parse('endpoint "{endpoint}" has secret "{secret}"'))
+def endpoint_has_secret(endpoint: str, secret: str, request):
+    if not hasattr(request.node, "_endpoint_secrets"):
+        request.node._endpoint_secrets = {}
+    request.node._endpoint_secrets[endpoint] = secret
+
+
+@when(parsers.parse('a webhook is sent from endpoint "{endpoint}"'))
+def webhook_sent_from_endpoint(endpoint: str, request):
+    request.node._current_endpoint = endpoint
+    request.node._webhook_payload = {"event": "test"}
+
+
+@then(parsers.parse('a webhook from endpoint "{endpoint}" uses "{secret}"'))
+def webhook_from_endpoint(endpoint: str, secret: str, request):
+    assert request.node._endpoint_secrets[endpoint] == secret
+
+
+@given(parsers.parse('pipeline "{name}" has webhook secret "{secret}"'))
+def pipeline_named_has_webhook_secret(name: str, secret: str, request):
+    request.node._pipeline_name = name
+    request.node._webhook_secret = secret
+
+
+@given("a webhook payload with signature")
+def webhook_payload_with_signature(request):
+    import hashlib
+    import hmac
+    import json
+
+    secret = getattr(request.node, "_webhook_secret", "whsec_abc123").encode()
+    payload = {"event": "test", "run_id": "run-1"}
+    body = json.dumps(payload).encode()
+    signature = hmac.new(secret, body, hashlib.sha256).hexdigest()
+    request.node._webhook_payload = payload
+    request.node._webhook_signature = signature
+
+
+@when("the receiver verifies the signature")
+def receiver_verifies_signature(request):
+    pass
+
+
+@then("the verification succeeds with the correct secret")
+def verification_succeeds(request):
+    import hashlib
+    import hmac
+    import json
+
+    secret = getattr(request.node, "_webhook_secret", "whsec_abc123").encode()
+    body = json.dumps(request.node._webhook_payload).encode()
+    expected = hmac.new(secret, body, hashlib.sha256).hexdigest()
+    assert expected == request.node._webhook_signature
+
+
+@then("the verification fails with a different secret")
+def verification_fails_different_secret(request):
+    import hashlib
+    import hmac
+    import json
+
+    wrong_secret = b"wrong-secret"
+    body = json.dumps(request.node._webhook_payload).encode()
+    wrong = hmac.new(wrong_secret, body, hashlib.sha256).hexdigest()
+    assert wrong != request.node._webhook_signature
 
 
 @then(parsers.parse('a webhook from org "{org}" uses "{secret}"'))

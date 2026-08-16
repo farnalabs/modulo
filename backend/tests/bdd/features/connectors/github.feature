@@ -30,4 +30,4 @@ Feature: GitHub Connector
   Scenario: Invalid credentials are rejected
     Given a GitHub connector configured with invalid credentials
     When the connector checks health
-    Then the health check returns "unhealthy"
+    Then the connector health check returns "unhealthy"
