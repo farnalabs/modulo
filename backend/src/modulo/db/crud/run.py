@@ -435,20 +435,12 @@ async def create_run(
         to_engine_definition,
         to_engine_definition_from_pin,
     )
-    from modulo.db.models.eval_definition import EvalDefinition as EvalDefinitionModel
+    from modulo.db.crud.guardrail_config import load_pipeline_guardrail_rows
 
-    guardrail_rows = (
-        (
-            await session.execute(
-                select(EvalDefinitionModel).where(
-                    EvalDefinitionModel.pipeline_id == pipeline_id,
-                    EvalDefinitionModel.organisation_id == org_id,
-                    EvalDefinitionModel.eval_type == "guardrail",
-                )
-            )
-        )
-        .scalars()
-        .all()
+    guardrail_rows = await load_pipeline_guardrail_rows(
+        session,
+        pipeline_id=pipeline_id,
+        organisation_id=org_id,
     )
 
     # Item 10 — replay uses the PINNED guardrail set from the snapshot, not the
@@ -458,8 +450,8 @@ async def create_run(
     # to the live rows.
     pinned_defs: list[Any] = []
     skipped_guardrails: list[GuardrailSkip] = []
+    snap_pins: Any = None
     if is_replay and snapshot_id is not None:
-        snap_pins = None
         try:
             snap_pins = (
                 await session.execute(
@@ -488,7 +480,13 @@ async def create_run(
                     skipped_guardrails.append(GuardrailSkip(name=name, reason="soft_deleted", detail="pin unreadable"))
 
     if guardrail_rows or pinned_defs or skipped_guardrails:
-        guardrail_defs = pinned_defs or [to_engine_definition(row) for row in guardrail_rows]
+        # Item 10 invariant — a snapshot with a NON-EMPTY pinned set evaluates
+        # exactly that set, even when EVERY pin fails to rebuild (all pinned
+        # rows soft-deleted → ``pinned_defs`` empty). It must never fall back
+        # to the live rows: the skip audit + enforcement-gap alert is then the
+        # sole signal that the pinned control is not enforcing. Only a
+        # snapshot with NO pins (pre-migration / read failure) falls back.
+        guardrail_defs = pinned_defs if snap_pins else [to_engine_definition(row) for row in guardrail_rows]
 
         # Item 7 — cap enforcement (fail closed): a single node binding more
         # than the per-node guardrail cap is a mechanism error. Graph-save
@@ -592,8 +590,12 @@ async def create_run(
                         "latency_ms": round(latency_ms, 3),
                     },
                 )
-            else:
-                skipped_guardrails = []
+            # NOTE (item 10 invariant): a conformance block (``guardrail_blocked``
+            # True via the block above) must NOT clear the accumulated pin-skips
+            # collected earlier in this seam — they survive the conformance path
+            # and are still audited + alerted just below. The pass only ever
+            # replaces ``skipped_guardrails`` with its own carried skips (via
+            # ``outcome.skipped``), so there is no stale-skip case to clear.
 
         # Item 10 — audit + alert skipped pinned guardrails (best-effort: the
         # skip is the policy; a failed audit/alert never breaks the run).

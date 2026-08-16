@@ -76,6 +76,26 @@ class _SleepingEngine(EvalEngine):
         raise AssertionError("should never reach real evaluation in timeout tests")
 
 
+class _SplitSleepEngine(EvalEngine):
+    """Engine that sleeps only for the named guardrails, real detection otherwise.
+
+    Lets a single pass carry BOTH a fast guardrail (real regex detection, which
+    completes) and a slow one (sleeps and times out) so the per-guardrail budget
+    is actually proven, not assumed.
+    """
+
+    def __init__(self, sleeping: set[str], delay: float) -> None:
+        super().__init__()
+        self._sleeping = sleeping
+        self._delay = delay
+
+    def evaluate(self, output: dict[str, Any], eval_def: EvalDefinition, **kwargs: Any) -> Any:
+        if eval_def.name in self._sleeping:
+            time.sleep(self._delay)
+            raise AssertionError("should never reach real evaluation for sleeping guardrails")
+        return super().evaluate(output, eval_def, **kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Per-guardrail hard timeout
 # ---------------------------------------------------------------------------
@@ -201,18 +221,33 @@ def test_resolve_timeout_defaults_and_declared():
 
 
 async def test_timeout_applies_per_guardrail_not_pass_wide():
-    """A fast guardrail still evaluates when a sibling times out (per-guardrail budget)."""
-    fast = _def("fast", "block")
-    slow = _def("slow", "block", timeout=0.05)
+    """A fast guardrail still evaluates when a sibling times out (per-guardrail budget).
+
+    Uses a split engine: the 'fast' guardrail runs real (fast) regex detection
+    against a CLEAN payload and completes, while the 'slow' guardrail blocks in
+    the sleeping engine (5s >> 1s budget) and times out. If the budget were
+    pass-wide, the fast guardrail would time out too and yield NO result —
+    asserting its real (non-mechanism-error) result is what proves per-guardrail
+    independence. The 1s budget is generous so the fast thread's pool scheduling
+    can never be mistaken for a pass-wide timeout.
+    """
+    fast = _def("fast", "block", config={"pattern": r"FAST_MARKER_\d{4}", "field": "body"})
+    slow = _def("slow", "block", timeout=1.0)
     outcome = await run_interception_pass_async(
-        _SleepingEngine(5.0),
+        _SplitSleepEngine(sleeping={"slow"}, delay=5.0),
         [fast, slow],
         {"body": "leak SECRET_ABC12345"},
-        timeout_seconds=0.05,
+        timeout_seconds=1.0,
     )
     # The slow block guardrail timed out → fail closed.
     assert outcome.blocked is True
     assert outcome.blocking_eval_name == "slow"
+    # The fast guardrail COMPLETED: a real result (clean payload → passed
+    # False), never a mechanism-error timeout result.
+    fast_results = [r for r in outcome.results if r.eval_id == fast.id]
+    assert len(fast_results) == 1
+    assert fast_results[0].passed is False
+    assert "mechanism error" not in fast_results[0].detail
 
 
 # ---------------------------------------------------------------------------

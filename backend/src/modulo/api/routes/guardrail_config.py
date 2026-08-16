@@ -47,7 +47,7 @@ from modulo.core.guardrails.config import (
     to_eval_config,
     utc_now_iso,
 )
-from modulo.db.crud.guardrail_config import get_guardrail_pin, set_guardrail_pin
+from modulo.db.crud.guardrail_config import get_guardrail_pin, load_pipeline_guardrail_rows, set_guardrail_pin
 from modulo.db.models.eval_definition import EvalDefinition as EvalDefinitionRow
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.rls import set_rls_org
@@ -216,18 +216,10 @@ async def _reconcile_guardrail_rows(
     pipelines_rows: list[tuple[Pipeline, dict[str, EvalDefinitionRow]]] = []
     colliding: list[str] = []
     for pipeline in pipelines:
-        rows = (
-            (
-                await session.execute(
-                    select(EvalDefinitionRow).where(
-                        EvalDefinitionRow.pipeline_id == pipeline.id,
-                        EvalDefinitionRow.organisation_id == org_id,
-                        EvalDefinitionRow.eval_type == "guardrail",
-                    )
-                )
-            )
-            .scalars()
-            .all()
+        rows = await load_pipeline_guardrail_rows(
+            session,
+            pipeline_id=pipeline.id,
+            organisation_id=org_id,
         )
         rows_by_name = {row.name: row for row in rows}
         pipelines_rows.append((pipeline, rows_by_name))

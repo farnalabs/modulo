@@ -558,6 +558,53 @@ async def test_create_run_replay_without_pins_falls_back_to_live_rows(session: A
     assert run.status == "pending"  # detection-only replay of the live row
 
 
+async def test_create_run_replay_pinned_all_soft_deleted_never_falls_back_to_live(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+):
+    """MAJOR (review): a replay whose pins are ALL soft-deleted must NOT fall
+    back to the LIVE rows — the pinned (empty) set governs. The live guardrail's
+    detection must never fire, the skip is audited, and the enforcement-gap
+    alert fires."""
+    notified: list[dict[str, Any]] = []
+
+    async def _fake_notify(org_id: uuid.UUID, event_type: str, payload: dict[str, Any], **kwargs: Any) -> None:
+        notified.append({"event_type": event_type, "payload": payload})
+
+    monkeypatch.setattr(guardrails_module, "notify_guardrail_event", _fake_notify)
+    await _seed(session)
+    pinned = await _seed_guardrail(session, name="ghost-block", action="block")
+    pinned_row = await _get_guardrail_row(session, pinned)
+    await _seed_snapshot_with_pins(session, guardrail_defs=[pinned_row])
+    # A DIFFERENT live guardrail now exists with its OWN detection pattern.
+    await _seed_guardrail(
+        session,
+        name="live-only",
+        action="block",
+        config={"type": "regex", "field": "body", "pattern": r"LIVE_ONLY_MARKER_\d{4}"},
+    )
+    # Delete the pinned row BEFORE the replay — its live row is soft-deleted.
+    await session.execute(EvalDefinition.__table__.delete().where(EvalDefinition.__table__.c.id == pinned))
+    await session.flush()
+
+    run = await _create(session, input_payload={"body": "leak LIVE_ONLY_MARKER_1234"}, is_replay=True)
+    assert run.status == "pending"
+    # NO live-guardrail result: the pinned (empty) set governs, so 'live-only'
+    # was never evaluated. Before the fix, the live rows were evaluated and a
+    # passed=True detection result would exist.
+    rows = (await session.execute(select(EvalResult).where(EvalResult.run_id == run.id))).scalars().all()
+    assert rows == []
+    # The skip is audited + alerted (the sole enforcement signal).
+    audit = (
+        (await session.execute(select(AuditEvent).where(AuditEvent.event_type == "guardrail.skipped"))).scalars().all()
+    )
+    assert len(audit) == 1
+    assert audit[0].payload_json["guardrail"] == "ghost-block"
+    assert any(
+        e["event_type"] == "guardrail_enforcement_gap" and e["payload"].get("guardrail") == "ghost-block"
+        for e in notified
+    )
+
+
 # ---------------------------------------------------------------------------
 # FAR-223 item 7 "Plus" — conformance enforcement at dispatch time
 # ---------------------------------------------------------------------------
@@ -625,6 +672,52 @@ async def test_create_run_conformance_block_fires_paging_alert(session: AsyncSes
     assert run.error_code == "eval_blocked"
     assert any(
         e["event_type"] == "guardrail_enforcement_gap" and e["payload"].get("reason") == "non_conformant"
+        for e in notified
+    )
+
+
+async def test_create_run_conformance_block_preserves_pin_skip(session: AsyncSession, monkeypatch: pytest.MonkeyPatch):
+    """MINOR (review): a conformance block on one guardrail must NOT swallow the
+    pin-skips collected earlier in the seam. A replay with a soft-deleted pinned
+    guardrail AND a non-conformant block guardrail in the pinned set still
+    audits the pin-skip and fires its enforcement-gap alert."""
+    notified: list[dict[str, Any]] = []
+
+    async def _fake_notify(org_id: uuid.UUID, event_type: str, payload: dict[str, Any], **kwargs: Any) -> None:
+        notified.append({"event_type": event_type, "payload": payload})
+
+    monkeypatch.setattr(guardrails_module, "notify_guardrail_event", _fake_notify)
+    await _seed(session)
+    pinned = await _seed_guardrail(session, name="ghost-block", action="block")
+    pinned_row = await _get_guardrail_row(session, pinned)
+    conformance_guardrail = await _seed_guardrail(
+        session,
+        name="needs-docker",
+        action="block",
+        config={"required_capabilities": ["docker"]},
+    )
+    conformance_row = await _get_guardrail_row(session, conformance_guardrail)
+    await _seed_snapshot_with_pins(session, guardrail_defs=[pinned_row, conformance_row])
+    # Delete the pinned row's live row BEFORE the replay (soft-deleted pin).
+    await session.execute(EvalDefinition.__table__.delete().where(EvalDefinition.__table__.c.id == pinned))
+    await session.flush()
+
+    run = await _create(session, input_payload={"body": "clean"}, is_replay=True)
+    # The pinned non-conformant 'needs-docker' guardrail blocks (fail closed).
+    assert run.status == "eval_failed"
+    assert run.error_code == "eval_blocked"
+    assert "non-conformant" in (run.error_detail or "")
+    # The ghost-block pin-skip SURVIVES the conformance path: audited AND
+    # alerted. Before the fix, the conformance block cleared the collected
+    # skips, so no guardrail.skipped audit and no ghost-block alert existed.
+    audit = (
+        (await session.execute(select(AuditEvent).where(AuditEvent.event_type == "guardrail.skipped"))).scalars().all()
+    )
+    assert len(audit) == 1
+    assert audit[0].payload_json["guardrail"] == "ghost-block"
+    assert audit[0].payload_json["reason"] == "soft_deleted"
+    assert any(
+        e["event_type"] == "guardrail_enforcement_gap" and e["payload"].get("guardrail") == "ghost-block"
         for e in notified
     )
 

@@ -892,6 +892,14 @@ async def run_interception_pass_async(
         action = _resolve_action(eval_def)
         guarding = action in (GuardrailAction.BLOCK, GuardrailAction.REDACT)
         try:
+            # NOTE — known trade-off (runaway thread): ``wait_for`` only bounds
+            # how long WE wait; the worker thread started by ``to_thread`` keeps
+            # running in the pool even after the budget fires (a pathological
+            # regex can keep spinning in the background). Under repeated
+            # pathological patterns this can exhaust the default thread pool
+            # executor (one thread per guardrail per run). The 1MB payload
+            # budget bounds but does not eliminate it; a future fix could run
+            # detection in a cancellable process/sandbox instead.
             result = await asyncio.wait_for(
                 asyncio.to_thread(_detect_one, engine, pre_act, eval_def),
                 timeout=timeout,
