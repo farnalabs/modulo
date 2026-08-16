@@ -351,6 +351,14 @@ class TestRevealEndpoint:
         )
         assert resp.status_code == 400
 
+    def test_reveal_invalid_resource_id_returns_400(self, client: TestClient) -> None:
+        resp = client.post(
+            "/api/v1/admin/sensitive/reveal",
+            json={"resource_type": "connector", "resource_id": "not-a-uuid"},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "resource_id must be a valid UUID"
+
     def test_reveal_not_found(self, client: TestClient) -> None:
         self._setup_session_execute(None)
 

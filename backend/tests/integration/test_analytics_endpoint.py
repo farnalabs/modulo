@@ -932,6 +932,17 @@ class TestEnrichedColumns:
         total = sum(b["count"] for b in resp.json()["buckets"])
         assert total == 1, f"error_code filter must narrow to the matching fact, got {total}"
 
+        # The API presents canonical DOTTED codes while the facts table stores
+        # the RAW spelling — the dotted input must expand to the raw
+        # ``executor_stalled`` row (build_error_code_condition IN-clause).
+        resp = await integration_client.get(
+            f"/api/v1/analytics/query?date_from={day.isoformat()}&date_to={day.isoformat()}&error_code=agent.stall",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        total = sum(b["count"] for b in resp.json()["buckets"])
+        assert total == 1, f"dotted error_code filter must match the raw executor_stalled fact, got {total}"
+
     async def test_error_code_dimension_returns_keyed_buckets(
         self,
         integration_client: AsyncClient,
@@ -964,7 +975,51 @@ class TestEnrichedColumns:
         )
         assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
         keys = {b["key"] for b in resp.json()["buckets"]}
-        assert {"executor_stalled", "node_timeout"} <= keys, f"expected error_code keys, got {keys}"
+        # bucket_rows canonicalizes the RAW facts-table codes (executor_stalled /
+        # node_timeout) into the dotted taxonomy, so the dimension returns the
+        # canonical keys the runs API presents.
+        assert {"agent.stall", "node.timeout"} <= keys, f"expected error_code keys, got {keys}"
+
+    async def test_error_code_unknown_aggregate_round_trip(
+        self,
+        integration_client: AsyncClient,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        # A distinct past date avoids colliding with other tests' facts in the
+        # shared session-scoped org (org_a) — the exact-count assertion requires
+        # an uncontaminated run_date.
+        day = date(2026, 7, 20)
+        await _insert_fact(
+            db_engine,
+            org_id=org_a,
+            run_id=uuid.uuid4(),
+            run_date=day,
+            status="failed",
+            error_code="SomeWeirdError",
+        )
+
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            f"/api/v1/analytics/query?date_from={day.isoformat()}&date_to={day.isoformat()}&dimension=error_code",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        keys = {b["key"] for b in resp.json()["buckets"]}
+        assert "harness.unknown" in keys, (
+            f"unmapped raw error_code must canonicalize into the harness.unknown dimension slice, got {keys}"
+        )
+
+        # The aggregate filter (NOT IN over the complement of known codes) must
+        # match the SAME raw row the unknown slice shows.
+        resp = await integration_client.get(
+            f"/api/v1/analytics/query?date_from={day.isoformat()}&date_to={day.isoformat()}&error_code=harness.unknown",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        total = sum(b["count"] for b in resp.json()["buckets"])
+        assert total == 1, f"error_code=harness.unknown must return the unmapped raw row, got {total}"
 
 
 class TestExportEndpoint:

@@ -497,7 +497,7 @@ def test_run_response_serializes_error_detail(client: TestClient) -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert body["error_detail"] == "LLM provider returned 429 Too Many Requests"
-    assert body["error_code"] == "rate_limited"
+    assert body["error_code"] == "harness.unknown"
 
 
 def test_run_response_error_detail_none_when_run_succeeded(client: TestClient) -> None:
@@ -534,6 +534,22 @@ def test_run_response_gate_fired_true_on_idempotency_gate_code(client: TestClien
     """FAR-228: a guard-B suppressed run (error_code harness.idempotency_gate)
     exposes gate_fired True."""
     run = _make_run(status="complete", error_code="harness.idempotency_gate")
+    run.raw_output_markers = {}
+    run.run_classification = None
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.json()["gate_fired"] is True
+
+
+def test_run_response_gate_fired_true_on_raw_idempotency_gate_code(client: TestClient) -> None:
+    """FAR-228 review fix: the DB stores the RAW spelling (``idempotency_gate``)
+    for legacy guard-B rows — ``_run_gate_fired`` must route the read through
+    ``map_legacy_code`` so they are not missed."""
+    run = _make_run(status="complete", error_code="idempotency_gate")
     run.raw_output_markers = {}
     run.run_classification = None
     with (
@@ -934,7 +950,7 @@ def test_list_runs_includes_truncated_error_detail_preview(client: TestClient) -
 
     assert resp.status_code == 200
     item = resp.json()["items"][0]
-    assert item["error_code"] == "task_failure"
+    assert item["error_code"] == "harness.worker_failed"
     assert item["error_detail"].endswith("…")
     assert len(item["error_detail"]) == 201
 

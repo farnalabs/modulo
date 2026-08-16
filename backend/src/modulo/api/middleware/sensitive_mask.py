@@ -106,12 +106,23 @@ async def _fetch_value(
     resource_id = payload.resource_id
     field = payload.field
 
+    try:
+        resource_uuid = uuid.UUID(resource_id)
+    except ValueError as exc:
+        # The path body field is an untyped str (RevealRequest.resource_id);
+        # parse it up front so a malformed id is a clean 400 instead of an
+        # uncaught ValueError bubbling out of every resource branch as a 500.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="resource_id must be a valid UUID",
+        ) from exc
+
     if payload.resource_type == "connector":
         from modulo.db.models.connector_instance import ConnectorInstance
 
         connector_result = await session.execute(
             select(ConnectorInstance).where(
-                ConnectorInstance.id == uuid.UUID(resource_id),
+                ConnectorInstance.id == resource_uuid,
                 ConnectorInstance.organisation_id == principal.organisation_id,
             )
         )
@@ -124,7 +135,7 @@ async def _fetch_value(
     if payload.resource_type == "sso_provider":
         provider_result = await session.execute(
             select(SsoProvider).where(
-                SsoProvider.id == uuid.UUID(resource_id),
+                SsoProvider.id == resource_uuid,
                 SsoProvider.organisation_id == principal.organisation_id,
             )
         )

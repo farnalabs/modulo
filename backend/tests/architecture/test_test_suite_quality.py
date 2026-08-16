@@ -232,6 +232,24 @@ regression that silently weakens the suite:
   they are the specific form this lens exists to force, and a union of
   *specific* exceptions (``(ValueError, TypeError)``) is the intentional
   "either of these" form
+- ``assert <mock>.assert_*()`` / ``assert not <mock>.assert_*()`` — using a
+  unittest.mock verification method *as* the assertion's test expression.
+  Every ``assert_called``/``assert_called_with``/``assert_awaited*``/
+  ``assert_not_called``/``assert_has_calls`` method returns ``None``, so
+  ``assert mock.assert_called()`` is a typo for ``mock.assert_called()`` +
+  ``assert <something>``: the assertion is ``assert None``, which ALWAYS
+  FAILS even when the double verified correctly (the test is red no matter
+  what the code under test does), and ``assert not mock.assert_called()`` is
+  ``assert not None``, which ALWAYS PASSES regardless of the recorded calls
+  (a silent false green that a mutation-testing run believes is a real
+  verification). Both are almost always a leftover from inlining a bare
+  ``assert`` in front of a verification call while debugging; the correct
+  form is to call the verification method as its own statement — it already
+  raises ``AssertionError`` on mismatch — and assert on a real mock attribute
+  (``call_count``/``called``/``call_args``) for the value check. Only the
+  whole-expression position is flagged: a verification call appearing inside a
+  larger expression (the negation of another operand, a function argument, ...)
+  is not the assertion itself and is left alone
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -4085,3 +4103,152 @@ def test_mock_constructor_lens_flags_dead_asserts():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _mock_constructor_assert_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+_MOCK_ASSERT_METHOD_NAMES = frozenset(
+    {
+        "assert_called",
+        "assert_called_once",
+        "assert_called_with",
+        "assert_called_once_with",
+        "assert_awaited",
+        "assert_awaited_once",
+        "assert_awaited_with",
+        "assert_awaited_once_with",
+        "assert_not_called",
+        "assert_not_awaited",
+        "assert_has_calls",
+        "assert_has_awaits",
+        "assert_any_call",
+        "assert_any_await",
+    }
+)
+"""Attribute names of ``unittest.mock`` verification methods, all of which
+return ``None``. ``assert_called*``/``assert_called_with``/``assert_awaited*``
+verifications raise ``AssertionError`` on mismatch and return ``None`` on
+success; ``assert_not_called``/``assert_not_awaited`` and the ``assert_has_*``/
+``assert_any_*`` families return ``None`` unconditionally on success."""
+
+
+def _mock_assert_in_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert`` whose test
+    expression *is* — or ``not``-wraps — a call to a mock verification method.
+
+    Only the two whole-expression positions are checked, so a verification
+    call that happens to appear inside a larger expression is never implicated
+    and the lens has no false positives. No name resolution is involved: any
+    attribute method with one of the ``assert_*`` names in either position is
+    a call that returns ``None``, which is exactly the dead-assert hazard."""
+    found: list[tuple[int, str]] = []
+
+    def _is_mock_assert_call(node: ast.AST) -> bool:
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in _MOCK_ASSERT_METHOD_NAMES
+        )
+
+    def _report(lineno: int, negated: bool, source: ast.AST) -> None:
+        verb = "ALWAYS FAILS" if not negated else "ALWAYS PASSES"
+        found.append(
+            (
+                lineno,
+                f"assert {'not ' if negated else ''}{ast.unparse(source)} — "
+                f"a mock verification method returns None, so this is assert "
+                f"None, which {verb} regardless of the recorded calls",
+            )
+        )
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        if _is_mock_assert_call(node.test):
+            _report(node.lineno, negated=False, source=node.test)
+            continue
+        if (
+            isinstance(node.test, ast.UnaryOp)
+            and isinstance(node.test.op, ast.Not)
+            and _is_mock_assert_call(node.test.operand)
+        ):
+            _report(node.lineno, negated=True, source=node.test)
+    return found
+
+
+def test_no_mock_assert_as_assertion_expression():
+    """An ``assert`` whose test expression is a call to a ``unittest.mock``
+    verification method is a fixed-outcome assertion: every ``assert_called*``/
+    ``assert_awaited*``/``assert_not_called``/``assert_has_calls`` method
+    returns ``None``, so ``assert mock.assert_called()`` evaluates as
+    ``assert None`` and ALWAYS FAILS (the test stays red even when the double
+    verified its calls correctly), while ``assert not mock.assert_called()``
+    evaluates as ``assert not None`` and ALWAYS PASSES no matter what the code
+    under test or the double did. Both spellings falsely report on behaviour
+    that the verification method itself is the only thing capable of judging,
+    and a mutation-testing run trusts the green ``assert not`` form as real
+    coverage. Verification methods already raise ``AssertionError`` on mismatch
+    — call them as their own statement — and assert on a mock attribute
+    (``call_count``/``called``/``call_args``) for the value-level check. The
+    concurrent-constructor and redundant-call lenses own the neighbouring
+    shapes (fresh ``Mock()`` in a test expression; weak ``assert .called``
+    immediately before a recorded-calls access); this lens owns the
+    None-returning verification call as the assertion itself."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _mock_assert_in_assert_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} assertion(s) whose expression is a mock verification call.\n"
+        "assert_called*/assert_awaited*/assert_not_called/assert_has_calls all return None, so "
+        "'assert mock.assert_called()' is always False and 'assert not mock.assert_called()' is "
+        "always True. Call the verification method as its own statement (it raises on mismatch) "
+        "and assert on a mock attribute for the value.\n" + "\n".join(violations)
+    )
+
+
+def test_mock_assert_lens_flags_none_returning_asserts():
+    """Synthetic positive/negative control for the mock-verification-assert
+    lens: it must flag an ``assert`` whose test expression is a call to any
+    of the None-returning mock verification methods (``assert_called``,
+    ``assert_called_once_with``, ``assert_awaited``, ``assert_not_called``,
+    ``assert_has_calls``, ...) in either the direct or ``not``-wrapped shape,
+    and ignore verification calls used as standalone statements, asserts over
+    mock attributes (``called``/``call_count``/``call_args``), ``is not None``
+    checks, and any call whose function is not a verification method."""
+    positive_sources = [
+        "def test_foo():\n    assert mock.assert_called()\n",
+        "def test_foo():\n    assert not mock.assert_called()\n",
+        "def test_foo():\n    assert mock.assert_called_once()\n",
+        "def test_foo():\n    assert mock.assert_called_once_with(1, 2)\n",
+        "def test_foo():\n    assert mock.assert_not_called()\n",
+        "def test_foo():\n    assert mock.assert_awaited()\n",
+        "def test_foo():\n    assert not mock.assert_awaited_once()\n",
+        "def test_foo():\n    assert mock.assert_awaited_once_with(x=1)\n",
+        "def test_foo():\n    assert mock.assert_not_awaited()\n",
+        "def test_foo():\n    assert mock.assert_has_calls([call(1)])\n",
+        "def test_foo():\n    assert mock.assert_has_awaits([call(2)])\n",
+        "def test_foo():\n    assert mock.assert_any_call(3)\n",
+        "def test_foo():\n    assert mocker.patch('x').assert_called_with(1)\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _mock_assert_in_assert_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    mock.assert_called()\n",
+        "def test_foo():\n    mock.assert_not_called()\n",
+        "def test_foo():\n    mock.assert_called_once_with(1)\n",
+        "def test_foo():\n    assert mock.called\n",
+        "def test_foo():\n    assert not mock.called\n",
+        "def test_foo():\n    assert mock.call_count == 1\n",
+        "def test_foo():\n    assert mock.call_args.args[0] == 1\n",
+        "def test_foo():\n    assert result is not None\n",
+        "def test_foo():\n    assert result.compute_total() == 3\n",
+        "def test_foo():\n    mock.assert_called()\n    assert mock.call_count == 1\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _mock_assert_in_assert_violations(tree), f"lens should NOT flag:\n{source}"
