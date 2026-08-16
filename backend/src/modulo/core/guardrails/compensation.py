@@ -353,8 +353,16 @@ async def compensate_blocked_run(
 
     summary = _build_summary(run, guardrail_block, blocking_eval_name, executed, per_node)
     try:
-        run.blocked_partial_summary = summary
-        await session.flush()
+        # SAVEPOINT-scoped write (guard-the-guard): a failed summary flush rolls
+        # back only the summary write and leaves the terminalization
+        # transaction usable. A bare flush failure would poison the outer
+        # transaction (SQLAlchemy requires rollback after a failed flush), so
+        # the caller's run-create commit would fail even though the exception
+        # was caught here — defeating the "never crashes terminalization"
+        # contract.
+        async with session.begin_nested():
+            run.blocked_partial_summary = summary
+            await session.flush()
     except asyncio.CancelledError:
         raise
     except Exception:

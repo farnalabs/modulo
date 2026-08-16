@@ -15,7 +15,7 @@ audit writer are stubbed. The suppression predicate uses a real Run table.
 
 import uuid
 from collections.abc import AsyncGenerator
-from typing import Any, cast
+from typing import Any, Self, cast
 
 import httpx
 import pytest
@@ -228,17 +228,44 @@ class _FakeScalar:
 
 
 class _FakeSession:
-    """Minimal AsyncSession stand-in: graph query + flush only."""
+    """Minimal AsyncSession stand-in: graph query + flush + savepoint."""
 
     def __init__(self, graph: dict[str, Any] | None = None) -> None:
         self._graph = graph if graph is not None else {"nodes": []}
         self.flushed: list[bool] = []
+        self.nested_begins: int = 0
 
     async def execute(self, _stmt: Any) -> _FakeScalar:
         return _FakeScalar(self._graph)
 
     async def flush(self) -> None:
         self.flushed.append(True)
+
+    def begin_nested(self) -> "_FakeNested":
+        self.nested_begins += 1
+        return _FakeNested(self)
+
+
+class _FakeNested:
+    """Async context manager mimicking a never-failing SAVEPOINT."""
+
+    def __init__(self, session: _FakeSession) -> None:
+        self._session = session
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+
+class _FailingFlushSession(_FakeSession):
+    """Savepoint whose inner flush always fails — the summary write must roll
+    back to the savepoint and be contained."""
+
+    async def flush(self) -> None:
+        self.flushed.append(True)
+        raise RuntimeError("summary write boom")
 
 
 class _FakeRun:
@@ -428,6 +455,24 @@ async def test_compensate_blocked_run_guard_the_guard_audit_failure(audit_patch:
     )
     assert summary["blocked"] is True
     assert run.blocked_partial_summary is not None
+
+
+@pytest.mark.asyncio
+async def test_compensate_blocked_run_summary_write_failure_is_contained(audit_patch: Any):
+    """A summary-write flush failure must be swallowed AND transaction-safe: the
+    write is SAVEPOINT-scoped, so the failure rolls back only the summary write
+    and never poisons the terminalization transaction (guard-the-guard)."""
+    session = _FailingFlushSession()
+    run = _FakeRun()
+    summary = await compensate_blocked_run(
+        session,
+        run,
+        guardrail_block="blocked",
+        executed_nodes={"node_a": {"output": {"number": 1}}},
+    )
+    assert summary["blocked"] is True
+    assert session.nested_begins >= 1
+    audit_patch.assert_awaited_once()
 
 
 @pytest.mark.asyncio
