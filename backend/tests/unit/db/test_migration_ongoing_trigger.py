@@ -21,8 +21,10 @@ No live Postgres here (integration territory) — instead:
   ``0102_ongoing_streak_epoch`` sit on top of that; main's
   ``0103_lifecycle_map_version_actor`` sits on top of the epoch; this branch's
   FAR-192 ``0104_trigger_event_auto_deactivated`` migration (renumbered from
-  ``0103`` to sit on main's new head) sits on top of that; the chain head is
-  this branch's FAR-219 ``0105_guardrail_pins`` migration.
+  ``0103`` to sit on main's new head) sits on top of that, followed by this
+  branch's FAR-219 ``0105_guardrail_pins``; the chain head is this branch's
+  FAR-214 ``0106_trigger_event_guardrail_blocked`` migration, which widens the
+  ``trigger_events`` validation_result vocabulary with ``guardrail_blocked``.
 """
 
 from __future__ import annotations
@@ -46,6 +48,7 @@ _MIGRATION_0101 = "0101_guardrails"
 _MIGRATION_0102 = "0102_ongoing_streak_epoch"
 _MIGRATION_0104 = "0104_trigger_event_auto_deactivated"
 _MIGRATION_0105 = "0105_guardrail_pins"
+_MIGRATION_0106 = "0106_trigger_event_guardrail_blocked"
 
 _VERSIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 
@@ -162,11 +165,11 @@ class TestMigration0095OngoingFlag:
         # which is superseded by 0099_run_raw_output_markers, which is
         # superseded by 0100_run_classification, which is superseded by this
         # branch's FAR-208 head 0101_guardrails, then on to the FAR-219 head
-        # 0105_guardrail_pins.
+        # 0105_guardrail_pins and the FAR-214 head 0106_trigger_event_guardrail_blocked.
         heads = script.get_heads()
         assert migration_0095.revision not in heads
         assert migration_0096.revision not in heads
-        assert heads == [_MIGRATION_0105], f"expected a single head, got {heads}"
+        assert heads == [_MIGRATION_0106], f"expected a single head, got {heads}"
         assert _MIGRATION_0098 not in heads
         assert _MIGRATION_0099 not in heads
 
@@ -189,9 +192,10 @@ class TestMigration0097OngoingFlagEnabled:
         # 0097 is superseded as the head by 0099_run_raw_output_markers,
         # which is superseded by 0100_run_classification, which is superseded
         # by this branch's FAR-208 head 0101_guardrails, on to the FAR-219 head
-        # 0105_guardrail_pins.
+        # 0105_guardrail_pins and the FAR-214 head
+        # 0106_trigger_event_guardrail_blocked.
         assert migration_0097.revision not in heads
-        assert heads == [_MIGRATION_0105], f"expected a single head, got {heads}"
+        assert heads == [_MIGRATION_0106], f"expected a single head, got {heads}"
 
     def test_flag_flips_ongoing_trigger_active(self, migration_0097: ModuleType) -> None:
         assert "ongoing_trigger" in migration_0097._FLAGS
@@ -219,10 +223,11 @@ class TestMigration0098SlackAppMention:
         # 0098 is superseded as the head by 0099_run_raw_output_markers, which
         # is superseded by 0100_run_classification, which is superseded by this
         # branch's FAR-208 migration 0101_guardrails, on to the FAR-219 head
-        # 0105_guardrail_pins.
+        # 0105_guardrail_pins and the FAR-214 head
+        # 0106_trigger_event_guardrail_blocked.
         assert migration_0098.revision not in heads
-        assert _MIGRATION_0105 in heads
-        assert heads == [_MIGRATION_0105], f"expected a single head, got {heads}"
+        assert _MIGRATION_0106 in heads
+        assert heads == [_MIGRATION_0106], f"expected a single head, got {heads}"
 
     def test_upgrade_widens_both_checks_with_slack_app_mention(self, migration_0098: ModuleType) -> None:
         source = _source(migration_0098)
@@ -253,9 +258,9 @@ class TestMigration0099RunRawOutputMarkers:
     def test_single_head_chain(self, migration_0099: ModuleType) -> None:
         script = _script()
         heads = script.get_heads()
-        assert heads == [_MIGRATION_0105], f"expected a single head, got {heads}"
+        assert heads == [_MIGRATION_0106], f"expected a single head, got {heads}"
         assert migration_0099.revision not in heads
-        assert _MIGRATION_0105 in heads
+        assert _MIGRATION_0106 in heads
 
     def test_upgrade_adds_raw_output_markers_column(self, migration_0099: ModuleType) -> None:
         source = _source(migration_0099)
@@ -277,8 +282,8 @@ class TestMigration0101Guardrails:
     def test_single_head_chain(self, migration_0101: ModuleType) -> None:
         script = _script()
         heads = script.get_heads()
-        assert heads == [_MIGRATION_0105], f"expected a single head, got {heads}"
-        assert _MIGRATION_0105 in heads
+        assert heads == [_MIGRATION_0106], f"expected a single head, got {heads}"
+        assert _MIGRATION_0106 in heads
 
     def test_upgrade_widens_eval_type_check_with_guardrail(self, migration_0101: ModuleType) -> None:
         source = _source(migration_0101)
