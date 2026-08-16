@@ -1690,8 +1690,8 @@ export interface paths {
          * Reassign Team Resources Endpoint
          * @description Reassign every team-owned resource to org-wide (PRD §9.3 Team Deletion Policy).
          *
-         *     Sets ``owner_team_id = NULL`` (and ``visibility = 'org'`` so the
-         *     ``ck_*_team_owner`` check constraints are satisfied) on every pipeline,
+         *     Sets ``owner_team_id = NULL`` (and flips ``visibility`` to ``'org'``, keeping
+         *     the ``ck_*_team_owner`` CHECK constraints satisfied) on every pipeline,
          *     connector instance, model backend and library primitive currently owned by
          *     the team, so the team can then be deleted (deletion is blocked while
          *     ``owner_team_id`` references the team). Admin-only (``team.delete``).
