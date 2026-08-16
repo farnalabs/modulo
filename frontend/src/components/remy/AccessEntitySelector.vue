@@ -40,6 +40,13 @@
     </div>
     <div v-else class="overflow-hidden rounded-lg border">
       <table class="w-full text-left text-sm">
+        <thead>
+          <tr>
+            <th scope="col" class="sr-only">{{ labelField }}</th>
+            <th v-if="descriptionField" scope="col" class="sr-only">{{ descriptionField }}</th>
+            <th scope="col" class="sr-only">Remove</th>
+          </tr>
+        </thead>
         <tbody class="divide-y">
           <tr
             v-for="entity in selectedEntities"

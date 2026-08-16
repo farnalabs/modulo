@@ -20,7 +20,6 @@ export default {
       "pipeline_templates": "Pipeline Templates",
       "search_primitives": "Search modules...",
       "no_primitives_found": "No modules found",
-      "all_types": "All types",
       "preview_integrations_count": "{count} preview integration | {count} preview integrations",
       "preview_badge": "Preview",
       "native_library": "Native Library",
@@ -44,7 +43,6 @@ export default {
       "previous_page": "Previous",
       "next_page": "Next",
       "page_of": "Page {page} of {total}",
-      "all_types": "All types"
     },
     "AdminRemyView": {
       "configure_remy_ai_assistant_behaviour_access_and_skills": "Configure Remy AI assistant behaviour, access, and skills",
@@ -136,7 +134,6 @@ export default {
       "save_the_default_model_provider_and_allowed_model_configuration": "Save the default model provider and allowed model configuration.",
       "save_rate_limits_threshold_no_go_patterns_and_allowlist": "Save rate limits, threshold, no-go patterns, and allowlist.",
       "permission_mode": "Permission Mode",
-      "tool": "Tool",
       "description": "Description",
       "permission": "Permission",
       "auto_allow": "Auto-allow",
@@ -1612,7 +1609,6 @@ export default {
       "schema_created": "Schema created.",
       "schema_updated": "Schema updated.",
       "save_failed": "Save failed:",
-      "deprecated": "Deprecated",
       "name_placeholder": "My Schema",
       "description_placeholder": "Optional description",
       "version_placeholder": "1.0.0",
