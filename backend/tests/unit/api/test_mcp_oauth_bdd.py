@@ -949,15 +949,18 @@ class TestOAuthMiddlewareAccountBinding:
     async def _dispatch(
         self,
         *,
-        scopes: list[str],
+        scopes: list[str] | None = None,
         live_role: str | None,
         family_valid: bool = True,
         family_check_error: Exception | None = None,
         live_role_error: Exception | None = None,
+        token: str | None = None,
     ) -> tuple[Any, Response]:
         from starlette.responses import JSONResponse
 
-        token = self._oauth_token(scopes)
+        if token is None:
+            assert scopes is not None
+            token = self._oauth_token(scopes)
         request = self._make_request(headers=[(b"authorization", f"Bearer {token}".encode())])
 
         async def fake_call_next(_req: Request) -> Response:
@@ -1086,6 +1089,117 @@ class TestOAuthMiddlewareAccountBinding:
         assert response.status_code == 503
         body = json_module.loads(response.body)
         assert body["error"] == "temporarily_unavailable"
+
+
+# ---------------------------------------------------------------------------
+# MCP middleware — invalid/expired/malformed OAuth tokens, regular-JWT
+# fallback, and blacklisted token families (unchecked behaviours from the
+# mcp-oauth product-map entry, driven to [x] 2026-08-15).
+# ---------------------------------------------------------------------------
+
+
+class TestOAuthMiddlewareInvalidTokens:
+    """McpAuthMiddleware OAuth path returns 401 for bad tokens and falls back
+    to the regular-JWT path for non-OAuth tokens (Remy)."""
+
+    _CTX_VARS = (_ctx_user_id, _ctx_role, _ctx_org_id, _ctx_auth_type, _ctx_auth_token, _ctx_key_id)
+
+    def _save_ctx(self) -> list[Any]:
+        saved = []
+        for var in self._CTX_VARS:
+            sentinel = uuid.UUID(int=0) if var in (_ctx_user_id, _ctx_org_id, _ctx_key_id) else ""
+            saved.append(var.set(sentinel))
+        return saved
+
+    def _restore_ctx(self, saved: list[Any]) -> None:
+        for var, token in zip(self._CTX_VARS, saved, strict=True):
+            var.reset(token)
+
+    @pytest.mark.asyncio
+    async def test_malformed_token_returns_401(self) -> None:
+        """A garbage bearer token is neither an OAuth token nor a regular JWT → 401."""
+        saved = self._save_ctx()
+        try:
+            response, _request = await TestOAuthMiddlewareAccountBinding()._dispatch(
+                token="definitely-not-a-jwt",
+                live_role="admin",
+            )
+            assert response.status_code == 401
+        finally:
+            self._restore_ctx(saved)
+
+    @pytest.mark.asyncio
+    async def test_expired_oauth_token_returns_401(self) -> None:
+        """An OAuth access token past its exp is rejected with 401."""
+        import jwt as pyjwt
+
+        now = datetime.now(UTC)
+        expired = pyjwt.encode(
+            {
+                "sub": "oauth_client_1",
+                "org_id": str(_ORG_ID),
+                "account_id": str(_USER_ID),
+                "scopes": "trigger:run",
+                "purpose": "oauth_access",
+                "token_family": "family_1",
+                "token_sequence": 0,
+                "iat": now - timedelta(hours=2),
+                "exp": now - timedelta(hours=1),
+            },
+            _VALID_32,
+            algorithm="HS256",
+        )
+        saved = self._save_ctx()
+        try:
+            response, _request = await TestOAuthMiddlewareAccountBinding()._dispatch(
+                token=expired,
+                live_role="admin",
+            )
+            assert response.status_code == 401
+        finally:
+            self._restore_ctx(saved)
+
+    @pytest.mark.asyncio
+    async def test_non_oauth_jwt_falls_back_to_regular_jwt_path(self) -> None:
+        """A token without purpose=oauth_access is not an OAuth token; the
+        middleware falls back to the regular-JWT (Remy) path and accepts it."""
+        from modulo.auth.jwt import create_access_token
+
+        regular = create_access_token(
+            "admin",
+            _VALID_32,
+            organisation_id=str(_ORG_ID),
+            account_id=str(_USER_ID),
+            org_role="admin",
+        )
+        saved = self._save_ctx()
+        try:
+            response, _request = await TestOAuthMiddlewareAccountBinding()._dispatch(
+                token=regular,
+                live_role="admin",
+            )
+            assert response.status_code == 200
+            assert _ctx_auth_type.get() == "oauth"
+            assert _ctx_role.get() == "admin"
+        finally:
+            self._restore_ctx(saved)
+
+    @pytest.mark.asyncio
+    async def test_blacklisted_token_family_returns_401(self) -> None:
+        """A revoked (blacklisted) token family denies the request with 401."""
+        saved = self._save_ctx()
+        try:
+            response, _request = await TestOAuthMiddlewareAccountBinding()._dispatch(
+                scopes=["trigger:run"],
+                live_role="admin",
+                family_valid=False,
+            )
+            assert response.status_code == 401
+            body = json_module.loads(response.body)
+            assert body["error"] == "unauthorized"
+            assert "family" in body["detail"].lower()
+        finally:
+            self._restore_ctx(saved)
 
 
 # ---------------------------------------------------------------------------
