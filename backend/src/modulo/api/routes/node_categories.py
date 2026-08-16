@@ -1,5 +1,6 @@
 """NodeCategory CRUD REST API."""
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime
@@ -103,6 +104,8 @@ async def list_node_categories_endpoint(
         ) from None
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         logger.exception("node_categories.list.unexpected_error")
         raise HTTPException(
@@ -160,6 +163,8 @@ async def create_node_category_endpoint(
         ) from None
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         logger.exception("node_categories.create.unexpected_error")
         raise HTTPException(
@@ -202,6 +207,8 @@ async def get_node_category_endpoint(
             detail="Database operation failed. Please try again later.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception as e:
         logger.exception("node_categories.get.unexpected_error")
@@ -249,6 +256,8 @@ async def update_node_category_endpoint(
             detail="Database operation failed. Please try again later.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception as e:
         logger.exception("node_categories.update.unexpected_error")
@@ -302,6 +311,8 @@ async def delete_node_category_endpoint(
         ) from None
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         logger.exception("node_categories.delete.unexpected_error")
         raise HTTPException(
@@ -338,6 +349,8 @@ async def restore_node_category_endpoint(
             detail="Database operation failed. Please try again later.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception as e:
         logger.exception("node_categories.restore.unexpected_error")

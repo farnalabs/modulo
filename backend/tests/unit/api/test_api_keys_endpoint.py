@@ -8,9 +8,11 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.auth.api_key import _UNSET
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
@@ -552,3 +554,84 @@ def test_update_api_key_strips_whitespace_name(client: TestClient) -> None:
         )
     assert resp.status_code == 200
     assert update.call_args.kwargs["name"] == "Trimmed"
+
+
+# ---------------------------------------------------------------------------
+# team_id transitions
+# ---------------------------------------------------------------------------
+
+
+def test_create_api_key_with_unknown_team_returns_409(client: TestClient) -> None:
+    """A team_id that references a non-existent team trips the FK and maps to 409."""
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    with (
+        patch(
+            "modulo.api.routes.api_keys.create_api_key",
+            side_effect=IntegrityError(
+                "stmt",
+                {},
+                Exception("insert or update on table 'org_api_keys' violates foreign key constraint"),
+            ),
+        ),
+        patch("modulo.api.routes.api_keys.resolve_plan_context", return_value=mock_plan),
+        patch("modulo.api.routes.api_keys.set_rls_org"),
+        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+    ):
+        resp = client.post(
+            "/api/v1/api-keys",
+            json={"name": "Team Key", "role": "operator", "team_id": str(uuid.uuid4())},
+        )
+    assert resp.status_code == 409
+
+
+def test_update_api_key_clears_team_id(client: TestClient) -> None:
+    """PUT with team_id=null moves a team-scoped key back to org-wide (admin)."""
+    key = _make_key()
+    key.name = "Widened Key"
+    key.team_id = None
+    with (
+        patch("modulo.api.routes.api_keys.update_api_key", return_value=key) as update,
+        patch("modulo.api.routes.api_keys.set_rls_org"),
+        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+    ):
+        resp = client.put(
+            f"/api/v1/api-keys/{_KEY_ID}",
+            json={"name": "Widened Key", "team_id": None},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["team_id"] is None
+    # The clear is signalled explicitly — update_api_key receives team_id=None,
+    # not the "not provided" sentinel.
+    assert update.call_args.kwargs["team_id"] is None
+
+
+def test_update_api_key_without_team_id_passes_unset_sentinel(client: TestClient) -> None:
+    """PUT without a team_id key must not disturb the existing team scope."""
+    key = _make_key()
+    key.name = "Scoped Key"
+    key.team_id = _TEAM_ID
+    with (
+        patch("modulo.api.routes.api_keys.update_api_key", return_value=key) as update,
+        patch("modulo.api.routes.api_keys.set_rls_org"),
+        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+    ):
+        resp = client.put(
+            f"/api/v1/api-keys/{_KEY_ID}",
+            json={"name": "Scoped Key"},
+        )
+    assert resp.status_code == 200
+    assert update.call_args.kwargs["team_id"] is _UNSET
+
+
+def test_update_api_key_clear_team_requires_admin(operator_client: TestClient) -> None:
+    """Clearing the team scope is an admin-only operation (same as setting it)."""
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    with patch("modulo.api.routes.api_keys.resolve_plan_context", return_value=mock_plan):
+        resp = operator_client.put(
+            f"/api/v1/api-keys/{_KEY_ID}",
+            json={"name": "k", "team_id": None},
+        )
+    assert resp.status_code == 403

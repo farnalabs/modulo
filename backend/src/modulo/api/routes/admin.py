@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import Date, case, cast, delete, func, select, text, update
+from sqlalchemy import Date, case, cast, delete, func, select, text
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -55,6 +55,7 @@ from modulo.db.crud.team import (
     get_team,
     get_team_by_name,
     list_teams,
+    reassign_team_resources_to_org,
     update_team_if_unchanged,
 )
 from modulo.db.crud.team import update_team as crud_update_team
@@ -1598,23 +1599,11 @@ async def admin_reassign_all_team_resources(
             if team is None or team.organisation_id != current_user.organisation_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
 
-            reassigned = 0
-            touched: list[str] = []
-            for model_cls, label in [
-                (Pipeline, "pipeline"),
-                (ConnectorInstance, "connector"),
-                (ModelBackend, "model backend"),
-                (LibraryPrimitive, "library primitive"),
-            ]:
-                result = await session.execute(
-                    update(model_cls)
-                    .where(model_cls.__table__.c.owner_team_id == team_id)
-                    .values(owner_team_id=None, visibility="org")
-                )
-                count = max(int(result.rowcount or 0), 0)  # type: ignore[attr-defined]
-                if count:
-                    reassigned += count
-                    touched.append(label)
+            reassigned, touched = await reassign_team_resources_to_org(
+                session,
+                org_id=current_user.organisation_id,
+                team_id=team_id,
+            )
     except IntegrityError:
         logger.exception("admin.admin_reassign_all_team_resources")
         raise HTTPException(
@@ -1689,7 +1678,7 @@ async def admin_delete_team(
                 details = "; ".join(f"{count} {label}(s)" for label, count in resource_checks)
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Cannot delete team: still has resources — {details}",
+                    detail=f"team_has_resources: Cannot delete team: still has resources — {details}",
                 )
 
             deleted = await delete_team(session, team_id)

@@ -22,6 +22,7 @@ from modulo.db.crud.team import (
     get_team,
     get_team_by_name,
     list_teams,
+    reassign_team_resources_to_org,
     update_team,
     update_team_if_unchanged,
 )
@@ -126,6 +127,11 @@ class TeamResponse(BaseModel):
     description: str | None
     account_id: str
     created_at: str
+
+
+class TeamReassignResponse(BaseModel):
+    team_id: str
+    reassigned: int
 
 
 class TeamListResponse(BaseModel):
@@ -562,7 +568,7 @@ async def delete_team_endpoint(
                 details = "; ".join(f"{count} {label}(s)" for label, count in resource_checks)
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Cannot delete team: still has resources — {details}",
+                    detail=f"team_has_resources: Cannot delete team: still has resources — {details}",
                 )
 
             deleted = await delete_team(session, team_id)
@@ -621,6 +627,73 @@ async def delete_team_endpoint(
             "delete_team audit event failed — team was deleted",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
         )
+
+
+@router.post("/{team_id}/reassign-org", response_model=TeamReassignResponse)
+@handle_db_errors("teams.reassign_team_resources_endpoint")
+async def reassign_team_resources_endpoint(
+    team_id: uuid.UUID,
+    current_user: TenantPrincipal = require_permission("team.delete"),
+    session: AsyncSession = Depends(get_db_session),
+) -> TeamReassignResponse:
+    """Reassign every team-owned resource to org-wide (PRD §9.3 Team Deletion Policy).
+
+    Sets ``owner_team_id = NULL`` (and flips ``visibility`` to ``'org'``, keeping
+    the ``ck_*_team_owner`` CHECK constraints satisfied) on every pipeline,
+    connector instance, model backend and library primitive currently owned by
+    the team, so the team can then be deleted (deletion is blocked while
+    ``owner_team_id`` references the team). Admin-only (``team.delete``).
+    Idempotent: re-running after a successful reassignment finds zero owned
+    rows and returns ``reassigned=0``.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+
+            team = await get_team(session, team_id)
+            if team is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+
+            total, _touched = await reassign_team_resources_to_org(
+                session,
+                org_id=current_user.organisation_id,
+                team_id=team_id,
+            )
+    except IntegrityError as exc:
+        _log.exception("teams.reassign_team_resources_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        ) from exc
+    except ProgrammingError:
+        _log.exception("teams.reassign_team_resources_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.exception(
+            "reassign_team_resources SQLAlchemyError",
+            extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please try again.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception(
+            "reassign_team_resources unexpected error",
+            extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while reassigning the team's resources.",
+        ) from None
+
+    return TeamReassignResponse(team_id=str(team_id), reassigned=total)
 
 
 @router.get("/{team_id}/members", response_model=MembershipListResponse)

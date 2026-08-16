@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
-from modulo.auth.api_key import create_api_key, list_api_keys, revoke_api_key, update_api_key
+from modulo.auth.api_key import _UNSET, create_api_key, list_api_keys, revoke_api_key, update_api_key
 from modulo.auth.dependencies import get_current_tenant_user, resolve_role_from_membership
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, org_role_level
@@ -310,11 +310,18 @@ async def update_api_key_endpoint(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="API key name must not be blank",
             )
-    team_id: uuid.UUID | None = None
-    if req.team_id is not None:
-        await _require_team_rbac(settings, session)
-        _require_admin(principal)
-        team_id = uuid.UUID(req.team_id)
+    team_id: uuid.UUID | None | object = _UNSET
+    if "team_id" in req.model_fields_set:
+        if req.team_id is not None:
+            await _require_team_rbac(settings, session)
+            _require_admin(principal)
+            team_id = uuid.UUID(req.team_id)
+        else:
+            # Explicitly clearing the team scope is an admin operation, same as
+            # setting one — but it needs no team-tier feature check (removing
+            # scope never enables a team feature).
+            _require_admin(principal)
+            team_id = None
     expires_at: datetime | None = None
     if req.expires_at:
         expires_at = _parse_expires_at(req.expires_at)

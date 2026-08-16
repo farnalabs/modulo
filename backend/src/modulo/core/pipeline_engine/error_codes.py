@@ -308,6 +308,9 @@ LEGACY_ALIASES: dict[str, str] = {
     "executor_superseded": "run.superseded",
     # Contract.
     "output_rejected": "contract.schema",
+    # Executor maps manual/agent output schema validation failures to this
+    # domain code (PRD §8.9 error table) instead of a raw "ValueError".
+    "schema_validation_failure": "contract.schema",
     # Harness machinery (§3.2). ``TypeError``/``OperationalError`` are the
     # raw exception class names that executor's generic catch publishes.
     "OperationalError": "harness.db.connection_lost",

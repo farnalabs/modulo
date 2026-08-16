@@ -90,6 +90,11 @@ async def create_folder_endpoint(
                 account_id=principal.account_id,
                 parent_id=req.parent_id,
             )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(e),
+        ) from None
     except ProgrammingError:
         logger.exception("pipeline_folders.create")
         raise HTTPException(
@@ -117,6 +122,11 @@ async def update_folder_endpoint(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
             await session.refresh(folder)
             response = FolderResponse.model_validate(folder)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(e),
+        ) from None
     except ProgrammingError:
         logger.exception("pipeline_folders.update(%s)", folder_id)
         raise HTTPException(

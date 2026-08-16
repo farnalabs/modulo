@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_system_permission
+from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitive_value
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.crud.system_config import delete_config, list_config, set_config
 
@@ -37,7 +38,9 @@ async def admin_list_config(
         return [
             ConfigEntry(
                 key=e.key,
-                value=e.value,
+                value=(
+                    mask_sensitive_value(e.value) if isinstance(e.value, str) and is_sensitive_key(e.key) else e.value
+                ),
                 updated_at=e.updated_at.isoformat() if e.updated_at else None,
             )
             for e in entries
