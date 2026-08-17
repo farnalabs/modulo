@@ -2847,6 +2847,51 @@ async def search_library(
         return _tool_error("Failed to search library")
 
 
+async def _apply_trigger_event_trigger_filter(
+    s: AsyncSession,
+    q: Any,
+    key_team_id: uuid.UUID | None,
+    trigger_id: str | None,
+) -> tuple[Any, dict[str, Any] | None]:
+    from sqlalchemy import select
+
+    from modulo.db.models.trigger import Trigger
+    from modulo.db.models.trigger_event import TriggerEvent
+
+    if trigger_id is None:
+        return q, None
+    try:
+        tid = uuid.UUID(trigger_id)
+    except ValueError:
+        return q, {
+            "error": "invalid_id",
+            "field": "trigger_id",
+            "detail": f"Invalid UUID format: {trigger_id}",
+        }
+    q = q.where(TriggerEvent.trigger_id == tid)
+    if key_team_id is not None:
+        # A team-scoped key must not read events for another
+        # team's trigger even when no pipeline filter is given.
+        # Fail closed: a soft-deleted or otherwise-unresolvable
+        # trigger is treated as out of the key's team boundary too
+        # (matching ``list_triggers``, which filters
+        # ``Trigger.deleted_at.is_(None)``), so a deleted cross-team
+        # trigger cannot fall through to an unfiltered listing.
+        trigger = (
+            await s.execute(
+                select(Trigger).where(
+                    Trigger.id == tid,
+                    Trigger.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if trigger is None:
+            return q, _team_scope_error("trigger", str(tid))
+        if _team_scoped_key_mismatch(await _pipeline_owner_team_id(s, trigger.pipeline_id)):
+            return q, _team_scope_error("pipeline", str(trigger.pipeline_id))
+    return q, None
+
+
 async def _build_trigger_event_query(
     s: AsyncSession,
     org_id: uuid.UUID,
@@ -2863,36 +2908,9 @@ async def _build_trigger_event_query(
     q = select(TriggerEvent).where(TriggerEvent.organisation_id == org_id)
     joined = False
 
-    if trigger_id is not None:
-        try:
-            tid = uuid.UUID(trigger_id)
-        except ValueError:
-            return None, {
-                "error": "invalid_id",
-                "field": "trigger_id",
-                "detail": f"Invalid UUID format: {trigger_id}",
-            }
-        q = q.where(TriggerEvent.trigger_id == tid)
-        if key_team_id is not None:
-            # A team-scoped key must not read events for another
-            # team's trigger even when no pipeline filter is given.
-            # Fail closed: a soft-deleted or otherwise-unresolvable
-            # trigger is treated as out of the key's team boundary too
-            # (matching ``list_triggers``, which filters
-            # ``Trigger.deleted_at.is_(None)``), so a deleted cross-team
-            # trigger cannot fall through to an unfiltered listing.
-            trigger = (
-                await s.execute(
-                    select(Trigger).where(
-                        Trigger.id == tid,
-                        Trigger.deleted_at.is_(None),
-                    )
-                )
-            ).scalar_one_or_none()
-            if trigger is None:
-                return None, _team_scope_error("trigger", str(tid))
-            if _team_scoped_key_mismatch(await _pipeline_owner_team_id(s, trigger.pipeline_id)):
-                return None, _team_scope_error("pipeline", str(trigger.pipeline_id))
+    q, trigger_filter_err = await _apply_trigger_event_trigger_filter(s, q, key_team_id, trigger_id)
+    if trigger_filter_err:
+        return None, trigger_filter_err
 
     if pipeline_id is not None:
         try:
