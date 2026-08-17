@@ -10097,6 +10097,11 @@ export interface components {
             description: string;
             /** Reject Target */
             reject_target?: string | null;
+            /**
+             * Correction Target
+             * @description Node ID routed to on HITL rejection for the FAR-210 single-node correction path. Accepted and persisted through the graph contract; the reject→correction dispatch seam is tracked as a follow-up (the graph compiler currently kicks a rejection back to reject_target).
+             */
+            correction_target?: string | null;
             /** Claim Expiry Minutes */
             claim_expiry_minutes: number;
             /** Human Only */
