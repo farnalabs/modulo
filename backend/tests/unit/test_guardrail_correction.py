@@ -727,3 +727,135 @@ async def test_claim_slot_excludes_current_record_self_count():
         )
         is True
     )
+
+
+@pytest.mark.asyncio
+async def test_dispatch_reject_correction_resolves_and_dispatches():
+    """The reject→correction seam resolves the guardrail's correction and dispatches.
+
+    Proves the FAR-210 follow-up dispatch reaches the correction path
+    (``run_single_node_correction``) with the correction-configured guardrail,
+    the embedded CorrectionDefinition, the run, and the blocked node's input.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from modulo.core.feedback_manager import FeedbackManager, dispatch_reject_correction
+
+    run = SimpleNamespace(pipeline_id=uuid.uuid4(), account_id=uuid.uuid4())
+    node_input = {"body": "secret: hunter2"}
+    record = MagicMock()
+    record.id = uuid.uuid4()
+
+    guardrail_config: dict[str, Any] = {
+        "interception_point": "input",
+        "action": "block",
+        "detection": {"type": "regex", "pattern": r"(?i)secret[:=]\s*\S+", "field": "body"},
+        "correction": {
+            "id": "corr_no_secrets",
+            "guardrail_id": "gr_no_secrets",
+            "model_backend_id": str(uuid.uuid4()),
+            "input_redaction_patterns": [
+                {"path": "body", "pattern": r"(?i)secret[:=]\s*\S+", "replacement": "\u2022\u2022\u2022"},
+            ],
+            "output_schema": {
+                "type": "object",
+                "required": ["body"],
+                "properties": {"body": {"type": "string"}},
+            },
+            "revalidation_detector_family": CorrectionDetectorFamily.PII.value,
+            "max_attempts": 1,
+            "concurrency_cap": 1,
+        },
+    }
+    guardrail = EvalDefinition(
+        id=uuid.uuid4(),
+        org_id=_ORG,
+        pipeline_id=run.pipeline_id,
+        node_id="node_a",
+        name="gr_no_secrets",
+        eval_type=EvalType.GUARDRAIL,
+        config=guardrail_config,
+        failure_behaviour="warn",
+    )
+
+    backend = _StubCorrectionBackend({})
+    session = AsyncMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock()
+    session.begin.return_value.__aenter__ = AsyncMock(return_value=session)
+    session.begin.return_value.__aexit__ = AsyncMock(return_value=False)
+    session.in_transaction = MagicMock(return_value=True)
+    session.get_bind = MagicMock(return_value=MagicMock(dialect=MagicMock(name="sqlite")))
+    session.info = {}
+    session_factory = MagicMock(return_value=session)
+
+    hub = MagicMock()
+    hub.get = AsyncMock(return_value=backend)
+
+    with (
+        patch("modulo.core.feedback_manager.get_run", AsyncMock(return_value=run)),
+        patch("modulo.core.guardrails.conformance.load_node_guardrails", AsyncMock(return_value=[guardrail])),
+        patch("modulo.core.feedback_manager._get_feedback_record_for_node", AsyncMock(return_value=record)),
+        patch("modulo.core.pipeline_engine.decorator.get_model_backend_hub", return_value=hub),
+        patch.object(
+            FeedbackManager,
+            "run_single_node_correction",
+            AsyncMock(return_value={"verdict": "resolved"}),
+        ) as mock_run,
+    ):
+        outcome = await dispatch_reject_correction(
+            session_factory=session_factory,
+            org_id=_ORG,
+            run_id=run.pipeline_id,
+            node_id="node_a",
+            node_input=node_input,
+            rejection_reason="secret detected",
+            gate_id="hitl_gate_a_b",
+        )
+
+    assert outcome == {"verdict": "resolved"}
+    mock_run.assert_awaited_once()
+    call_kwargs = mock_run.await_args.kwargs
+    assert call_kwargs["node_input"] == node_input
+    assert call_kwargs["correction"].id == "corr_no_secrets"
+    assert call_kwargs["guardrail"].name == "gr_no_secrets"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_reject_correction_no_correction_guardrail_returns_none():
+    """A node with no correction-configured guardrail dispatches nothing (best-effort)."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from modulo.core.feedback_manager import dispatch_reject_correction
+
+    run = SimpleNamespace(pipeline_id=uuid.uuid4(), account_id=uuid.uuid4())
+    session = AsyncMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock()
+    session.begin.return_value.__aenter__ = AsyncMock(return_value=session)
+    session.begin.return_value.__aexit__ = AsyncMock(return_value=False)
+    session.in_transaction = MagicMock(return_value=True)
+    session.get_bind = MagicMock(return_value=MagicMock(dialect=MagicMock(name="sqlite")))
+    session.info = {}
+    session_factory = MagicMock(return_value=session)
+
+    plain_guardrail = _guardrail()  # no correction block
+    with (
+        patch("modulo.core.feedback_manager.get_run", AsyncMock(return_value=run)),
+        patch("modulo.core.guardrails.conformance.load_node_guardrails", AsyncMock(return_value=[plain_guardrail])),
+    ):
+        outcome = await dispatch_reject_correction(
+            session_factory=session_factory,
+            org_id=_ORG,
+            run_id=run.pipeline_id,
+            node_id="node_a",
+            node_input={"body": "x"},
+            rejection_reason="nope",
+            gate_id="hitl_gate_a_b",
+        )
+
+    assert outcome is None
