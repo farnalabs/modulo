@@ -54,7 +54,7 @@ Discovered from 1 completed delivery task (task-nv2-eval-bdd-tests). Tests valid
 - [x] Unauthenticated requests return 401/403 on all CRUD endpoints
 
 ### Eval run lifecycle
-- [x] Trigger eval run (POST /api/pipelines/{name}/evals) returns 202 with status "pending"
+- [ ] Trigger eval run (POST /api/pipelines/{name}/evals) returns 202 with status "pending" — NOT WIRED (corrected from an overclaim 2026-08-15): no such route exists in pipelines.py; the eval_run.feature “Trigger an eval run” scenario has no real endpoint and is step-stubbed only. See the eval-engine.md Known Gap "No eval run trigger via API".
 - [x] Eval run scores each test case individually
 - [x] Eval run computes aggregate score from per-case scores
 - [x] Eval run below pass_threshold fails with status "failed"
@@ -199,6 +199,8 @@ Discovered from 1 completed delivery task (task-nv2-eval-bdd-tests). Tests valid
 - [ ] No circuit breaker on repeated eval engine failures
 
 ### QA History
+- 2026-08-15: Coverage completion (FAR-231/FAR-233 distribute batch). **Corrected an overclaim**: "Trigger eval run (POST /api/pipelines/{name}/evals) returns 202" was marked [x] but no such endpoint exists in pipelines.py — the eval_run.feature scenario is not wired to a real route. Now documented as a gap (consistent with the eval-engine.md Known Gap). The remaining 5 unchecked items (eval results UI page/Playwright scenario, entry-point-group custom-function registration, eval-blocking integration test, retry/backoff, circuit breaker) are genuine gaps. Marked no new [x] items — every other claim in this entry was re-verified against the code paths (CRUD routes in evals.py, dashboard/regressions in admin.py, engine error handling in eval_engine).
+
 - 2026-08-15: Coverage completion (FAR-232). Marked [ ]→[x]: (1) "Block failure recorded in AuditEvent" — verified wired at executor level (executor.py:1394-1409, 1876-1891 write append_audit_event event_type="eval.blocked"; eval_block.feature scenario + step defs exist), the "BDD step defs are stubs" note was stale. (2) "JSON Schema eval config stores schema ref and validates against output field" — field-scoped validation already covered by test_field_scoped_validation. Clarified custom_function entry-point-group gap (not implemented — engine uses explicit registry dict; PRD deviation documented, PRD file not editable within this worktree's allowlist). Remaining unchecked items are genuine gaps (eval results UI, integration test for eval blocking, retry/backoff, circuit breaker).
 - 2026-07-06: Cross-cutting QA (index 229). Fixed CRITICAL — eval_dashboard route in admin.py was missing SQLAlchemyError→503 catch (connection/deadlock failures propagated as 500). Fixed CRITICAL — okr_progress route in admin.py was missing SQLAlchemyError→503 catch (same pattern). Added except SQLAlchemyError handlers + 4 new tests (dashboard + regressions + okr_progress SQLAlchemyError→503, okr_progress ProgrammingError→501). Added json_schema and custom_function eval type behaviour sections to product map. Added Resilience section. Status: partial.
 - 2026-07-07: Cross-cutting QA (index 324). Fixed CRITICAL — detect_regressions() only returned alerts for declining trends; improving/stable trends were silently dropped despite product map claiming they were returned. Unit tests (test_improving_not_alerted, test_stable_not_alerted) caught the gap — moved alerts.append() outside the if/elif/else block so all trends produce alerts. Status: covered.
