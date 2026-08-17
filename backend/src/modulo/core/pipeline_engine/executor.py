@@ -502,7 +502,7 @@ def _graph_has_script_mode(graph_json: dict[str, Any] | None) -> bool:
             continue
         if (
             str(node.get("node_type", "")).strip() == "sandbox_agent"
-            and str(node.get("mode", "llm")).strip() == "script"
+            and str(node.get("mode") or "").strip() == "script"
         ):
             return True
     return False
