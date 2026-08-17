@@ -321,12 +321,6 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: false
-      - name: Setup PowerShell
-        shell: bash
-        run: |
-          if ! command -v pwsh &>/dev/null; then
-            sudo apt-get update -qq && sudo apt-get install -y -qq powershell
-          fi
       - name: Validate product map graph
         shell: bash
         run: uv run --project backend --no-sync python scripts/run_graph_validate.py --ci
@@ -340,34 +334,9 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: false
-      - name: Setup PowerShell
-        shell: bash
-        run: |
-          if ! command -v pwsh &>/dev/null; then
-            sudo apt-get update -qq && sudo apt-get install -y -qq powershell
-          fi
       - name: Validate manifest.yaml
         shell: bash
-        run: pwsh -NoProfile -File tools/validate-manifest.ps1 -CI
-
-  tools-tests:
-    name: PowerShell tool tests (Pester)
-    runs-on: ubicloud-standard-2
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v7
-        with:
-          python-version: "3.12"
-          enable-cache: false
-      - name: Setup PowerShell
-        shell: bash
-        run: |
-          if ! command -v pwsh &>/dev/null; then
-            sudo apt-get update -qq && sudo apt-get install -y -qq powershell
-          fi
-      - name: Run Pester suite under tools/tests
-        shell: bash
-        run: pwsh -NoProfile -File tools/run-pester-tests.ps1
+        run: uv run --project backend --no-sync --with pyyaml python scripts/run_validate_manifest.py --ci
 
   gitleaks:
     name: Secret scan
@@ -506,7 +475,7 @@ jobs:
     # step so it keeps its documented meaning ("do not auto-dispatch the
     # Branch Fixer").
     if: github.event_name == 'pull_request' && always()
-    needs: [backend-lint, backend-test, integration-changed, frontend, schema-freshness, product-map-validate, manifest-validate, tools-tests, gitleaks, break-glass-deploy-gate]
+    needs: [backend-lint, backend-test, integration-changed, frontend, schema-freshness, product-map-validate, manifest-validate, gitleaks, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
@@ -594,7 +563,7 @@ jobs:
     # reports success on pull_request events; the "only dispatch when all
     # needed checks are green" logic lives on the webhook step below.
     if: github.event_name == 'pull_request' && always()
-    needs: [backend-lint, backend-test, integration-changed, frontend, schema-freshness, product-map-validate, manifest-validate, tools-tests, gitleaks, break-glass-deploy-gate]
+    needs: [backend-lint, backend-test, integration-changed, frontend, schema-freshness, product-map-validate, manifest-validate, gitleaks, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       contents: read
