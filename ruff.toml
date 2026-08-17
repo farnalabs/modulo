@@ -37,6 +37,7 @@ ignore = [
 "backend/tests/unit/runtime_provider/*" = ["E402"]
 "backend/tests/unit/secrets_backend/*" = ["E402"]
 "backend/src/modulo/db/migrations/**" = ["RUF002", "RUF003", "E501"]
+"backend/src/modulo/api/routes/scim.py" = ["N803", "N815"]
 "backend/src/modulo/api/routes/triggers.py" = ["UP017"]
 "backend/src/modulo/core/cron_scheduler.py" = ["UP017"]
 "backend/src/modulo/core/reports/scheduler.py" = ["UP017"]
