@@ -2216,27 +2216,31 @@ def _run_status_node(
     return node
 
 
+async def _get_run_status_impl(run_id: str, detail: bool) -> dict[str, Any]:
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    org_id = _ctx_org_id_val()
+    try:
+        rid = uuid.UUID(run_id)
+    except ValueError:
+        return {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
+    async with _session(org_id) as s:
+        run = await _load_run_for_status(s, org_id, rid, run_id)
+        if run is _TEAM_SCOPE_ERROR:
+            return _team_scope_error("run", run_id)
+        if run is None:
+            return {"error": "run_not_found", "run_id": run_id}
+    result = _run_status_base(run)
+    if detail:
+        result.update(_run_status_detail(run))
+    return result
+
+
 @mcp.tool(description="Get current run status. Pass detail=true for per-node breakdown.")
 @_RETRY_DB
 async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
     try:
-        if not await validate_current_auth():
-            return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        org_id = _ctx_org_id_val()
-        try:
-            rid = uuid.UUID(run_id)
-        except ValueError:
-            return {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
-        async with _session(org_id) as s:
-            run = await _load_run_for_status(s, org_id, rid, run_id)
-            if run is _TEAM_SCOPE_ERROR:
-                return _team_scope_error("run", run_id)
-            if run is None:
-                return {"error": "run_not_found", "run_id": run_id}
-        result = _run_status_base(run)
-        if detail:
-            result.update(_run_status_detail(run))
-        return result
+        return await _get_run_status_impl(run_id, detail)
     except ProgrammingError:
         _log.exception("get_run_status failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
