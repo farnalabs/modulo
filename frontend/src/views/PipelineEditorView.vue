@@ -1626,6 +1626,7 @@ async function saveEdgeConfig() {
         nodes: rawNodes.value.map((n: any) => ({
           id: n.id,
           node_type: n.node_type || 'agent',
+          mode: n.mode || 'llm',
           label: n.label || null,
           description: n.description || null,
           agent_id: n.agent_id || null,
@@ -1895,6 +1896,7 @@ async function saveGraph() {
         nodes: rawNodes.value.map((n: any) => ({
           id: n.id,
           node_type: n.node_type || 'agent',
+          mode: n.mode || 'llm',
           label: n.label || null,
           description: n.description || null,
           agent_id: n.agent_id || null,
