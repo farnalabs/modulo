@@ -1478,6 +1478,41 @@ def make_hitl_gate_fn(
                 }
             is_rejected = action == "rejected"
             result_status = "rejected" if is_rejected else "approved"
+            # FAR-210 follow-up: the reject→correction edge. When this gate
+            # declares a ``correction_target`` and the human REJECTED it, dispatch
+            # the single-node correction for the blocked node (the AUTOMATED path)
+            # instead of only kicking back to the plain ``reject_target``. This is
+            # best-effort and fully failure-isolated — a correction dispatch
+            # failure must never crash the reject path.
+            if is_rejected and session_factory is not None and org_id is not None:
+                correction_target = hitl_gate_config.get("correction_target")
+                run_id_for_correction = state.get("_run_id")
+                node_output = state.get("output")
+                if correction_target and run_id_for_correction and isinstance(node_output, dict):
+                    from modulo.core.feedback_manager import dispatch_reject_correction
+
+                    try:
+                        await dispatch_reject_correction(
+                            session_factory=session_factory,
+                            org_id=org_id,
+                            run_id=run_id_for_correction,
+                            node_id=str(correction_target),
+                            node_input=node_output,
+                            rejection_reason=(
+                                (decision.get("reason") if isinstance(decision, dict) else None)
+                                or "rejected via HITL gate"
+                            ),
+                            gate_id=gate_id,
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        # Best-effort: the correction dispatch must never crash the
+                        # reject path — log and fall through to normal reject routing.
+                        _log.exception(
+                            "hitl_gate.reject_correction_dispatch_failed",
+                            extra={"gate_id": gate_id, "node_id": str(correction_target)},
+                        )
             gate_result: dict[str, Any] = {
                 "artifacts": [
                     {
