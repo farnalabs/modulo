@@ -3216,6 +3216,43 @@ async def _validate_ongoing_trigger_create(
     return datetime.now(UTC), None
 
 
+def _build_trigger_record(
+    org_id: uuid.UUID,
+    pid: uuid.UUID,
+    trigger_type: str,
+    active: bool,
+    max_concurrent_runs: int,
+    daily_spend_limit: float | None,
+    config_json: dict[str, Any] | None,
+    account_id: uuid.UUID,
+    next_fire_at: datetime | None,
+    cron_expression: str | None,
+) -> tuple[Any, dict[str, Any] | None]:
+    from modulo.db.models.trigger import Trigger
+
+    trigger = Trigger(
+        organisation_id=org_id,
+        pipeline_id=pid,
+        trigger_type=trigger_type,
+        active=active,
+        max_concurrent_runs=max_concurrent_runs,
+        daily_spend_limit=Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else None,
+        config_json=config_json or {},
+        account_id=account_id,
+        next_fire_at=next_fire_at,
+        # FAR-190: creation anchors the no-delivery streak epoch (the
+        # streak boundary) so pre-existing history can never count.
+        streak_epoch=datetime.now(UTC),
+    )
+    if cron_expression:
+        trigger.cron_expression = cron_expression
+        error = validate_cron_expression(cron_expression)
+        if error:
+            return trigger, {"error": "invalid_cron", "detail": error}
+        trigger.next_fire_at = compute_next_fire(cron_expression, timezone=trigger.cron_timezone or "UTC")
+    return trigger, None
+
+
 @mcp.tool(description="Create a new trigger for a pipeline.")
 @_RETRY_DB
 async def create_trigger(
@@ -3227,8 +3264,6 @@ async def create_trigger(
     max_concurrent_runs: int = 1,
     daily_spend_limit: float | None = None,
 ) -> dict[str, Any]:
-    from datetime import UTC
-
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
@@ -3241,8 +3276,6 @@ async def create_trigger(
             return input_err
         assert pid is not None
 
-        from modulo.db.models.trigger import Trigger
-
         async with _session(org_id) as s:
             owner_team_id = await _pipeline_owner_team_id(s, pid)
             if _team_scoped_key_mismatch(owner_team_id):
@@ -3252,26 +3285,20 @@ async def create_trigger(
             )
             if ongoing_err:
                 return ongoing_err
-            trigger = Trigger(
-                organisation_id=org_id,
-                pipeline_id=pid,
-                trigger_type=trigger_type,
-                active=active,
-                max_concurrent_runs=max_concurrent_runs,
-                daily_spend_limit=Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else None,
-                config_json=config_json or {},
-                account_id=account_id,
-                next_fire_at=next_fire_at,
-                # FAR-190: creation anchors the no-delivery streak epoch (the
-                # streak boundary) so pre-existing history can never count.
-                streak_epoch=datetime.now(UTC),
+            trigger, build_err = _build_trigger_record(
+                org_id,
+                pid,
+                trigger_type,
+                active,
+                max_concurrent_runs,
+                daily_spend_limit,
+                config_json,
+                account_id,
+                next_fire_at,
+                cron_expression,
             )
-            if cron_expression:
-                trigger.cron_expression = cron_expression
-                error = validate_cron_expression(cron_expression)
-                if error:
-                    return {"error": "invalid_cron", "detail": error}
-                trigger.next_fire_at = compute_next_fire(cron_expression, timezone=trigger.cron_timezone or "UTC")
+            if build_err:
+                return build_err
             s.add(trigger)
             await s.flush()
             # FAR-251 — surface the created trigger's streak_status exactly as
