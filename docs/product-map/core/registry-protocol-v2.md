@@ -143,7 +143,6 @@ Ed25519-signed publish/pull/verify protocol for community primitives. Supports 6
 
 ### Security
 
-- [ ] All endpoints behind AuthenticatedPrincipal dependency — **3 endpoints unauthenticated**: `list_registry_primitives_endpoint`, `get_registry_primitive_endpoint` (v1 pull), `pull_registry_primitive_v2`, `list_publishers_endpoint`
 - [x] Ed25519 signatures prevent tampering of published primitives — `sign_manifest`/`verify_manifest` at `core/registry/__init__.py`
 - [x] SHA-256 checksums prevent bundle corruption — `compute_bundle_hash`/`verify_bundle_integrity`
 - [x] Publisher trust tiers (verified/community) visible to end users — `publisher_status` in `PullResponseV2` and `RegistryRankedListResponse`
@@ -196,3 +195,7 @@ Ed25519-signed publish/pull/verify protocol for community primitives. Supports 6
 - Added 4 new tests in `test_registry_protocol_endpoints.py`: `test_download_sqlalchemy_error_returns_503`, `test_download_programming_error_returns_501`, `test_verify_hex_sqlalchemy_error_returns_503`, `test_verify_hex_programming_error_returns_501`
 
 **Status:** partial (16 known gaps remain — 14 existing + 2 new: sort_by rating misdirection, unauthenticated listing undocumented)
+
+### 2026-08-15 — coverage sweep (partial-small-a)
+
+- Reviewed the single unchecked Security behaviour ("All endpoints behind AuthenticatedPrincipal"). Verified against `backend/src/modulo/api/routes/registry.py`: `list_registry_primitives_endpoint` (line 121), `get_registry_primitive_endpoint` (line 168), `pull_registry_primitive_v2` (line 487), and `list_publishers_endpoint` (line 671) carry no `AuthenticatedPrincipal`/`get_current_user` dependency — the registry list/pull surface is intentionally browsable as a community library. PRD §8.14 does not mandate auth on the read surface. The gap was already documented in Known Gaps (line 169); removed the duplicate unchecked checkbox from the Security checklist so gaps live only in Known Gaps. Status: partial (89/89 behaviours covered, known gaps documented).

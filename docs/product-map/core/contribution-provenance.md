@@ -71,16 +71,16 @@ Cryptographic signing, verification, and fork tracking for community library pri
 ### Signature verification & trust tiers
 
 - [x] `verify_primitive_signature()` verifies Ed25519 signature against built-in or provided public key
-- [ ] Trust tier display: **Verified publisher** (green badge) vs **Community** (amber badge)
-- [ ] Verified publisher program: key issuance, application process, revocation (v2)
-- [ ] Community (unsigned/self-signed) primitives show warning on copy requiring `confirm: true`
-- [ ] Warning text: "This primitive has not been verified by Modulo. Review the prompt template and schema before use."
+- Trust tier display (green/amber badges) — no frontend UI exists (see Known Gaps)
+- Verified publisher program: key issuance, application process, revocation — v2 roadmap, not implemented (see Known Gaps)
+- Community (unsigned/self-signed) primitives show warning on copy requiring `confirm: true` — no frontend warning flow (see Known Gaps)
+- Warning text: "This primitive has not been verified by Modulo. Review the prompt template and schema before use." — no frontend warning flow (see Known Gaps)
 
 ### Copy-to-adapt flow
 
 - [x] Copy creates new row with `source: local`, `forked_from` set to registry entry ID
 - [x] Local copy has `ed25519_signature` null (no signature carried forward)
-- [ ] Ownership picker shown during copy: defaults to org for registry sources, same team for local sources
+- Ownership picker shown during copy — no frontend ownership picker (see Known Gaps)
 - [x] Community primitives are read-only via MCP (returns 403 `community_primitive_read_only`)
 - [x] Browser POST to `/api/v1/libraries/{id}/adapt` succeeds (201) and creates local copy
 
@@ -101,7 +101,7 @@ Cryptographic signing, verification, and fork tracking for community library pri
 - [x] `ConnectorInstance.connector_type_id` is a string resolved at runtime from in-memory registry
 - [x] Pre-run health check fails with `connector_type_unavailable` for missing types
 - [x] Runtime `pip install` explicitly disallowed — only build-time install
-- [ ] Admin UI surfaces unavailable connector types with warning badge
+- Admin UI surfaces unavailable connector types with warning badge — no frontend warning badge (see Known Gaps)
 - [x] `GET /api/v1/plugins` returns all discovered plugins with health status
 - [x] `GET /api/v1/plugins/{plugin_id}/health` returns health for a single plugin
 - [x] Plugin discovery gated by `MODULO_PLUGIN_DISCOVERY` env var (default: true)
@@ -185,5 +185,8 @@ Cryptographic signing, verification, and fork tracking for community library pri
 - Fixed: cryptography lazy import moved to module level
 - Fixed: rating endpoint catches domain exceptions (SelfRatingError, DuplicateRatingError, RatingCooldownError, CopyToAdaptError)
 - Confirmed: trust tier display, ownership picker, verified publisher program remain unimplemented (UI features)
+
+### 2026-08-15 — coverage sweep (partial-small-a)
+- Verified the 6 unchecked items are all genuine gaps and already documented in Known Gaps: (1) trust-tier display (green/amber badges) — no frontend UI, only `communityPrimitives` computed in `LibraryView.vue`; (2) verified publisher program — v2 roadmap; (3) community-unsigned copy warning with `confirm: true` and (4) its warning text — no frontend warning flow; (5) ownership picker during copy — no frontend picker; (6) admin UI warning badge for unavailable connector types — not implemented. All converted from behaviour checkboxes to Known Gap bullets. No code change (frontend gaps, out of scope). Status: partial (61/67 — all remaining unchecked items are documented gaps).
 - Confirmed: plugin_registry.feature @awaiting-implementation scenarios still not implemented
 - New Known Gaps: register_publisher missing admin auth, unauthenticated registry endpoints (tracked separately)

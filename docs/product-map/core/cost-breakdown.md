@@ -154,10 +154,10 @@ Discovered from 1 completed delivery tasks.
 
 ### PRD — Missing from code (future scope)
 
-- [ ] Per-run `run_budget` hard stop — no `run_budget` field or per-run budget check exists anywhere in the run path (agent-level budgets only)
-- [ ] `cost_tracking: disabled` skips token accumulation for self-hosted models — the `ModelBackend.cost_tracking` column (`'enabled'|'disabled'`) exists, but cost finalization never reads it, so disabled backends still accumulate token cost
-- [ ] Token-level cost accumulation via `on_llm_end` callback — the OTel bridge handler captures usage into OTel spans only; per-run token/cost accumulation happens at finalize from node outputs, not incrementally via the LLM callback
-- [ ] Pricing table in `config/model_pricing.yaml` — the file does not exist
+- Per-run `run_budget` hard stop — no `run_budget` field or per-run budget check exists anywhere in the run path (agent-level budgets only)
+- `cost_tracking: disabled` skips token accumulation for self-hosted models — the `ModelBackend.cost_tracking` column (`'enabled'|'disabled'`) exists, but cost finalization never reads it, so disabled backends still accumulate token cost
+- Token-level cost accumulation via `on_llm_end` callback — the OTel bridge handler captures usage into OTel spans only; per-run token/cost accumulation happens at finalize from node outputs, not incrementally via the LLM callback
+- Pricing table in `config/model_pricing.yaml` — the file does not exist
 
 ## Known Gaps
 - Per-run `run_budget` (PRD §8.10) not implemented — no per-run budget field or check in the run path
