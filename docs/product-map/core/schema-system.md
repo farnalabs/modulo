@@ -183,6 +183,12 @@ CRUD for Schema and SchemaVersion, JSON Schema validation, import, migration, an
 
 ### Known Gaps
 
+- **No `except Exception` catch-all on DB routes** — Python-level errors (TypeError, ValueError) on schema-inference DB routes propagate to CatchAllMiddleware as an opaque 500
+- **No timeout on `ModelBackendHub.initialise` for infer/generate endpoints**
+- **No retry logic for connector sampling failures**
+- **No retry logic for LLM inference/generation failures**
+- **No connection pooling for the model backend hub in schema inference**
+- **No circuit breaker for external connector sampling**
 - **No `force=true` BDD scenario verified end-to-end** — unit test exists in `test_schema_programming_error.py` but no Gherkin `.feature` scenario
 - **No graph validation warning for deprecated schemas** — no alert when a pipeline uses a deprecated schema
 - **No admin UI listing pipelines pinned to deprecated schemas**
@@ -201,6 +207,7 @@ CRUD for Schema and SchemaVersion, JSON Schema validation, import, migration, an
 - **No circuit breaker for external connector sampling** — repeated connector failures always take the full retry path with no trip-and-cool-down
 
 ### QA History
+- **2026-08-15 — distribute (final-pass sweep C)**: Documented six unchecked resilience gaps in Known Gaps — no `except Exception` catch-all on schema-inference DB routes, no timeout on `ModelBackendHub.initialise`, no retry for connector sampling or LLM inference/generation failures, no model-backend connection pooling, and no circuit breaker for external connector sampling. Status: partial.
 
 - 2026-08-15: coverage sweep (partial-small-a) — **corrected a stale unchecked claim**: "No `except Exception` catch-all on DB routes" was false — `api/routes/schemas.py` has 28 `except Exception → 500` sites with `logger.exception` across all CRUD + infer/generate routes, so Python-level errors are caught (marked `[ ]`→`[x]`). Verified the remaining 5 unchecked resilience items are genuine gaps (no initialise timeout, no sampling/LLM retry, no hub connection pooling, no circuit breaker) and moved them into Known Gaps. Status: partial (102/107 — all remaining unchecked items are documented gaps).
 

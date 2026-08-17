@@ -132,6 +132,7 @@ LLM-driven prompt improvement from eval failures, with full version history, rol
 - ~~`version` path parameter in `optimize_prompt` is accepted but never validated or used — non-existent version accepted as source~~ **RESOLVED 2026-08-12**: see QA History.
 
 ## QA History
+- **2026-08-15 — distribute (final-pass sweep C)**: Documented two unchecked resilience gaps in Known Gaps — no retry/backoff on credential decryption failure in the optimize endpoint, and no circuit breaker when the LLM backend is persistently unavailable. Status: partial.
 
 ### 2026-08-15 — coverage sweep (partial-small-a)
 - Confirmed the 2 remaining unchecked Resilience items are genuine gaps and moved both into Known Gaps: (1) no retry/backoff on credential decryption failure in the optimize endpoint — LLM calls get `_MAX_RETRIES=3` exponential backoff but decryption is single-shot; (2) no circuit breaker when the LLM backend is persistently unavailable. Neither is PRD-mandated hardening. No code change. Status: partial (70/72).

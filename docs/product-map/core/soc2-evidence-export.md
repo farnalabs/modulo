@@ -91,6 +91,7 @@ Paginated JSON export of audit events for SOC 2 compliance evidence. Builds on t
 - [x] SQLAlchemyError → 503 (connection failure, deadlock) on all 4 routes
 
 ### QA History
+- **2026-08-15 — distribute (final-pass sweep C)**: Documented two unchecked hardening gaps in Known Gaps — no retry/backoff on DB connection failure, and no circuit breaker for exports of very large orgs (100k+ events). Status: partial.
 
 #### 2026-07-07 — Cross-cutting QA (feat-core-soc2-evidence-export index 315)
 - FIXED: Added unit tests for /verify endpoint: ProgrammingError→501, SQLAlchemyError→503, non-admin→403
@@ -119,6 +120,8 @@ Paginated JSON export of audit events for SOC 2 compliance evidence. Builds on t
 - [x] Export never includes credentials or ciphertexts
 
 ## Known Gaps
+- **No retry/backoff on DB connection failure** — the export flow does not retry transient DB failures
+- **No circuit breaker for export of very large orgs (100k+ events)** — a large export runs unbounded with no trip-and-cool-down
 - No CSV generation on backend — frontend converts JSON to CSV client-side (large exports hit browser memory limits)
 - No export bundle checksum/signature for tamper-evident SOC 2 artifacts
 - No chain verification data bundled with export (auditor must call /verify separately)

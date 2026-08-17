@@ -81,6 +81,12 @@ Plan tier definitions and feature flag catalog governing which features are avai
 - Feature flag `depends_on` circular reference — no cycle detection (a flag depending on itself/its own dependency chain is not rejected)
 - No audit logging for tier catalog reads — the admin read routes emit no audit events
 
+## Known Gaps
+
+- **Tier rank conflict** — two tiers with the same `rank` produce undefined ordering (list orders by rank only; no conflict detection or tie-break). Not PRD-mandated; edge-case gap.
+- **Feature flag `depends_on` circular reference** — no cycle detection; a circular `depends_on` chain resolves undefined. Not PRD-mandated; edge-case gap.
+- **No audit logging for tier-catalog reads** — `list_tiers`/`list_feature_flags`/`get_feature_flag` are read-only and unlogged. Not PRD-mandated.
+
 ## QA History
 
 - 2026-08-15: feat-core-tier-catalog → partial, product-map coverage sweep: **RESOLVED the standalone `seed_tier_catalog.py` drift** — it now imports `TIERS`/`FLAGS` from `modulo.core.seed_data.catalog` (the same source the boot-time `_seed_tier_catalog` uses) instead of maintaining a stale private copy, so `observability` is `community` again and the previously-missing flags (`notification_log`, `api_changelog`, `email_config`, `error_tracking`, `scim`, `external_secrets`, `schema_union_types`, `migration_cli`, `checkpoint_encryption`, `audit_crypto_chain`, `community_registry`, `prompt_optimization`, `pipeline_diff_rollback`, `pipeline_delete`, `rate_limits`, `runtime_config`, etc.) can never drift again. Added output validation: the script reads back the seeded row counts and raises on an empty table. Marked the "Seed script idempotency" and "Seed script output validation" checkboxes `[ ]`→`[x]` (idempotency via `ON CONFLICT ... DO NOTHING` was already implemented; validation added this session). Remaining genuine gaps kept unchecked: tier-rank conflict ordering, `depends_on` cycle detection, and audit logging for tier-catalog reads (none PRD-mandated).

@@ -83,14 +83,16 @@ LangGraph-based pipeline runtime — StateGraph compilation, execution, snapshot
 
 ## Known Gaps
 
-- Engine-level catch blocks route DB errors generically (no explicit `IntegrityError`/`SQLAlchemyError` distinction at the engine boundary)
-- No explicit isolation test for concurrent checkpoint writes
-- No enforced cap on `dict[str, Any]` state growth beyond the in-memory limit
-- Credential isolation relies on the ConnectorHub one-decrypt-per-run lifecycle; no additional per-run isolation layer
-- Checkpoint data may contain state from a previous run before the LRU cache evicts a stale graph
+- **No explicit `IntegrityError`/`SQLAlchemyError` routing in engine-level catch blocks** — the pipeline engine's catch blocks don't distinguish DB error classes (they surface run-failure generically). Not PRD-mandated; hardening item.
+- **Concurrent checkpoint writes** — no explicit isolation testing (two runs checkpointing the same snapshot concurrently). LangGraph checkpointers are not tested for write-write races.
+- **State growth beyond memory limit** — no enforced cap on the `dict[str, Any]` state; a node writing unbounded data grows memory until OOM.
+- **No per-run credential isolation beyond the ConnectorHub one-decrypt lifecycle** — credentials are decrypted once per run into a run-scoped context; there is no finer-grained per-node credential scoping.
+- **Checkpoint data may contain state from previous runs before LRU eviction** — the graph cache is keyed by `(pipeline_id, snapshot_id)` with LRU eviction; a recompiled graph uses a fresh snapshot, but stale checkpoint state from a prior run is not explicitly cleared.
 
 ## QA History
 
 ### 2026-08-15 — coverage sweep (partial-small-a)
 
 - Verified the 5 unchecked items are genuine gaps (no engine-level exception routing, no concurrent-checkpoint isolation test, no state-size cap, no per-run credential isolation beyond ConnectorHub, checkpoint state from prior runs before LRU eviction) and documented them in a new Known Gaps section. No code change. Status: partial (21/26 — all remaining unchecked items are documented gaps).
+
+- **2026-08-15 — distribute (final-pass sweep C)**: Verified the 5 unchecked behaviours are all genuine, non-PRD hardening gaps (engine-level DB-error routing, concurrent checkpoint isolation, state-growth cap, per-run credential isolation beyond ConnectorHub, stale checkpoint state before LRU eviction) and documented them in the previously-empty Known Gaps section. No code changes — `core/pipeline_engine/` is outside this sweep's scope. Status: partial.

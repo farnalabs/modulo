@@ -288,6 +288,39 @@ def test_update_agent_max_input_length(client: TestClient) -> None:
     assert resp.json()["max_input_length"] == 10000
 
 
+def test_update_agent_cannot_change_input_output_schemas(client: TestClient) -> None:
+    """PATCH cannot change input/output schema references after create.
+
+    ``AgentUpdate`` does not expose ``input_schema_id``/``output_schema_id``
+    (they are set only on create via ``AgentCreate``), so schema fields in a
+    PATCH body are ignored by Pydantic and never reach the CRUD update. The
+    agent's input/output schemas are therefore fixed after create — matching
+    the product-map "schemas are fixed after create (no PATCH support)" item.
+    """
+    agent = _make_agent()
+    new_input = uuid.uuid4()
+    new_output = uuid.uuid4()
+    with (
+        patch(f"{_AGENT_PATCH_PREFIX}get_agent", return_value=agent),
+        patch(f"{_AGENT_PATCH_PREFIX}update_agent", return_value=agent) as mock_update,
+        patch(f"{_AGENT_PATCH_PREFIX}set_rls_org"),
+    ):
+        resp = client.patch(
+            f"/api/v1/agents/{_AGENT_ID}",
+            json={
+                **_UPDATE_BODY,
+                "input_schema_id": str(new_input),
+                "output_schema_id": str(new_output),
+            },
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["input_schema_id"] == str(_SCHEMA_ID)
+    assert resp.json()["output_schema_id"] == str(_SCHEMA_ID)
+    updates = mock_update.call_args[0][2]
+    assert "input_schema_id" not in updates
+    assert "output_schema_id" not in updates
+
+
 def test_update_agent_patch_returns_200_and_reflects_update(client: TestClient) -> None:
     """Regression: PATCH with a valid body must return 200, not 500.
 

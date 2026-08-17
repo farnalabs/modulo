@@ -205,11 +205,14 @@ Two categories exist:
 - No connection pooling error handling — DB connection pool exhaustion returns 5xx (see Known Gaps)
 
 ## Known Gaps
-- No connection-pooling error handling — when the DB connection pool is exhausted, the underlying pool `TimeoutError` propagates as a generic 5xx; there is no dedicated 503 path or backoff for pool exhaustion.
+
+- **No connection-pooling error handling** — when the DB connection pool is exhausted, the underlying pool `TimeoutError` propagates as a generic 5xx rather than a typed, rate-limited 429/503-with-retry; there is no dedicated 503 path or backoff for pool exhaustion. Not PRD-mandated; a hardening item. (Referenced in QA history as "1 resilience gap remains — connection pooling".)
 - No `SQLAlchemyError`→503 distinction from pool exhaustion — all DB failures share the same 503 handler; a pool-exhaustion timeout is indistinguishable from other transient failures in the response.
 - No audit event for `agent_prompt_changed` (PRD §8.12) — prompt apply/rollback does not dispatch an audit event recording old/new version (see `core/audit-trail.md` event catalog).
 
 ## QA History
+
+- **2026-08-15 — distribute (final-pass sweep C)**: Verified two previously-unchecked Edge Case items and marked `[x]`: (1) duplicate prompt-version labels on apply — `add_prompt_version` in `db/crud/agent.py` appends to `prompt_version_history` with no uniqueness check on `version_label`, so duplicate labels are accepted; (2) schema FK changability re-verified against the merged code — `AgentUpdate` (`agents.py:98-113`) does NOT expose `input_schema_id`/`output_schema_id`, so input/output schemas ARE fixed after create (no PATCH support); the earlier branch-side claim that schemas were re-assignable via PATCH was found inaccurate and reverted. Confirmed the sole remaining unchecked item (connection-pooling error handling) is a genuine, non-PRD hardening gap and documented it in the Known Gaps section.
 
 - **2026-07-02 — improve-architecture index 46**: Added `ProgrammingError` catches to 5
   unprotected endpoints (create, list, get, update, delete) — all now return 501 Not
