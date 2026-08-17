@@ -6,9 +6,11 @@ The Azure Repos (``value``), Azure Pipelines (``value``), Azure Key Vault
 CircleCI (``items``), GitHub Actions (``workflow_runs``), n8n (``data``),
 Opsgenie (``data``), Datadog (``data``), Asana (``data``), Snyk (``data``),
 SonarQube (``components``/``analyses``/``issues``/``qualitygates``/
-``metrics``/``plugins``/``hotspots``), and PagerDuty
+``metrics``/``plugins``/``hotspots``), PagerDuty
 (``incidents``/``services``/``teams``/``users``/``escalation_policies``/
-``schedules``/``oncalls``) connectors each guard their list parsing against
+``schedules``/``oncalls``), Confluence (``results``), CodeClimate (``data``),
+Jenkins (``builds``/``jobs``/``computer``), and Dropbox Paper
+(``doc_ids``/``entries``) connectors each guard their list parsing against
 corrupt or hostile response bodies. A corrupt or hostile response may return
 a non-dict body (list, string, number, ...) or a non-list page field — either
 crashes the connector with ``AttributeError`` on the bare

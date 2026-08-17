@@ -202,6 +202,41 @@ async def test_query_children_missing_page_id(connector):
         await connector.query(ConnectorQuery(resource="children"))
 
 
+@respx.mock
+async def test_query_pages_non_list_results_no_crash(connector):
+    """A corrupt body placing a non-list in ``results`` must fall back to an empty list."""
+    pages = {"results": "corrupt"}
+    respx.get(f"{_BASE}/wiki/api/v2/pages").mock(return_value=httpx.Response(200, json=pages))
+    result = await connector.query(ConnectorQuery(resource="pages"))
+    assert not result.records
+
+
+@respx.mock
+async def test_query_pages_non_dict_body_no_crash(connector):
+    """A corrupt/hostile non-dict body must degrade to an empty page."""
+    respx.get(f"{_BASE}/wiki/api/v2/pages").mock(return_value=httpx.Response(200, json=["not-a-dict"]))
+    result = await connector.query(ConnectorQuery(resource="pages"))
+    assert not result.records
+
+
+@respx.mock
+async def test_query_spaces_missing_results_no_crash(connector):
+    """A missing ``results`` key must behave like an empty page."""
+    respx.get(f"{_BASE}/wiki/api/v2/spaces").mock(return_value=httpx.Response(200, json={}))
+    result = await connector.query(ConnectorQuery(resource="spaces"))
+    assert not result.records
+
+
+@respx.mock
+async def test_query_children_non_list_results_no_crash(connector):
+    """A corrupt non-list ``results`` page field must degrade gracefully."""
+    respx.get(f"{_BASE}/wiki/api/v2/pages/p1/children").mock(
+        return_value=httpx.Response(200, json={"results": {"id": "c1"}})
+    )
+    result = await connector.query(ConnectorQuery(resource="children", filters={"page_id": "p1"}))
+    assert not result.records
+
+
 # ---------------------------------------------------------------------------
 # query — labels
 # ---------------------------------------------------------------------------
