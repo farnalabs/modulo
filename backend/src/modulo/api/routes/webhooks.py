@@ -22,7 +22,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.api.constants import MSG_DB_OPERATION_FAILED, MSG_FEATURE_NOT_AVAILABLE
+from modulo.api.constants import (
+    MSG_DB_OPERATION_FAILED,
+    MSG_FEATURE_NOT_AVAILABLE,
+    MSG_INTERNAL_SERVER_ERROR,
+)
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import (
     _get_engine,
@@ -330,7 +334,7 @@ async def receive_webhook(
         _log.exception("receive_webhook failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     if guardrail_block_detail is not None:
@@ -553,7 +557,7 @@ async def replay_webhook(
         _log.exception("replay_webhook failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     run_id = run.id

@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from starlette import status as http_status
 
+from modulo.api.constants import MSG_UNEXPECTED_ERROR
 from modulo.api.dependencies import get_or_create_engine, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.analytics.builder import (
@@ -226,7 +227,7 @@ def _map_service_error(exc: Exception) -> HTTPException:
     _log.exception("analytics.route.unexpected_error")
     return HTTPException(
         status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-        detail="An unexpected error occurred.",
+        detail=MSG_UNEXPECTED_ERROR,
     )
 
 
