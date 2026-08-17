@@ -31,7 +31,6 @@ from types import ModuleType
 import pytest
 from alembic.script import ScriptDirectory
 
-
 _MIGRATION_0008 = "0110_schema_pipeline_runtime"
 _HEAD_MIGRATION = "0113_guardrail_summary"
 
@@ -55,6 +54,7 @@ def migration_0008() -> ModuleType:
     spec.loader.exec_module(module)
     return module
 
+
 @pytest.fixture(scope="module")
 def migration_0113() -> ModuleType:
     path = _VERSIONS_DIR / f"{_HEAD_MIGRATION}.py"
@@ -69,8 +69,6 @@ def migration_0113() -> ModuleType:
     return module
 
 
-
-
 def _script() -> ScriptDirectory:
     return ScriptDirectory(str(_VERSIONS_DIR.parent))
 
@@ -81,7 +79,6 @@ class TestReconciliationChain:
         assert script.get_heads() == [_HEAD_MIGRATION], (
             f"expected a single head {_HEAD_MIGRATION}, got {script.get_heads()}"
         )
-
 
     def test_0113_adds_guardrail_summary_column(self, migration_0113: ModuleType) -> None:
         source = _source(migration_0113)
@@ -130,11 +127,9 @@ class TestReconciliationChain:
         assert "'guardrail'" in source
 
 
-
 def _source(module: ModuleType) -> str:
     path = _VERSIONS_DIR / f"{module.revision}.py"
     return path.read_text(encoding="utf-8")
-
 
 
 class TestOrmCheckDriftGuard:
