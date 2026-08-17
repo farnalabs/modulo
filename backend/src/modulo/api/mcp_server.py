@@ -2777,23 +2777,13 @@ def _hitl_error_response(exc: BaseException, run_id: str, gate_id: str) -> dict[
     return _tool_error("Failed to process HITL action")
 
 
-@mcp.tool(
-    description=(
-        "Unified HITL gate action: claim, approve, reject, or deliver_manual. "
-        "Step 1: call with action='claim' to get a claim_token. "
-        "Step 2: call with action='approve', 'reject', or 'deliver_manual' + your claim_token. "
-        "'deliver_manual' requires 'output' (a dict) to supply the output directly. "
-        "human_only gates return 403 on approve — only a browser-authenticated human can approve."
-    ),
-)
-@_RETRY_DB
-async def review_hitl(
+async def _review_hitl_impl(
     run_id: str,
     gate_id: str,
     action: str,
-    claim_token: str | None = None,
-    reason: str | None = None,
-    output: dict[str, Any] | None = None,
+    claim_token: str | None,
+    reason: str | None,
+    output: dict[str, Any] | None,
 ) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
@@ -2812,39 +2802,60 @@ async def review_hitl(
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
 
+    async with _session(org_id) as s:
+        run = await _load_hitl_run(s, org_id, rid, run_id, gate_id)
+        if run is _TEAM_SCOPE_ERROR:
+            return _team_scope_error("run", run_id)
+        if run is None:
+            return {"error": "gate_not_found", "run_id": run_id, "gate_id": gate_id}
+
+        if action == "approve":
+            human_only_err = await _check_human_only_gate(s, org_id, rid, gate_id)
+            if human_only_err:
+                return human_only_err
+
+        try:
+            return await _dispatch_hitl_action(
+                mgr, s, action, rid, gate_id, org_id, key_id, claim_token, output, reason
+            )
+        except GateNotFoundError as exc:
+            return _hitl_error_response(exc, run_id, gate_id)
+        except NotTeamMemberError as exc:
+            return _hitl_error_response(exc, run_id, gate_id)
+        except AlreadyClaimedError as exc:
+            return _hitl_error_response(exc, run_id, gate_id)
+        except ClaimTokenInvalidError as exc:
+            return _hitl_error_response(exc, run_id, gate_id)
+        except ClaimTokenExpiredError as exc:
+            return _hitl_error_response(exc, run_id, gate_id)
+        except GateAlreadyDecidedError as exc:
+            return _hitl_error_response(exc, run_id, gate_id)
+        except ProgrammingError as exc:
+            return _hitl_error_response(exc, run_id, gate_id)
+        except Exception as exc:
+            return _hitl_error_response(exc, run_id, gate_id)
+
+
+@mcp.tool(
+    description=(
+        "Unified HITL gate action: claim, approve, reject, or deliver_manual. "
+        "Step 1: call with action='claim' to get a claim_token. "
+        "Step 2: call with action='approve', 'reject', or 'deliver_manual' + your claim_token. "
+        "'deliver_manual' requires 'output' (a dict) to supply the output directly. "
+        "human_only gates return 403 on approve — only a browser-authenticated human can approve."
+    ),
+)
+@_RETRY_DB
+async def review_hitl(
+    run_id: str,
+    gate_id: str,
+    action: str,
+    claim_token: str | None = None,
+    reason: str | None = None,
+    output: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     try:
-        async with _session(org_id) as s:
-            run = await _load_hitl_run(s, org_id, rid, run_id, gate_id)
-            if run is _TEAM_SCOPE_ERROR:
-                return _team_scope_error("run", run_id)
-            if run is None:
-                return {"error": "gate_not_found", "run_id": run_id, "gate_id": gate_id}
-
-            if action == "approve":
-                human_only_err = await _check_human_only_gate(s, org_id, rid, gate_id)
-                if human_only_err:
-                    return human_only_err
-
-            try:
-                return await _dispatch_hitl_action(
-                    mgr, s, action, rid, gate_id, org_id, key_id, claim_token, output, reason
-                )
-            except GateNotFoundError as exc:
-                return _hitl_error_response(exc, run_id, gate_id)
-            except NotTeamMemberError as exc:
-                return _hitl_error_response(exc, run_id, gate_id)
-            except AlreadyClaimedError as exc:
-                return _hitl_error_response(exc, run_id, gate_id)
-            except ClaimTokenInvalidError as exc:
-                return _hitl_error_response(exc, run_id, gate_id)
-            except ClaimTokenExpiredError as exc:
-                return _hitl_error_response(exc, run_id, gate_id)
-            except GateAlreadyDecidedError as exc:
-                return _hitl_error_response(exc, run_id, gate_id)
-            except ProgrammingError as exc:
-                return _hitl_error_response(exc, run_id, gate_id)
-            except Exception as exc:
-                return _hitl_error_response(exc, run_id, gate_id)
+        return await _review_hitl_impl(run_id, gate_id, action, claim_token, reason, output)
     except OperationalError:
         raise
     except Exception:
