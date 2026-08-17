@@ -1359,6 +1359,19 @@ def _analytics_deep_link(result: dict[str, Any], params: AnalyticsParams) -> str
     return "/analytics?" + urlencode(parts)
 
 
+async def _require_analytics_feature(org_id: uuid.UUID, settings: Any) -> dict[str, Any] | None:
+    from modulo.core.feature_flags import resolve_plan_context
+    from modulo.db.crud.organisation import get_organisation
+
+    async with _session(org_id) as s:
+        org = await get_organisation(s, org_id)
+    async with _session(org_id) as s:
+        plan_ctx = await resolve_plan_context(settings, s, org)
+    if not plan_ctx.feature_enabled("analytics_page"):
+        return {"error": "feature_required", "detail": "analytics_page is not available on your plan"}
+    return None
+
+
 @mcp.tool(
     name="query_analytics",
     description=(
@@ -1394,16 +1407,9 @@ async def query_analytics(
         org_id = _ctx_org_id_val()
         settings = get_settings()
 
-        # analytics_page feature gate — mirror the REST route's require_feature.
-        from modulo.core.feature_flags import resolve_plan_context
-        from modulo.db.crud.organisation import get_organisation
-
-        async with _session(org_id) as s:
-            org = await get_organisation(s, org_id)
-        async with _session(org_id) as s:
-            plan_ctx = await resolve_plan_context(settings, s, org)
-        if not plan_ctx.feature_enabled("analytics_page"):
-            return {"error": "feature_required", "detail": "analytics_page is not available on your plan"}
+        feat_err = await _require_analytics_feature(org_id, settings)
+        if feat_err:
+            return feat_err
 
         try:
             dim = AnalyticsDimension(dimension) if dimension is not None else None
