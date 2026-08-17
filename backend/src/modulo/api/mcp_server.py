@@ -148,8 +148,8 @@ from modulo.settings import get_settings
 _log = logging.getLogger(__name__)
 
 _CT_APPLICATION_JSON = "application/json"
-_MSG_TOKEN_REVOKED = "Token revoked or expired - re-authenticate"
-_MSG_ERROR_TOKEN_REVOKED = "error: Token revoked or expired - re-authenticate"
+_MSG_TOKEN_REVOKED = "Token revoked or expired - re-authenticate"  # nosec B105 -- user-facing error message string, NOT a secret credential
+_MSG_ERROR_TOKEN_REVOKED = "error: Token revoked or expired - re-authenticate"  # nosec B105 -- user-facing error message string, NOT a secret credential
 _MSG_DB_MIGRATION_REQUIRED = "Database migration required. Run `alembic upgrade head`."
 _MSG_DB_MIGRATION_REQUIRED_HEADS = "Database migration required. Run alembic upgrade heads."
 _MSG_TRIGGER_NOT_FOUND = "Trigger not found"
@@ -3253,7 +3253,7 @@ async def update_trigger(
         tid, input_err = _validate_trigger_update_inputs(trigger_id, max_concurrent_runs, daily_spend_limit)
         if input_err:
             return input_err
-        assert tid is not None
+        assert tid is not None  # nosec B101 -- genuine invariant: _validate_trigger_update_inputs returns (tid, None) only when there is no input error, so a non-None tid is guaranteed here
 
         async with _session(org_id) as s:
             trigger = await _load_trigger_for_update(s, org_id, tid)
