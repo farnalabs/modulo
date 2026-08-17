@@ -1917,7 +1917,7 @@ class GraphValidator:
         1. agent_command (llm mode) / script_command (script mode) is non-empty,
            per the shared mode-aware validator (FAR-296).
         2. template_id is set.
-        3. timeout_seconds within bounds (60-3600) if set.
+        3. timeout_seconds within bounds (60-604800) if set.
         4. context_files source paths start with /.
         5. env_vars keys avoid reserved prefixes.
         6. output_schema_json has valid JSON Schema structure if present.

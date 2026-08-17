@@ -11971,7 +11971,7 @@ export interface components {
             } | null;
             /**
              * Timeout Seconds
-             * @description Per-node timeout override (60-3600s). Overrides pipeline node_timeout_seconds.
+             * @description Per-node timeout override (60-604800s). Overrides pipeline node_timeout_seconds.
              */
             timeout_seconds?: number | null;
             /**
