@@ -1821,6 +1821,116 @@ async def _append_mcp_hitl_denial_audit(
         _log.exception("mcp.hitl_denial_audit_failed", extra={"org_id": str(org_id)})
 
 
+async def _update_pipeline_graph_impl(
+    pipeline_id: str,
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    check_tool_scope(_ctx_role_val(), "update_pipeline_graph")
+    from modulo.core.team_visibility import (
+        CONNECTOR_TEAM_MISMATCH,
+        connector_team_mismatch_detail,
+        extract_connector_bindings,
+        find_connector_team_mismatches,
+    )
+    from modulo.db.crud.pipeline import replace_pipeline_graph
+
+    org_id = _ctx_org_id_val()
+    try:
+        pid = uuid.UUID(pipeline_id)
+    except ValueError:
+        return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
+
+    # ADR 017 service-layer backstop + hitl-gate-removal-guard-plan.md v19:
+    # the MCP surface is structurally excluded from gate weakening. The
+    # guarded function hardcodes is_privileged=False when
+    # caller_type=="mcp" (no DB query); the literal below is enforced by a
+    # .semgrep/ rule (mcp call site must pass the literal, not a variable).
+    from modulo.api.routes.pipelines import PipelineGraphUpdate, _is_privileged
+
+    is_privileged = _is_privileged(_ctx_role_val())
+
+    # Validate graph structure using Pydantic models (same as REST endpoint)
+    from pydantic import ValidationError as _PydanticValidationError
+
+    try:
+        PipelineGraphUpdate.model_validate({"nodes": nodes, "edges": edges})
+    except _PydanticValidationError as exc:
+        return {
+            "error": "validation_failed",
+            "detail": f"Graph validation failed: {exc.errors(include_url=False)}",
+        }
+
+    # FAR-296 mode-aware sandbox_agent gate — the SAME shared helper the
+    # Pydantic model, node runner, and GraphValidator use, applied to the
+    # raw node dicts so this gate agrees with save-time and run-time
+    # validation even if the Pydantic surface is bypassed.
+    sandbox_err = _validate_sandbox_nodes(nodes)
+    if sandbox_err:
+        return sandbox_err
+
+    try:
+        async with _session(org_id) as s:
+            from modulo.db.crud.pipeline import get_pipeline
+
+            pipeline = await get_pipeline(s, pid)
+            if pipeline is None:
+                return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+            if _team_scoped_key_mismatch(pipeline.owner_team_id):
+                return _team_scope_error("pipeline", pipeline_id)
+            mismatches = await find_connector_team_mismatches(
+                s,
+                org_id=org_id,
+                pipeline_owner_team_id=pipeline.owner_team_id,
+                connector_bindings=extract_connector_bindings(nodes),
+            )
+            if mismatches:
+                return {
+                    "error": CONNECTOR_TEAM_MISMATCH,
+                    "detail": connector_team_mismatch_detail(mismatches),
+                }
+            result = await replace_pipeline_graph(
+                s,
+                pipeline_id=pid,
+                org_id=org_id,
+                nodes=nodes,
+                edges=edges,
+                is_privileged=is_privileged,
+                caller_type="mcp",
+            )
+            if result is None:
+                return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+            updated_nodes, updated_edges = result
+    except HitlGateWeakeningDenied as exc:
+        await _append_mcp_hitl_denial_audit(org_id, pid, exc)
+        return {
+            "error": "hitl_gate_removal_denied",
+            "detail": str(exc),
+            "reason_code": exc.reason_code,
+            "affected_edges": [
+                {"source_node_id": k[0], "target_node_id": k[1], "edge_type": k[2]} for k in exc.correlation_keys
+            ],
+        }
+
+    return {
+        "pipeline_id": pipeline_id,
+        "nodes": updated_nodes,
+        "edges": [
+            {
+                "id": str(e.id),
+                "source_node_id": str(e.source_node_id),
+                "target_node_id": str(e.target_node_id),
+                "edge_type": e.edge_type,
+            }
+            for e in updated_edges
+        ],
+        "node_count": len(updated_nodes),
+        "edge_count": len(updated_edges),
+    }
+
+
 @mcp.tool(
     description="Set or replace the graph (nodes + edges) of an existing pipeline. "
     "Pass nodes as a list of dicts with id, node_type, agent_id, position (x, y), "
@@ -1834,109 +1944,7 @@ async def update_pipeline_graph(
     edges: list[dict[str, Any]],
 ) -> dict[str, Any]:
     try:
-        if not await validate_current_auth():
-            return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "update_pipeline_graph")
-        from modulo.core.team_visibility import (
-            CONNECTOR_TEAM_MISMATCH,
-            connector_team_mismatch_detail,
-            extract_connector_bindings,
-            find_connector_team_mismatches,
-        )
-        from modulo.db.crud.pipeline import replace_pipeline_graph
-
-        org_id = _ctx_org_id_val()
-        try:
-            pid = uuid.UUID(pipeline_id)
-        except ValueError:
-            return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
-
-        # ADR 017 service-layer backstop + hitl-gate-removal-guard-plan.md v19:
-        # the MCP surface is structurally excluded from gate weakening. The
-        # guarded function hardcodes is_privileged=False when
-        # caller_type=="mcp" (no DB query); the literal below is enforced by a
-        # .semgrep/ rule (mcp call site must pass the literal, not a variable).
-        from modulo.api.routes.pipelines import PipelineGraphUpdate, _is_privileged
-
-        is_privileged = _is_privileged(_ctx_role_val())
-
-        # Validate graph structure using Pydantic models (same as REST endpoint)
-        from pydantic import ValidationError as _PydanticValidationError
-
-        try:
-            PipelineGraphUpdate.model_validate({"nodes": nodes, "edges": edges})
-        except _PydanticValidationError as exc:
-            return {
-                "error": "validation_failed",
-                "detail": f"Graph validation failed: {exc.errors(include_url=False)}",
-            }
-
-        # FAR-296 mode-aware sandbox_agent gate — the SAME shared helper the
-        # Pydantic model, node runner, and GraphValidator use, applied to the
-        # raw node dicts so this gate agrees with save-time and run-time
-        # validation even if the Pydantic surface is bypassed.
-        sandbox_err = _validate_sandbox_nodes(nodes)
-        if sandbox_err:
-            return sandbox_err
-
-        try:
-            async with _session(org_id) as s:
-                from modulo.db.crud.pipeline import get_pipeline
-
-                pipeline = await get_pipeline(s, pid)
-                if pipeline is None:
-                    return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
-                if _team_scoped_key_mismatch(pipeline.owner_team_id):
-                    return _team_scope_error("pipeline", pipeline_id)
-                mismatches = await find_connector_team_mismatches(
-                    s,
-                    org_id=org_id,
-                    pipeline_owner_team_id=pipeline.owner_team_id,
-                    connector_bindings=extract_connector_bindings(nodes),
-                )
-                if mismatches:
-                    return {
-                        "error": CONNECTOR_TEAM_MISMATCH,
-                        "detail": connector_team_mismatch_detail(mismatches),
-                    }
-                result = await replace_pipeline_graph(
-                    s,
-                    pipeline_id=pid,
-                    org_id=org_id,
-                    nodes=nodes,
-                    edges=edges,
-                    is_privileged=is_privileged,
-                    caller_type="mcp",
-                )
-                if result is None:
-                    return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
-                updated_nodes, updated_edges = result
-        except HitlGateWeakeningDenied as exc:
-            await _append_mcp_hitl_denial_audit(org_id, pid, exc)
-            return {
-                "error": "hitl_gate_removal_denied",
-                "detail": str(exc),
-                "reason_code": exc.reason_code,
-                "affected_edges": [
-                    {"source_node_id": k[0], "target_node_id": k[1], "edge_type": k[2]} for k in exc.correlation_keys
-                ],
-            }
-
-        return {
-            "pipeline_id": pipeline_id,
-            "nodes": updated_nodes,
-            "edges": [
-                {
-                    "id": str(e.id),
-                    "source_node_id": str(e.source_node_id),
-                    "target_node_id": str(e.target_node_id),
-                    "edge_type": e.edge_type,
-                }
-                for e in updated_edges
-            ],
-            "node_count": len(updated_nodes),
-            "edge_count": len(updated_edges),
-        }
+        return await _update_pipeline_graph_impl(pipeline_id, nodes, edges)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
@@ -2126,6 +2134,41 @@ async def _create_manual_run(
     return run.id, run.langgraph_thread_id, None
 
 
+async def _trigger_pipeline_impl(
+    pipeline_id: str,
+    input_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    check_tool_scope(_ctx_role_val(), "trigger_pipeline")
+    if not await _trigger_pipeline_rate_allowed():
+        _log.warning(
+            "ratelimit.trigger_pipeline_exceeded",
+            extra={"client_key": _trigger_pipeline_client_key()},
+        )
+        return {"error": "rate_limited", "detail": "Rate limit exceeded for trigger_pipeline (60/min)"}
+    org_id = _ctx_org_id_val()
+    pid, id_err = _trigger_pipeline_validate_id(pipeline_id)
+    if id_err:
+        return id_err
+    assert pid is not None
+    payload = input_payload or {}
+
+    async with _session(org_id) as s:
+        run_id, thread_id, run_err = await _create_manual_run(s, org_id, pid, pipeline_id, payload)
+    if run_err:
+        return run_err
+    assert run_id is not None
+
+    await dispatch_run(str(run_id), str(org_id), queue="runs")
+
+    return {
+        "run_id": str(run_id),
+        "status": "pending",
+        "langgraph_thread_id": thread_id,
+    }
+
+
 @mcp.tool(description="Fire a pipeline run and return immediately with run_id. Poll get_run_status to track progress.")
 @_RETRY_DB
 async def trigger_pipeline(
@@ -2133,35 +2176,7 @@ async def trigger_pipeline(
     input_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
-        if not await validate_current_auth():
-            return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "trigger_pipeline")
-        if not await _trigger_pipeline_rate_allowed():
-            _log.warning(
-                "ratelimit.trigger_pipeline_exceeded",
-                extra={"client_key": _trigger_pipeline_client_key()},
-            )
-            return {"error": "rate_limited", "detail": "Rate limit exceeded for trigger_pipeline (60/min)"}
-        org_id = _ctx_org_id_val()
-        pid, id_err = _trigger_pipeline_validate_id(pipeline_id)
-        if id_err:
-            return id_err
-        assert pid is not None
-        payload = input_payload or {}
-
-        async with _session(org_id) as s:
-            run_id, thread_id, run_err = await _create_manual_run(s, org_id, pid, pipeline_id, payload)
-        if run_err:
-            return run_err
-        assert run_id is not None
-
-        await dispatch_run(str(run_id), str(org_id), queue="runs")
-
-        return {
-            "run_id": str(run_id),
-            "status": "pending",
-            "langgraph_thread_id": thread_id,
-        }
+        return await _trigger_pipeline_impl(pipeline_id, input_payload)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except SnapshotLockNotAvailableError:
