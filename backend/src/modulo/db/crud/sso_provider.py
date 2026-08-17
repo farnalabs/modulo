@@ -31,6 +31,9 @@ _UPDATABLE_SSO_FIELDS = frozenset(
     }
 )
 
+# Audit-record failure log message (best-effort audit — fail open, log loudly).
+_LOG_AUDIT_RECORD_FAILED = "Failed to record audit event for SSO provider %s"
+
 
 async def list_providers(session: AsyncSession) -> list[SsoProvider]:
     result = await session.execute(select(SsoProvider).order_by(SsoProvider.created_at))
@@ -100,7 +103,7 @@ async def create_provider(
     except asyncio.CancelledError:
         raise
     except Exception:
-        logger.exception("Failed to record audit event for SSO provider %s", name)
+        logger.exception(_LOG_AUDIT_RECORD_FAILED, name)
 
     return provider
 
@@ -164,7 +167,7 @@ async def update_provider(
     except asyncio.CancelledError:
         raise
     except Exception:
-        logger.exception("Failed to record audit event for SSO provider %s", provider.name)
+        logger.exception(_LOG_AUDIT_RECORD_FAILED, provider.name)
 
     return provider
 
@@ -199,7 +202,7 @@ async def delete_provider(
     except asyncio.CancelledError:
         raise
     except Exception:
-        logger.exception("Failed to record audit event for SSO provider %s", provider_name)
+        logger.exception(_LOG_AUDIT_RECORD_FAILED, provider_name)
 
     return True
 
@@ -229,7 +232,7 @@ async def toggle_provider(
     except asyncio.CancelledError:
         raise
     except Exception:
-        logger.exception("Failed to record audit event for SSO provider %s", provider.name)
+        logger.exception(_LOG_AUDIT_RECORD_FAILED, provider.name)
 
     return provider
 

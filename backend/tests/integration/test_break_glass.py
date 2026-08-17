@@ -1,22 +1,18 @@
 """Integration tests for break-glass deliverable (A) — last-admin prevention.
 
-Exercises the caller-bound ``deactivate_break_glass`` SECURITY DEFINER (0036)
-against a real Postgres: M2010/M2020/M2040 pgcodes, force gating on the
-operator role (real login vs SET ROLE), scoped-vs-global deactivation, the
-active IS TRUE membership JOIN fix, SCIM DELETE parity + re-create
-reversibility, the accounts UPDATE allow-list boundary, the migration downgrade
-round-trip, and the lookup_api_key_org regression.
+Exercises the caller-bound ``deactivate_break_glass`` SECURITY DEFINER
+(reconciliation chain 0108_schema_org_identity) against a real Postgres:
+M2010/M2020/M2040 pgcodes, force gating on the operator role (real login vs
+SET ROLE), scoped-vs-global deactivation, the active IS TRUE membership JOIN
+fix, SCIM DELETE parity + re-create reversibility, the accounts UPDATE
+allow-list boundary, the break-glass surface posture, and the
+lookup_api_key_org regression.
 """
 
-import asyncio
-import os
 import uuid
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import event, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
@@ -25,9 +21,6 @@ from sqlalchemy.pool import NullPool
 from modulo.api.routes.admin import _extract_bg_pgcode
 from modulo.db.crud.org_membership import resolve_role_from_membership
 from modulo.db.rls import set_rls_org
-
-BACKEND_ROOT = Path(__file__).parents[2]
-
 
 # ── helpers ──────────────────────────────────────────────────────────
 
@@ -487,8 +480,8 @@ async def test_lookup_api_key_org_regression(
 async def test_modulo_migrate_has_schema_usage(db_engine: AsyncEngine) -> None:
     """The SECURITY DEFINER function owner must resolve schema public objects.
 
-    ``lookup_api_key_org`` is owned by ``modulo_migrate`` (migration 0036) and
-    executes with that role's privileges (SECURITY DEFINER). The function body
+    ``lookup_api_key_org`` is owned by ``modulo_migrate`` (reconciliation chain)
+    and executes with that role's privileges (SECURITY DEFINER). The function body
     does ``FROM org_api_keys`` through schema public, so ``modulo_migrate``
     needs USAGE on schema public. ``bootstrap_role`` grants it; without it,
     every API-key-authenticated request fails with
@@ -520,75 +513,33 @@ async def test_modulo_migrate_has_schema_usage(db_engine: AsyncEngine) -> None:
             await conn.execute(text("GRANT USAGE ON SCHEMA public TO PUBLIC"))
 
 
-# ── migration downgrade round-trip ───────────────────────────────────
+# ── break-glass posture (final chain state) ─────────────────────────
 
 
-def _make_alembic_config() -> Config:
-    from modulo.db.migrations.env import _to_sync_url
-
-    url = os.getenv("DATABASE_URL", "")
-    config = Config(BACKEND_ROOT / "alembic.ini")
-    config.set_main_option("sqlalchemy.url", _to_sync_url(url))
-    config.set_main_option("script_location", str(BACKEND_ROOT / "src" / "modulo" / "db" / "migrations"))
-    config.config_file_name = None
-    return config
-
-
-async def test_migration_downgrade_round_trip(migrated_db_url: str) -> None:
-    """0036 -> merge -> (stop) downgrade, then re-upgrade to heads.
-
-    Verifies the columns + CHECK + SECURITY DEFINER are dropped and the owners
-    are restored to the captured baseline, then re-applies cleanly.
+async def test_break_glass_surface_present(db_engine: AsyncEngine) -> None:
+    """The reconciliation chain (0108_schema_org_identity) keeps the break-glass
+    surface: ``accounts.is_break_glass`` and the caller-bound
+    ``deactivate_break_glass`` SECURITY DEFINER. The old downgrade round-trip
+    (0036 -> heads) no longer exists — reconciliation downgrades are no-ops and
+    the chain never drops the surface, so the posture assertions are the
+    meaningful contract.
     """
-    config = _make_alembic_config()
-    await asyncio.to_thread(command.downgrade, config, "0036_merge_all_heads")
-
-    engine = create_async_engine(migrated_db_url, poolclass=NullPool)
-    try:
-        async with engine.connect() as conn:
-            cols = {
-                row[0]
-                for row in (
-                    await conn.execute(
-                        text(
-                            "SELECT column_name FROM information_schema.columns "
-                            "WHERE table_name = 'accounts' AND table_schema = 'public'"
-                        )
-                    )
-                ).fetchall()
-            }
-            assert "is_break_glass" not in cols
-            func_exists = (
+    async with db_engine.connect() as conn:
+        cols = {
+            row[0]
+            for row in (
                 await conn.execute(
-                    text("SELECT to_regprocedure('public.deactivate_break_glass(uuid, uuid, boolean)') IS NOT NULL")
-                )
-            ).scalar_one()
-            assert func_exists is False
-    finally:
-        await engine.dispose()
-
-    # Re-upgrade to heads and confirm the schema is back.
-    await asyncio.to_thread(command.upgrade, config, "heads")
-    engine = create_async_engine(migrated_db_url, poolclass=NullPool)
-    try:
-        async with engine.connect() as conn:
-            cols = {
-                row[0]
-                for row in (
-                    await conn.execute(
-                        text(
-                            "SELECT column_name FROM information_schema.columns "
-                            "WHERE table_name = 'accounts' AND table_schema = 'public'"
-                        )
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name = 'accounts' AND table_schema = 'public'"
                     )
-                ).fetchall()
-            }
-            assert "is_break_glass" in cols
-            func_exists = (
-                await conn.execute(
-                    text("SELECT to_regprocedure('public.deactivate_break_glass(uuid, uuid, boolean)') IS NOT NULL")
                 )
-            ).scalar_one()
-            assert func_exists is True
-    finally:
-        await engine.dispose()
+            ).fetchall()
+        }
+        assert "is_break_glass" in cols
+        func_exists = (
+            await conn.execute(
+                text("SELECT to_regprocedure('public.deactivate_break_glass(uuid, uuid, boolean)') IS NOT NULL")
+            )
+        ).scalar_one()
+        assert func_exists is True

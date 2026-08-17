@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from modulo.connectors._safe_int import safe_int as _safe_int
+from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -132,10 +133,10 @@ class NpmConnector(ConnectorBase):
         resp = await c.get(_NPM_SEARCH_ENDPOINT, params=params)
         resp.raise_for_status()
         body = resp.json()
-        objects = body.get("objects", [])
-        records = [o.get("package", {}) for o in objects]
+        objects: list[dict[str, Any]] = _safe_records(body, "objects")
+        records = [o.get("package", {}) for o in objects if isinstance(o, dict)]
 
-        total = _safe_int(body.get("total"), len(records))
+        total = _safe_int(body.get("total"), len(records)) if isinstance(body, dict) else len(records)
         next_cursor = None
         if records and offset + len(records) < total:
             next_cursor = str(offset + len(records))

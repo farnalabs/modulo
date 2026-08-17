@@ -9,8 +9,8 @@ code:
   - backend/src/modulo/core/analytics/
   - backend/src/modulo/core/mcp/scope_validator.py
   - backend/src/modulo/db/models/run_daily_facts.py
-  - backend/src/modulo/db/migrations/versions/0067_run_daily_facts.py
-  - backend/src/modulo/db/migrations/versions/0071_analytics_facts_enrich.py
+  - backend/src/modulo/db/migrations/versions/0110_schema_pipeline_runtime.py
+  - backend/src/modulo/db/migrations/versions/0110_schema_pipeline_runtime.py
   - backend/src/modulo/core/cost_controller/finalize.py
 unit-tests:
   - backend/tests/unit/test_analytics_builder.py

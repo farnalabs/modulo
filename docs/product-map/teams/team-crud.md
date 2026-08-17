@@ -162,8 +162,8 @@ status: partial
 ## Known Gaps
 
 - Membership add does not enforce privilege cap for non-admin grantors (PRD 9.3: a team operator can only grant roles up to their own team role — currently requires org admin)
-- Notification endpoints not exposed through REST API (field exists in model, no route)
-- Daily spend limit not exposed through REST API
+- ~~Notification endpoints not exposed through REST API (field exists in model, no route)~~ — RESOLVED 2026-08-17: team-scoped notification endpoints are fully manageable via the `/api/v1/notifications` CRUD (`team_id` on create/update/response) and the admin `/api/v1/admin/notifications` CRUD (create/update now accept `team_id` with RLS-scoped existence validation → 422 for unknown teams; responses echo it)
+- ~~Daily spend limit not exposed through REST API~~ — RESOLVED 2026-08-17 (verified): team `daily_spend_limit` is readable/writable via `GET/PUT /api/v1/admin/costs/limits/teams/{team_id}` in `api/routes/costs.py`
 - No integration tests for the membership privilege cap
 - RLS isolation test (`test_teams_isolated_between_orgs`) still skipped — uses SET_CONFIG directly instead of the app-level RLS helpers
 
@@ -194,3 +194,9 @@ status: partial
 **Fixed (MINOR):** Flattened nested try/except in `admin_create_team` — inner `try/except ProgrammingError` was redundant with outer `except ProgrammingError`; consolidated and added `logger.exception` to the outer handler.
 
 **All tests pass:** 30 API endpoint + 22 CRUD unit tests + 4 admin RLS context tests = 56/56 pass. No regressions.
+
+### 2026-08-17 — improve-architecture (feat-core-notifications cross-entry)
+
+**RESOLVED 2 Known Gaps:**
+- **Notification endpoints not exposed through REST API** — the admin `/api/v1/admin/notifications` CRUD now accepts `team_id` on create/update (RLS-scoped existence validation → 422 `Unknown team id` for missing/soft-deleted/other-org teams, closing the FK-`IntegrityError`→503 rough edge), echoes `team_id` on every response, and the non-admin `/api/v1/notifications` CRUD already surfaced the field. 9 new endpoint tests in `test_admin_notifications_webhooks.py`.
+- **Daily spend limit not exposed through REST API** — verified resolved: `GET/PUT /api/v1/admin/costs/limits/teams/{team_id}` (`api/routes/costs.py:373`) reads/writes `Team.daily_spend_limit`.

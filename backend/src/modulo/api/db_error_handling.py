@@ -8,6 +8,8 @@ import pydantic
 from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
+from modulo.api.constants import MSG_UNEXPECTED_ERROR
+
 _log = logging.getLogger(__name__)
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
@@ -62,7 +64,7 @@ def handle_db_errors(
                 _log.exception("%s.unexpected_error", log_prefix)
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="An unexpected error occurred.",
+                    detail=MSG_UNEXPECTED_ERROR,
                 ) from None
 
         return wrapper

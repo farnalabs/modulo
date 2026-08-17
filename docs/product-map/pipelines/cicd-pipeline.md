@@ -223,6 +223,7 @@ and checkpoint resume.
 - The graph cache key is `(pipeline_id, snapshot_id)` only — it does NOT include eval definitions. If eval definitions change between runs using the same snapshot, the cached graph contains stale eval definitions for HITL gate eval-before-interrupt evaluation. Cache invalidation on eval definition change is not implemented.
 
 ## QA History
+- **2026-08-15 (coverage sweep partial-small-b): Verified the 3 unchecked behaviours (resume from checkpoint after failure, resume after HITL interrupt, snapshot re-validation on resume) are genuine gaps — no resume API endpoint exists (`POST /runs/{id}/resume` is not implemented). All 98 checked behaviours verified against executor + snapshot tests. 98/101 behaviours covered.**
 
 ### Index 309 (2026-07-11): Cross-cutting QA
 - Fixed MAJOR — post-stream operations in `executor.py` (eval suite checks, agent signal firing) were outside the main try/except. An unexpected exception there would skip `RunEventBroker.close()` and leak the broker. Wrapped in try/finally to guarantee closure.

@@ -17,12 +17,21 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_DB_OPERATION_FAILED, MSG_UNEXPECTED_ERROR_NO_PERIOD
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
+
+_CODE_NOTIFICATION_VIEW = "notification.view"
+_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING = "notifications.endpoint_table_missing"
+_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN = (
+    "Notifications are not available. Run database migrations to enable this feature."
+)
+_MSG_ENDPOINT_NOT_FOUND = "Endpoint not found"
+
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +85,7 @@ class NotificationEndpointResponse(BaseModel):
 @handle_db_errors("notifications.list_endpoints")
 async def list_endpoints(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("notification.view"),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_VIEW),
 ) -> list[NotificationEndpointResponse]:
     try:
         async with session.begin():
@@ -90,16 +99,16 @@ async def list_endpoints(
             )
             endpoints = list(result.scalars())
     except ProgrammingError:
-        logger.exception("notifications.endpoint_table_missing")
+        logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Notifications are not available. Run database migrations to enable this feature.",
+            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
         ) from None
     except SQLAlchemyError:
         logger.exception("notifications.list_endpoints.sqlalchemy_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -107,7 +116,7 @@ async def list_endpoints(
         logger.exception("notifications.list_endpoints.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
     return [_ep_to_response(ep) for ep in endpoints]
 
@@ -122,7 +131,7 @@ async def list_endpoints(
 async def create_endpoint(
     req: NotificationEndpointCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("notification.view"),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_VIEW),
     settings: Settings = Depends(get_settings),
 ) -> NotificationEndpointResponse:
     from cryptography.fernet import Fernet
@@ -159,16 +168,16 @@ async def create_endpoint(
             session.add(ep)
             await session.flush()
     except ProgrammingError:
-        logger.exception("notifications.endpoint_table_missing")
+        logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Notifications are not available. Run database migrations to enable this feature.",
+            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
         ) from None
     except SQLAlchemyError:
         logger.exception("notifications.create_endpoint.sqlalchemy_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -176,7 +185,7 @@ async def create_endpoint(
         logger.exception("notifications.create_endpoint.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
 
     return _ep_to_response(ep)
@@ -187,7 +196,7 @@ async def create_endpoint(
 async def get_endpoint(
     endpoint_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("notification.view"),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_VIEW),
 ) -> NotificationEndpointResponse:
     try:
         async with session.begin():
@@ -202,18 +211,18 @@ async def get_endpoint(
             )
             ep = result.scalar_one_or_none()
             if ep is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endpoint not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ENDPOINT_NOT_FOUND)
     except ProgrammingError:
-        logger.exception("notifications.endpoint_table_missing")
+        logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Notifications are not available. Run database migrations to enable this feature.",
+            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
         ) from None
     except SQLAlchemyError:
         logger.exception("notifications")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -221,7 +230,7 @@ async def get_endpoint(
         logger.exception("notifications.get_endpoint.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
     return _ep_to_response(ep)
 
@@ -234,7 +243,7 @@ async def update_endpoint(
     endpoint_id: uuid.UUID,
     req: NotificationEndpointUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("notification.view"),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_VIEW),
     settings: Settings = Depends(get_settings),
 ) -> NotificationEndpointResponse:
     from cryptography.fernet import Fernet
@@ -258,7 +267,7 @@ async def update_endpoint(
             )
             ep = result.scalar_one_or_none()
             if ep is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endpoint not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ENDPOINT_NOT_FOUND)
 
             if req.url is not None:
                 ep.url = req.url
@@ -274,16 +283,16 @@ async def update_endpoint(
 
             await session.flush()
     except ProgrammingError:
-        logger.exception("notifications.endpoint_table_missing")
+        logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Notifications are not available. Run database migrations to enable this feature.",
+            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
         ) from None
     except SQLAlchemyError:
         logger.exception("notifications.update_endpoint.sqlalchemy_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -291,7 +300,7 @@ async def update_endpoint(
         logger.exception("notifications.update_endpoint.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
 
     return _ep_to_response(ep)
@@ -302,7 +311,7 @@ async def update_endpoint(
 async def delete_endpoint(
     endpoint_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("notification.view"),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_VIEW),
 ) -> None:
     try:
         async with session.begin():
@@ -320,16 +329,16 @@ async def delete_endpoint(
             )
             deleted = result.scalar_one_or_none()
     except ProgrammingError:
-        logger.exception("notifications.endpoint_table_missing")
+        logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Notifications are not available. Run database migrations to enable this feature.",
+            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
         ) from None
     except SQLAlchemyError:
         logger.exception("notifications.delete_endpoint.sqlalchemy_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -337,10 +346,10 @@ async def delete_endpoint(
         logger.exception("notifications.delete_endpoint.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endpoint not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ENDPOINT_NOT_FOUND)
 
 
 @router.post(
@@ -350,7 +359,7 @@ async def delete_endpoint(
 async def restore_endpoint(
     endpoint_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("notification.view"),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_VIEW),
 ) -> NotificationEndpointResponse:
     try:
         async with session.begin():
@@ -368,16 +377,16 @@ async def restore_endpoint(
             )
             ep = result.scalar_one_or_none()
     except ProgrammingError:
-        logger.exception("notifications.endpoint_table_missing")
+        logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Notifications are not available. Run database migrations to enable this feature.",
+            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
         ) from None
     except SQLAlchemyError:
         logger.exception("notifications.restore_endpoint.sqlalchemy_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -385,10 +394,10 @@ async def restore_endpoint(
         logger.exception("notifications.restore_endpoint.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
     if ep is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endpoint not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ENDPOINT_NOT_FOUND)
     return _ep_to_response(ep)
 
 

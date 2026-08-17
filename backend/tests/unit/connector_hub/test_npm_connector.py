@@ -172,6 +172,34 @@ async def test_query_search_missing_text(connector):
         await connector.query(ConnectorQuery(resource="search"))
 
 
+@respx.mock
+async def test_query_search_non_list_objects_no_crash(connector):
+    """A corrupt body placing a non-list in ``objects`` must fall back to an empty result."""
+    respx.get(f"{_BASE}/-/v1/search").mock(return_value=httpx.Response(200, json={"objects": "corrupt", "total": 1}))
+    result = await connector.query(ConnectorQuery(resource="search", filters={"text": "react"}, limit=10))
+    assert not result.records
+    assert result.total == 1
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_search_non_dict_body_no_crash(connector):
+    """A corrupt/hostile non-dict body must degrade to an empty result."""
+    respx.get(f"{_BASE}/-/v1/search").mock(return_value=httpx.Response(200, json=["not-a-dict"]))
+    result = await connector.query(ConnectorQuery(resource="search", filters={"text": "react"}, limit=10))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_search_non_dict_object_skipped(connector):
+    """A non-dict ``objects`` element must be skipped instead of crashing the package extraction."""
+    body = {"objects": [{"package": {"name": "react", "version": "18.2.0"}}, "corrupt"], "total": 2}
+    respx.get(f"{_BASE}/-/v1/search").mock(return_value=httpx.Response(200, json=body))
+    result = await connector.query(ConnectorQuery(resource="search", filters={"text": "react"}, limit=10))
+    assert result.records == [{"name": "react", "version": "18.2.0"}]
+
+
 # ---------------------------------------------------------------------------
 # query — package_files
 # ---------------------------------------------------------------------------

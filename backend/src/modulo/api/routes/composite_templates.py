@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
@@ -27,6 +28,10 @@ from modulo.db.crud.composite_template import (
     update_composite_template,
 )
 from modulo.db.rls import set_rls_org
+
+_MSG_DATABASE_TEMPORARILY_UNAVAILABLE = "Database temporarily unavailable."
+_MSG_COMPOSITE_TEMPLATE_NOT_FOUND = "Composite template not found"
+
 
 logger = logging.getLogger(__name__)
 
@@ -125,13 +130,13 @@ async def list_composite_templates_endpoint(
         logger.exception("composite_templates.list_composite_templates_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("composite_templates.list_composite_templates_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -139,7 +144,7 @@ async def list_composite_templates_endpoint(
         logger.exception("Unexpected error in list_composite_templates_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     return CompositeTemplateListResponse(
         items=[CompositeTemplateResponse.model_validate(t) for t in result.items],
@@ -177,13 +182,13 @@ async def create_composite_template_endpoint(
         logger.exception("composite_templates.create_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("composite_templates.create_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -191,7 +196,7 @@ async def create_composite_template_endpoint(
         logger.exception("Unexpected error in create_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
 
@@ -210,13 +215,13 @@ async def get_composite_template_endpoint(
         logger.exception("composite_templates.get_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("composite_templates.get_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -224,10 +229,10 @@ async def get_composite_template_endpoint(
         logger.exception("Unexpected error in get_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     if template is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_COMPOSITE_TEMPLATE_NOT_FOUND)
     return CompositeTemplateResponse.model_validate(template)
 
 
@@ -253,13 +258,13 @@ async def update_composite_template_endpoint(
         logger.exception("composite_templates.update_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("composite_templates.update_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -267,10 +272,10 @@ async def update_composite_template_endpoint(
         logger.exception("Unexpected error in update_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     if template is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_COMPOSITE_TEMPLATE_NOT_FOUND)
     return CompositeTemplateResponse.model_validate(template)
 
 
@@ -289,13 +294,13 @@ async def delete_composite_template_endpoint(
         logger.exception("composite_templates.delete_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("composite_templates.delete_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -303,10 +308,10 @@ async def delete_composite_template_endpoint(
         logger.exception("Unexpected error in delete_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_COMPOSITE_TEMPLATE_NOT_FOUND)
 
 
 @router.post("/{template_id}/restore", response_model=CompositeTemplateResponse)
@@ -324,13 +329,13 @@ async def restore_composite_template_endpoint(
         logger.exception("composite_templates.restore_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("composite_templates.restore_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -338,10 +343,10 @@ async def restore_composite_template_endpoint(
         logger.exception("Unexpected error in restore_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     if template is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_COMPOSITE_TEMPLATE_NOT_FOUND)
     return CompositeTemplateResponse.model_validate(template)
 
 
@@ -377,7 +382,7 @@ async def get_composite_editor_endpoint(
         logger.exception("composite_templates.get_composite_editor_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -385,10 +390,10 @@ async def get_composite_editor_endpoint(
         logger.exception("Unexpected error in get_composite_editor_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     if template is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_COMPOSITE_TEMPLATE_NOT_FOUND)
     graph = template.sub_pipeline_graph_json
     return EditorGraphResponse(
         nodes=graph.get("nodes", []),
@@ -409,7 +414,7 @@ async def save_composite_editor_endpoint(
             await set_rls_org(session, principal.organisation_id)
             template = await get_composite_template(session, template_id)
             if template is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_COMPOSITE_TEMPLATE_NOT_FOUND)
             graph = dict(template.sub_pipeline_graph_json) if template.sub_pipeline_graph_json else {}
             graph["nodes"] = req.nodes
             graph["edges"] = req.edges
@@ -424,13 +429,13 @@ async def save_composite_editor_endpoint(
         logger.exception("composite_templates.save_composite_editor_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("composite_templates.save_composite_editor_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -438,10 +443,10 @@ async def save_composite_editor_endpoint(
         logger.exception("Unexpected error in save_composite_editor_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     if template is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_COMPOSITE_TEMPLATE_NOT_FOUND)
     return EditorGraphResponse(
         nodes=template.sub_pipeline_graph_json.get("nodes", []),
         edges=template.sub_pipeline_graph_json.get("edges", []),
@@ -533,7 +538,7 @@ async def detect_params_endpoint(
         logger.exception("Unexpected error in detect_params_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
 
@@ -569,13 +574,13 @@ async def publish_composite_endpoint(
         logger.exception("composite_templates.publish_composite_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("composite_templates.publish_composite_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -583,8 +588,8 @@ async def publish_composite_endpoint(
         logger.exception("Unexpected error in publish_composite_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     if template is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Composite template not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_COMPOSITE_TEMPLATE_NOT_FOUND)
     return PublishResponse(id=template.id, version=template.version, published=True)

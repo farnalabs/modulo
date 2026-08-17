@@ -137,6 +137,18 @@ Discovered from 1 completed delivery task.
 - Concurrent delete + run race: run reads group then delete removes it before FOR UPDATE — run gets None rather than a clear error
 
 ## QA History
+### 2026-08-15 — Coverage-completion round 2 (dist partial-evals-d)
+- **Verified** every remaining unchecked behaviour against code + tests. All unchecked items are genuine feature gaps requiring frontend work, a new endpoint/run-status, or agent-side prompt-version resolution — none are backend-only fixes in this worktree's scope:
+  - **Comparison view** (eval scores per node per variant, token cost per run, HITL outcomes, per-node output diff) — no comparison endpoint or UI exists; `variant_groups.feature`'s comparison/cost scenarios are `@awaiting-implementation` and their step fixtures are mock-only (no real surface to drive).
+  - **Eval coverage warning** ("Variants diverged but evals did not differentiate") — no divergence-vs-eval-scores signal is computed anywhere (backend or frontend).
+  - **HITL blocked variant / partial results / pre-eval degraded mode** — no HITL-aware comparison rendering (frontend).
+  - **Abandon a variant run** (mark `abandoned`, exclude from aggregates) — no abandon endpoint/status handling (`grep` for "abandon" in variants/run lifecycle returns nothing).
+  - **Group complete when all variants reach terminal state** — no group-level completion logic.
+  - **Agents read `run_context.prompt_version`** to select a prompt template — no agent-side prompt-template versioning; `prompt_version` flows through `run_context_overrides` and the `prompt-diffs` endpoint compares hashes, but no agent consumes it.
+  - **Concurrent delete + run race** — edge case (run reads group, delete removes it before `FOR UPDATE` → `None`).
+- **Confirmed** the coverage-gap detection surface (per-variant missing evals, `GET /variant-groups/{id}/coverage-gaps`, `GET /evals/coverage`, prompt-diffs, `detect_eval_gap`) remains complete and covered.
+- **Status**: partial — batch-firing + quota pre-flight + coverage-gap detection are done; the comparison view + coverage-warning + abandon semantics + agent prompt-version selection are genuine feature work.
+
 ### 2026-08-15 — Coverage completion (FAR-232)
 
 **What was fixed:**

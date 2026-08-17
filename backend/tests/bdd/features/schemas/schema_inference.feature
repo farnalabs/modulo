@@ -34,7 +34,7 @@ Feature: Schema Inference
     And a model backend is configured
     When I POST /api/v1/schemas/infer with the connector instance and no limit
     Then the response status is 200
-    And the sample query limit defaults to 10
+    And the sample query limit defaults to 200
 
   Scenario: Select connector instance by UUID
     Given a connector instance "jira-tasks" with sample data
@@ -42,6 +42,13 @@ Feature: Schema Inference
     When I POST /api/v1/schemas/infer with connector id "jira-tasks"
     Then the response status is 200
     And the suggestion name mentions "jira-tasks"
+
+  Scenario: Rarely-used fields are flagged in the response
+    Given sample records with a rarely-used field
+    And a model backend is configured
+    When I POST /api/v1/schemas/infer with the rarely-used sample data
+    Then the response status is 200
+    And the response lists the rarely-used field "story_points"
 
   Scenario: Publish inferred schema as a schema version
     Given a connector instance "github-issues" with sample data

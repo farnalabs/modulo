@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission, require_permission_any_credential
 from modulo.api.models.team_visibility import TeamVisibilityMixin
@@ -44,6 +45,25 @@ from modulo.core.lifecycle_map.validation import (
 )
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
 from modulo.db.rls import set_rls_org, set_rls_user_context
+
+_CODE_LIFECYCLE_MAPS_AUDIT_FAILED = "lifecycle_maps.audit_failed"
+_CODE_LIFECYCLE_MAP_LIST = "lifecycle_map.list"
+_MSG_DATABASE_TEMPORARILY_UNAVAILABLE = "Database temporarily unavailable."
+_CODE_LIFECYCLE_MAP_CREATE = "lifecycle_map.create"
+_CODE_LIFECYCLE_MAPS_CREATE_LIFECYCLE = "lifecycle_maps.create_lifecycle_map_endpoint"
+_MSG_LIFECYCLE_MAP_CONFLICTS_EXISTING = "Lifecycle map conflicts with an existing resource."
+_CODE_LIFECYCLE_MAPS_IMPORT_LIFECYCLE = "lifecycle_maps.import_lifecycle_map_endpoint"
+_MSG_LIFECYCLE_MAP_NOT_FOUND = "Lifecycle map not found"
+_CODE_LIFECYCLE_MAP_UPDATE = "lifecycle_map.update"
+_CODE_LIFECYCLE_MAPS_UPDATE_LIFECYCLE = "lifecycle_maps.update_lifecycle_map_endpoint"
+_CODE_LIFECYCLE_MAPS_RESTORE_LIFECYCLE = "lifecycle_maps.restore_lifecycle_map_endpoint"
+_CODE_LIFECYCLE_MAPS_SAVE_VERSION = "lifecycle_maps.save_version_endpoint"
+_MSG_MAP_VERSION_CONFLICTS_EXISTING = "Map version conflicts with an existing lifecycle map resource."
+_CODE_LIFECYCLE_MAPS_UPDATE_VERSION = "lifecycle_maps.update_version_endpoint"
+_CODE_LIFECYCLE_MAPS_GRADUATE_STAGE = "lifecycle_maps.graduate_stage_endpoint"
+_CODE_LIFECYCLE_MAPS_LIST_JOURNEYS = "lifecycle_maps.list_journeys_endpoint"
+_CODE_LIFECYCLE_MAPS_GET_JOURNEY = "lifecycle_maps.get_journey_endpoint"
+
 
 _log = logging.getLogger(__name__)
 
@@ -335,11 +355,11 @@ async def _record_audit(
                 payload_json=payload_json,
             )
     except ProgrammingError:
-        _log.exception("lifecycle_maps.audit_failed")
+        _log.exception(_CODE_LIFECYCLE_MAPS_AUDIT_FAILED)
     except SQLAlchemyError:
-        _log.exception("lifecycle_maps.audit_failed")
+        _log.exception(_CODE_LIFECYCLE_MAPS_AUDIT_FAILED)
     except Exception:
-        _log.exception("lifecycle_maps.audit_failed")
+        _log.exception(_CODE_LIFECYCLE_MAPS_AUDIT_FAILED)
 
 
 def _build_version_entry(lm: Any) -> LifecycleMapVersionResponse:
@@ -448,7 +468,7 @@ async def list_lifecycle_maps_endpoint(
     owner_team_id: uuid.UUID | None = Query(default=None),
     include_archived: bool = Query(default=False),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("lifecycle_map.list"),
+    principal: TenantPrincipal = require_permission(_CODE_LIFECYCLE_MAP_LIST),
 ) -> LifecycleMapListResponse:
     try:
         async with session.begin():
@@ -465,13 +485,13 @@ async def list_lifecycle_maps_endpoint(
         _log.exception("lifecycle_maps.list_lifecycle_maps_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("lifecycle_maps.list_lifecycle_maps_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -479,7 +499,7 @@ async def list_lifecycle_maps_endpoint(
         _log.exception("lifecycle_maps.list")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return LifecycleMapListResponse(
         items=[LifecycleMapResponse.model_validate(m) for m in result.items],
@@ -490,11 +510,11 @@ async def list_lifecycle_maps_endpoint(
 
 
 @router.post("", response_model=LifecycleMapResponse, status_code=status.HTTP_201_CREATED)
-@handle_db_errors("lifecycle_maps.create_lifecycle_map_endpoint")
+@handle_db_errors(_CODE_LIFECYCLE_MAPS_CREATE_LIFECYCLE)
 async def create_lifecycle_map_endpoint(
     req: LifecycleMapCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("lifecycle_map.create"),
+    principal: TenantPrincipal = require_permission(_CODE_LIFECYCLE_MAP_CREATE),
 ) -> LifecycleMapResponse:
     try:
         async with session.begin():
@@ -524,22 +544,22 @@ async def create_lifecycle_map_endpoint(
     except LifecycleMapContentError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
     except ProgrammingError as exc:
-        _log.exception("lifecycle_maps.create_lifecycle_map_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_CREATE_LIFECYCLE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except IntegrityError as exc:
-        _log.exception("lifecycle_maps.create_lifecycle_map_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_CREATE_LIFECYCLE)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Lifecycle map conflicts with an existing resource.",
+            detail=_MSG_LIFECYCLE_MAP_CONFLICTS_EXISTING,
         ) from exc
     except SQLAlchemyError as exc:
-        _log.exception("lifecycle_maps.create_lifecycle_map_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_CREATE_LIFECYCLE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -547,17 +567,17 @@ async def create_lifecycle_map_endpoint(
         _log.exception("lifecycle_maps.create")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return LifecycleMapResponse.model_validate(lifecycle_map)
 
 
 @router.post("/import", response_model=LifecycleMapResponse, status_code=status.HTTP_201_CREATED)
-@handle_db_errors("lifecycle_maps.import_lifecycle_map_endpoint")
+@handle_db_errors(_CODE_LIFECYCLE_MAPS_IMPORT_LIFECYCLE)
 async def import_lifecycle_map_endpoint(
     req: LifecycleMapTransfer,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("lifecycle_map.create"),
+    principal: TenantPrincipal = require_permission(_CODE_LIFECYCLE_MAP_CREATE),
 ) -> LifecycleMapResponse:
     """Import an exported lifecycle-map envelope, creating a new map in the org.
 
@@ -589,22 +609,22 @@ async def import_lifecycle_map_endpoint(
     except (LifecycleMapBundleError, LifecycleMapContentError) as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
     except ProgrammingError as exc:
-        _log.exception("lifecycle_maps.import_lifecycle_map_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_IMPORT_LIFECYCLE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except IntegrityError as exc:
-        _log.exception("lifecycle_maps.import_lifecycle_map_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_IMPORT_LIFECYCLE)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Lifecycle map conflicts with an existing resource.",
+            detail=_MSG_LIFECYCLE_MAP_CONFLICTS_EXISTING,
         ) from exc
     except SQLAlchemyError as exc:
-        _log.exception("lifecycle_maps.import_lifecycle_map_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_IMPORT_LIFECYCLE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -612,7 +632,7 @@ async def import_lifecycle_map_endpoint(
         _log.exception("lifecycle_maps.import")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return LifecycleMapResponse.model_validate(lifecycle_map)
 
@@ -622,7 +642,7 @@ async def import_lifecycle_map_endpoint(
 async def export_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("lifecycle_map.list"),
+    principal: TenantPrincipal = require_permission(_CODE_LIFECYCLE_MAP_LIST),
 ) -> LifecycleMapTransfer:
     """Export a lifecycle map's active-version content as a portable envelope."""
     try:
@@ -634,13 +654,13 @@ async def export_lifecycle_map_endpoint(
         _log.exception("lifecycle_maps.export_lifecycle_map_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("lifecycle_maps.export_lifecycle_map_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -648,10 +668,10 @@ async def export_lifecycle_map_endpoint(
         _log.exception("lifecycle_maps.export")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if lifecycle_map is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_LIFECYCLE_MAP_NOT_FOUND)
     envelope = build_export_envelope(lifecycle_map)
     return LifecycleMapTransfer(**envelope)
 
@@ -661,7 +681,7 @@ async def export_lifecycle_map_endpoint(
 async def get_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("lifecycle_map.list"),
+    principal: TenantPrincipal = require_permission(_CODE_LIFECYCLE_MAP_LIST),
 ) -> LifecycleMapDetailResponse:
     try:
         async with session.begin():
@@ -672,13 +692,13 @@ async def get_lifecycle_map_endpoint(
         _log.exception("lifecycle_maps.get_lifecycle_map_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("lifecycle_maps.get_lifecycle_map_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -686,20 +706,20 @@ async def get_lifecycle_map_endpoint(
         _log.exception("lifecycle_maps.get")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if lifecycle_map is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_LIFECYCLE_MAP_NOT_FOUND)
     return _build_detail(lifecycle_map)
 
 
 @router.put("/{lifecycle_map_id}", response_model=LifecycleMapResponse)
-@handle_db_errors("lifecycle_maps.update_lifecycle_map_endpoint")
+@handle_db_errors(_CODE_LIFECYCLE_MAPS_UPDATE_LIFECYCLE)
 async def update_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
     req: LifecycleMapUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("lifecycle_map.update"),
+    principal: TenantPrincipal = require_permission(_CODE_LIFECYCLE_MAP_UPDATE),
 ) -> LifecycleMapResponse:
     updates = req.model_dump(exclude_unset=True)
     try:
@@ -713,7 +733,7 @@ async def update_lifecycle_map_endpoint(
                 updated_by=principal.account_id,
             )
             if lifecycle_map is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_LIFECYCLE_MAP_NOT_FOUND)
             await session.refresh(lifecycle_map)
             await _record_audit(
                 session,
@@ -728,22 +748,22 @@ async def update_lifecycle_map_endpoint(
     except LifecycleMapContentError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
     except ProgrammingError as exc:
-        _log.exception("lifecycle_maps.update_lifecycle_map_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_UPDATE_LIFECYCLE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except IntegrityError as exc:
-        _log.exception("lifecycle_maps.update_lifecycle_map_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_UPDATE_LIFECYCLE)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Lifecycle map conflicts with an existing resource.",
+            detail=_MSG_LIFECYCLE_MAP_CONFLICTS_EXISTING,
         ) from exc
     except SQLAlchemyError as exc:
-        _log.exception("lifecycle_maps.update_lifecycle_map_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_UPDATE_LIFECYCLE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -751,7 +771,7 @@ async def update_lifecycle_map_endpoint(
         _log.exception("lifecycle_maps.update")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return LifecycleMapResponse.model_validate(lifecycle_map)
 
@@ -781,13 +801,13 @@ async def delete_lifecycle_map_endpoint(
         _log.exception("lifecycle_maps.delete_lifecycle_map_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("lifecycle_maps.delete_lifecycle_map_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -795,18 +815,18 @@ async def delete_lifecycle_map_endpoint(
         _log.exception("lifecycle_maps.delete")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_LIFECYCLE_MAP_NOT_FOUND)
 
 
 @router.post("/{lifecycle_map_id}/restore", response_model=LifecycleMapResponse)
-@handle_db_errors("lifecycle_maps.restore_lifecycle_map_endpoint")
+@handle_db_errors(_CODE_LIFECYCLE_MAPS_RESTORE_LIFECYCLE)
 async def restore_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("lifecycle_map.create"),
+    principal: TenantPrincipal = require_permission(_CODE_LIFECYCLE_MAP_CREATE),
 ) -> LifecycleMapResponse:
     try:
         async with session.begin():
@@ -828,22 +848,22 @@ async def restore_lifecycle_map_endpoint(
                     payload_json={"name": lifecycle_map.name},
                 )
     except ProgrammingError as exc:
-        _log.exception("lifecycle_maps.restore_lifecycle_map_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_RESTORE_LIFECYCLE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except IntegrityError as exc:
-        _log.exception("lifecycle_maps.restore_lifecycle_map_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_RESTORE_LIFECYCLE)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Lifecycle map cannot be restored: a stage pipeline is already registered in another active map.",
         ) from exc
     except SQLAlchemyError as exc:
-        _log.exception("lifecycle_maps.restore_lifecycle_map_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_RESTORE_LIFECYCLE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -851,7 +871,7 @@ async def restore_lifecycle_map_endpoint(
         _log.exception("lifecycle_maps.restore")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if lifecycle_map is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map not found or not deleted")
@@ -863,7 +883,7 @@ async def restore_lifecycle_map_endpoint(
 async def list_lifecycle_map_versions_endpoint(
     lifecycle_map_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("lifecycle_map.list"),
+    principal: TenantPrincipal = require_permission(_CODE_LIFECYCLE_MAP_LIST),
 ) -> list[LifecycleMapVersionResponse]:
     try:
         async with session.begin():
@@ -874,13 +894,13 @@ async def list_lifecycle_map_versions_endpoint(
         _log.exception("lifecycle_maps.list_versions_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("lifecycle_maps.list_versions_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -888,10 +908,10 @@ async def list_lifecycle_map_versions_endpoint(
         _log.exception("lifecycle_maps.list_versions")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if lifecycle_map is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_LIFECYCLE_MAP_NOT_FOUND)
     return [_build_version_entry(lifecycle_map)]
 
 
@@ -900,12 +920,12 @@ async def list_lifecycle_map_versions_endpoint(
     response_model=LifecycleMapVersionResponse,
     status_code=status.HTTP_201_CREATED,
 )
-@handle_db_errors("lifecycle_maps.save_version_endpoint")
+@handle_db_errors(_CODE_LIFECYCLE_MAPS_SAVE_VERSION)
 async def save_lifecycle_map_version_endpoint(
     lifecycle_map_id: uuid.UUID,
     req: VersionSaveRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("lifecycle_map.update"),
+    principal: TenantPrincipal = require_permission(_CODE_LIFECYCLE_MAP_UPDATE),
 ) -> LifecycleMapVersionResponse:
     try:
         async with session.begin():
@@ -938,22 +958,22 @@ async def save_lifecycle_map_version_endpoint(
     except LifecycleMapContentError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
     except ProgrammingError as exc:
-        _log.exception("lifecycle_maps.save_version_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_SAVE_VERSION)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except IntegrityError as exc:
-        _log.exception("lifecycle_maps.save_version_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_SAVE_VERSION)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Map version conflicts with an existing lifecycle map resource.",
+            detail=_MSG_MAP_VERSION_CONFLICTS_EXISTING,
         ) from exc
     except SQLAlchemyError as exc:
-        _log.exception("lifecycle_maps.save_version_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_SAVE_VERSION)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -961,21 +981,21 @@ async def save_lifecycle_map_version_endpoint(
         _log.exception("lifecycle_maps.save_version")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if lifecycle_map is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_LIFECYCLE_MAP_NOT_FOUND)
     return _build_version_entry(lifecycle_map)
 
 
 @router.put("/{lifecycle_map_id}/versions/{version_id}", response_model=LifecycleMapVersionResponse)
-@handle_db_errors("lifecycle_maps.update_version_endpoint")
+@handle_db_errors(_CODE_LIFECYCLE_MAPS_UPDATE_VERSION)
 async def update_lifecycle_map_version_endpoint(
     lifecycle_map_id: uuid.UUID,
     version_id: uuid.UUID,
     req: VersionSaveRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("lifecycle_map.update"),
+    principal: TenantPrincipal = require_permission(_CODE_LIFECYCLE_MAP_UPDATE),
 ) -> LifecycleMapVersionResponse:
     """Update a version. v1 semantics: the active map state is the only version,
     so this behaves identically to save — ``version_id`` is validated as a UUID
@@ -1012,22 +1032,22 @@ async def update_lifecycle_map_version_endpoint(
     except LifecycleMapContentError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
     except ProgrammingError as exc:
-        _log.exception("lifecycle_maps.update_version_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_UPDATE_VERSION)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except IntegrityError as exc:
-        _log.exception("lifecycle_maps.update_version_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_UPDATE_VERSION)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Map version conflicts with an existing lifecycle map resource.",
+            detail=_MSG_MAP_VERSION_CONFLICTS_EXISTING,
         ) from exc
     except SQLAlchemyError as exc:
-        _log.exception("lifecycle_maps.update_version_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_UPDATE_VERSION)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -1035,10 +1055,10 @@ async def update_lifecycle_map_version_endpoint(
         _log.exception("lifecycle_maps.update_version")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if lifecycle_map is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_LIFECYCLE_MAP_NOT_FOUND)
     return _build_version_entry(lifecycle_map)
 
 
@@ -1048,7 +1068,7 @@ async def get_lifecycle_map_version_endpoint(
     lifecycle_map_id: uuid.UUID,
     version: int = Path(ge=1),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("lifecycle_map.list"),
+    principal: TenantPrincipal = require_permission(_CODE_LIFECYCLE_MAP_LIST),
 ) -> LifecycleMapDetailResponse:
     try:
         async with session.begin():
@@ -1059,13 +1079,13 @@ async def get_lifecycle_map_version_endpoint(
         _log.exception("lifecycle_maps.get_version_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("lifecycle_maps.get_version_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -1073,7 +1093,7 @@ async def get_lifecycle_map_version_endpoint(
         _log.exception("lifecycle_maps.get_version")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if lifecycle_map is None or lifecycle_map.version != version:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map version not found")
@@ -1084,14 +1104,14 @@ async def get_lifecycle_map_version_endpoint(
     "/{lifecycle_map_id}/versions/{version_id}/stages/{stage_id}/graduate",
     response_model=LifecycleMapVersionResponse,
 )
-@handle_db_errors("lifecycle_maps.graduate_stage_endpoint")
+@handle_db_errors(_CODE_LIFECYCLE_MAPS_GRADUATE_STAGE)
 async def graduate_lifecycle_map_stage_endpoint(
     lifecycle_map_id: uuid.UUID,
     version_id: uuid.UUID,
     stage_id: str,
     req: GraduateStageRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("lifecycle_map.update"),
+    principal: TenantPrincipal = require_permission(_CODE_LIFECYCLE_MAP_UPDATE),
 ) -> LifecycleMapVersionResponse:
     try:
         async with session.begin():
@@ -1119,22 +1139,22 @@ async def graduate_lifecycle_map_stage_endpoint(
     except LifecycleMapContentError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
     except ProgrammingError as exc:
-        _log.exception("lifecycle_maps.graduate_stage_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_GRADUATE_STAGE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except IntegrityError as exc:
-        _log.exception("lifecycle_maps.graduate_stage_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_GRADUATE_STAGE)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Map version conflicts with an existing lifecycle map resource.",
+            detail=_MSG_MAP_VERSION_CONFLICTS_EXISTING,
         ) from exc
     except SQLAlchemyError as exc:
-        _log.exception("lifecycle_maps.graduate_stage_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_GRADUATE_STAGE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -1142,10 +1162,10 @@ async def graduate_lifecycle_map_stage_endpoint(
         _log.exception("lifecycle_maps.graduate_stage")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if lifecycle_map is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_LIFECYCLE_MAP_NOT_FOUND)
     return _build_version_entry(lifecycle_map)
 
 
@@ -1185,7 +1205,7 @@ def _team_scope_filter(lifecycle_map: Any) -> uuid.UUID | None:
 
 
 @router.get("/{lifecycle_map_id}/journeys", response_model=JourneyListResponse)
-@handle_db_errors("lifecycle_maps.list_journeys_endpoint")
+@handle_db_errors(_CODE_LIFECYCLE_MAPS_LIST_JOURNEYS)
 async def list_journeys_endpoint(
     lifecycle_map_id: uuid.UUID,
     kind: str | None = Query(default=None),
@@ -1202,7 +1222,7 @@ async def list_journeys_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             lifecycle_map = await get_lifecycle_map(session, lifecycle_map_id)
             if lifecycle_map is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_LIFECYCLE_MAP_NOT_FOUND)
             owner_team_id = _team_scope_filter(lifecycle_map)
             journeys, next_cursor = await list_map_journeys(
                 session,
@@ -1214,22 +1234,22 @@ async def list_journeys_endpoint(
                 limit=limit,
             )
     except ValueError as exc:
-        _log.exception("lifecycle_maps.list_journeys_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_LIST_JOURNEYS)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Invalid kind, ref, or pagination cursor.",
         ) from exc
     except ProgrammingError as exc:
-        _log.exception("lifecycle_maps.list_journeys_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_LIST_JOURNEYS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        _log.exception("lifecycle_maps.list_journeys_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_LIST_JOURNEYS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -1237,7 +1257,7 @@ async def list_journeys_endpoint(
         _log.exception("lifecycle_maps.list_journeys")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return JourneyListResponse(
         items=[_build_journey_summary(j, unattributed) for j, unattributed in journeys],
@@ -1246,7 +1266,7 @@ async def list_journeys_endpoint(
 
 
 @router.get("/{lifecycle_map_id}/journeys/{kind}/{ref}", response_model=JourneyDetailResponse)
-@handle_db_errors("lifecycle_maps.get_journey_endpoint")
+@handle_db_errors(_CODE_LIFECYCLE_MAPS_GET_JOURNEY)
 async def get_journey_endpoint(
     lifecycle_map_id: uuid.UUID,
     kind: str,
@@ -1265,7 +1285,7 @@ async def get_journey_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             lifecycle_map = await get_lifecycle_map(session, lifecycle_map_id)
             if lifecycle_map is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_LIFECYCLE_MAP_NOT_FOUND)
             owner_team_id = _team_scope_filter(lifecycle_map)
             journey_result = await get_map_journey(
                 session,
@@ -1279,22 +1299,22 @@ async def get_journey_endpoint(
             journey, unattributed = journey_result
             runs = await list_journey_runs(session, journey=journey)
     except ValueError as exc:
-        _log.exception("lifecycle_maps.get_journey_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_GET_JOURNEY)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Invalid kind or ref.",
         ) from exc
     except ProgrammingError as exc:
-        _log.exception("lifecycle_maps.get_journey_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_GET_JOURNEY)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        _log.exception("lifecycle_maps.get_journey_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_GET_JOURNEY)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -1302,7 +1322,7 @@ async def get_journey_endpoint(
         _log.exception("lifecycle_maps.get_journey")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return JourneyDetailResponse(
         **_build_journey_summary(journey, unattributed).model_dump(),
@@ -1370,7 +1390,7 @@ async def self_report_journeys_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             lifecycle_map = await get_lifecycle_map(session, lifecycle_map_id)
             if lifecycle_map is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_LIFECYCLE_MAP_NOT_FOUND)
             reported, counters = validate_and_normalise_reported_refs(req.work_item_refs)
             confirmed, unmatched = await confirm_reported_refs(session, principal.organisation_id, reported)
             explicit_stage: LifecycleMapStage | None = None
@@ -1400,13 +1420,13 @@ async def self_report_journeys_endpoint(
         _log.exception("lifecycle_maps.self_report_journeys_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("lifecycle_maps.self_report_journeys_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -1414,7 +1434,7 @@ async def self_report_journeys_endpoint(
         _log.exception("lifecycle_maps.self_report_journeys")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return JourneySelfReportResponse(
         accepted=advanced,

@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 if TYPE_CHECKING:
     from sqlalchemy.engine import CursorResult
 
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_system_permission, require_target_org_role
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -32,6 +33,12 @@ from modulo.db.crud.organisation import (
 )
 from modulo.db.models.organisation import Organisation
 from modulo.db.rls import set_rls_org
+
+_CODE_SYSTEM_ORG_MANAGE = "system.org.manage"
+_MSG_ORGANISATION_NOT_FOUND = "Organisation not found"
+_CODE_ADMIN_ORGS_ADMIN_SET = "admin_orgs.admin_set_org_license"
+_CODE_ADMIN_ORGS_ADMIN_REMOVE = "admin_orgs.admin_remove_org_license"
+
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +70,7 @@ class CreateOrgResponse(BaseModel):
 @handle_db_errors("admin.orgs.admin_create_org")
 async def admin_create_org(
     req: CreateOrgRequest,
-    current_user: AuthenticatedPrincipal = require_system_permission("system.org.manage"),  # type: ignore[assignment]
+    current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_ORG_MANAGE),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> CreateOrgResponse:
     try:
@@ -102,7 +109,7 @@ async def admin_create_org(
         logger.exception("admin_orgs.admin_create_org")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         logger.exception("admin_orgs.admin_create_org")
@@ -116,7 +123,7 @@ async def admin_create_org(
         logger.exception("Unexpected error in admin_create_org")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
 
@@ -135,7 +142,7 @@ class ListOrgItem(BaseModel):
 @router.get("", response_model=list[ListOrgItem])
 @handle_db_errors("admin.orgs.admin_list_orgs")
 async def admin_list_orgs(
-    _: AuthenticatedPrincipal = require_system_permission("system.org.manage"),  # type: ignore[assignment]
+    _: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_ORG_MANAGE),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ListOrgItem]:
     try:
@@ -145,7 +152,7 @@ async def admin_list_orgs(
         logger.exception("admin_orgs.admin_list_orgs")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         logger.exception("admin_orgs.admin_list_orgs")
@@ -159,7 +166,7 @@ async def admin_list_orgs(
         logger.exception("Unexpected error in admin_list_orgs")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     return [
         ListOrgItem(
@@ -198,7 +205,7 @@ class CreateOrgUserResponse(BaseModel):
 async def admin_create_org_user(
     org_id: uuid.UUID,
     req: CreateOrgUserRequest,
-    current_user: AuthenticatedPrincipal = require_system_permission("system.org.manage"),  # type: ignore[assignment]
+    current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_ORG_MANAGE),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> CreateOrgUserResponse:
     if req.org_role not in ("admin", "operator", "runner", "viewer"):
@@ -221,7 +228,7 @@ async def admin_create_org_user(
             if org is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Organisation not found",
+                    detail=_MSG_ORGANISATION_NOT_FOUND,
                 )
 
             existing = await get_account_by_email(session, req.email)
@@ -267,7 +274,7 @@ async def admin_create_org_user(
         logger.exception("admin_orgs.admin_create_org_user")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         logger.exception("admin_orgs.admin_create_org_user")
@@ -281,7 +288,7 @@ async def admin_create_org_user(
         logger.exception("Unexpected error in admin_create_org_user")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
 
@@ -292,23 +299,23 @@ async def admin_create_org_user(
 @handle_db_errors("admin.orgs.admin_delete_org")
 async def admin_delete_org(
     org_id: uuid.UUID,
-    _: AuthenticatedPrincipal = require_system_permission("system.org.manage"),  # type: ignore[assignment]
+    _: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_ORG_MANAGE),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     try:
         async with session.begin():
             org = await get_organisation(session, org_id)
             if org is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
 
             deleted = await delete_organisation(session, org_id)
             if not deleted:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
     except ProgrammingError as exc:
         logger.exception("admin_orgs.admin_delete_org")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         logger.exception("admin_orgs.admin_delete_org")
@@ -322,7 +329,7 @@ async def admin_delete_org(
         logger.exception("Unexpected error in admin_delete_org")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
 
@@ -354,7 +361,7 @@ async def admin_get_org_license(
         logger.exception("admin_orgs.admin_get_org_license")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         logger.exception("admin_orgs.admin_get_org_license")
@@ -368,10 +375,10 @@ async def admin_get_org_license(
         logger.exception("Unexpected error in admin_get_org_license")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     if org is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
 
     from modulo.core.license import get_license as get_sys_license
     from modulo.core.license import parse_and_verify
@@ -413,13 +420,13 @@ async def admin_set_org_license(
     try:
         org = await get_organisation(session, org_id)
     except ProgrammingError as exc:
-        logger.exception("admin_orgs.admin_set_org_license")
+        logger.exception(_CODE_ADMIN_ORGS_ADMIN_SET)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        logger.exception("admin_orgs.admin_set_org_license")
+        logger.exception(_CODE_ADMIN_ORGS_ADMIN_SET)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching org for set-license.",
@@ -430,10 +437,10 @@ async def admin_set_org_license(
         logger.exception("Unexpected error in admin_set_org_license (fetch)")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     if org is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
 
     from modulo.core.license import parse_and_verify
 
@@ -442,7 +449,7 @@ async def admin_set_org_license(
     except HTTPException:
         raise
     except Exception as exc:
-        logger.exception("admin_orgs.admin_set_org_license")
+        logger.exception(_CODE_ADMIN_ORGS_ADMIN_SET)
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
     if not validation.valid or validation.license_data is None:
@@ -457,13 +464,13 @@ async def admin_set_org_license(
     try:
         await update_organisation(session, org_id, {"settings_json": settings_json})
     except ProgrammingError as exc:
-        logger.exception("admin_orgs.admin_set_org_license")
+        logger.exception(_CODE_ADMIN_ORGS_ADMIN_SET)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        logger.exception("admin_orgs.admin_set_org_license")
+        logger.exception(_CODE_ADMIN_ORGS_ADMIN_SET)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating org license.",
@@ -474,7 +481,7 @@ async def admin_set_org_license(
         logger.exception("Unexpected error in admin_set_org_license (update)")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     d = validation.license_data
@@ -497,13 +504,13 @@ async def admin_remove_org_license(
     try:
         org = await get_organisation(session, org_id)
     except ProgrammingError as exc:
-        logger.exception("admin_orgs.admin_remove_org_license")
+        logger.exception(_CODE_ADMIN_ORGS_ADMIN_REMOVE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        logger.exception("admin_orgs.admin_remove_org_license")
+        logger.exception(_CODE_ADMIN_ORGS_ADMIN_REMOVE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching org for remove-license.",
@@ -514,10 +521,10 @@ async def admin_remove_org_license(
         logger.exception("Unexpected error in admin_remove_org_license (fetch)")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     if org is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
 
     settings_json = dict(org.settings_json or {})
     settings_json.pop("license_key", None)
@@ -525,13 +532,13 @@ async def admin_remove_org_license(
     try:
         await update_organisation(session, org_id, {"settings_json": settings_json})
     except ProgrammingError as exc:
-        logger.exception("admin_orgs.admin_remove_org_license")
+        logger.exception(_CODE_ADMIN_ORGS_ADMIN_REMOVE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        logger.exception("admin_orgs.admin_remove_org_license")
+        logger.exception(_CODE_ADMIN_ORGS_ADMIN_REMOVE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while removing org license.",
@@ -542,7 +549,7 @@ async def admin_remove_org_license(
         logger.exception("Unexpected error in admin_remove_org_license (remove)")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     return OrgLicenseResponse(has_license=False)
@@ -587,7 +594,7 @@ async def admin_set_org_authz_enforce(
         logger.exception("admin_orgs.admin_set_org_authz_enforce")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         logger.exception("admin_orgs.admin_set_org_authz_enforce")
@@ -599,11 +606,11 @@ async def admin_set_org_authz_enforce(
         logger.exception("Unexpected error in admin_set_org_authz_enforce")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     if affected == 0:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
 
     return SetOrgAuthzEnforceResponse(org_id=str(org_id), enforce=req.enforce)
 
@@ -640,7 +647,7 @@ async def admin_set_org_triggers_paused(
             await set_rls_org(session, org_id)
             org = await get_organisation(session, org_id)
             if org is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
 
             # Idempotency: toggling to the current state is a no-op (no audit write).
             if org.triggers_paused == req.paused:
@@ -674,7 +681,7 @@ async def admin_set_org_triggers_paused(
         logger.exception("admin_orgs.admin_set_org_triggers_paused")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         logger.exception("admin_orgs.admin_set_org_triggers_paused")
@@ -688,5 +695,150 @@ async def admin_set_org_triggers_paused(
         logger.exception("Unexpected error in admin_set_org_triggers_paused")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
+        ) from None
+
+
+# ── Guardrails org-wide kill-switch (FAR-223 item 9) ─────────────────────────
+
+
+class GetOrgGuardrailsKillSwitchResponse(BaseModel):
+    enabled: bool
+    enabled_at: str | None
+
+
+class SetOrgGuardrailsKillSwitchRequest(BaseModel):
+    enabled: bool
+
+
+class SetOrgGuardrailsKillSwitchResponse(BaseModel):
+    enabled: bool
+    enabled_at: str | None
+
+
+@router.get("/{org_id}/guardrails/kill-switch", response_model=GetOrgGuardrailsKillSwitchResponse)
+@handle_db_errors("admin.orgs.get_org_guardrails_kill_switch")
+async def admin_get_org_guardrails_kill_switch(
+    org_id: uuid.UUID,
+    current_user: AuthenticatedPrincipal = require_target_org_role(  # type: ignore[assignment]
+        "org.guardrails.kill_switch.manage", "admin", kill_switch_eligible=False
+    ),
+    session: AsyncSession = Depends(get_db_session),
+) -> GetOrgGuardrailsKillSwitchResponse:
+    """Read the org's guardrails kill-switch state (admin only)."""
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            org = await get_organisation(session, org_id)
+            if org is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
+            return GetOrgGuardrailsKillSwitchResponse(
+                enabled=bool(org.guardrails_kill_switch),
+                enabled_at=org.guardrails_kill_switch_at.isoformat() if org.guardrails_kill_switch_at else None,
+            )
+    except ProgrammingError as exc:
+        logger.exception("admin_orgs.admin_get_org_guardrails_kill_switch")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        logger.exception("admin_orgs.admin_get_org_guardrails_kill_switch")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while reading org guardrails kill-switch state.",
+        ) from exc
+    except HTTPException as exc:
+        raise exc
+    except Exception:
+        logger.exception("Unexpected error in admin_get_org_guardrails_kill_switch")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_INTERNAL_SERVER_ERROR,
+        ) from None
+
+
+@router.put("/{org_id}/guardrails/kill-switch", response_model=SetOrgGuardrailsKillSwitchResponse)
+@handle_db_errors("admin.orgs.admin_set_org_guardrails_kill_switch")
+async def admin_set_org_guardrails_kill_switch(
+    org_id: uuid.UUID,
+    req: SetOrgGuardrailsKillSwitchRequest,
+    current_user: AuthenticatedPrincipal = require_target_org_role(  # type: ignore[assignment]
+        "org.guardrails.kill_switch.manage", "admin", kill_switch_eligible=False
+    ),
+    session: AsyncSession = Depends(get_db_session),
+) -> SetOrgGuardrailsKillSwitchResponse:
+    """Set the org's guardrails kill-switch (admin only).
+
+    Enabling downgrades every bound guardrail to observe (shadow-only) at run
+    start — never a full disable. Enabling fires an audit event AND a
+    paging Notification (``guardrail_kill_switch``) so the downgrade is never
+    silent. Disabling restores full enforcement.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            org = await get_organisation(session, org_id)
+            if org is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
+
+            # Idempotency: toggling to the current state is a no-op (no audit write).
+            if bool(org.guardrails_kill_switch) == req.enabled:
+                return SetOrgGuardrailsKillSwitchResponse(
+                    enabled=bool(org.guardrails_kill_switch),
+                    enabled_at=org.guardrails_kill_switch_at.isoformat() if org.guardrails_kill_switch_at else None,
+                )
+
+            org.guardrails_kill_switch = req.enabled
+            org.guardrails_kill_switch_at = datetime.now(UTC) if req.enabled else None
+            await session.flush()
+
+            # Audit is fail-open-with-alert: the toggle ALWAYS commits; a failed
+            # audit write is loudly logged and never rolls back the toggle.
+            try:
+                await append_audit_event(
+                    session,
+                    org_id=org_id,
+                    event_type="guardrails_kill_switch",
+                    actor_user_id=current_user.user_id,
+                    payload_json={"enabled": req.enabled},
+                )
+            except SQLAlchemyError:
+                logger.exception("admin_orgs.admin_set_org_guardrails_kill_switch audit write failed")
+            except Exception:
+                logger.exception("admin_orgs.admin_set_org_guardrails_kill_switch audit write failed (non-DB)")
+
+            if req.enabled:
+                # Alert on enable — the downgrade-to-observe is never silent.
+                from modulo.core.guardrails import notify_guardrail_event
+
+                await notify_guardrail_event(
+                    org_id,
+                    "guardrail_kill_switch",
+                    {"org_id": str(org_id), "enabled": True},
+                )
+
+            return SetOrgGuardrailsKillSwitchResponse(
+                enabled=org.guardrails_kill_switch,
+                enabled_at=org.guardrails_kill_switch_at.isoformat() if org.guardrails_kill_switch_at else None,
+            )
+    except ProgrammingError as exc:
+        logger.exception("admin_orgs.admin_set_org_guardrails_kill_switch")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        logger.exception("admin_orgs.admin_set_org_guardrails_kill_switch")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while updating org guardrails kill-switch state.",
+        ) from exc
+    except HTTPException as exc:
+        raise exc
+    except Exception:
+        logger.exception("Unexpected error in admin_set_org_guardrails_kill_switch")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None

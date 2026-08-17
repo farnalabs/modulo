@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import time
 import uuid
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
@@ -15,7 +16,7 @@ from operator import attrgetter
 from typing import Any
 
 from sqlalchemy import Date, bindparam, case, cast, delete, func, select, text, update
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -44,6 +45,9 @@ ERROR_CODE_CAPACITY_TIMEOUT = "capacity_timeout"
 # Non-terminal markers that operators must be able to distinguish from real
 # failures. The stale-run sweep exempts runs carrying these markers.
 CAPACITY_MARKERS = frozenset({ERROR_CODE_ORG_CAPACITY_LIMITED, ERROR_CODE_PIPELINE_CAPACITY})
+
+# Day-key format used for run-usage bucketing and the --older-than parser.
+_DAY_FORMAT = "%Y-%m-%d"
 
 # The canonical whitelist of run statuses (subset of the ``ck_runs_status``
 # CHECK constraint). ``transition_run`` and ``update_run_status`` refuse any
@@ -98,6 +102,47 @@ def _strip_reserved_keys(input_payload: dict[str, Any]) -> dict[str, Any]:
     ``create_run`` kwargs, never ``input_payload``.
     """
     return {k: v for k, v in input_payload.items() if k not in _RESERVED_INPUT_PAYLOAD_KEYS}
+
+
+async def _load_registered_guardrail_capabilities(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    definitions: list[Any],
+) -> dict[str, bool | None]:
+    """Build the registered-capability map for conformance enforcement (item 7 "Plus").
+
+    A block-action guardrail's ``required_capabilities`` is checked against
+    the org's registered surfaces at dispatch time — here the active
+    EnvironmentProfiles' ``capabilities_json``. Confirmed-present capabilities
+    map True; everything else resolves to None (unreadable) so the fail-closed
+    conformance derivation blocks (absent AND unknown both block). Only queried
+    when at least one block-action guardrail carries a conformance claim, so
+    the hot path stays free of the extra query.
+    """
+    needs_conformance = any(
+        d.config.get("action") == "block" and (d.config.get("required_capabilities") or []) for d in definitions
+    )
+    if not needs_conformance:
+        return {}
+    from modulo.db.models.environment_profile import EnvironmentProfile
+
+    profiles = (
+        (
+            await session.execute(
+                select(EnvironmentProfile).where(
+                    EnvironmentProfile.organisation_id == org_id,
+                    EnvironmentProfile.deleted_at.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    registered: dict[str, bool | None] = {}
+    for profile in profiles:
+        for capability in profile.capabilities_json or []:
+            registered[str(capability)] = True
+    return registered
 
 
 # Dedicated v5 namespace for floor work-item ids — DISTINCT from the journey
@@ -319,6 +364,25 @@ async def create_run(
     if org_status is None or org_status == "deleted":
         raise OrgDeletedError(org_id=org_id, deleted=org_status == "deleted")
 
+    # Guardrails kill-switch (FAR-223 item 9) — pinned at run start alongside
+    # the guardrail rows, never re-read mid-run. When ON, every bound
+    # guardrail downgrades to observe (shadow-only). A read failure (column
+    # absent on an unmigrated DB during bluegreen) defaults to OFF — normal
+    # enforcement stays active, which is the fail-closed direction for a
+    # data-safety control.
+    guardrails_kill_switch = False
+    try:
+        ks_row = (
+            await session.execute(
+                text("SELECT guardrails_kill_switch FROM organisations WHERE id = :oid"),
+                {"oid": org_id.hex},
+            )
+        ).scalar_one_or_none()
+        if ks_row is not None:
+            guardrails_kill_switch = bool(ks_row)
+    except SQLAlchemyError:
+        _log.warning("guardrails.kill_switch_read_unavailable", extra={"org_id": str(org_id)})
+
     # Org-wide pause kill-switch — the SINGLE authority gate for trigger-initiated
     # runs (webhook, replay, cron, polling, agent_signal). Manual runs (POST /runs,
     # MCP trigger_pipeline), test_trigger (trigger_type="manual"), feedback
@@ -357,56 +421,193 @@ async def create_run(
     # Mechanism errors FAIL CLOSED when any bound guardrail carries a block or
     # redact action (item 7: warn-on-error applies to warn-action only);
     # observe/warn-only guardrails log-and-continue on mechanism error.
+    run_id = uuid.uuid4()
     guardrail_results: list[Any] = []
     guardrail_blocked = False
     guardrail_block_message = ""
+    guardrail_blocking_eval_name = ""
     guardrail_observed_by_eval: dict[uuid.UUID, bool] = {}
     from modulo.core.eval_engine import EvalEngine
-    from modulo.core.guardrails import GuardrailAction, run_interception_pass, to_engine_definition
-    from modulo.db.models.eval_definition import EvalDefinition as EvalDefinitionModel
-
-    guardrail_rows = (
-        (
-            await session.execute(
-                select(EvalDefinitionModel).where(
-                    EvalDefinitionModel.pipeline_id == pipeline_id,
-                    EvalDefinitionModel.organisation_id == org_id,
-                    EvalDefinitionModel.eval_type == "guardrail",
-                )
-            )
-        )
-        .scalars()
-        .all()
+    from modulo.core.guardrails import (
+        GuardrailAction,
+        GuardrailSkip,
+        audit_guardrail_skip,
+        guardrail_cap_violation,
+        non_conformant_blocking_guardrails,
+        notify_guardrail_event,
+        run_interception_pass_async,
+        to_engine_definition,
+        to_engine_definition_from_pin,
     )
-    if guardrail_rows:
-        guardrail_defs = [to_engine_definition(row) for row in guardrail_rows]
-        guardrail_observed_by_eval = {d.id: d.config.get("action") == GuardrailAction.OBSERVE for d in guardrail_defs}
-        any_guarding = any(
-            d.config.get("action") in (GuardrailAction.BLOCK, GuardrailAction.REDACT) for d in guardrail_defs
-        )
+    from modulo.db.crud.guardrail_config import load_pipeline_guardrail_rows
+
+    guardrail_rows = await load_pipeline_guardrail_rows(
+        session,
+        pipeline_id=pipeline_id,
+        organisation_id=org_id,
+    )
+
+    # Item 10 — replay uses the PINNED guardrail set from the snapshot, not the
+    # live rows. A pinned guardrail whose live row no longer exists
+    # (soft-deleted) is SKIPPED (never a run failure) with an audit event +
+    # enforcement-gap alert. A snapshot with no pins (pre-migration) falls back
+    # to the live rows.
+    pinned_defs: list[Any] = []
+    skipped_guardrails: list[GuardrailSkip] = []
+    snap_pins: list[dict[str, Any]] | None = None
+    if is_replay and snapshot_id is not None:
         try:
-            outcome = run_interception_pass(
-                EvalEngine(),
-                guardrail_defs,
-                stored_payload,
-                detection_only=bool(is_replay),
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            # Fail-closed for block/redact guardrails; log-and-continue for
-            # observe/warn-only guardrails. NEVER a raw payload in the log.
-            _log.exception("guardrails.interception_error")
-            if any_guarding:
-                guardrail_blocked = True
-                guardrail_block_message = "guardrail mechanism error at ingestion edge"
-            else:
-                guardrail_blocked = False
+            snap_pins = (
+                await session.execute(
+                    select(PipelineSnapshot.guardrail_pins_json).where(PipelineSnapshot.id == snapshot_id)
+                )
+            ).scalar_one_or_none()
+        except SQLAlchemyError:
+            # Column/table absent on an unmigrated DB during bluegreen (or a
+            # backend that cannot resolve the column) — the pinned set is
+            # unavailable, so the replay falls back to the live rows
+            # (pre-pinning behaviour).
+            _log.warning("guardrails.pins_read_unavailable", extra={"org_id": str(org_id)})
+        if snap_pins:
+            live_by_name = {row.name: row for row in guardrail_rows}
+            for entry in snap_pins:
+                if not isinstance(entry, dict) or not entry.get("name"):
+                    continue
+                name = str(entry["name"])
+                if name not in live_by_name:
+                    skipped_guardrails.append(GuardrailSkip(name=name, reason="soft_deleted"))
+                    continue
+                try:
+                    pinned_defs.append(to_engine_definition_from_pin(entry))
+                except Exception:
+                    _log.exception("guardrails.pin_rebuild_error", extra={"guardrail": name})
+                    skipped_guardrails.append(GuardrailSkip(name=name, reason="soft_deleted", detail="pin unreadable"))
+
+    if guardrail_rows or pinned_defs or skipped_guardrails:
+        # Item 10 invariant — a snapshot with a NON-EMPTY pinned set evaluates
+        # exactly that set, even when EVERY pin fails to rebuild (all pinned
+        # rows soft-deleted → ``pinned_defs`` empty). It must never fall back
+        # to the live rows: the skip audit + enforcement-gap alert is then the
+        # sole signal that the pinned control is not enforcing. Only a
+        # snapshot with NO pins (pre-migration / read failure) falls back.
+        guardrail_defs = pinned_defs if snap_pins else [to_engine_definition(row) for row in guardrail_rows]
+
+        # Item 7 — cap enforcement (fail closed): a single node binding more
+        # than the per-node guardrail cap is a mechanism error. Graph-save
+        # rejects the authoring-time case; this is the defensive backstop.
+        cap_violation = guardrail_cap_violation(guardrail_defs)
+        if cap_violation:
+            _log.warning("guardrails.cap_violation", extra={"org_id": str(org_id), "detail": cap_violation})
+            guardrail_blocked = True
+            guardrail_block_message = f"guardrail mechanism error: {cap_violation}"
         else:
-            stored_payload = outcome.payload
-            guardrail_results = outcome.results
-            guardrail_blocked = outcome.blocked
-            guardrail_block_message = outcome.block_message
+            # Item 9 — kill-switch: downgrade EVERY bound guardrail to observe
+            # (shadow-only — compute + log, never block, never redact). Never a
+            # full disable: observe mode still computes and logs.
+            if guardrails_kill_switch:
+                downgraded = []
+                for d in guardrail_defs:
+                    cfg = dict(d.config)
+                    cfg["action"] = GuardrailAction.OBSERVE.value
+                    downgraded.append(d.model_copy(update={"config": cfg}))
+                guardrail_defs = downgraded
+                _log.warning("guardrails.kill_switch_active", extra={"org_id": str(org_id)})
+
+            guardrail_observed_by_eval = {
+                d.id: d.config.get("action") == GuardrailAction.OBSERVE for d in guardrail_defs
+            }
+            any_guarding = any(
+                d.config.get("action") in (GuardrailAction.BLOCK, GuardrailAction.REDACT) for d in guardrail_defs
+            )
+
+            # Conformance enforcement (FAR-223 item 7 "Plus"): a block-action
+            # guardrail carrying required_capabilities that the org cannot
+            # satisfy blocks (fail closed — absent AND unknown) and fires a
+            # paging Notification via the alert path. The derivation helper is
+            # shipped; this is its dispatch-time wiring.
+            conformance_registered = await _load_registered_guardrail_capabilities(session, org_id, guardrail_defs)
+            for eval_def, derivation in non_conformant_blocking_guardrails(guardrail_defs, conformance_registered):
+                _log.warning(
+                    "guardrails.conformance_block",
+                    extra={
+                        "org_id": str(org_id),
+                        "guardrail": eval_def.name,
+                        "state": derivation.state,
+                    },
+                )
+                guardrail_blocked = True
+                guardrail_block_message = (
+                    f"guardrail {eval_def.name!r} non-conformant: required capabilities unavailable "
+                    f"({', '.join(derivation.missing + derivation.unreadable) or 'unknown'})"
+                )
+                await notify_guardrail_event(
+                    org_id,
+                    "guardrail_enforcement_gap",
+                    {
+                        "guardrail": eval_def.name,
+                        "reason": "non_conformant",
+                        "state": derivation.state,
+                        "run_id": str(run_id),
+                    },
+                    run_id=run_id,
+                )
+                break
+
+            if not guardrail_blocked:
+                start_wall = time.perf_counter()
+                try:
+                    outcome = await run_interception_pass_async(
+                        EvalEngine(),
+                        guardrail_defs,
+                        stored_payload,
+                        detection_only=bool(is_replay),
+                        skipped=skipped_guardrails,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    # Fail-closed for block/redact guardrails; log-and-continue
+                    # for observe/warn-only guardrails. NEVER a raw payload in
+                    # the log.
+                    _log.exception("guardrails.interception_error")
+                    if any_guarding:
+                        guardrail_blocked = True
+                        guardrail_block_message = "guardrail mechanism error at ingestion edge"
+                    else:
+                        guardrail_blocked = False
+                else:
+                    stored_payload = outcome.payload
+                    guardrail_results = outcome.results
+                    guardrail_blocked = outcome.blocked
+                    guardrail_block_message = outcome.block_message
+                    skipped_guardrails = outcome.skipped
+                    # FAR-213: the blocking eval name feeds the blocked_partial
+                    # summary written at terminalization below.
+                    guardrail_blocking_eval_name = outcome.blocking_eval_name
+                # Item 7 — guardrail latency metric: the interception runs
+                # BEFORE the first node starts, so its wall-clock is accounted
+                # separately (a structured log line) and never silently eats
+                # the first node's timeout budget.
+                latency_ms = (time.perf_counter() - start_wall) * 1000
+                _log.info(
+                    "guardrails.interception_latency_ms",
+                    extra={
+                        "org_id": str(org_id),
+                        "guardrail_count": len(guardrail_defs),
+                        "latency_ms": round(latency_ms, 3),
+                    },
+                )
+            # NOTE (item 10 invariant): a conformance block (``guardrail_blocked``
+            # True via the block above) must NOT clear the accumulated pin-skips
+            # collected earlier in this seam — they survive the conformance path
+            # and are still audited + alerted just below. The pass only ever
+            # replaces ``skipped_guardrails`` with its own carried skips (via
+            # ``outcome.skipped``), so there is no stale-skip case to clear.
+
+        # Item 10 — audit + alert skipped pinned guardrails (best-effort: the
+        # skip is the policy; a failed audit/alert never breaks the run).
+        for skip in skipped_guardrails:
+            await audit_guardrail_skip(session, org_id, run_id, skip)
 
     # Engine-only feedback-correction context (FAR-142): the
     # ``_feedback_correction`` key is reserved and stripped above, so a user
@@ -418,7 +619,6 @@ async def create_run(
     if feedback_correction is not None:
         stored_payload["_feedback_correction"] = feedback_correction
 
-    run_id = uuid.uuid4()
     thread_id = f"{org_id}:{run_id}"
     # Per-org atomic counter (FAR-168) — never MAX(run_number)+1 on Postgres,
     # which races under concurrent trigger dispatches.
@@ -504,6 +704,31 @@ async def create_run(
     # NEVER abort create_run — a lost create-stamp is recoverable at finalise
     # via the deterministic canonical id.
     await _hydrate_journeys(session, org_id, canonical_refs)
+
+    # Run-termination compensation (FAR-213) — runs AFTER the terminal status
+    # write (the run was flushed above) as best-effort + failure-isolated: it
+    # writes the blocked_partial summary and, when a connector hub is supplied,
+    # compensates executed nodes' external side effects. It must NEVER block or
+    # delay the terminal write and never propagate — guard-the-guard: any
+    # compensation raise is logged + audited here. At the ingestion edge no
+    # nodes have executed (connector_hub is always None here), so only the
+    # summary + summary audit are written; the mid-run terminalization paths
+    # call compensate_blocked_run directly with the executed node outputs and a
+    # connector hub.
+    if guardrail_blocked:
+        from modulo.core.guardrails.compensation import compensate_blocked_run
+
+        try:
+            await compensate_blocked_run(
+                session,
+                run,
+                guardrail_block=guardrail_block_message,
+                blocking_eval_name=guardrail_blocking_eval_name,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("guardrails.compensation.error run=%s", run_id)
     return run
 
 
@@ -1338,7 +1563,7 @@ async def _get_run_stats_python(
     dur_by_day: dict[str, list[int]] = defaultdict(list)
 
     for r in runs:
-        day = r.created_at.strftime("%Y-%m-%d")
+        day = r.created_at.strftime(_DAY_FORMAT)
         by_day[day]["count"] += 1
         if r.status == "complete":
             by_day[day]["success"] += 1
@@ -1346,7 +1571,7 @@ async def _get_run_stats_python(
             by_day[day]["failed"] += 1
 
     for r in completed_runs:
-        day = r.created_at.strftime("%Y-%m-%d")
+        day = r.created_at.strftime(_DAY_FORMAT)
         if r.completed_at is None or r.started_at is None:
             continue
         ms = int((r.completed_at - r.started_at).total_seconds() * 1000)
@@ -1509,7 +1734,7 @@ async def get_run_heatmap(
 
     by_day: dict[str, int] = defaultdict(int)
     for r in runs:
-        by_day[r.created_at.strftime("%Y-%m-%d")] += 1
+        by_day[r.created_at.strftime(_DAY_FORMAT)] += 1
 
     return [{"date": d, "count": c} for d, c in sorted(by_day.items())]
 
@@ -1563,7 +1788,7 @@ async def purge_runs(
     Returns dict with ``deleted_run_count``.
     """
     try:
-        cutoff = datetime.strptime(older_than, "%Y-%m-%d").replace(tzinfo=UTC)
+        cutoff = datetime.strptime(older_than, _DAY_FORMAT).replace(tzinfo=UTC)
     except ValueError as exc:
         raise ValueError(f"Invalid date format: '{older_than}'. Expected YYYY-MM-DD.") from exc
     deleted_total = 0

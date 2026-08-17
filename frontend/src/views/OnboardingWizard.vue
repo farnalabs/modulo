@@ -560,7 +560,7 @@ async function inferSchema() {
         sample_query: {
           resource: wizardState.resourceType.trim(),
           filters: {},
-          limit: 10,
+          limit: 200,
         },
       },
     })

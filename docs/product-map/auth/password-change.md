@@ -64,13 +64,16 @@ Logged-in users can change their own password via the My Profile page. Admins ca
 - [x] GET /api/v1/me/settings returns 501 on ProgrammingError, 503 on SQLAlchemyError — fixed in QA (cross-cutting, 2026-07-08)
 - [x] PUT /api/v1/me/settings returns 501 on ProgrammingError, 503 on SQLAlchemyError — fixed in QA (cross-cutting, 2026-07-08)
 - [x] Token family blacklist failure during password change logs warning but does not fail the request — per-family try/except with savepoints; fixed in QA (2026-07-06)
-- [ ] Unauthenticated requests return 401 (no JWT) — FastAPI HTTPBearer default (auto_error=True); cannot change without altering auth dependency contract
+- [x] Unauthenticated requests return 401 (no JWT) — FastAPI HTTPBearer default (auto_error=True); verified by `test_password_change_needs_auth` (2026-08-15)
 
 ## Known Gaps
 
 - Website docs page for password change does not exist — no stub at `Website/modulo-website/src/docs/auth/password-change.md`
 
 ## QA History
+### 2026-08-15 — improve-architecture (FAR-244 partial-sso sweep)
+- Marked the "Unauthenticated requests return 401 (no JWT)" error-handling box `[ ]`→`[x]`: the behaviour is implemented via FastAPI's HTTPBearer default (`auto_error=True`) and verified by `test_password_change_needs_auth` (`test_me_password.py`), which asserts 401 on an unauthenticated `PUT /api/v1/me/password`. Re-verified all other `[x]` behaviours (current-password check, no-op rejection, strength/422, SSO-user 400, family blacklist, audit event, error handling) remain implemented and tested. No code changes required. Status: partial (missing website docs page remains the only Known Gap).
+
 ### 2026-08-09 — improve-architecture (product-map walk)
 - **RESOLVED** "PUT /api/v1/me/password does not validate that `new_password` differs from `current_password`" — server: `change_password` now rejects a no-op change (400 `New password must be different from the current password`) after the current-password check and before hashing, so a user can no longer "change" to the same password and burn token families for nothing. Client: `MyProfileView` blocks the no-op submit client-side (`new_password_must_differ` i18n key) before calling the API. Added unit test `test_same_new_password_rejected` (`test_me_password.py`) + a BDD scenario ("Reusing the current password is rejected") in `change_password.feature` + a vitest case in `MyProfileView.spec.ts`. Updated product map (2 behaviours `[ ]`→`[x]`, Known Gap removed, QA History). 10/10 `test_me_password.py` + 7/7 change-password BDD scenarios pass (incl. `test_me_remy_skills`/`test_route_introspection`/`test_metrics` related tests), ruff clean, mypy --strict clean; 8/8 `MyProfileView.spec.ts` vitest + full frontend suite (717 tests) pass, eslint clean. Status: partial (missing website docs page remains).
 

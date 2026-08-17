@@ -59,6 +59,7 @@ from modulo.core.graph_validator import GraphValidator
 from modulo.core.graph_validator._types import ValidationResult
 from modulo.core.hitl_manager import HITLManager
 from modulo.core.model_backend_hub import ModelBackendHub
+from modulo.core.notifier import EVENT_HITL_AWAITING
 from modulo.core.pipeline_engine.decorator import (
     RunCancelledError,
     set_audit_hook,
@@ -79,6 +80,7 @@ from modulo.core.pipeline_engine.evidence import (
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_or_compile
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 from modulo.core.pipeline_engine.node_runner import (
+    OutputSchemaValidationError,
     SandboxNodeFailedError,
     SupersededNodeError,
     _idempotency_gate_skipped_envelope,
@@ -88,6 +90,7 @@ from modulo.core.pipeline_engine.node_runner import (
 from modulo.core.pipeline_engine.output_filter import OutputRejectedError
 from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
 from modulo.core.trigger_engine.agent_signal import fire_agent_signal
+from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.run import (
     ERROR_CODE_ORG_CAPACITY_LIMITED,
     ERROR_CODE_PIPELINE_CAPACITY,
@@ -138,6 +141,12 @@ _log = logging.getLogger(__name__)
 #                 error_detail — see ``_retry_after_policy``, FAR-136)
 _RETRY_POLICY_EVENTS = frozenset({"stall", "timeout", "failure"})
 _RETRY_POLICY_MAX_RETRIES = 5
+
+# Canonical dotted error codes written at terminalization (agent-failure UX) and
+# matched by the retry policy. Constants are pure aliases so the retry policy,
+# the failure write, and log names cannot drift (S1192).
+_ERROR_CODE_AGENT_FAILED = "agent.failed"
+_ERROR_CODE_NODE_TIMEOUT = "node.timeout"
 
 # Backoff schedule for a retry_policy re-dispatch (FAR-136). A policy-triggered
 # retry must NOT re-fire back-to-back — the run is re-dispatched only after a
@@ -258,28 +267,52 @@ def _retry_after_policy(
     event_set = set(events)
     code = error_code or ""
     mapped = map_legacy_code(code) if code else ""
-    if "stall" in event_set and (final_status == "stalled" or code == "executor_stalled" or mapped == "agent.stall"):
+    if _stall_event_matches(event_set, final_status, code, mapped):
         return max_retries
-    if "timeout" in event_set and (
-        code in ("node_timeout", "TimeoutError") or mapped in ("node.timeout", "node.runaway")
-    ):
+    if _timeout_event_matches(event_set, code, mapped):
         return max_retries
-    if (
-        "failure" in event_set
-        and final_status == "failed"
-        # Timeout is a distinct event — a "failure"-only policy must not retry
-        # a timeout outcome, and a stall is not a generic failure.
-        and code not in ("node_timeout", "TimeoutError", "executor_stalled")
-        and mapped not in ("node.timeout", "node.runaway", "agent.stall")
-    ):
-        # FAR-136 Gap 2: exclude sandbox-agent hang deaths. A hang terminalizes
-        # as node_cancelled + "likely hung" in error_detail — retrying it only
-        # re-burns a full node timeout with zero recovery probability.
-        is_cancel = code == "node_cancelled" or mapped == "node.cancelled"
-        if is_cancel and error_detail and "likely hung" in error_detail:
-            return None
+    if _failure_event_matches(event_set, final_status, code, mapped, error_detail):
         return max_retries
     return None
+
+
+def _stall_event_matches(event_set: set[Any], final_status: str, code: str, mapped: str) -> bool:
+    """``stall`` event matches a stalled outcome or an agent.stall code."""
+    return "stall" in event_set and (final_status == "stalled" or code == "executor_stalled" or mapped == "agent.stall")
+
+
+def _timeout_event_matches(event_set: set[Any], code: str, mapped: str) -> bool:
+    """``timeout`` event matches a node.timeout / node.runaway code."""
+    return "timeout" in event_set and (
+        code in ("node_timeout", "TimeoutError") or mapped in ("node.timeout", "node.runaway")
+    )
+
+
+def _failure_event_matches(
+    event_set: set[Any],
+    final_status: str,
+    code: str,
+    mapped: str,
+    error_detail: str | None,
+) -> bool:
+    """``failure`` event matches a failed outcome, excluding hang deaths.
+
+    A sandbox-agent HANG death terminalizes as ``node_cancelled`` + "likely
+    hung" in ``error_detail`` — re-dispatching would burn a full node timeout
+    with zero recovery probability, so it is excluded from ``"failure"`` retries.
+    """
+    if (
+        "failure" not in event_set
+        or final_status != "failed"
+        # Timeout is a distinct event — a "failure"-only policy must not retry
+        # a timeout outcome, and a stall is not a generic failure.
+        or code in ("node_timeout", "TimeoutError", "executor_stalled")
+        or mapped in ("node.timeout", "node.runaway", "agent.stall")
+    ):
+        return False
+    # FAR-136 Gap 2: exclude sandbox-agent hang deaths.
+    is_cancel = code == "node_cancelled" or mapped == "node.cancelled"
+    return not (is_cancel and error_detail and "likely hung" in error_detail)
 
 
 class RunNotFoundError(KeyError):
@@ -460,6 +493,30 @@ def _node_output_agent_failure(node_output: Any) -> str | None:
     return reason
 
 
+def _node_output_sandbox_session_lost(node_output: Any) -> str | None:
+    """Return a reason string when a captured node output carries the FAR-227
+    session-lost marker.
+
+    node_runner stamps ``sandbox_session_lost: True`` on the output dict ONLY
+    for the E2B wrapper's fallback echo (a dead opencode session). It is NOT an
+    agent verdict — the agent never wrote output.json — so it must be routed to
+    the retryable ``sandbox.no_output_json``, never the non-retryable
+    ``agent.failed`` A1 elevation. Returns None for non-dict / non-marked
+    output, so ordinary node outputs are never misread.
+    """
+    if not isinstance(node_output, dict):
+        return None
+    inner = node_output.get("output")
+    if not isinstance(inner, dict):
+        return None
+    if inner.get("sandbox_session_lost") is not True:
+        return None
+    reason = inner.get("error") or inner.get("summary")
+    if not isinstance(reason, str) or not reason:
+        return "No output from agent - session interrupted"
+    return reason
+
+
 def _should_skip_retry(node_id: str | None, markers: Any, run_id: Any) -> bool:
     """FAR-228 guard B decision: should a transient node failure be suppressed
     as a retry because the run's delivery was already made?
@@ -634,6 +691,7 @@ class PipelineExecutor:
         *,
         checkpointer_conn_string: str | None = None,
         evidence_provider: EvidenceProvider | None = None,
+        notifier: Any | None = None,
     ) -> None:
         self._engine = db_engine
         self._session_factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
@@ -659,6 +717,12 @@ class PipelineExecutor:
         # from a genuine transient node cancellation and skip the pending-reset.
         self._stall_requested: asyncio.Event | None = None
         self._superseded: asyncio.Event | None = None
+        # HITL-awaiting notifier seam (team-hitl-gates Known Gap, 2026-08-16):
+        # inject the Notifier so the run lifecycle can dispatch the
+        # ``hitl_awaiting`` webhook/in-app notification. Injected by the SAQ
+        # execute/resume path (which already builds a Notifier for the system
+        # worker crons); None skips dispatch (fail-open, never blocks the run).
+        self._notifier: Any | None = notifier
 
     async def _check_capacity(
         self,
@@ -721,39 +785,17 @@ class PipelineExecutor:
                 )
                 pipeline_capacity_ok = active_count < max_concurrent
 
-            org_capacity_ok = True
-            org_count = 0
+            org_sandbox_count = 0
             if org_sandbox_cap is not None:
-                try:
-                    org_count = await count_active_sandbox_runs_for_org(session, org_id, exclude_run_id=run_id)
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.warning(
-                        "pipeline.sandbox_org_count_failed",
-                        extra={"org_id": str(org_id), "run_id": str(run_id)},
-                    )
-                else:
-                    org_capacity_ok = org_count < org_sandbox_cap
+                org_sandbox_count = await self._org_sandbox_active_count(session, org_id, run_id)
+            org_sandbox_cap_ok = org_sandbox_cap is None or org_sandbox_count < org_sandbox_cap
 
-            org_run_capacity_ok = True
             org_run_count = 0
             if org_run_limit is not None:
-                try:
-                    org_run_count = await count_active_runs_for_org(
-                        session, org_id, include_pending=False, exclude_run_id=run_id
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.warning(
-                        "pipeline.org_run_count_failed",
-                        extra={"org_id": str(org_id), "run_id": str(run_id)},
-                    )
-                else:
-                    org_run_capacity_ok = org_run_count < org_run_limit
+                org_run_count = await self._org_run_active_count(session, org_id, run_id)
+            org_run_cap_ok = org_run_limit is None or org_run_count < org_run_limit
 
-            if pipeline_capacity_ok and org_capacity_ok and org_run_capacity_ok:
+            if pipeline_capacity_ok and org_sandbox_cap_ok and org_run_cap_ok:
                 if run.status not in _ADMISSIBLE_STATUSES:
                     # The run went terminal (or hold) while a retry was backing
                     # off — never resurrect it. Return it untouched so the
@@ -798,11 +840,11 @@ class PipelineExecutor:
                 active_count=active_count,
                 pipeline_capacity_ok=pipeline_capacity_ok,
                 org_sandbox_cap=org_sandbox_cap,
-                org_count=org_count,
-                org_capacity_ok=org_capacity_ok,
+                org_count=org_sandbox_count,
+                org_capacity_ok=org_sandbox_cap_ok,
                 org_run_limit=org_run_limit,
                 org_run_count=org_run_count,
-                org_run_capacity_ok=org_run_capacity_ok,
+                org_run_capacity_ok=org_run_cap_ok,
             )
             # Demote to pending + reason marker so the recovery sweeps
             # (dispatcher_reconcile / stale-run) pick it up. FENCED to this
@@ -822,6 +864,32 @@ class PipelineExecutor:
             if pending_run is None:
                 raise RunNotFoundError(run_id)
             return pending_run
+
+    async def _org_sandbox_active_count(self, session: AsyncSession, org_id: uuid.UUID, run_id: uuid.UUID) -> int:
+        """Count the org's active sandbox runs (fail-open to 0 on read error)."""
+        try:
+            return await count_active_sandbox_runs_for_org(session, org_id, exclude_run_id=run_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "pipeline.sandbox_org_count_failed",
+                extra={"org_id": str(org_id), "run_id": str(run_id)},
+            )
+            return 0
+
+    async def _org_run_active_count(self, session: AsyncSession, org_id: uuid.UUID, run_id: uuid.UUID) -> int:
+        """Count the org's active runs (fail-open to 0 on read error)."""
+        try:
+            return await count_active_runs_for_org(session, org_id, include_pending=False, exclude_run_id=run_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "pipeline.org_run_count_failed",
+                extra={"org_id": str(org_id), "run_id": str(run_id)},
+            )
+            return 0
 
     async def _read_org_sandbox_cap(
         self,
@@ -1258,11 +1326,13 @@ class PipelineExecutor:
         Returns None for non-terminal statuses (nothing to write). An
         A1-elevated run (``failed`` + ``agent.failed``) is NOT complete — its
         honest work verdict is False (§15.4), so the zero-work elevation banner
-        is what renders.
+        is what renders. Same for a ``sandbox.no_output_json`` session-lost run
+        (FAR-227): the agent produced no output at all, so it can never be
+        "work intact".
         """
         if final_status not in _TERMINAL_STATUSES:
             return None
-        if final_status == "failed" and error_code == "agent.failed":
+        if final_status == "failed" and error_code in ("agent.failed", "sandbox.no_output_json"):
             return False
         return compute_work_intact(completed_node_outputs, node_ids)
 
@@ -1475,6 +1545,43 @@ class PipelineExecutor:
             if final_status != "awaiting_human":
                 get_registry().close(run_id)
 
+        # Mark terminal/awaiting_human — the SINGLE finalization path (PR A2).
+        # (The eval_blocked audit + work_intact + finalize_cost tail live in
+        # ``_finalize_run_after_stream``.)
+        return await self._finalize_run_after_stream(
+            run_id=run_id,
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            node_type_map=node_type_map,
+            final_status=final_status,
+            error_code=error_code,
+            error_detail=error_detail,
+            node_token_usage=node_token_usage,
+            completed_node_outputs=completed_node_outputs,
+            node_ids=node_ids,
+        )
+
+    async def _finalize_run_after_stream(
+        self,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+        node_type_map: dict[str, str],
+        final_status: str,
+        error_code: str | None,
+        error_detail: str | None,
+        node_token_usage: dict[str, Any] | None,
+        completed_node_outputs: dict[str, Any],
+        node_ids: set[str],
+    ) -> Run:
+        """Finalize a streamed run (execute + resume share this tail).
+
+        Computes ``work_intact``, runs ``finalize_cost``, records the
+        compensating daily fact when needed, fetches the final row, and fires
+        the post-terminal evidence probes. ``final_status`` reflects the
+        terminal/awaiting_human outcome of the stream.
+        """
         # Record audit events for block failures on resume.
         if final_status == "eval_failed" and error_code == "eval_blocked":
             async with self._session_factory() as session, session.begin():
@@ -1493,7 +1600,6 @@ class PipelineExecutor:
                 except Exception:
                     _log.exception("audit.eval_blocked_failed", extra={"run_id": str(run_id)})
 
-        # Mark terminal/awaiting_human — the SINGLE finalization path (PR A2).
         # Resume recomputes from LIVE components over the cumulative merged set
         # (two-state rule, §4.4); finalize_cost reads the stored cumulative set,
         # merges the resumed segment (segment-wins), and recomputes.
@@ -1627,6 +1733,12 @@ class PipelineExecutor:
 
         snapshot_id = run.snapshot_id
         thread_id = run.langgraph_thread_id
+        # FAR-210: correction runs are EXCLUDED from retry_policy re-dispatch.
+        # A single-node correction has a fixed bounded retry budget owned by the
+        # correction path itself; the pipeline retry policy must never
+        # re-dispatch a correction run (no chained corrections).
+        run_trigger_type = getattr(run, "trigger_type", "") or ""
+        is_correction_run = run_trigger_type == "correction"
 
         # Load eval definitions for conditional HITL gating (eval-before-interrupt).
         eval_defs_by_node: dict[str, list[EvalDefDTO]] = {}
@@ -1956,7 +2068,7 @@ class PipelineExecutor:
         # favour of ``runs.claim_token`` fencing (settings.py F3a note), so the
         # fenced pending-reset below IS the fence release.
         retry_budget = _retry_after_policy(pipeline_retry_policy, final_status, error_code, error_detail)
-        if retry_budget is not None:
+        if retry_budget is not None and not is_correction_run:
             node_attempt_count = 0
             current_claim_token: str | None = None
             async with self._session_factory() as session, session.begin():
@@ -2027,24 +2139,9 @@ class PipelineExecutor:
                 raise RunRetryPolicyError(final_status, retry_budget)
 
         try:
-            # Record audit events for block failures.
-            if final_status == "eval_failed" and error_code == "eval_blocked":
-                async with self._session_factory() as session, session.begin():
-                    await set_rls_org(session, org_id)
-                    try:
-                        await append_audit_event(
-                            session,
-                            org_id=org_id,
-                            event_type="eval.blocked",
-                            resource_type="run",
-                            resource_id=run_id,
-                            payload_json={"error_detail": _sanitize_detail(error_detail, limit=5000)},
-                        )
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception:
-                        _log.exception("audit.eval_blocked_failed", extra={"run_id": str(run_id)})
-
+            # (The eval_blocked audit for this run is recorded in
+            # ``_finalize_run_after_stream`` — the shared finalization tail that
+            # both execute() and resume() use, so it fires exactly once.)
             # If the run completed, check for eval suite thresholds. FAR-228: a
             # gated run (error_code harness.idempotency_gate) is excluded — the
             # delivery was already made by a PRIOR attempt; running evals /
@@ -2156,60 +2253,18 @@ class PipelineExecutor:
         # completed-node artifacts + the full DAG ran. NOT from the async
         # evidence probe. Written atomically inside the same terminalization
         # transaction (restores the false-failure banner for #1/#3).
-        work_intact = self._compute_run_work_intact(final_status, error_code, completed_node_outputs, node_ids)
-        async with self._session_factory() as session, session.begin():
-            await set_rls_org(session, org_id)
-            await finalize_cost(
-                session,
-                run_id=run_id,
-                org_id=org_id,
-                status=final_status,
-                segment_node_token_usage=node_token_usage,
-                segment_completed_node_outputs=completed_node_outputs,
-                node_type_map=node_type_map,
-                error_code=error_code,
-                error_detail=error_detail,
-                is_terminal=final_status in _TERMINAL_STATUSES,
-                session_factory=self._session_factory,
-                claim_token=self._claim_token,
-            )
-            if work_intact is not None:
-                # Atomic with terminalization: the same transaction, fenced so a
-                # superseded executor cannot stamp work_intact on a successor.
-                try:
-                    await _apply_work_intact(session, run_id, work_intact, claim_token=self._claim_token)
-                    # FAR-189 round-2 FIX 3: finalize_cost's inline classify ran
-                    # BEFORE this write (work_intact still NULL at classify
-                    # time). Re-persist the classification with the real value —
-                    # the sweep skips already-classified rows, so this is the
-                    # only correction for executor-terminalized runs.
-                    await _reclassify_after_work_intact(session, run_id)
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.exception("work_intact.write_failed", extra={"run_id": str(run_id)})
-
-        # Fetch the final run in a fresh session — finalize_cost's ledger block
-        # may have aborted the transaction in the whole-tx-abort reduced-escape
-        # path (the run row was re-terminalized there).
-        async with self._session_factory() as session, session.begin():
-            await set_rls_org(session, org_id)
-            final_run = await get_run(session, run_id)
-
-        if final_run is None:
-            raise RunNotFoundError(run_id)
-
-        # FAR-152 §15.3 — post-commit async evidence probe for no-op-eligible
-        # nodes (declared outcome:success) on a complete run. Off the critical
-        # path (terminalization already committed), bounded ≤3s per probe,
-        # gated by the EvidenceProvider seam. Fail-open.
-        await self._run_post_terminal_evidence_probes(
+        return await self._finalize_run_after_stream(
             run_id=run_id,
             org_id=org_id,
+            pipeline_id=pipeline_id,
+            node_type_map=node_type_map,
             final_status=final_status,
+            error_code=error_code,
+            error_detail=error_detail,
+            node_token_usage=node_token_usage,
             completed_node_outputs=completed_node_outputs,
+            node_ids=node_ids,
         )
-        return final_run
 
     async def _check_eval_suites(
         self,
@@ -2322,6 +2377,7 @@ class PipelineExecutor:
 
         if pipeline_id is not None and org_id is not None:
             mgr = HITLManager()
+            pipeline_name: str | None = None
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
                 await mgr.create_gate(
@@ -2332,12 +2388,29 @@ class PipelineExecutor:
                     org_id=org_id,
                     required_team_id=required_team_id,
                 )
+                try:
+                    pipeline = await get_pipeline(session, pipeline_id)
+                    pipeline_name = pipeline.name if pipeline is not None else None
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.warning(
+                        "hitl_gate.pipeline_name_lookup_failed",
+                        extra={"pipeline_id": str(pipeline_id), "org_id": str(org_id)},
+                    )
             broker.publish(
                 "hitl_awaiting",
                 {
                     "gate_payload": gate_payload,
                     "team_id": str(required_team_id) if required_team_id else None,
                 },
+            )
+            await self._dispatch_hitl_awaiting(
+                org_id=org_id,
+                run_id=run_id,
+                gate_id=gate_id,
+                pipeline_name=pipeline_name,
+                team_id=required_team_id,
             )
             return "awaiting_human", None, None, node_token_usage or None
 
@@ -2352,6 +2425,50 @@ class PipelineExecutor:
             "Missing pipeline_id or org_id for HITL gate creation",
             node_token_usage or None,
         )
+
+    async def _dispatch_hitl_awaiting(
+        self,
+        *,
+        org_id: uuid.UUID,
+        run_id: uuid.UUID,
+        gate_id: str,
+        pipeline_name: str | None,
+        team_id: uuid.UUID | None,
+    ) -> None:
+        """Dispatch the ``hitl_awaiting`` webhook/in-app notification.
+
+        Closes the team-hitl-gates Known Gap (PRD §8.8 flow step 2): previously
+        the run lifecycle only emitted the WebSocket broker ``hitl_awaiting``
+        event — the HMAC-signed webhook / in-app notification path was never
+        triggered from the executor. Routed through the injected Notifier with
+        ``team_id`` so team-scoped gates reach team notification endpoints
+        first (falling back to org-wide). Failure-isolated: a broken notifier
+        or dispatch is logged and never blocks the run pause.
+        """
+        if self._notifier is None:
+            return
+        payload: dict[str, Any] = {
+            "run_id": str(run_id),
+            "gate_id": gate_id,
+            "team_id": str(team_id) if team_id else None,
+        }
+        if pipeline_name is not None:
+            payload["pipeline_name"] = pipeline_name
+        try:
+            await self._notifier.dispatch_event(
+                org_id=org_id,
+                event_type=EVENT_HITL_AWAITING,
+                payload=payload,
+                run_id=run_id,
+                team_id=team_id,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception(
+                "hitl_gate.awaiting_notification_failed",
+                extra={"run_id": str(run_id), "org_id": str(org_id), "gate_id": gate_id},
+            )
 
     async def _stream_graph(
         self,
@@ -2395,6 +2512,11 @@ class PipelineExecutor:
         # UX, phase 1): such a run must NEVER land 'complete'. Only published
         # at terminalization; never twice.
         agent_failure_reason: str | None = None
+        # FAR-227: set when a captured sandbox-agent node output carries the
+        # sandbox-session-lost marker (the E2B wrapper's fallback echo — a dead
+        # opencode session). Routes to retryable ``sandbox.no_output_json`` at
+        # terminalization instead of the non-retryable ``agent.failed``.
+        sandbox_session_lost_reason: str | None = None
         # FAR-198: seed the OTel context with the run's deterministic trace id
         # so every span exported during graph execution carries the SAME
         # trace_id the API reports on RunResponse. The root span is stored on
@@ -2490,6 +2612,9 @@ class PipelineExecutor:
                                 agent_failure = _node_output_agent_failure(output)
                                 if agent_failure:
                                     agent_failure_reason = agent_failure
+                                session_lost = _node_output_sandbox_session_lost(output)
+                                if session_lost:
+                                    sandbox_session_lost_reason = session_lost
 
                 if event_kind == "on_chat_model_end":
                     metadata = lg_event.get("metadata") or {}
@@ -2565,6 +2690,19 @@ class PipelineExecutor:
                                         node_budget,
                                     )
 
+            if sandbox_session_lost_reason and not stalled_node_reason:
+                # FAR-227: a dead opencode session (the E2B wrapper's fallback
+                # echo) is a transient sandbox infra failure — classify as the
+                # retryable ``sandbox.no_output_json`` so the pipeline's
+                # retry_policy ("failure" event) re-dispatches it, instead of
+                # the non-retryable ``agent.failed`` verdict. The summary is
+                # preserved so the failure detail stays visible.
+                scrubbed = _sanitize_detail(sandbox_session_lost_reason, limit=5000)
+                broker.publish(
+                    "run_failed",
+                    {"error": "sandbox.no_output_json", "detail": scrubbed},
+                )
+                return "failed", "sandbox.no_output_json", scrubbed, node_token_usage or None
             if agent_failure_reason and not stalled_node_reason:
                 # A1 elevation (agent-failure UX, phase 1, §15.4): a node that
                 # self-reported failure must NEVER land the run 'complete'.
@@ -2578,9 +2716,9 @@ class PipelineExecutor:
                         scrubbed = _sanitize_detail(agent_failure_reason, limit=5000)
                         broker.publish(
                             "run_failed",
-                            {"error": "agent.failed", "detail": scrubbed},
+                            {"error": _ERROR_CODE_AGENT_FAILED, "detail": scrubbed},
                         )
-                        return "failed", "agent.failed", scrubbed, node_token_usage or None
+                        return "failed", _ERROR_CODE_AGENT_FAILED, scrubbed, node_token_usage or None
                 except Exception:
                     _log.warning(
                         "agent_failure_elevation.failed_open",
@@ -2635,7 +2773,7 @@ class PipelineExecutor:
             error_detail = _sanitize_detail(exc, limit=5000)
             broker.publish("run_failed", {"error": "node_timeout", "detail": error_detail})
             _log.warning(
-                "node.timeout",
+                _ERROR_CODE_NODE_TIMEOUT,
                 extra={"run_id": str(run_id), "detail": error_detail},
             )
             return "failed", "node_timeout", error_detail, node_token_usage or None
@@ -2651,6 +2789,17 @@ class PipelineExecutor:
                 extra={"run_id": str(run_id), "detail": scrubbed[:500]},
             )
             return "failed", "executor_superseded", scrubbed, node_token_usage or None
+        except OutputSchemaValidationError as exc:
+            # Manual-node resume output (or agent output) failed validation
+            # against output_schema_json. Domain-specific error code per §8.9 —
+            # never a raw ``ValueError``.
+            scrubbed = _sanitize_detail(exc, limit=5000)
+            broker.publish("run_failed", {"error": "schema_validation_failure", "detail": scrubbed})
+            _log.warning(
+                "pipeline.output_schema_validation_failed",
+                extra={"run_id": str(run_id), "detail": scrubbed[:500]},
+            )
+            return "failed", "schema_validation_failure", scrubbed, node_token_usage or None
         except asyncio.CancelledError:
             raise
         except (NodeCancelledError, SandboxNodeFailedError):

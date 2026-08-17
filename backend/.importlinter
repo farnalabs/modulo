@@ -87,6 +87,17 @@ ignore_imports =
     # core.
     modulo.db.crud.run -> modulo.core.guardrails
     modulo.db.crud.run -> modulo.core.eval_engine
+    # FAR-213 run-termination compensation: the guardrail-blocked terminalization
+    # seam lives in create_run (it writes the blocked_partial summary AFTER the
+    # terminal status write). Same cross-boundary category as the FAR-208
+    # guardrail exemption above — compensation orchestration stays in core;
+    # create_run only invokes it.
+    modulo.db.crud.run -> modulo.core.guardrails.compensation
+    # FAR-223 item 10 — snapshot creation serializes the pipeline's guardrail
+    # rows into ``guardrail_pins_json`` (thin DTO conversion via
+    # ``serialize_guardrail_pin``); same cross-boundary category as the run.py
+    # guardrail exemption above.
+    modulo.db.crud.pipeline_snapshot -> modulo.core.guardrails
     # FAR-189 — the shared fenced terminal write (update_run_status / the fenced
     # variant / transition_run / request_cancellation) invokes the run-outcome
     # classifier inline, so every terminalizer that funnels through db.crud.run

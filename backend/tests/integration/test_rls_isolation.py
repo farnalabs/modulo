@@ -379,8 +379,8 @@ async def test_team_memberships_isolated_by_org_rls(
 ) -> None:
     """Team membership rows are correctly isolated by org-scoped RLS.
 
-    After the users→accounts+org_memberships migration (0074), the
-    rls_org_isolation policy on team_memberships (org-scoped via OrgScoped)
+    After the users→accounts+org_memberships reconciliation (0108_schema_org_identity),
+    the rls_org_isolation policy on team_memberships (org-scoped via OrgScoped)
     must use ``organisation_id`` to prevent cross-org membership leaks.
     This test creates accounts in different teams within the same org and
     verifies that membership queries are scoped to the correct team.

@@ -32,6 +32,9 @@ from modulo.connectors.base import (
 
 _log = logging.getLogger(__name__)
 
+# Raised/reported when no runtime provider is bound to the connector (S1192).
+_ERR_RUNTIME_NOT_CONFIGURED = "Runtime provider not configured"
+
 
 class ShellRuntimeProvider(Protocol):
     """Legacy workspace operations consumed by ShellConnector."""
@@ -96,7 +99,7 @@ class ShellConnector(ConnectorBase):
 
     async def health_check(self) -> HealthResult:
         if self._runtime_provider is None and self._runtime_provider_hub is None:
-            return HealthResult(ok=False, detail="Runtime provider not configured")
+            return HealthResult(ok=False, detail=_ERR_RUNTIME_NOT_CONFIGURED)
         return HealthResult(ok=True, detail="ShellConnector ready")
 
     def _check_workspace_lease(self) -> None:
@@ -143,7 +146,7 @@ class ShellConnector(ConnectorBase):
                     self._runtime_provider = provider
 
         if self._runtime_provider is None:
-            raise ValueError("Runtime provider not configured")
+            raise ValueError(_ERR_RUNTIME_NOT_CONFIGURED)
         self._check_workspace_lease()
         provider_ref: str | None = q.filters.get("provider_ref")
 
@@ -192,7 +195,7 @@ class ShellConnector(ConnectorBase):
                     self._runtime_provider = provider
 
         if self._runtime_provider is None:
-            raise ValueError("Runtime provider not configured")
+            raise ValueError(_ERR_RUNTIME_NOT_CONFIGURED)
         self._check_workspace_lease()
         provider_ref: str | None = payload.data.get("provider_ref")
 

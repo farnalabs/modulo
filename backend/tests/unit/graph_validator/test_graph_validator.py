@@ -1057,3 +1057,130 @@ async def test_conditional_edge_normal_edges_still_checked():
     session = _session_returning([])
     result = await GraphValidator().validate(snap, session)
     assert result.is_valid
+
+
+# ---------------------------------------------------------------------------
+# Guardrail per-node cap (FAR-223 item 7)
+# ---------------------------------------------------------------------------
+
+
+def _guardrail_row(node_id, name, *, cap=None):
+    row = MagicMock()
+    row.id = uuid.uuid4()
+    row.organisation_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    row.pipeline_id = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
+    row.node_id = node_id
+    row.name = name
+    row.eval_type = "guardrail"
+    row.config_json = (
+        {"action": "observe", "max_guardrails_per_node": cap} if cap is not None else {"action": "observe"}
+    )
+    row.failure_behaviour = "warn"
+    row.pass_threshold = None
+    row.suite_id = None
+    return row
+
+
+async def test_guardrail_cap_exceeded_rejected_at_graph_save():
+    rows = [_guardrail_row(None, f"g-{i}") for i in range(9)]
+    result = await GraphValidator().validate_definition(
+        _SINGLE_NODE, _session_returning([]), guardrail_definitions=rows
+    )
+    assert not result.is_valid
+    assert any(i.code == "GUARDRAIL_CAP_EXCEEDED" for i in result.issues)
+
+
+async def test_guardrail_cap_within_budget_passes_graph_save():
+    rows = [_guardrail_row(None, f"g-{i}") for i in range(8)]
+    result = await GraphValidator().validate_definition(
+        _SINGLE_NODE, _session_returning([]), guardrail_definitions=rows
+    )
+    assert result.is_valid
+    assert not any(i.code == "GUARDRAIL_CAP_EXCEEDED" for i in result.issues)
+
+
+async def test_guardrail_cap_feature_off_never_violates():
+    rows = [_guardrail_row(None, f"g-{i}", cap=0) for i in range(12)]
+    result = await GraphValidator().validate_definition(
+        _SINGLE_NODE, _session_returning([]), guardrail_definitions=rows
+    )
+    assert result.is_valid
+
+
+async def test_guardrail_cap_configurable_cap_enforced_at_graph_save():
+    """A RAISED org cap (not just the default 8) is honoured at graph-save:
+    exactly cap rows pass, cap+1 rows reject with GUARDRAIL_CAP_EXCEEDED."""
+    under = [_guardrail_row(None, f"g-{i}", cap=4) for i in range(4)]
+    under_result = await GraphValidator().validate_definition(
+        _SINGLE_NODE, _session_returning([]), guardrail_definitions=under
+    )
+    assert under_result.is_valid
+    assert not any(i.code == "GUARDRAIL_CAP_EXCEEDED" for i in under_result.issues)
+
+    over = [_guardrail_row(None, f"g-{i}", cap=4) for i in range(5)]
+    over_result = await GraphValidator().validate_definition(
+        _SINGLE_NODE, _session_returning([]), guardrail_definitions=over
+    )
+    assert not over_result.is_valid
+    assert any(i.code == "GUARDRAIL_CAP_EXCEEDED" for i in over_result.issues)
+
+
+async def test_guardrail_cap_no_rows_is_skipped():
+    result = await GraphValidator().validate_definition(_SINGLE_NODE, _session_returning([]), guardrail_definitions=[])
+    assert result.is_valid
+
+
+# ---------------------------------------------------------------------------
+# Guardrail redact+correct hard-block (FAR-210 T2b)
+# ---------------------------------------------------------------------------
+
+
+def _redact_correction_row(node_id, name, *, action="redact", has_correction=True):
+    row = MagicMock()
+    row.id = uuid.uuid4()
+    row.organisation_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    row.pipeline_id = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
+    row.node_id = node_id
+    row.name = name
+    row.eval_type = "guardrail"
+    config = {"action": action}
+    if has_correction:
+        config["correction"] = {"id": "corr-1", "model_backend_id": "mb-1"}
+    row.config_json = config
+    row.failure_behaviour = "warn"
+    row.pass_threshold = None
+    row.suite_id = None
+    return row
+
+
+async def test_redact_correct_hard_blocked_at_graph_save():
+    """A 'correction' block on a 'redact'-action guardrail is rejected at
+    graph-save (exfiltration channel) — matches the runtime
+    RedactCorrectBlockedError backstop."""
+    rows = [_redact_correction_row(None, "g-redact-correct")]
+    result = await GraphValidator().validate_definition(
+        _SINGLE_NODE, _session_returning([]), guardrail_definitions=rows
+    )
+    assert not result.is_valid
+    assert any(i.code == "REDACT_CORRECT_BLOCKED" for i in result.issues)
+
+
+async def test_redact_without_correction_passes_graph_save():
+    """A plain 'redact'-action guardrail (no correction block) is valid."""
+    rows = [_redact_correction_row(None, "g-redact-only", has_correction=False)]
+    result = await GraphValidator().validate_definition(
+        _SINGLE_NODE, _session_returning([]), guardrail_definitions=rows
+    )
+    assert result.is_valid
+    assert not any(i.code == "REDACT_CORRECT_BLOCKED" for i in result.issues)
+
+
+async def test_non_redact_correction_passes_graph_save():
+    """A correction on a non-redact guardrail is NOT the exfiltration channel
+    the hard-block protects — it stays valid at graph-save."""
+    rows = [_redact_correction_row(None, "g-block-correct", action="block")]
+    result = await GraphValidator().validate_definition(
+        _SINGLE_NODE, _session_returning([]), guardrail_definitions=rows
+    )
+    assert result.is_valid
+    assert not any(i.code == "REDACT_CORRECT_BLOCKED" for i in result.issues)

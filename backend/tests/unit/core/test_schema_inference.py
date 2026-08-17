@@ -7,9 +7,11 @@ import pytest
 
 from modulo.core.schema_registry._common import parse_schema_from_response
 from modulo.core.schema_registry.inference import (
+    _INFERENCE_SYSTEM_PROMPT,
     SchemaInferenceError,
     SchemaInferenceService,
     _build_infer_prompt,
+    flag_rare_fields,
 )
 
 
@@ -73,9 +75,9 @@ class TestBuildInferPrompt:
         assert "Sample data" in messages[1].content
 
     def test_truncates_large_sample_sets(self) -> None:
-        samples = [{"i": i} for i in range(100)]
+        samples = [{"i": i} for i in range(250)]
         messages = _build_infer_prompt(samples)
-        assert "50 records" in messages[1].content
+        assert "200 records" in messages[1].content
 
     def test_builds_with_empty_samples(self) -> None:
         messages = _build_infer_prompt([])
@@ -87,6 +89,138 @@ class TestBuildInferPrompt:
         messages = _build_infer_prompt(samples, max_records=5)
         assert "5 records" in messages[1].content
         assert "100 records" not in messages[1].content
+
+    def test_issue_tracker_connector_guidance(self) -> None:
+        samples = [{"summary": "bug", "status": "open", "priority": "high"}]
+        messages = _build_infer_prompt(samples, connector_type="jira")
+        assert "issue-tracker" in messages[0].content
+        assert "assignee" in messages[0].content
+        assert "labels" in messages[0].content
+
+    def test_git_host_connector_guidance(self) -> None:
+        samples = [{"repo": "modulo", "branch": "main"}]
+        messages = _build_infer_prompt(samples, connector_type="github")
+        assert "git host" in messages[0].content
+        assert "pull-request metadata" in messages[0].content
+        assert "file paths" in messages[0].content
+
+    def test_ci_runner_connector_guidance(self) -> None:
+        samples = [{"pipeline_id": "1", "status": "success"}]
+        messages = _build_infer_prompt(samples, connector_type="circleci")
+        assert "CI runner" in messages[0].content
+        assert "commit SHA" in messages[0].content
+        assert "duration" in messages[0].content
+
+    def test_chat_connector_guidance(self) -> None:
+        samples = [{"text": "hello", "channel": "general"}]
+        messages = _build_infer_prompt(samples, connector_type="slack")
+        assert "chat tool" in messages[0].content
+        assert "message and channel metadata" in messages[0].content
+
+    def test_document_store_connector_guidance(self) -> None:
+        samples = [{"title": "page", "blocks": ["para"]}]
+        messages = _build_infer_prompt(samples, connector_type="notion")
+        assert "document store" in messages[0].content
+        assert "page structure" in messages[0].content
+
+    def test_generic_connector_guidance(self) -> None:
+        samples = [{"id": 1, "name": "x", "type": "y"}]
+        messages = _build_infer_prompt(samples, connector_type="filesystem")
+        assert "minimal field set" in messages[0].content
+        assert "id, name, and type" in messages[0].content
+
+    def test_unknown_connector_falls_back_to_generic(self) -> None:
+        messages = _build_infer_prompt([{"id": 1}], connector_type="totally-unknown")
+        assert "minimal field set" in messages[0].content
+
+    def test_no_connector_type_keeps_prompt_unchanged(self) -> None:
+        messages = _build_infer_prompt([{"id": 1}])
+        assert messages[0].content == _INFERENCE_SYSTEM_PROMPT
+        assert "minimal field set" not in messages[0].content
+
+    def test_connector_type_case_insensitive(self) -> None:
+        messages = _build_infer_prompt([{"id": 1}], connector_type="GitHub")
+        assert "git host" in messages[0].content
+
+    def test_connector_category_helper(self) -> None:
+        from modulo.core.schema_registry.inference import connector_category
+
+        assert connector_category("jira") == "issue-tracker"
+        assert connector_category("linear") == "issue-tracker"
+        assert connector_category("github") == "git-host"
+        assert connector_category("circleci") == "ci-runner"
+        assert connector_category("slack") == "chat"
+        assert connector_category("notion") == "document-store"
+        assert connector_category("filesystem") == "generic"
+        assert connector_category(None) == "generic"
+
+    def test_rare_fields_are_listed_in_prompt(self) -> None:
+        samples = [{"common": i} for i in range(11)]
+        samples[0]["rare"] = "x"
+        messages = _build_infer_prompt(samples)
+        assert "rarely-used fields" in messages[1].content.lower()
+        assert "rare" in messages[1].content
+        assert "11 samples" in messages[1].content
+
+    def test_rare_fields_omitted_when_all_fields_common(self) -> None:
+        samples = [{"common": 1, "id": 2}, {"common": 3, "id": 4}]
+        messages = _build_infer_prompt(samples)
+        assert "rarely-used fields" not in messages[1].content.lower()
+
+    def test_system_prompt_instructs_rare_field_exclusion(self) -> None:
+        messages = _build_infer_prompt([{"a": 1}])
+        assert "rarely-used fields" in messages[0].content.lower()
+        assert "exclude" in messages[0].content.lower()
+
+
+class TestFlagRareFields:
+    def test_no_fields_when_all_common(self) -> None:
+        records = [{"id": 1, "title": "a"}, {"id": 2, "title": "b"}]
+        assert not flag_rare_fields(records)
+
+    def test_flags_fields_below_default_threshold(self) -> None:
+        records = [{"common": i} for i in range(11)]
+        records[0]["rare"] = 2
+        assert flag_rare_fields(records) == ["rare"]
+
+    def test_result_is_sorted_deterministically(self) -> None:
+        records = [{"mid": i} for i in range(11)]
+        records[0]["zeta"] = 1
+        records[1]["alpha"] = 2
+        assert flag_rare_fields(records) == ["alpha", "zeta"]
+
+    def test_null_values_do_not_count_as_present(self) -> None:
+        records = [{"id": i, "nullable": None} for i in range(11)]
+        records[0]["nullable"] = "x"
+        assert flag_rare_fields(records) == ["nullable"]
+
+    def test_empty_containers_count_as_present(self) -> None:
+        records = [{"id": 1, "tags": []}, {"id": 2, "tags": ["x"]}]
+        assert not flag_rare_fields(records)
+
+    def test_empty_records_return_empty(self) -> None:
+        assert not flag_rare_fields([])
+
+    def test_non_dict_records_are_ignored(self) -> None:
+        records = [{"id": 1}, "not-a-dict", 42]
+        assert not flag_rare_fields(records)
+
+    def test_custom_threshold(self) -> None:
+        records = [{"a": 1, "b": 2}, {"a": 3, "b": 4}, {"a": 5, "b": 6}, {"a": 7}]
+        assert not flag_rare_fields(records, threshold=0.5)
+        assert flag_rare_fields(records, threshold=0.8) == ["b"]
+
+    def test_zero_threshold_flags_nothing(self) -> None:
+        records = [{"a": 1}, {"b": 2}]
+        assert not flag_rare_fields(records, threshold=0.0)
+
+    def test_invalid_thresholds_raise(self) -> None:
+        with pytest.raises(ValueError, match="threshold"):
+            flag_rare_fields([{"a": 1}], threshold=1.5)
+        with pytest.raises(ValueError, match="threshold"):
+            flag_rare_fields([{"a": 1}], threshold=-0.1)
+        with pytest.raises(ValueError, match="threshold"):
+            flag_rare_fields([{"a": 1}], threshold="0.1")
 
 
 class TestParseSchemaFromResponse:

@@ -95,7 +95,7 @@ status: covered
 - [x] Delete shows loading state
 - [x] Delete shows error feedback
 - [x] Team deletion writes `team_deleted` to AuditEvent
-- [ ] Bulk "Reassign all resources to org-wide" action before deletion (PRD requirement — backend endpoint `POST /api/v1/admin/teams/{id}/reassign-all` in-flight in PR #1408, not merged; no frontend action wired yet)
+- [ ] Bulk "Reassign all resources to org-wide" action before deletion (PRD requirement — backend endpoint `POST /api/v1/admin/teams/{id}/reassign-all` implemented + tested since PR #1408 merged; no frontend action wired yet — the UI still blocks on the `team_has_resources` error)
 
 ### Members list
 

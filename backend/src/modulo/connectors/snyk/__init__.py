@@ -7,6 +7,7 @@ import httpx
 
 from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
 from modulo.connectors._safe_int import safe_int as _safe_int
+from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -20,6 +21,8 @@ _API_BASE = "https://api.snyk.io/rest"
 
 
 def _next_cursor(body: dict[str, Any]) -> str | None:
+    if not isinstance(body, dict):
+        return None
     links = body.get("links")
     if not isinstance(links, dict):
         return None
@@ -34,6 +37,8 @@ def _meta_total(body: dict[str, Any], fallback: int) -> int:
     chain) and a non-finite ``count`` (``inf``/``nan`` from an overflowing
     JSON literal), which would otherwise poison the reported total.
     """
+    if not isinstance(body, dict):
+        return fallback
     meta = body.get("meta")
     if not isinstance(meta, dict):
         return fallback
@@ -125,7 +130,7 @@ class SnykConnector(ConnectorBase):
         resp = await c.get(f"/orgs/{org_id}/projects", params=params)
         resp.raise_for_status()
         body = resp.json()
-        data: list[dict[str, Any]] = body.get("data", [])
+        data: list[dict[str, Any]] = _safe_records(body, "data")
         return ConnectorResult(
             records=data,
             total=_meta_total(body, len(data)),
@@ -168,7 +173,7 @@ class SnykConnector(ConnectorBase):
         resp = await c.get(f"/orgs/{org_id}/projects/{project_id}/issues", params=params)
         resp.raise_for_status()
         body = resp.json()
-        data: list[dict[str, Any]] = body.get("data", [])
+        data: list[dict[str, Any]] = _safe_records(body, "data")
         return ConnectorResult(
             records=data,
             total=_meta_total(body, len(data)),
@@ -189,7 +194,7 @@ class SnykConnector(ConnectorBase):
         resp = await c.post(f"/orgs/{org_id}/packages/issues", params=params, json=body_payload)
         resp.raise_for_status()
         body = resp.json()
-        data: list[dict[str, Any]] = body.get("data", [])
+        data: list[dict[str, Any]] = _safe_records(body, "data")
         return ConnectorResult(records=data, total=len(data))
 
     async def _list_orgs(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -202,7 +207,7 @@ class SnykConnector(ConnectorBase):
         resp = await c.get("/orgs", params=params)
         resp.raise_for_status()
         body = resp.json()
-        data: list[dict[str, Any]] = body.get("data", [])
+        data: list[dict[str, Any]] = _safe_records(body, "data")
         return ConnectorResult(
             records=data,
             total=_meta_total(body, len(data)),
@@ -222,7 +227,7 @@ class SnykConnector(ConnectorBase):
         resp = await c.get(f"/orgs/{org_id}/tests", params=params)
         resp.raise_for_status()
         body = resp.json()
-        data: list[dict[str, Any]] = body.get("data", [])
+        data: list[dict[str, Any]] = _safe_records(body, "data")
         return ConnectorResult(
             records=data,
             total=_meta_total(body, len(data)),

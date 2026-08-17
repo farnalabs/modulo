@@ -27,6 +27,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 _DB_TIMEOUT: float = 10.0
 
+# Raised by every read/write path when no session is available (S1192).
+_ERR_NO_DB_SESSION = "FernetSecretsBackend: no DB session set"
+
 
 class FernetSecretsBackend(SecretsBackend):
     """Encrypt secrets at rest with Fernet, persisted in the *secrets* table.
@@ -88,7 +91,7 @@ class FernetSecretsBackend(SecretsBackend):
         """
         key = validate_key(key)
         if self._session is None:
-            raise RuntimeError("FernetSecretsBackend: no DB session set")
+            raise RuntimeError(_ERR_NO_DB_SESSION)
 
         org_id = await self._read_org_id_from_session()
         result = await asyncio.wait_for(
@@ -133,7 +136,7 @@ class FernetSecretsBackend(SecretsBackend):
         if self._org_id is not None:
             return self._org_id
         if self._session is None:
-            raise RuntimeError("FernetSecretsBackend: no DB session set")
+            raise RuntimeError(_ERR_NO_DB_SESSION)
 
         org_id_str: str | None = None
 
@@ -169,7 +172,7 @@ class FernetSecretsBackend(SecretsBackend):
         """Encrypt *value* and upsert it under *key*."""
         key = validate_key(key)
         if self._session is None:
-            raise RuntimeError("FernetSecretsBackend: no DB session set")
+            raise RuntimeError(_ERR_NO_DB_SESSION)
 
         encrypted = self._fernet.encrypt(value.encode())
         org_id = await self._read_org_id_from_session()
@@ -210,7 +213,7 @@ class FernetSecretsBackend(SecretsBackend):
         """Remove the record for *key* from the secrets table."""
         key = validate_key(key)
         if self._session is None:
-            raise RuntimeError("FernetSecretsBackend: no DB session set")
+            raise RuntimeError(_ERR_NO_DB_SESSION)
 
         org_id = await self._read_org_id_from_session()
         stmt = delete(Secret).where(Secret.key == key, Secret.organisation_id == org_id)

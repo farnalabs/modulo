@@ -24,6 +24,16 @@ from modulo.core.license import get_license
 from modulo.db.crud.organisation import get_organisation
 from modulo.settings import Settings, get_settings
 
+_CODE_FEATURE_FLAGS_LIST_FAILED = "feature_flags.list_failed"
+_MSG_FEATURE_FLAGS_NOT_AVAILABLE = "Feature flags are not available. Run database migrations to enable this feature."
+_CODE_FEATURE_FLAGS_GET_FAILED = "feature_flags.get_failed"
+_CODE_SYSTEM_CONFIG_MANAGE = "system.config.manage"
+_CODE_FEATURE_FLAGS_TOGGLE_FAILED = "feature_flags.toggle_failed"
+_CODE_FEATURE_FLAGS_GET_ORG = "feature_flags.get_org_override_failed"
+_CODE_FEATURE_FLAGS_SET_ORG = "feature_flags.set_org_override_failed"
+_CODE_FEATURE_FLAGS_CLEAR_ORG = "feature_flags.clear_org_override_failed"
+
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/feature-flags", tags=["admin-feature-flags"])
@@ -183,18 +193,18 @@ async def list_feature_flags(
     except HTTPException:
         raise
     except ProgrammingError:
-        logger.exception("feature_flags.list_failed")
+        logger.exception(_CODE_FEATURE_FLAGS_LIST_FAILED)
         return JSONResponse(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             content={
                 "error": {
                     "code": "NOT_IMPLEMENTED",
-                    "message": "Feature flags are not available. Run database migrations to enable this feature.",
+                    "message": _MSG_FEATURE_FLAGS_NOT_AVAILABLE,
                 }
             },
         )
     except SQLAlchemyError:
-        logger.exception("feature_flags.list_failed")
+        logger.exception(_CODE_FEATURE_FLAGS_LIST_FAILED)
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={
@@ -205,7 +215,7 @@ async def list_feature_flags(
             },
         )
     except Exception:
-        logger.exception("feature_flags.list_failed")
+        logger.exception(_CODE_FEATURE_FLAGS_LIST_FAILED)
         return JSONResponse(
             status_code=500,
             content={
@@ -243,18 +253,18 @@ async def get_feature_flag(
     except HTTPException:
         raise
     except ProgrammingError:
-        logger.exception("feature_flags.get_failed", extra={"flag_name": flag_name})
+        logger.exception(_CODE_FEATURE_FLAGS_GET_FAILED, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             content={
                 "error": {
                     "code": "NOT_IMPLEMENTED",
-                    "message": "Feature flags are not available. Run database migrations to enable this feature.",
+                    "message": _MSG_FEATURE_FLAGS_NOT_AVAILABLE,
                 }
             },
         )
     except SQLAlchemyError:
-        logger.exception("feature_flags.get_failed", extra={"flag_name": flag_name})
+        logger.exception(_CODE_FEATURE_FLAGS_GET_FAILED, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={
@@ -265,7 +275,7 @@ async def get_feature_flag(
             },
         )
     except Exception:
-        logger.exception("feature_flags.get_failed", extra={"flag_name": flag_name})
+        logger.exception(_CODE_FEATURE_FLAGS_GET_FAILED, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=500,
             content={
@@ -288,7 +298,7 @@ async def toggle_feature_flag(
     req: ToggleFlagRequest,
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
-    current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
+    current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
 ) -> Response | dict[str, Any]:
     try:
         registry = await _build_registry(settings, session, current_user)
@@ -310,18 +320,18 @@ async def toggle_feature_flag(
     except HTTPException:
         raise
     except ProgrammingError:
-        logger.exception("feature_flags.toggle_failed", extra={"flag_name": flag_name})
+        logger.exception(_CODE_FEATURE_FLAGS_TOGGLE_FAILED, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             content={
                 "error": {
                     "code": "NOT_IMPLEMENTED",
-                    "message": "Feature flags are not available. Run database migrations to enable this feature.",
+                    "message": _MSG_FEATURE_FLAGS_NOT_AVAILABLE,
                 }
             },
         )
     except SQLAlchemyError:
-        logger.exception("feature_flags.toggle_failed", extra={"flag_name": flag_name})
+        logger.exception(_CODE_FEATURE_FLAGS_TOGGLE_FAILED, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={
@@ -332,7 +342,7 @@ async def toggle_feature_flag(
             },
         )
     except Exception:
-        logger.exception("feature_flags.toggle_failed", extra={"flag_name": flag_name})
+        logger.exception(_CODE_FEATURE_FLAGS_TOGGLE_FAILED, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=500,
             content={
@@ -348,7 +358,7 @@ async def toggle_feature_flag(
 @handle_db_errors("admin.feature_flags.get_org_flag_override")
 async def get_org_flag_override(
     flag_name: str,
-    current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
+    current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
     assert current_user.organisation_id is not None
@@ -362,18 +372,18 @@ async def get_org_flag_override(
     except HTTPException:
         raise
     except ProgrammingError:
-        logger.exception("feature_flags.get_org_override_failed", extra={"flag_name": flag_name})
+        logger.exception(_CODE_FEATURE_FLAGS_GET_ORG, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             content={
                 "error": {
                     "code": "NOT_IMPLEMENTED",
-                    "message": "Feature flags are not available. Run database migrations to enable this feature.",
+                    "message": _MSG_FEATURE_FLAGS_NOT_AVAILABLE,
                 }
             },
         )
     except SQLAlchemyError:
-        logger.exception("feature_flags.get_org_override_failed", extra={"flag_name": flag_name})
+        logger.exception(_CODE_FEATURE_FLAGS_GET_ORG, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={
@@ -384,7 +394,7 @@ async def get_org_flag_override(
             },
         )
     except Exception:
-        logger.exception("feature_flags.get_org_override_failed", extra={"flag_name": flag_name})
+        logger.exception(_CODE_FEATURE_FLAGS_GET_ORG, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=500,
             content={
@@ -402,7 +412,7 @@ async def set_org_flag_override(
     flag_name: str,
     req: ToggleFlagRequest,
     settings: Settings = Depends(get_settings),
-    current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
+    current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
     assert current_user.organisation_id is not None
@@ -422,18 +432,18 @@ async def set_org_flag_override(
     except HTTPException:
         raise
     except ProgrammingError:
-        logger.exception("feature_flags.set_org_override_failed", extra={"flag_name": flag_name})
+        logger.exception(_CODE_FEATURE_FLAGS_SET_ORG, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             content={
                 "error": {
                     "code": "NOT_IMPLEMENTED",
-                    "message": "Feature flags are not available. Run database migrations to enable this feature.",
+                    "message": _MSG_FEATURE_FLAGS_NOT_AVAILABLE,
                 }
             },
         )
     except SQLAlchemyError:
-        logger.exception("feature_flags.set_org_override_failed", extra={"flag_name": flag_name})
+        logger.exception(_CODE_FEATURE_FLAGS_SET_ORG, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={
@@ -444,7 +454,7 @@ async def set_org_flag_override(
             },
         )
     except Exception:
-        logger.exception("feature_flags.set_org_override_failed", extra={"flag_name": flag_name})
+        logger.exception(_CODE_FEATURE_FLAGS_SET_ORG, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=500,
             content={
@@ -461,7 +471,7 @@ async def set_org_flag_override(
 async def clear_org_flag_override(
     flag_name: str,
     settings: Settings = Depends(get_settings),
-    current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
+    current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
     assert current_user.organisation_id is not None
@@ -481,18 +491,18 @@ async def clear_org_flag_override(
     except HTTPException:
         raise
     except ProgrammingError:
-        logger.exception("feature_flags.clear_org_override_failed", extra={"flag_name": flag_name})
+        logger.exception(_CODE_FEATURE_FLAGS_CLEAR_ORG, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             content={
                 "error": {
                     "code": "NOT_IMPLEMENTED",
-                    "message": "Feature flags are not available. Run database migrations to enable this feature.",
+                    "message": _MSG_FEATURE_FLAGS_NOT_AVAILABLE,
                 }
             },
         )
     except SQLAlchemyError:
-        logger.exception("feature_flags.clear_org_override_failed", extra={"flag_name": flag_name})
+        logger.exception(_CODE_FEATURE_FLAGS_CLEAR_ORG, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={
@@ -503,7 +513,7 @@ async def clear_org_flag_override(
             },
         )
     except Exception:
-        logger.exception("feature_flags.clear_org_override_failed", extra={"flag_name": flag_name})
+        logger.exception(_CODE_FEATURE_FLAGS_CLEAR_ORG, extra={"flag_name": flag_name})
         return JSONResponse(
             status_code=500,
             content={

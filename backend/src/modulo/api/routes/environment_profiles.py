@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
@@ -23,6 +24,12 @@ from modulo.db.crud.environment_profile import (
 )
 from modulo.db.models.environment_profile import EnvironmentProfile
 from modulo.db.rls import set_rls_org, set_rls_user_context
+
+_MSG_DATABASE_ERROR_OCCURRED_PLEASE = "Database error occurred. Please try again later."
+_CODE_ENVIRONMENT_PROFILES_CREATE_PROFILE = "environment_profiles.create_profile"
+_MSG_ENVIRONMENT_PROFILE_NOT_FOUND = "Environment profile not found"
+_CODE_ENVIRONMENT_PROFILES_UPDATE_PROFILE = "environment_profiles.update_profile"
+
 
 _log = logging.getLogger(__name__)
 
@@ -127,13 +134,13 @@ async def list_profiles(
         _log.exception("environment_profiles.list_profiles")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("environment_profiles.list_profiles")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error occurred. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -141,7 +148,7 @@ async def list_profiles(
         _log.exception("Unexpected error listing environment profiles: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return ProfileListResponse(
         items=[_to_response(p) for p in result.items],
@@ -152,7 +159,7 @@ async def list_profiles(
 
 
 @router.post("", response_model=ProfileResponse, status_code=status.HTTP_201_CREATED)
-@handle_db_errors("environment_profiles.create_profile")
+@handle_db_errors(_CODE_ENVIRONMENT_PROFILES_CREATE_PROFILE)
 async def create_profile(
     req: ProfileCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -180,22 +187,22 @@ async def create_profile(
                 visibility=req.visibility,
             )
     except IntegrityError:
-        _log.exception("environment_profiles.create_profile")
+        _log.exception(_CODE_ENVIRONMENT_PROFILES_CREATE_PROFILE)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="An environment profile with this name already exists.",
         ) from None
     except ProgrammingError:
-        _log.exception("environment_profiles.create_profile")
+        _log.exception(_CODE_ENVIRONMENT_PROFILES_CREATE_PROFILE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("environment_profiles.create_profile")
+        _log.exception(_CODE_ENVIRONMENT_PROFILES_CREATE_PROFILE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error occurred. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -203,7 +210,7 @@ async def create_profile(
         _log.exception("Unexpected error creating environment profile: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return _to_response(profile)
 
@@ -224,27 +231,27 @@ async def get_profile(
         _log.exception("environment_profiles.get_profile")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("environment_profiles.get_profile")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error occurred. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except Exception as exc:
         _log.exception("Unexpected error fetching environment profile: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if profile is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Environment profile not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ENVIRONMENT_PROFILE_NOT_FOUND)
     return _to_response(profile)
 
 
 @router.put("/{profile_id}", response_model=ProfileResponse)
-@handle_db_errors("environment_profiles.update_profile")
+@handle_db_errors(_CODE_ENVIRONMENT_PROFILES_UPDATE_PROFILE)
 async def update_profile(
     profile_id: uuid.UUID,
     req: ProfileUpdate,
@@ -262,22 +269,22 @@ async def update_profile(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             profile = await update_environment_profile(session, profile_id, updates)
     except IntegrityError:
-        _log.exception("environment_profiles.update_profile")
+        _log.exception(_CODE_ENVIRONMENT_PROFILES_UPDATE_PROFILE)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="An environment profile with this name already exists.",
         ) from None
     except ProgrammingError:
-        _log.exception("environment_profiles.update_profile")
+        _log.exception(_CODE_ENVIRONMENT_PROFILES_UPDATE_PROFILE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("environment_profiles.update_profile")
+        _log.exception(_CODE_ENVIRONMENT_PROFILES_UPDATE_PROFILE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error occurred. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -285,10 +292,10 @@ async def update_profile(
         _log.exception("Unexpected error updating environment profile: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if profile is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Environment profile not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ENVIRONMENT_PROFILE_NOT_FOUND)
     return _to_response(profile)
 
 
@@ -308,22 +315,22 @@ async def delete_profile(
         _log.exception("environment_profiles.delete_profile")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("environment_profiles.delete_profile")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error occurred. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except Exception as exc:
         _log.exception("Unexpected error deleting environment profile: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Environment profile not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ENVIRONMENT_PROFILE_NOT_FOUND)
 
 
 @router.post("/{profile_id}/restore", response_model=ProfileResponse)
@@ -342,13 +349,13 @@ async def restore_profile(
         _log.exception("environment_profiles.restore_profile")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("environment_profiles.restore_profile")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error occurred. Please try again later.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -356,8 +363,8 @@ async def restore_profile(
         _log.exception("Unexpected error restoring environment profile: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if profile is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Environment profile not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ENVIRONMENT_PROFILE_NOT_FOUND)
     return _to_response(profile)

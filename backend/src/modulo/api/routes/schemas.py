@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_RESOURCE_ALREADY_EXISTS, MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
@@ -29,7 +30,9 @@ from modulo.core.schema_registry import (
     SchemaInferenceService,
     apply_migration,
     create_migration,
+    flag_rare_fields,
 )
+from modulo.core.schema_registry.inference import SUPPORTED_INFERENCE_TYPES
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.connector_instance import get_connector_instance
 from modulo.db.crud.model_backend import list_model_backends
@@ -50,6 +53,14 @@ from modulo.db.models.schema import Schema
 from modulo.db.models.schema import SchemaVersion as SchemaVersionModel
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
+
+_CODE_SCHEMA_LIST = "schema.list"
+_MSG_SCHEMA_MANAGEMENT_NOT_AVAILABLE = "Schema management is not available. Run database migrations to enable it."
+_MSG_SCHEMA_MANAGEMENT_TEMPORARILY_UNAVAILABLE = "Schema management is temporarily unavailable."
+_CODE_SCHEMA_CREATE = "schema.create"
+_MSG_SCHEMA_NOT_FOUND = "Schema not found"
+_CODE_SCHEMA_UPDATE = "schema.update"
+
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +158,7 @@ async def list_schemas_endpoint(
     page_size: int = Query(default=20, ge=1, le=100),
     folder_id: uuid.UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("schema.list"),
+    principal: TenantPrincipal = require_permission(_CODE_SCHEMA_LIST),
 ) -> SchemaListResponse:
     try:
         async with session.begin():
@@ -157,19 +168,19 @@ async def list_schemas_endpoint(
         logger.exception("schemas.list_schemas_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         logger.exception("schemas.table_missing")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Schema management is not available. Run database migrations to enable it.",
+            detail=_MSG_SCHEMA_MANAGEMENT_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("schemas.list_schemas")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Schema management is temporarily unavailable.",
+            detail=_MSG_SCHEMA_MANAGEMENT_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -179,7 +190,7 @@ async def list_schemas_endpoint(
         logger.exception("schemas.list_schemas")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return SchemaListResponse(
         items=[SchemaResponse.model_validate(s) for s in result.items],
@@ -193,7 +204,7 @@ async def list_schemas_endpoint(
 @handle_db_errors("schemas.counts_endpoint")
 async def schema_counts_endpoint(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("schema.list"),
+    principal: TenantPrincipal = require_permission(_CODE_SCHEMA_LIST),
 ) -> SchemaCountsResponse:
     """Return total schema count and per-folder counts for the caller's org.
 
@@ -214,13 +225,13 @@ async def schema_counts_endpoint(
         logger.exception("schemas.counts")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Schema management is not available. Run database migrations to enable it.",
+            detail=_MSG_SCHEMA_MANAGEMENT_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("schemas.counts")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Schema management is temporarily unavailable.",
+            detail=_MSG_SCHEMA_MANAGEMENT_TEMPORARILY_UNAVAILABLE,
         ) from None
     total = 0
     by_folder: dict[str, int] = {}
@@ -236,7 +247,7 @@ async def schema_counts_endpoint(
 async def create_schema_endpoint(
     req: SchemaCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("schema.create"),
+    principal: TenantPrincipal = require_permission(_CODE_SCHEMA_CREATE),
 ) -> SchemaResponse:
     try:
         async with session.begin():
@@ -268,13 +279,13 @@ async def create_schema_endpoint(
         logger.exception("schemas.create")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Schema management is not available. Run database migrations to enable it.",
+            detail=_MSG_SCHEMA_MANAGEMENT_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("schemas.create_schema")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Schema management is temporarily unavailable.",
+            detail=_MSG_SCHEMA_MANAGEMENT_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -284,7 +295,7 @@ async def create_schema_endpoint(
         logger.exception("schemas.create_schema")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return SchemaResponse.model_validate(schema)
 
@@ -294,7 +305,7 @@ async def create_schema_endpoint(
 async def get_schema_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("schema.list"),
+    principal: TenantPrincipal = require_permission(_CODE_SCHEMA_LIST),
 ) -> SchemaResponse:
     try:
         async with session.begin():
@@ -304,19 +315,19 @@ async def get_schema_endpoint(
         logger.exception("schemas.get_schema_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         logger.exception("schemas.get")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Schema management is not available. Run database migrations to enable it.",
+            detail=_MSG_SCHEMA_MANAGEMENT_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("schemas.get_schema")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Schema management is temporarily unavailable.",
+            detail=_MSG_SCHEMA_MANAGEMENT_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -326,10 +337,10 @@ async def get_schema_endpoint(
         logger.exception("schemas.get_schema")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if schema is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SCHEMA_NOT_FOUND)
     return SchemaResponse.model_validate(schema)
 
 
@@ -339,7 +350,7 @@ async def update_schema_endpoint(
     schema_id: uuid.UUID,
     req: SchemaUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("schema.update"),
+    principal: TenantPrincipal = require_permission(_CODE_SCHEMA_UPDATE),
 ) -> SchemaResponse:
     updates = req.model_dump(exclude_unset=True)
     try:
@@ -356,13 +367,13 @@ async def update_schema_endpoint(
         logger.exception("schemas.update")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Schema management is not available. Run database migrations to enable it.",
+            detail=_MSG_SCHEMA_MANAGEMENT_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("schemas.update_schema")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Schema management is temporarily unavailable.",
+            detail=_MSG_SCHEMA_MANAGEMENT_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -372,10 +383,10 @@ async def update_schema_endpoint(
         logger.exception("schemas.update_schema")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if schema is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SCHEMA_NOT_FOUND)
     return SchemaResponse.model_validate(schema)
 
 
@@ -384,7 +395,7 @@ async def update_schema_endpoint(
 async def deprecate_schema_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("schema.update"),
+    principal: TenantPrincipal = require_permission(_CODE_SCHEMA_UPDATE),
 ) -> SchemaResponse:
     """Mark a schema as deprecated."""
     try:
@@ -395,19 +406,19 @@ async def deprecate_schema_endpoint(
         logger.exception("schemas.deprecate_schema_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         logger.exception("schemas.deprecate")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Schema management is not available. Run database migrations to enable it.",
+            detail=_MSG_SCHEMA_MANAGEMENT_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("schemas.deprecate_schema")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Schema management is temporarily unavailable.",
+            detail=_MSG_SCHEMA_MANAGEMENT_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -417,10 +428,10 @@ async def deprecate_schema_endpoint(
         logger.exception("schemas.deprecate_schema")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if schema is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SCHEMA_NOT_FOUND)
     return SchemaResponse.model_validate(schema)
 
 
@@ -439,7 +450,7 @@ async def move_schema_to_folder_endpoint(
     schema_id: uuid.UUID,
     req: SchemaFolderMoveRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("schema.update"),
+    principal: TenantPrincipal = require_permission(_CODE_SCHEMA_UPDATE),
 ) -> SchemaResponse:
     try:
         async with session.begin():
@@ -457,7 +468,7 @@ async def move_schema_to_folder_endpoint(
             detail="This feature is not available. Run database migrations to enable it.",
         ) from None
     if schema is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SCHEMA_NOT_FOUND)
     return SchemaResponse.model_validate(schema)
 
 
@@ -483,19 +494,19 @@ async def delete_schema_endpoint(
         logger.exception("schemas.delete_schema_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         logger.exception("schemas.delete")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Schema management is not available. Run database migrations to enable it.",
+            detail=_MSG_SCHEMA_MANAGEMENT_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("schemas.delete_schema")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Schema management is temporarily unavailable.",
+            detail=_MSG_SCHEMA_MANAGEMENT_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -505,10 +516,10 @@ async def delete_schema_endpoint(
         logger.exception("schemas.delete_schema")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SCHEMA_NOT_FOUND)
 
 
 # ---------------------------------------------------------------------------
@@ -526,32 +537,32 @@ async def list_schema_versions_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("schema.list"),
+    principal: TenantPrincipal = require_permission(_CODE_SCHEMA_LIST),
 ) -> SchemaVersionListResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             schema = await get_schema(session, schema_id)
             if schema is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SCHEMA_NOT_FOUND)
             result = await list_schema_versions(session, schema_id, page=page, page_size=page_size)
     except IntegrityError:
         logger.exception("schemas.list_schema_versions_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         logger.exception("schemas.list_versions")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Schema management is not available. Run database migrations to enable it.",
+            detail=_MSG_SCHEMA_MANAGEMENT_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("schemas.list_schema_versions")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Schema management is temporarily unavailable.",
+            detail=_MSG_SCHEMA_MANAGEMENT_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -561,7 +572,7 @@ async def list_schema_versions_endpoint(
         logger.exception("schemas.list_schema_versions")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return SchemaVersionListResponse(
         items=[SchemaVersionResponse.model_validate(sv) for sv in result.items],
@@ -581,14 +592,14 @@ async def create_schema_version_endpoint(
     schema_id: uuid.UUID,
     req: SchemaVersionCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("schema.create"),
+    principal: TenantPrincipal = require_permission(_CODE_SCHEMA_CREATE),
 ) -> SchemaVersionResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             schema = await get_schema(session, schema_id)
             if schema is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SCHEMA_NOT_FOUND)
             sv = await create_schema_version(
                 session,
                 org_id=principal.organisation_id,
@@ -609,13 +620,13 @@ async def create_schema_version_endpoint(
         logger.exception("schemas.create_version")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Schema management is not available. Run database migrations to enable it.",
+            detail=_MSG_SCHEMA_MANAGEMENT_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("schemas.create_schema_version")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Schema management is temporarily unavailable.",
+            detail=_MSG_SCHEMA_MANAGEMENT_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -625,7 +636,7 @@ async def create_schema_version_endpoint(
         logger.exception("schemas.create_schema_version")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return SchemaVersionResponse.model_validate(sv)
 
@@ -639,7 +650,7 @@ async def get_schema_version_endpoint(
     schema_id: uuid.UUID,
     version: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("schema.list"),
+    principal: TenantPrincipal = require_permission(_CODE_SCHEMA_LIST),
 ) -> SchemaVersionResponse:
     try:
         async with session.begin():
@@ -649,19 +660,19 @@ async def get_schema_version_endpoint(
         logger.exception("schemas.get_schema_version_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         logger.exception("schemas.get_version")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Schema management is not available. Run database migrations to enable it.",
+            detail=_MSG_SCHEMA_MANAGEMENT_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("schemas.get_schema_version")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Schema management is temporarily unavailable.",
+            detail=_MSG_SCHEMA_MANAGEMENT_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -671,7 +682,7 @@ async def get_schema_version_endpoint(
         logger.exception("schemas.get_schema_version")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if sv is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema version not found")
@@ -701,7 +712,7 @@ class SchemaFieldListResponse(BaseModel):
 async def list_schema_fields_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("schema.list"),
+    principal: TenantPrincipal = require_permission(_CODE_SCHEMA_LIST),
 ) -> SchemaFieldListResponse:
     """Return the field list for the latest version of a schema.
 
@@ -714,7 +725,7 @@ async def list_schema_fields_endpoint(
             await set_rls_org(session, principal.organisation_id)
             schema = await get_schema(session, schema_id)
             if schema is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SCHEMA_NOT_FOUND)
             sv = await _get_latest_version(session, schema_id)
             if sv is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema has no versions")
@@ -722,19 +733,19 @@ async def list_schema_fields_endpoint(
         logger.exception("schemas.list_schema_fields_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         logger.exception("schemas.list_fields")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Schema management is not available. Run database migrations to enable it.",
+            detail=_MSG_SCHEMA_MANAGEMENT_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("schemas.list_schema_fields")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Schema management is temporarily unavailable.",
+            detail=_MSG_SCHEMA_MANAGEMENT_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -744,7 +755,7 @@ async def list_schema_fields_endpoint(
         logger.exception("schemas.list_schema_fields")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
     definition = sv.definition_json
@@ -773,7 +784,7 @@ async def list_schema_fields_endpoint(
 class SchemaSampleQuery(BaseModel):
     resource: str = Field(min_length=1)
     filters: dict[str, Any] = Field(default_factory=dict)
-    limit: int = Field(default=10, ge=1, le=100)
+    limit: int = Field(default=200, ge=1, le=200)
 
 
 class SchemaInferRequest(BaseModel):
@@ -786,6 +797,7 @@ class SchemaInferResponse(BaseModel):
     sample_count: int
     suggestion_name: str
     suggestion_description: str | None = None
+    rare_fields: list[str] = Field(default_factory=list)
 
 
 @router.post("/infer", response_model=SchemaInferResponse)
@@ -812,18 +824,12 @@ async def infer_schema_endpoint(
                     detail="Connector instance not found",
                 )
 
-            # Connector-types currently supported for schema inference
-            supported_inference_types = frozenset(
-                {
-                    "github",
-                    "gitlab",
-                    "jira",
-                    "linear",
-                    "slack",
-                    "notion",
-                    "confluence",
-                }
-            )
+            # Connector-types currently supported for schema inference. Single
+            # source of truth lives in `schema_registry/inference.py` and is
+            # derived from the `ConnectorType` enum + the connector-type-aware
+            # field-extraction categories (PRD §8.16), so this list can't drift
+            # from the category map or the enum.
+            supported_inference_types = SUPPORTED_INFERENCE_TYPES
             if ci.connector_type_id not in supported_inference_types:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -841,7 +847,7 @@ async def infer_schema_endpoint(
         logger.exception("schemas.infer_schema_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         logger.exception("schemas.infer.table_missing")
@@ -853,7 +859,7 @@ async def infer_schema_endpoint(
         logger.exception("schemas.infer_schema")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Schema management is temporarily unavailable.",
+            detail=_MSG_SCHEMA_MANAGEMENT_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -936,7 +942,7 @@ async def infer_schema_endpoint(
                 detail="Selected model backend is unavailable.",
             ) from None
 
-        service = SchemaInferenceService(backend)
+        service = SchemaInferenceService(backend, connector_type=ci.connector_type_id)
         try:
             definition_json = await service.infer(records)
         except SchemaInferenceError as exc:
@@ -984,6 +990,7 @@ async def infer_schema_endpoint(
         sample_count=len(records),
         suggestion_name=suggestion_name,
         suggestion_description=suggestion_description,
+        rare_fields=flag_rare_fields(records),
     )
 
 
@@ -1006,7 +1013,7 @@ class SchemaGenerateResponse(BaseModel):
 async def generate_schema_endpoint(
     req: SchemaGenerateRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("schema.create"),
+    principal: TenantPrincipal = require_permission(_CODE_SCHEMA_CREATE),
     settings: Settings = Depends(get_settings),
 ) -> SchemaGenerateResponse:
     """Generate a JSON Schema from a natural language description and optional
@@ -1028,19 +1035,19 @@ async def generate_schema_endpoint(
         logger.exception("schemas.generate_schema_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         logger.exception("schemas.generate")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Schema management is not available. Run database migrations to enable it.",
+            detail=_MSG_SCHEMA_MANAGEMENT_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("schemas.generate_schema")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Schema management is temporarily unavailable.",
+            detail=_MSG_SCHEMA_MANAGEMENT_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -1161,7 +1168,7 @@ class SchemaMigrationPlanRequest(BaseModel):
 async def migrate_data_endpoint(
     req: SchemaMigrationRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("schema.update"),
+    principal: TenantPrincipal = require_permission(_CODE_SCHEMA_UPDATE),
     dry_run: bool = Query(False, description="If true, preview the migration plan without applying it"),
 ) -> SchemaMigrationResponse:
     """Migrate data from one schema version to another.
@@ -1193,19 +1200,19 @@ async def migrate_data_endpoint(
         logger.exception("schemas.migrate_data_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         logger.exception("schemas.migrate")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Schema management is not available. Run database migrations to enable it.",
+            detail=_MSG_SCHEMA_MANAGEMENT_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("schemas.migrate_data")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Schema management is temporarily unavailable.",
+            detail=_MSG_SCHEMA_MANAGEMENT_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -1215,7 +1222,7 @@ async def migrate_data_endpoint(
         logger.exception("schemas.migrate_data")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
     try:
@@ -1301,7 +1308,7 @@ async def migrate_data_endpoint(
 async def migration_plan_endpoint(
     req: SchemaMigrationPlanRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("schema.list"),
+    principal: TenantPrincipal = require_permission(_CODE_SCHEMA_LIST),
 ) -> dict[str, Any]:
     """Preview a migration plan between two schemas without applying it.
 

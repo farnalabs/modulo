@@ -113,7 +113,7 @@ Feature: Role-Based Access Control
     And a user "alice" exists
     And user "alice" is already a member of team "docs-team"
     When I remove user "alice" from team "docs-team"
-    Then the response status is 200
+    Then the response status is 204
 
   Scenario: Adding user to non-existent team returns 404
     Given a user "alice" exists
@@ -131,7 +131,8 @@ Feature: Role-Based Access Control
     And a user "alice" exists
     And user "alice" is already a member of team "docs-team"
     When I add user "alice" to team "docs-team" with role "viewer"
-    Then the error indicates user is already a member
+    Then the response status is 409
+    And the error detail mentions "already exists"
 
   # ── Feature gating ─────────────────────────────────────────────
 

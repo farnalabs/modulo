@@ -32,6 +32,18 @@ class ErrorCodeSpec:
     guidance: str
 
 
+# Canonical dotted codes referenced from multiple places in this module
+# (registry keys, LEGACY_ALIASES targets, and the unmapped-code fallback).
+# Constants keep the registry and the alias table provably in sync — a
+# spelling change is a one-line edit (S1192).
+_CODE_HARNESS_UNKNOWN = "harness.unknown"
+_CODE_HARNESS_EXECUTOR_FAILED = "harness.executor_failed"
+_CODE_HARNESS_DISPATCH_FAILED = "harness.dispatch_failed"
+_CODE_NODE_TIMEOUT = "node.timeout"
+_CODE_NODE_RUNAWAY = "node.runaway"
+_CODE_EVAL_BLOCKED = "eval.blocked"
+
+
 ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
     # --- agent (work verdict) codes -------------------------------------
     "agent.failed": ErrorCodeSpec(
@@ -70,7 +82,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
     # that has no alias and no registry entry resolves here so presentation
     # always has a resolvable code (§3.2). Non-retryable by default: an
     # unclassified failure is never auto-retried (fail-safe default).
-    "harness.unknown": ErrorCodeSpec(
+    _CODE_HARNESS_UNKNOWN: ErrorCodeSpec(
         error_class="harness",
         retryable=False,
         alert_severity="warning",
@@ -94,7 +106,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity="warning",
         guidance="Sandbox SDK task was cancelled.",
     ),
-    "harness.executor_failed": ErrorCodeSpec(
+    _CODE_HARNESS_EXECUTOR_FAILED: ErrorCodeSpec(
         error_class="harness",
         retryable=True,
         alert_severity="warning",
@@ -106,7 +118,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity="warning",
         guidance="Executor heartbeat was lost.",
     ),
-    "harness.dispatch_failed": ErrorCodeSpec(
+    _CODE_HARNESS_DISPATCH_FAILED: ErrorCodeSpec(
         error_class="harness",
         retryable=True,
         alert_severity="warning",
@@ -162,13 +174,13 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         guidance="Sandbox network failure.",
     ),
     # --- node guard codes ------------------------------------------------
-    "node.timeout": ErrorCodeSpec(
+    _CODE_NODE_TIMEOUT: ErrorCodeSpec(
         error_class="node",
         retryable=True,
         alert_severity="warning",
         guidance="Hit the timeout guard.",
     ),
-    "node.runaway": ErrorCodeSpec(
+    _CODE_NODE_RUNAWAY: ErrorCodeSpec(
         error_class="node",
         retryable=False,
         alert_severity="warning",
@@ -267,7 +279,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         guidance="Capacity wait timed out.",
     ),
     # --- eval codes ------------------------------------------------------
-    "eval.blocked": ErrorCodeSpec(
+    _CODE_EVAL_BLOCKED: ErrorCodeSpec(
         error_class="eval",
         retryable=False,
         alert_severity="warning",
@@ -299,27 +311,30 @@ LEGACY_ALIASES: dict[str, str] = {
     # Agent verdict / work-truth (executor.run_failed publishes).
     "executor_stalled": "agent.stall",
     # Node guards.
-    "node_timeout": "node.timeout",
-    "TimeoutError": "node.timeout",
-    "runaway": "node.runaway",
-    "runaway.tokens_exceeded": "node.runaway",
+    "node_timeout": _CODE_NODE_TIMEOUT,
+    "TimeoutError": _CODE_NODE_TIMEOUT,
+    "runaway": _CODE_NODE_RUNAWAY,
+    "runaway.tokens_exceeded": _CODE_NODE_RUNAWAY,
     "node_cancelled": "node.cancelled",
     # Run-level.
     "executor_superseded": "run.superseded",
     # Contract.
     "output_rejected": "contract.schema",
+    # Executor maps manual/agent output schema validation failures to this
+    # domain code (PRD §8.9 error table) instead of a raw "ValueError".
+    "schema_validation_failure": "contract.schema",
     # Harness machinery (§3.2). ``TypeError``/``OperationalError`` are the
     # raw exception class names that executor's generic catch publishes.
     "OperationalError": "harness.db.connection_lost",
     "TypeError": "harness.state_serialization",
     "NodeCancelledError": "harness.sdk_task_cancelled",
     "SandboxNodeFailedError": "sandbox.no_output_json",
-    "executor_setup_failed": "harness.executor_failed",
-    "executor_failed": "harness.executor_failed",
+    "executor_setup_failed": _CODE_HARNESS_EXECUTOR_FAILED,
+    "executor_failed": _CODE_HARNESS_EXECUTOR_FAILED,
     "executor_heartbeat_lost": "harness.executor_heartbeat_lost",
-    "never_dispatched": "harness.dispatch_failed",
-    "dispatch_failed": "harness.dispatch_failed",
-    "worker_lost": "harness.dispatch_failed",
+    "never_dispatched": _CODE_HARNESS_DISPATCH_FAILED,
+    "dispatch_failed": _CODE_HARNESS_DISPATCH_FAILED,
+    "worker_lost": _CODE_HARNESS_DISPATCH_FAILED,
     "task_failure": "harness.worker_failed",
     "gate_creation_failed": "harness.gate_creation_failed",
     # FAR-228 raw code used by the executor's retry-suppression write.
@@ -331,8 +346,8 @@ LEGACY_ALIASES: dict[str, str] = {
     "AuthenticationError": "provider.authentication",
     "APIConnectionError": "provider.connection",
     # Eval.
-    "eval_blocked": "eval.blocked",
-    "eval_suite_blocked": "eval.blocked",
+    "eval_blocked": _CODE_EVAL_BLOCKED,
+    "eval_suite_blocked": _CODE_EVAL_BLOCKED,
     # Config.
     "configuration_error": "config.error",
     # Capacity.
@@ -351,13 +366,13 @@ def map_legacy_code(code: str | None) -> str:
     ``harness.unknown`` (§3.2) so presentation always has a resolvable code.
     """
     if not code:
-        return "harness.unknown"
+        return _CODE_HARNESS_UNKNOWN
     resolved = LEGACY_ALIASES.get(code)
     if resolved is not None:
         return resolved
     if code in ERROR_CODE_REGISTRY:
         return code
-    return "harness.unknown"
+    return _CODE_HARNESS_UNKNOWN
 
 
 def class_for(code: str | None) -> str:

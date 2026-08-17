@@ -23,6 +23,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_RESOURCE_ALREADY_EXISTS
 from modulo.api.dependencies import get_db_session
 from modulo.api.routes.admin import _raise_bg_pgcode
 from modulo.auth.scim_auth import ScimPrincipal, get_scim_principal, require_scim_feature
@@ -51,6 +52,25 @@ from modulo.db.models.account import Account
 from modulo.db.models.team import Team
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
+
+_CODE_SCIM_LIST_USERS = "scim.list_users"
+_MSG_SCIM_ENDPOINT_FAILED_DATABASE = "SCIM endpoint failed: database migration required"
+_MSG_SCIM_PROVISIONING_NOT_AVAILABLE = "SCIM provisioning is not available. Run database migrations to enable it."
+_MSG_SCIM_PROVISIONING_TEMPORARILY_UNAVAILABLE = "SCIM provisioning is temporarily unavailable due to a database error"
+_CODE_SCIM_CREATE_USER = "scim.create_user"
+_CODE_SCIM_GET_USER = "scim.get_user"
+_MSG_NO_ACTIVE_ADMIN_EXISTS = "No active admin exists in this org; provision a replacement admin first"
+_MSG_COULD_NOT_VERIFY_LAST = "Could not verify the last-admin invariant. Please try again."
+_CODE_SCIM_REPLACE_USER = "scim.replace_user"
+_CODE_SCIM_PATCH_USER = "scim.patch_user"
+_CODE_SCIM_DELETE_USER = "scim.delete_user"
+_CODE_SCIM_LIST_GROUPS = "scim.list_groups"
+_CODE_SCIM_CREATE_GROUP = "scim.create_group"
+_CODE_SCIM_GET_GROUP = "scim.get_group"
+_CODE_SCIM_REPLACE_GROUP = "scim.replace_group"
+_CODE_SCIM_PATCH_GROUP = "scim.patch_group"
+_CODE_SCIM_DELETE_GROUP = "scim.delete_group"
+
 
 router = APIRouter(prefix="/scim/v2", tags=["scim"])
 
@@ -258,23 +278,23 @@ async def list_users(
         _log.warning("SCIM list_users: re-raising HTTPException")
         raise
     except IntegrityError:
-        _log.exception("scim.list_users")
+        _log.exception(_CODE_SCIM_LIST_USERS)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("scim.list_users")
-        _log.warning("SCIM endpoint failed: database migration required")
+        _log.exception(_CODE_SCIM_LIST_USERS)
+        _log.warning(_MSG_SCIM_ENDPOINT_FAILED_DATABASE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="SCIM provisioning is not available. Run database migrations to enable it.",
+            detail=_MSG_SCIM_PROVISIONING_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("scim.list_users")
+        _log.exception(_CODE_SCIM_LIST_USERS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="SCIM provisioning is temporarily unavailable due to a database error",
+            detail=_MSG_SCIM_PROVISIONING_TEMPORARILY_UNAVAILABLE,
         ) from None
     except Exception:
         _log.exception("SCIM list_users failed: unexpected error")
@@ -335,24 +355,24 @@ async def create_user(
         _log.warning("SCIM create_user: re-raising HTTPException")
         raise
     except IntegrityError:
-        _log.exception("scim.create_user")
+        _log.exception(_CODE_SCIM_CREATE_USER)
         _log.warning("SCIM create_user: duplicate key violation")
         raise _scim_error(
             status.HTTP_409_CONFLICT,
             f"User with userName {req.userName} already exists",
         ) from None
     except ProgrammingError:
-        _log.exception("scim.create_user")
-        _log.warning("SCIM endpoint failed: database migration required")
+        _log.exception(_CODE_SCIM_CREATE_USER)
+        _log.warning(_MSG_SCIM_ENDPOINT_FAILED_DATABASE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="SCIM provisioning is not available. Run database migrations to enable it.",
+            detail=_MSG_SCIM_PROVISIONING_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("scim.create_user")
+        _log.exception(_CODE_SCIM_CREATE_USER)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="SCIM provisioning is temporarily unavailable due to a database error",
+            detail=_MSG_SCIM_PROVISIONING_TEMPORARILY_UNAVAILABLE,
         ) from None
     except Exception:
         _log.exception("SCIM create_user failed: unexpected error")
@@ -379,23 +399,23 @@ async def get_user(
         _log.warning("SCIM get_user: re-raising HTTPException")
         raise
     except IntegrityError:
-        _log.exception("scim.get_user")
+        _log.exception(_CODE_SCIM_GET_USER)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("scim.get_user")
-        _log.warning("SCIM endpoint failed: database migration required")
+        _log.exception(_CODE_SCIM_GET_USER)
+        _log.warning(_MSG_SCIM_ENDPOINT_FAILED_DATABASE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="SCIM provisioning is not available. Run database migrations to enable it.",
+            detail=_MSG_SCIM_PROVISIONING_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("scim.get_user")
+        _log.exception(_CODE_SCIM_GET_USER)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="SCIM provisioning is temporarily unavailable due to a database error",
+            detail=_MSG_SCIM_PROVISIONING_TEMPORARILY_UNAVAILABLE,
         ) from None
     except Exception:
         _log.exception("SCIM get_user failed: unexpected error")
@@ -430,7 +450,7 @@ async def replace_user(
                 if caller is None:
                     raise _scim_error(
                         status.HTTP_409_CONFLICT,
-                        "No active admin exists in this org; provision a replacement admin first",
+                        _MSG_NO_ACTIVE_ADMIN_EXISTS,
                     )
                 await assert_not_last_admin(
                     session,
@@ -463,25 +483,25 @@ async def replace_user(
         _log.exception("scim.replace_user.last_admin_guard_unavailable")
         raise _scim_error(
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            "Could not verify the last-admin invariant. Please try again.",
+            _MSG_COULD_NOT_VERIFY_LAST,
         ) from None
     except HTTPException:
         raise
     except IntegrityError:
-        _log.exception("scim.replace_user")
+        _log.exception(_CODE_SCIM_REPLACE_USER)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("scim.replace_user")
-        _log.warning("SCIM endpoint failed: database migration required")
+        _log.exception(_CODE_SCIM_REPLACE_USER)
+        _log.warning(_MSG_SCIM_ENDPOINT_FAILED_DATABASE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="SCIM provisioning is not available. Run database migrations to enable it.",
+            detail=_MSG_SCIM_PROVISIONING_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        _log.exception("scim.replace_user")
+        _log.exception(_CODE_SCIM_REPLACE_USER)
         _raise_bg_pgcode(
             exc,
             unauthorized_status=status.HTTP_409_CONFLICT,
@@ -490,7 +510,7 @@ async def replace_user(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="SCIM provisioning is temporarily unavailable due to a database error",
+            detail=_MSG_SCIM_PROVISIONING_TEMPORARILY_UNAVAILABLE,
         ) from None
     except Exception:
         _log.exception("SCIM replace_user failed: unexpected error")
@@ -556,7 +576,7 @@ async def patch_user(
                 if caller is None:
                     raise _scim_error(
                         status.HTTP_409_CONFLICT,
-                        "No active admin exists in this org; provision a replacement admin first",
+                        _MSG_NO_ACTIVE_ADMIN_EXISTS,
                     )
                 await assert_not_last_admin(
                     session,
@@ -581,26 +601,26 @@ async def patch_user(
         _log.exception("scim.patch_user.last_admin_guard_unavailable")
         raise _scim_error(
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            "Could not verify the last-admin invariant. Please try again.",
+            _MSG_COULD_NOT_VERIFY_LAST,
         ) from None
     except HTTPException:
         _log.warning("SCIM patch_user: re-raising HTTPException")
         raise
     except IntegrityError:
-        _log.exception("scim.patch_user")
+        _log.exception(_CODE_SCIM_PATCH_USER)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("scim.patch_user")
-        _log.warning("SCIM endpoint failed: database migration required")
+        _log.exception(_CODE_SCIM_PATCH_USER)
+        _log.warning(_MSG_SCIM_ENDPOINT_FAILED_DATABASE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="SCIM provisioning is not available. Run database migrations to enable it.",
+            detail=_MSG_SCIM_PROVISIONING_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        _log.exception("scim.patch_user")
+        _log.exception(_CODE_SCIM_PATCH_USER)
         _raise_bg_pgcode(
             exc,
             unauthorized_status=status.HTTP_409_CONFLICT,
@@ -609,7 +629,7 @@ async def patch_user(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="SCIM provisioning is temporarily unavailable due to a database error",
+            detail=_MSG_SCIM_PROVISIONING_TEMPORARILY_UNAVAILABLE,
         ) from None
     except Exception:
         _log.exception("SCIM patch_user failed: unexpected error")
@@ -635,7 +655,7 @@ async def delete_user(
             if caller is None:
                 raise _scim_error(
                     status.HTTP_409_CONFLICT,
-                    "No active admin exists in this org; provision a replacement admin first",
+                    _MSG_NO_ACTIVE_ADMIN_EXISTS,
                 )
             account = await scim_get_user(session, principal.organisation_id, user_id)
             if account is None:
@@ -659,26 +679,26 @@ async def delete_user(
         _log.exception("scim.delete_user.last_admin_guard_unavailable")
         raise _scim_error(
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            "Could not verify the last-admin invariant. Please try again.",
+            _MSG_COULD_NOT_VERIFY_LAST,
         ) from None
     except HTTPException:
         _log.warning("SCIM delete_user: re-raising HTTPException")
         raise
     except IntegrityError:
-        _log.exception("scim.delete_user")
+        _log.exception(_CODE_SCIM_DELETE_USER)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("scim.delete_user")
-        _log.warning("SCIM endpoint failed: database migration required")
+        _log.exception(_CODE_SCIM_DELETE_USER)
+        _log.warning(_MSG_SCIM_ENDPOINT_FAILED_DATABASE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="SCIM provisioning is not available. Run database migrations to enable it.",
+            detail=_MSG_SCIM_PROVISIONING_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        _log.exception("scim.delete_user")
+        _log.exception(_CODE_SCIM_DELETE_USER)
         _raise_bg_pgcode(
             exc,
             unauthorized_status=status.HTTP_409_CONFLICT,
@@ -687,7 +707,7 @@ async def delete_user(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="SCIM provisioning is temporarily unavailable due to a database error",
+            detail=_MSG_SCIM_PROVISIONING_TEMPORARILY_UNAVAILABLE,
         ) from None
     except Exception:
         _log.exception("SCIM delete_user failed: unexpected error")
@@ -739,23 +759,23 @@ async def list_groups(
         _log.warning("SCIM list_groups: re-raising HTTPException")
         raise
     except IntegrityError:
-        _log.exception("scim.list_groups")
+        _log.exception(_CODE_SCIM_LIST_GROUPS)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("scim.list_groups")
-        _log.warning("SCIM endpoint failed: database migration required")
+        _log.exception(_CODE_SCIM_LIST_GROUPS)
+        _log.warning(_MSG_SCIM_ENDPOINT_FAILED_DATABASE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="SCIM provisioning is not available. Run database migrations to enable it.",
+            detail=_MSG_SCIM_PROVISIONING_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("scim.list_groups")
+        _log.exception(_CODE_SCIM_LIST_GROUPS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="SCIM provisioning is temporarily unavailable due to a database error",
+            detail=_MSG_SCIM_PROVISIONING_TEMPORARILY_UNAVAILABLE,
         ) from None
     except Exception:
         _log.exception("SCIM list_groups failed: unexpected error")
@@ -830,24 +850,24 @@ async def create_group(
         _log.warning("SCIM create_group: re-raising HTTPException")
         raise
     except IntegrityError:
-        _log.exception("scim.create_group")
+        _log.exception(_CODE_SCIM_CREATE_GROUP)
         _log.warning("SCIM create_group: duplicate key violation")
         raise _scim_error(
             status.HTTP_409_CONFLICT,
             f"Group with displayName {req.displayName} already exists",
         ) from None
     except ProgrammingError:
-        _log.exception("scim.create_group")
-        _log.warning("SCIM endpoint failed: database migration required")
+        _log.exception(_CODE_SCIM_CREATE_GROUP)
+        _log.warning(_MSG_SCIM_ENDPOINT_FAILED_DATABASE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="SCIM provisioning is not available. Run database migrations to enable it.",
+            detail=_MSG_SCIM_PROVISIONING_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("scim.create_group")
+        _log.exception(_CODE_SCIM_CREATE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="SCIM provisioning is temporarily unavailable due to a database error",
+            detail=_MSG_SCIM_PROVISIONING_TEMPORARILY_UNAVAILABLE,
         ) from None
     except Exception:
         _log.exception("SCIM create_group failed: unexpected error")
@@ -895,23 +915,23 @@ async def get_group(
         _log.warning("SCIM get_group: re-raising HTTPException")
         raise
     except IntegrityError:
-        _log.exception("scim.get_group")
+        _log.exception(_CODE_SCIM_GET_GROUP)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("scim.get_group")
-        _log.warning("SCIM endpoint failed: database migration required")
+        _log.exception(_CODE_SCIM_GET_GROUP)
+        _log.warning(_MSG_SCIM_ENDPOINT_FAILED_DATABASE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="SCIM provisioning is not available. Run database migrations to enable it.",
+            detail=_MSG_SCIM_PROVISIONING_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("scim.get_group")
+        _log.exception(_CODE_SCIM_GET_GROUP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="SCIM provisioning is temporarily unavailable due to a database error",
+            detail=_MSG_SCIM_PROVISIONING_TEMPORARILY_UNAVAILABLE,
         ) from None
     except Exception:
         _log.exception("SCIM get_group failed: unexpected error")
@@ -962,23 +982,23 @@ async def replace_group(
         _log.warning("SCIM replace_group: re-raising HTTPException")
         raise
     except IntegrityError:
-        _log.exception("scim.replace_group")
+        _log.exception(_CODE_SCIM_REPLACE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("scim.replace_group")
-        _log.warning("SCIM endpoint failed: database migration required")
+        _log.exception(_CODE_SCIM_REPLACE_GROUP)
+        _log.warning(_MSG_SCIM_ENDPOINT_FAILED_DATABASE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="SCIM provisioning is not available. Run database migrations to enable it.",
+            detail=_MSG_SCIM_PROVISIONING_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("scim.replace_group")
+        _log.exception(_CODE_SCIM_REPLACE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="SCIM provisioning is temporarily unavailable due to a database error",
+            detail=_MSG_SCIM_PROVISIONING_TEMPORARILY_UNAVAILABLE,
         ) from None
     except Exception:
         _log.exception("SCIM replace_group failed: unexpected error")
@@ -1099,23 +1119,23 @@ async def patch_group(
         _log.warning("SCIM patch_group: re-raising HTTPException")
         raise
     except IntegrityError:
-        _log.exception("scim.patch_group")
+        _log.exception(_CODE_SCIM_PATCH_GROUP)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("scim.patch_group")
-        _log.warning("SCIM endpoint failed: database migration required")
+        _log.exception(_CODE_SCIM_PATCH_GROUP)
+        _log.warning(_MSG_SCIM_ENDPOINT_FAILED_DATABASE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="SCIM provisioning is not available. Run database migrations to enable it.",
+            detail=_MSG_SCIM_PROVISIONING_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("scim.patch_group")
+        _log.exception(_CODE_SCIM_PATCH_GROUP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="SCIM provisioning is temporarily unavailable due to a database error",
+            detail=_MSG_SCIM_PROVISIONING_TEMPORARILY_UNAVAILABLE,
         ) from None
     except Exception:
         _log.exception("SCIM patch_group failed: unexpected error")
@@ -1146,23 +1166,23 @@ async def delete_group(
         _log.warning("SCIM delete_group: re-raising HTTPException")
         raise
     except IntegrityError:
-        _log.exception("scim.delete_group")
+        _log.exception(_CODE_SCIM_DELETE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("scim.delete_group")
-        _log.warning("SCIM endpoint failed: database migration required")
+        _log.exception(_CODE_SCIM_DELETE_GROUP)
+        _log.warning(_MSG_SCIM_ENDPOINT_FAILED_DATABASE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="SCIM provisioning is not available. Run database migrations to enable it.",
+            detail=_MSG_SCIM_PROVISIONING_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("scim.delete_group")
+        _log.exception(_CODE_SCIM_DELETE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="SCIM provisioning is temporarily unavailable due to a database error",
+            detail=_MSG_SCIM_PROVISIONING_TEMPORARILY_UNAVAILABLE,
         ) from None
     except Exception:
         _log.exception("SCIM delete_group failed: unexpected error")

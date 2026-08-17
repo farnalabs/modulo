@@ -30,7 +30,8 @@ from modulo.api.dependencies import _get_engine, get_db_session, get_plan_contex
 from modulo.api.main import app  # noqa: E402
 from modulo.auth.dependencies import get_current_user  # noqa: E402
 from modulo.auth.jwt import AuthenticatedPrincipal  # noqa: E402
-from modulo.db.crud.schema_folder import _MAX_FOLDER_DEPTH, create_folder, update_folder  # noqa: E402
+from modulo.db.crud.folder_tree import MAX_FOLDER_DEPTH  # noqa: E402
+from modulo.db.crud.schema_folder import create_folder, update_folder  # noqa: E402
 from modulo.settings import Settings  # noqa: E402
 from tests.unit.api.mock_session import configure_mock_session  # noqa: E402
 
@@ -266,7 +267,7 @@ async def test_update_folder_rejects_descendant_parent() -> None:
     folder = _make_folder()
     descendant_id = uuid.uuid4()
     # get_folder -> folder; parent-exists check -> descendant exists in org;
-    # _folder_is_ancestor walks up from the descendant and finds the folder
+    # folder_is_ancestor walks up from the descendant and finds the folder
     # being updated in its parent chain.
     session = _session_returning(folder, descendant_id, _FOLDER_ID)
     with pytest.raises(ValueError, match="descendants"):
@@ -290,10 +291,10 @@ async def test_update_folder_enforces_depth_limit() -> None:
     # get_folder -> folder; parent-exists check -> the parent id (exists)
     session = _session_returning(folder, uuid.uuid4())
     with (
-        patch("modulo.db.crud.schema_folder._folder_is_ancestor", new=AsyncMock(return_value=False)),
+        patch("modulo.db.crud.schema_folder.folder_is_ancestor", new=AsyncMock(return_value=False)),
         patch(
-            "modulo.db.crud.schema_folder._compute_folder_depth",
-            new=AsyncMock(return_value=_MAX_FOLDER_DEPTH),
+            "modulo.db.crud.folder_tree.compute_folder_depth",
+            new=AsyncMock(return_value=MAX_FOLDER_DEPTH),
         ),
         pytest.raises(ValueError, match="nesting depth"),
     ):
