@@ -28,6 +28,8 @@ from modulo.core.pipeline_engine.executor import (
     _script_lease_probe_ok,
 )
 from modulo.core.pipeline_engine.node_runner import (
+    OutputSchemaValidationError,
+    ScriptInvalidOutputError,
     ScriptSideEffectUnknownError,
     SupersededNodeError,
     make_sandbox_agent_fn,
@@ -362,6 +364,38 @@ def test_script_mode_schema_failure_never_retried():
         )
         is None
     )
+
+
+def test_retry_after_policy_never_retries_script_post_claim_schema_failure():
+    """A script-mode post-claim schema failure is TERMINAL (never retried).
+
+    Regression for the exactly-once hole: the script-mode post-claim schema
+    path (node_runner) must raise a ``ScriptInvalidOutputError`` subclass so it
+    surfaces under the never-retryable ``script.invalid_output`` code rather
+    than the SHARED ``schema_validation_failure`` / ``contract.schema`` spelling
+    (which must stay retryable for LLM-mode / manual nodes). Re-dispatching a
+    script whose process already started could double-execute a side effect.
+    """
+    policy = {"on": ["failure"], "max_retries": 3}
+    script_failure = _failure_event_matches(
+        {"failure"}, "failed", "ScriptInvalidOutputError", "script.invalid_output", None
+    )
+    assert script_failure is False
+    assert _retry_after_policy(policy, "failed", "ScriptInvalidOutputError") is None
+    assert _retry_after_policy(policy, "failed", "script.invalid_output") is None
+
+
+def test_script_post_claim_schema_failure_raises_never_retryable_script_error():
+    """node_runner raises ScriptInvalidOutputError (not the shared schema code)
+    for a script-mode post-claim output schema failure.
+
+    The shared ``OutputSchemaValidationError`` / ``schema_validation_failure``
+    is reserved for LLM-mode / manual-node resume output (retryable); the
+    script-mode post-claim path must be terminal and never-retryable.
+    """
+    assert issubclass(ScriptInvalidOutputError, Exception)
+    assert not issubclass(OutputSchemaValidationError, ScriptInvalidOutputError)
+    assert not issubclass(ScriptInvalidOutputError, OutputSchemaValidationError)
 
 
 # ---------------------------------------------------------------------------
