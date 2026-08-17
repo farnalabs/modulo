@@ -1230,7 +1230,11 @@ async def test_dispatch_hitl_awaiting_without_pipeline_name_omits_key():
 
 
 async def test_dispatch_hitl_awaiting_skips_without_notifier():
-    executor = PipelineExecutor(MagicMock())
+    notifier = MagicMock()
+    notifier.dispatch_event = AsyncMock()
+    executor = PipelineExecutor(MagicMock(), notifier=notifier)
+    executor._notifier = None
+
     await executor._dispatch_hitl_awaiting(
         org_id=uuid.uuid4(),
         run_id=uuid.uuid4(),
@@ -1238,6 +1242,9 @@ async def test_dispatch_hitl_awaiting_skips_without_notifier():
         pipeline_name="P",
         team_id=None,
     )
+
+    assert executor._notifier is None
+    notifier.dispatch_event.assert_not_awaited()
 
 
 async def test_dispatch_hitl_awaiting_failure_is_isolated():
@@ -1245,13 +1252,17 @@ async def test_dispatch_hitl_awaiting_failure_is_isolated():
     notifier.dispatch_event = AsyncMock(side_effect=RuntimeError("boom"))
     executor = PipelineExecutor(MagicMock(), notifier=notifier)
 
-    await executor._dispatch_hitl_awaiting(
-        org_id=uuid.uuid4(),
-        run_id=uuid.uuid4(),
-        gate_id="gate-1",
-        pipeline_name="P",
-        team_id=None,
-    )
+    with patch("modulo.core.pipeline_engine.executor._log.exception") as mock_exc:
+        await executor._dispatch_hitl_awaiting(
+            org_id=uuid.uuid4(),
+            run_id=uuid.uuid4(),
+            gate_id="gate-1",
+            pipeline_name="P",
+            team_id=None,
+        )
+
+    assert notifier.dispatch_event.await_count == 1
+    mock_exc.assert_called_once()
 
 
 async def test_execute_with_notifier_dispatches_hitl_awaiting():
