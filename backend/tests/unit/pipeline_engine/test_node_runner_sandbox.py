@@ -1638,6 +1638,134 @@ async def test_watch_log_growth_keeps_silent_run_alive():
     handle.kill.assert_not_awaited()
 
 
+async def test_watch_log_growth_end_to_end_keeps_heartbeat_off_run_alive():
+    """END-TO-END through make_sandbox_agent_fn: with enable_heartbeat=False
+    (strict mode) a connected-but-silent agent stays alive ONLY via the opt-in
+    watch_log_path log-growth detector. This proves the real wiring — strict
+    mode actually disables the heartbeat channel (the drain probe's get_info
+    is a no-op touch) and log-growth is the sole lifeline for a silent
+    heartbeat-off agent. Without the detector's wiring this test genuinely
+    fails: the watchdog fires and stalls the run.
+
+    ``handle.wait`` sleeps for ~the tick interval before returning/raising, so
+    a real wall-clock stall window elapses — the watchdog's stale-check
+    actually trips when no channel is refreshed (an instant-fail mock would
+    complete the run before the watchdog could ever fire).
+    """
+    node_def = _base_node_def(
+        timeout_seconds=30,
+        enable_heartbeat=False,
+        watch_log_path="/home/user/progress.log",
+    )
+    fn = make_sandbox_agent_fn(node_def)
+
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = ""
+    cmd_result.stderr = ""
+
+    watch_sizes = iter(range(10, 61, 10))
+    wait_calls = {"n": 0}
+
+    async def _wait():
+        wait_calls["n"] += 1
+        # Sleep just under the tick interval so the poll slice returns/raises
+        # BEFORE wait_for's timeout fires (a sleep >= the tick would lose the
+        # race and be swallowed as a timeout, adding phantom ticks that exhaust
+        # the watch-size iterator and stall the run spuriously).
+        await asyncio.sleep(0.04)
+        if wait_calls["n"] < 6:
+            raise TimeoutError
+        return cmd_result
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=_wait)
+    handle.kill = AsyncMock()
+
+    def _get_info(path, **kwargs):
+        if str(path).endswith("progress.log"):
+            return MagicMock(size=next(watch_sizes))
+        return MagicMock(size=0)
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            return '{"summary": "done"}'
+        return ""
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.get_info = AsyncMock(side_effect=_get_info)
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.files.list = AsyncMock(return_value=[])
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.05),
+        # Small stall window so a run with NO lifeline would genuinely fire the
+        # watchdog inside this short test (default 300s would never stall): the
+        # log-growth touch every tick (~0.04s) stays well short of the 0.1s
+        # idle window, while a detector-less run goes stale after 0.1s and the
+        # watchdog fires on the third tick.
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 0.1),
+    ):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    handle.kill.assert_not_awaited()
+
+
+async def test_heartbeat_off_no_detector_stalls_end_to_end():
+    """END-TO-END strict-mode companion: with enable_heartbeat=False and NO
+    opt-in detector, a connected-but-silent agent MUST stall through the real
+    make_sandbox_agent_fn wiring (not just a hand-built _StallDetector). The
+    drain probe's successful get_info proves the sandbox is responsive, but
+    with heartbeat disabled that touch is a no-op and the flat agent log never
+    refreshes the output channel — so log-growth is provably the ONLY lifeline
+    a heartbeat-off silent run has.
+
+    ``handle.wait`` sleeps for the full tick interval before each timeout so a
+    real stall window elapses and the watchdog genuinely fires.
+    """
+    node_def = _base_node_def(timeout_seconds=30, enable_heartbeat=False)
+    fn = make_sandbox_agent_fn(node_def)
+
+    async def _wait():
+        await asyncio.sleep(0.04)
+        raise TimeoutError
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=_wait)
+    handle.kill = AsyncMock()
+
+    def _get_info(path, **kwargs):
+        return MagicMock(size=0)
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            return '{"summary": "done"}'
+        return ""
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.get_info = AsyncMock(side_effect=_get_info)
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.files.list = AsyncMock(return_value=[])
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.05),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 0.1),
+        pytest.raises(SandboxNodeFailedError, match="no output"),
+    ):
+        await fn(_run_state())
+
+    handle.kill.assert_awaited()
+
+
 # ---------------------------------------------------------------------------
 # FAR-306: enable_heartbeat=False is strict — a connected-but-silent agent stalls
 # ---------------------------------------------------------------------------
