@@ -403,8 +403,13 @@ class PipelineGraphNode(BaseModel):
     parameter_set_id: uuid.UUID | None = None
     parameter_overrides: dict[str, Any] | None = None
     template_id: str | None = None
+    # FAR-296: sandbox_agent mode — "llm" (default, dispatches an LLM agent with
+    # agent_command + rendered prompt) or "script" (runs script_command verbatim
+    # with the full run input at /home/user/input.json).
+    mode: Literal["llm", "script"] = "llm"
     agent_command: str | None = None
     agent_prompt: str | None = None
+    script_command: str | None = None
     # FAR-228: opt-in idempotency gate for side-effecting sandbox nodes. When
     # non-empty, a FULL-LINE occurrence of this literal in the sandbox output
     # marks the run's delivery as done (raw-output marker ``delivery_done``),
@@ -444,10 +449,14 @@ class PipelineGraphNode(BaseModel):
             if self.connector_binding is not None:
                 raise ValueError("Composite nodes cannot have connector bindings")
         elif self.node_type == "sandbox_agent":
-            if not self.agent_prompt or not self.agent_prompt.strip():
-                raise ValueError("sandbox_agent nodes require a non-empty agent_prompt")
-            if not self.agent_command or not self.agent_command.strip():
-                raise ValueError("Sandbox agent nodes require a non-empty agent_command")
+            # FAR-296 mode-aware validation — ONE shared helper used by every
+            # sandbox_agent gate (Pydantic model, node runner, GraphValidator,
+            # MCP update_pipeline_graph, config linter) so save-time and run-time
+            # agreement is guaranteed. Imported from the lightweight sandbox_mode
+            # module (no LangGraph) to keep the API layer import-linter-clean.
+            from modulo.core.pipeline_engine.sandbox_mode import _validate_sandbox_mode_config
+
+            _validate_sandbox_mode_config(self.model_dump())
             if not self.template_id:
                 raise ValueError("Sandbox agent nodes require a template_id (e.g. 'opencode')")
             self._validate_sandbox_env_vars()

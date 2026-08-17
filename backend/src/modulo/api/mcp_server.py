@@ -1633,6 +1633,21 @@ async def update_pipeline_graph(
                 "detail": f"Graph validation failed: {exc.errors(include_url=False)}",
             }
 
+        # FAR-296 mode-aware sandbox_agent gate — the SAME shared helper the
+        # Pydantic model, node runner, and GraphValidator use, applied to the
+        # raw node dicts so this gate agrees with save-time and run-time
+        # validation even if the Pydantic surface is bypassed. Imported from the
+        # lightweight sandbox_mode module (no LangGraph) to keep the API layer
+        # import-linter-clean.
+        from modulo.core.pipeline_engine.sandbox_mode import _validate_sandbox_mode_config
+
+        for node in nodes:
+            if node.get("node_type") == "sandbox_agent":
+                try:
+                    _validate_sandbox_mode_config(node)
+                except ValueError as exc:
+                    return {"error": "validation_failed", "field": "nodes", "detail": str(exc)}
+
         try:
             async with _session(org_id) as s:
                 from modulo.db.crud.pipeline import get_pipeline
