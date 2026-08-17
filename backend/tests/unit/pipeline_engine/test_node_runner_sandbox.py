@@ -1711,6 +1711,56 @@ async def test_watch_log_growth_keeps_silent_strict_run_alive_end_to_end():
     handle.kill.assert_not_awaited()
 
 
+async def test_heartbeat_off_no_detector_stalls_end_to_end():
+    """END-TO-END strict-mode companion: with enable_heartbeat=False and NO
+    opt-in detector, a connected-but-silent agent MUST stall through the real
+    make_sandbox_agent_fn wiring (not just a hand-built _StallDetector). The
+    drain probe's successful get_info proves the sandbox is responsive, but
+    with heartbeat disabled that touch is a no-op and the flat agent log never
+    refreshes the output channel — so log-growth is provably the ONLY lifeline
+    a heartbeat-off silent run has.
+
+    ``handle.wait`` sleeps for the full tick interval before each timeout so a
+    real stall window elapses and the watchdog genuinely fires.
+    """
+    node_def = _base_node_def(timeout_seconds=30, enable_heartbeat=False)
+    fn = make_sandbox_agent_fn(node_def)
+
+    async def _wait():
+        await asyncio.sleep(0.04)
+        raise TimeoutError
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=_wait)
+    handle.kill = AsyncMock()
+
+    def _get_info(path, **kwargs):
+        return MagicMock(size=0)
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            return '{"summary": "done"}'
+        return ""
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.get_info = AsyncMock(side_effect=_get_info)
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.files.list = AsyncMock(return_value=[])
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.05),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 0.1),
+        pytest.raises(SandboxNodeFailedError, match="no output"),
+    ):
+        await fn(_run_state())
+
+    handle.kill.assert_awaited()
+
+
 # ---------------------------------------------------------------------------
 # FAR-306: enable_heartbeat=False is strict — a connected-but-silent agent stalls
 # ---------------------------------------------------------------------------
