@@ -358,8 +358,10 @@ def no_duplicate_account(ctx: dict[str, Any]) -> None:
     assert mock_jit is not None, "No mock_jit reference found in context"
     mock_jit.assert_awaited_once()
     returned = mock_jit.return_value
-    assert returned.email == ctx.get("expected_email", ""), (
-        f"Expected returning user {ctx.get('expected_email')}, got {returned.email}"
+    user = returned[0] if isinstance(returned, tuple) else returned
+    assert user.email == ctx.get("expected_email", ""), (
+        f"Expected returning user {ctx.get('expected_email')}, got {user.email}"
+        f"Expected returning user {ctx.get('expected_email')}, got {user.email}"
     )
 
 
@@ -370,7 +372,7 @@ def user_added_to_team(team_id: str, role: str, ctx: dict[str, Any]) -> None:
     mock_apply.assert_awaited_once()
     call = mock_apply.await_args
     assert call is not None
-    idp_groups_arg = call[0][2]
+    idp_groups_arg = call[0][3]
     assert len(idp_groups_arg) > 0, "Expected at least one IDP group in apply_group_mappings"
 
 
