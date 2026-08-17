@@ -3194,6 +3194,25 @@ async def _apply_trigger_field_updates(
         trigger.next_fire_at = next_fire_at
 
 
+def _recompute_ongoing_next_fire(
+    trigger: Any,
+    max_concurrent_runs: int | None,
+    active: bool | None,
+    prev_max: int | None,
+    prev_active: bool | None,
+    ongoing_scan_interval_changed: bool,
+) -> None:
+    # Ongoing triggers recompute next_fire_at when the pool / cadence /
+    # active actually changes so the new config takes effect promptly.
+    if trigger.trigger_type == "ongoing":
+        from datetime import UTC
+
+        target_changed = max_concurrent_runs is not None and max_concurrent_runs != prev_max
+        activated = active is not None and trigger.active and not prev_active
+        if target_changed or ongoing_scan_interval_changed or activated:
+            trigger.next_fire_at = datetime.now(UTC)
+
+
 @mcp.tool(
     description="Update an existing trigger's configuration. "
     "Mirrors PUT /api/v1/triggers/{id}. Setting cron_expression or "
@@ -3257,15 +3276,9 @@ async def update_trigger(
                 prev_active,
             )
 
-            # Ongoing triggers recompute next_fire_at when the pool / cadence /
-            # active actually changes so the new config takes effect promptly.
-            if trigger.trigger_type == "ongoing":
-                from datetime import UTC
-
-                target_changed = max_concurrent_runs is not None and max_concurrent_runs != prev_max
-                activated = active is not None and trigger.active and not prev_active
-                if target_changed or ongoing_scan_interval_changed or activated:
-                    trigger.next_fire_at = datetime.now(UTC)
+            _recompute_ongoing_next_fire(
+                trigger, max_concurrent_runs, active, prev_max, prev_active, ongoing_scan_interval_changed
+            )
             await s.flush()
             from modulo.core.cron_helpers import _count_ongoing_runs
 
