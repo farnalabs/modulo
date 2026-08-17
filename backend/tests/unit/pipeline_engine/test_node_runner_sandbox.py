@@ -1520,3 +1520,44 @@ async def test_agent_command_empty_after_render_fails():
         await fn(_run_state())
 
     sandbox.commands.run.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# FAR-194: `|tojson` on an undefined variable raises TypeError (not
+# UndefinedError) — the template render handlers must skip, not crash the run.
+# ---------------------------------------------------------------------------
+
+
+async def test_prompt_tojson_on_undefined_skips():
+    """A prompt template using `{{ missing | tojson }}` on an undefined variable
+    raises TypeError inside Jinja's tojson filter (json.dumps on Undefined), NOT
+    UndefinedError. It must be treated like the UndefinedError case: the node
+    returns status 'skipped' and NO sandbox command executes."""
+    node_def = _base_node_def(agent_prompt="Context: {{ missing | tojson }}")
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["status"] == "skipped"
+    assert "prompt template" in result["summary"]
+    sandbox.commands.run.assert_not_called()
+
+
+async def test_agent_command_tojson_on_undefined_skips():
+    """An agent_command template using `{{ missing | tojson }}` on an undefined
+    variable raises TypeError, not UndefinedError. It must return status
+    'skipped' and execute NO sandbox command, mirroring the prompt handling."""
+    node_def = _model_node_def(
+        "opencode run --model {{ missing | tojson }} --auto --format json < /home/user/prompt.md"
+    )
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["status"] == "skipped"
+    assert "agent_command" in result["summary"]
+    sandbox.commands.run.assert_not_called()

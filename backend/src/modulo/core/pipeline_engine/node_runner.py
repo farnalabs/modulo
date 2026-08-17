@@ -2173,7 +2173,7 @@ def make_sandbox_agent_fn(
 
             try:
                 rendered_prompt = template.render(**template_vars)
-            except jinja2.UndefinedError as e:
+            except (jinja2.UndefinedError, TypeError) as e:
                 _log.warning("Prompt template UndefinedError for run %s: %s", run_id, e)
                 return {
                     "status": "skipped",
@@ -2191,7 +2191,7 @@ def make_sandbox_agent_fn(
             # compatible with every existing pipeline.
             try:
                 rendered_agent_command = env.from_string(agent_command).render(**template_vars)
-            except jinja2.UndefinedError as e:
+            except (jinja2.UndefinedError, TypeError) as e:
                 _log.warning(
                     "agent_command template UndefinedError for run %s node %s: %s",
                     run_id,
