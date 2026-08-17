@@ -38,7 +38,6 @@ primary_region = 'lhr'
   MODULO_AUTO_LOGIN_PASSWORD = "demo"
   MODULO_DB = "postgres"
   MODULO_PUBLIC_URL = "https://demo.modulo.run"
-  MODULO_DEMO_MODE = "true"
   MODULO_PLUGIN_DISCOVERY = "false"
   MODULO_MAX_LOCAL_CONCURRENCY = "4"
   # REQUIRED: Upstash Redis instance. Create with:
