@@ -6039,6 +6039,30 @@ async def _exchange_authorization_code(
     )
 
 
+async def _oauth_token_impl(request: Request) -> JSONResponse:
+    params, parse_err = await _parse_oauth_form(request)
+    if parse_err:
+        return parse_err
+    assert params is not None
+
+    creds, cred_err = _extract_oauth_client_credentials(request, params)
+    if cred_err:
+        return cred_err
+
+    settings = get_settings()
+    if not settings.modulo_public_url or settings.modulo_public_url == "http://localhost:8000":
+        return JSONResponse(
+            {"error": "server_error", "detail": "MODULO_PUBLIC_URL must be configured"},
+            status_code=500,
+        )
+
+    token_resp, token_err = await _exchange_authorization_code(creds, settings)
+    if token_err:
+        return token_err
+    assert token_resp is not None
+    return JSONResponse(token_resp)
+
+
 async def _oauth_token(request: Request) -> JSONResponse:
     """POST /mcp/oauth/token — exchange code for access token.
 
@@ -6050,35 +6074,13 @@ async def _oauth_token(request: Request) -> JSONResponse:
     consenting account's LIVE org role is re-verified against the granted
     scopes — a demoted account is denied a token (ADR 017).
     """
-    params, parse_err = await _parse_oauth_form(request)
-    if parse_err:
-        return parse_err
-    assert params is not None
-
-    creds, cred_err = _extract_oauth_client_credentials(request, params)
-    if cred_err:
-        return cred_err
-
-    client_id = creds["client_id"]
-
     from modulo.auth.oauth import (
         InvalidClientError,
         InvalidGrantError,
     )
 
-    settings = get_settings()
-    if not settings.modulo_public_url or settings.modulo_public_url == "http://localhost:8000":
-        return JSONResponse(
-            {"error": "server_error", "detail": "MODULO_PUBLIC_URL must be configured"},
-            status_code=500,
-        )
-
     try:
-        token_resp, token_err = await _exchange_authorization_code(creds, settings)
-        if token_err:
-            return token_err
-        assert token_resp is not None
-        return JSONResponse(token_resp)
+        return await _oauth_token_impl(request)
     except (InvalidGrantError, InvalidClientError):
         return JSONResponse(
             {"error": "invalid_grant", "detail": "Authorization code exchange failed"},
@@ -6090,25 +6092,19 @@ async def _oauth_token(request: Request) -> JSONResponse:
             status_code=e.status_code,
         )
     except ProgrammingError:
-        _log.warning(
-            "mcp_oauth.token.programming_error",
-            extra={"client_id": client_id},
-        )
+        _log.warning("mcp_oauth.token.programming_error")
         return JSONResponse(
             {"error": "server_error", "detail": _MSG_FEATURE_NOT_AVAILABLE_MIGRATE},
             status_code=501,
         )
     except SQLAlchemyError:
-        _log.warning(
-            "mcp_oauth.token.sqlalchemy_error",
-            extra={"client_id": client_id},
-        )
+        _log.warning("mcp_oauth.token.sqlalchemy_error")
         return JSONResponse(
             {"error": "temporarily_unavailable", "detail": _MSG_DB_ERROR_TRY_AGAIN},
             status_code=503,
         )
     except Exception:
-        _log.exception("mcp_oauth.token.unexpected_error", extra={"client_id": client_id})
+        _log.exception("mcp_oauth.token.unexpected_error")
         return JSONResponse(
             {"error": "server_error", "detail": _MSG_UNEXPECTED_ERROR},
             status_code=500,
@@ -6238,6 +6234,24 @@ async def _exchange_refresh_token(
     )
 
 
+async def _oauth_refresh_impl(request: Request) -> JSONResponse:
+    params, parse_err = await _parse_oauth_form(request)
+    if parse_err:
+        return parse_err
+    assert params is not None
+
+    creds, cred_err = _extract_oauth_refresh_credentials(request, params)
+    if cred_err:
+        return cred_err
+
+    settings = get_settings()
+    token_resp, token_err = await _exchange_refresh_token(creds, settings)
+    if token_err:
+        return token_err
+    assert token_resp is not None
+    return JSONResponse(token_resp)
+
+
 async def _oauth_refresh(request: Request) -> JSONResponse:
     """POST /mcp/oauth/refresh — exchange refresh token for new access token.
 
@@ -6248,29 +6262,13 @@ async def _oauth_refresh(request: Request) -> JSONResponse:
     (ADR 017 demote-then-refresh). The refresh token is rotated: a new pair is
     issued with an incremented sequence, invalidating the old refresh token.
     """
-    params, parse_err = await _parse_oauth_form(request)
-    if parse_err:
-        return parse_err
-    assert params is not None
-
-    creds, cred_err = _extract_oauth_refresh_credentials(request, params)
-    if cred_err:
-        return cred_err
-
-    client_id = creds["client_id"]
-
     from modulo.auth.oauth import (
         InvalidClientError,
         InvalidGrantError,
     )
 
-    settings = get_settings()
     try:
-        token_resp, token_err = await _exchange_refresh_token(creds, settings)
-        if token_err:
-            return token_err
-        assert token_resp is not None
-        return JSONResponse(token_resp)
+        return await _oauth_refresh_impl(request)
     except (InvalidGrantError, InvalidClientError):
         return JSONResponse(
             {"error": "invalid_grant", "detail": "Refresh token exchange failed"},
@@ -6287,13 +6285,13 @@ async def _oauth_refresh(request: Request) -> JSONResponse:
             status_code=e.status_code,
         )
     except ProgrammingError:
-        _log.warning("mcp_oauth.refresh.programming_error", extra={"client_id": client_id})
+        _log.warning("mcp_oauth.refresh.programming_error")
         return JSONResponse(
             {"error": "server_error", "detail": _MSG_FEATURE_NOT_AVAILABLE_MIGRATE},
             status_code=501,
         )
     except SQLAlchemyError:
-        _log.warning("mcp_oauth.refresh.sqlalchemy_error", extra={"client_id": client_id})
+        _log.warning("mcp_oauth.refresh.sqlalchemy_error")
         return JSONResponse(
             {"error": "temporarily_unavailable", "detail": _MSG_DB_ERROR_TRY_AGAIN},
             status_code=503,
