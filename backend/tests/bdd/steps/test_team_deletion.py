@@ -2,7 +2,7 @@
 
 import contextlib
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
@@ -39,18 +39,13 @@ def user_is_member(username: str, team_name: str, ctx) -> None:
 
 
 @when(parsers.parse('I delete the team "{team_identifier}"'))
-def delete_team_endpoint(team_identifier: str, request, client, ctx) -> None:
+def delete_team_endpoint(team_identifier: str, request, ctx, client=None) -> None:
     from fastapi import HTTPException
+
+    from tests.bdd.conftest import _active_client, _store_response
 
     team_id = ctx.get("team_id", team_identifier)
     active_runs = ctx.get("active_runs", 0)
-    org_role = ctx.get("org_role", "admin")
-
-    if org_role == "viewer":
-        request.node._resp = MagicMock()
-        request.node._resp.status_code = 403
-        request.node._resp.json = lambda: {"detail": "Insufficient permissions"}
-        return
 
     with (
         patch("modulo.api.routes.teams.set_rls_org"),
@@ -67,9 +62,9 @@ def delete_team_endpoint(team_identifier: str, request, client, ctx) -> None:
         else:
             mock_delete.return_value = True
 
-        resp = client.delete(f"/api/v1/teams/{team_id}")
+        resp = _active_client(request, client).delete(f"/api/v1/teams/{team_id}")
 
-    request.node._resp = resp
+    _store_response(request, ctx, resp)
 
 
 @then("the error indicates the team has active runs")
