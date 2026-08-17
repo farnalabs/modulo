@@ -55,3 +55,6 @@ Configuration and management of error forwarding destinations (Sentry, DataDog, 
 |---|---|---|---|
 | 2026-07-10 | cross-cutting (6-lens) | All behaviours verified in code. Added BDD + unit tests. Documented 4 known gaps. Updated depends-on. | ✅ |
 | 2026-08-10 | improve-architecture (product-map walk) | **RESOLVED "No forwarder-specific config validation"** — added `_FORWARDER_CONFIG_SCHEMAS` + `validate_forwarder_config()`; `configure_forwarder` returns 422 for missing/empty required fields and wrong-type optional fields before touching the DB. `_is_configured` now reads required keys from the shared schema (behaviour unchanged). Added 16 unit tests (`TestValidateForwarderConfig` ×11 + 5 configure-422 endpoint tests incl. no-DB-write and multi-error detail) + 3 BDD scenarios with step support. 60/60 unit tests pass, ruff + mypy --strict clean. Status: partial (rate limiting, delivery monitoring, save-race remain). | ✅ |
+
+
+- **2026-08-15 (coverage sweep partial-small-b): Verified the 3 unchecked items (per-forwarder rate limiting, delivery status monitoring, test-result-save race) remain genuine documented gaps. All 18 checked behaviours verified against error_forwarder_config.py + test_error_forwarder_config.py. 18/21 behaviours covered.**

@@ -137,7 +137,7 @@ configuration API.
 - [x] Auth 401/403 enforced via `Depends(get_current_user)` on all routes
 - [x] 422 validation errors via Pydantic models on observability and runs endpoints
 - [x] OTel exporter failure at startup logged and continues without crashing (export.py:68-69)
-- [ ] End-to-end integration test for `ProgrammingError` catching (unit-testable via mock session)
+- [x] End-to-end integration test for `ProgrammingError` catching (unit-testable via mock session) — `test_observability_routes.py` exercises the full route path with a mocked session raising `ProgrammingError`: `test_get_returns_501_on_programming_error`, `test_preview_returns_501_on_programming_error`, `test_put_returns_501_on_programming_error` all assert 501
 
 ## Resilience
 
@@ -152,6 +152,7 @@ configuration API.
 - [ ] Duplicate orphaned span cleanup in `handler.py:_start_span` — lines 88-95 and 106-114 both try to `.set_status(OK)` and `.end()` the same orphaned span. The outer block (lines 88-95) already ends the span. The inner block (lines 106-114) is dead code — `Span.end()` is idempotent in the SDK, but the redundancy should be cleaned up.
 
 ## QA History
+- **2026-08-15 (coverage sweep partial-small-b): Verified the ProgrammingError→501 end-to-end route coverage exists (test_observability_routes.py: `test_get_returns_501_on_programming_error`, `test_preview_returns_501_on_programming_error`, `test_put_returns_501_on_programming_error` all assert 501) — flipped `[ ]`→`[x]`. The remaining unchecked item (duplicate orphaned-span cleanup in handler.py `_start_span` lines 88-95 / 106-114) is a documented code-debt note, not a behaviour — left unchecked. 75/78 behaviours covered.**
 
 ### index 58 (2026-07-02)
 - Cross-cutting QA: Marked all 50+ implemented behaviours [ ]→[x] (OTel bridge lifecycle mapping, token usage, span naming, export configuration, run trace ID, per-node token consumption, cost display, execution trace UI, credential safety, and BDD coverage).

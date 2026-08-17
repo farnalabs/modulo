@@ -101,6 +101,7 @@ disclosure; In-Dev items are hidden from the UI entirely. See ADR 010.
 **Status:** partial (5 known gaps unchanged — `copy_to_adapt` tier propagation resolved 2026-08-06).
 
 ## QA History
+- **2026-08-15 (coverage sweep partial-small-b): Verified the single unchecked item (`list_library_primitives` in library_primitive.py CRUD catches SQLAlchemyError but not ProgrammingError separately on count/items queries) remains a genuine minor gap — the route-level `handle_db_errors` catch still maps it to 501 with less specific messaging; the CRUD file is outside this sweep's scope so it was not modified. 35/36 behaviours covered.**
 
 ### 2026-08-13 — security review: `include_in_dev` reveal operator-gated (PR #1176)
 

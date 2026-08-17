@@ -198,7 +198,7 @@ Service-layer internal functions (`notify_importers_of_update`) also catch Progr
 - [x] DB transaction safety: all DB write paths use `async with session.begin()`
 - [ ] Team-private visibility RLS enforcement (deferred — depends on feat-teams-rbac)
 - [ ] Slug uniqueness across types validated at DB level (no DB unique constraint, only app-level 409 check)
-- [ ] Upload ZIP with no bundle.json returns 400 with descriptive message
+- [x] Upload ZIP with no bundle.json returns 400 with descriptive message — `extract_bundle_json_from_zip` raises `LookupError(MANIFEST_FILENAME)` when `bundle.json` is absent; `upload_zip_and_analyse_endpoint` (library.py) catches `LookupError`/`JSONDecodeError` → 400; covered by `test_workflow_import_export.py::test_...missing_bundle` (`pytest.raises(LookupError, match=MANIFEST_FILENAME)`) and the non-ZIP 400 BDD scenario
 
 ## Known Gaps
 
@@ -214,6 +214,7 @@ Service-layer internal functions (`notify_importers_of_update`) also catch Progr
 - ProgrammingError unit tests use mocking pattern (not DB-backed)
 
 ## QA History
+- **2026-08-15 (coverage sweep partial-small-b): Verified 11 of 12 unchecked behaviours are genuine gaps (abuse-report admin review queue, importlib entry-point discovery, ConnectorType-unavailable badge, team-private RLS deferred on feat-teams-rbac, API-key role restriction, DB-level slug uniqueness, 404-on-missing-primitive abuse submit, ownership-picker default). FLIPPED `[ ]`→`[x]` “Upload ZIP with no bundle.json returns 400 with descriptive message”: `extract_bundle_json_from_zip` raises `LookupError` and the route maps it to 400, covered by test_workflow_import_export.py + the non-ZIP BDD scenario. 96/108 → 97/108 behaviours covered.**
 
 - 2026-07-04: Cross-cutting QA (index 139): Fixed CRITICAL bugs — removed 4 sys.stderr debug calls, added ProgrammingError→501 catch + 404 check to create_pipeline_from_template_endpoint, fixed 2 keyword-arg mismatches in rating calls (user_id→account_id, reporter_user_id→reporter_account_id) that would crash with TypeError at runtime. Added ProgrammingError→501 catch to notify_importers_of_update. Created test_library_programming_error.py (18 tests covering all 12 library routes + 6 contribution routes). Marked ~100 behaviour checkboxes [ ]→[x] across all sections. Added Error Handling section (26 checkboxes). Added Edge Cases section (10 checkboxes). Updated frontmatter: 7 unit-test refs (was empty), 6 code paths (was 1), 6 BDD refs (was 3), 6 depends-on refs (was empty). Status: partial (8 known gaps remain).
 - 2026-07-05: Prodmap pipelines QA: Removed resolved Known Gap entry for `create-pipeline-from-template` ProgrammingError coverage (18 tests exist). Fixed "degredation" typo. Fixed depends-on frontmatter.
