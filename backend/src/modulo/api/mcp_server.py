@@ -3510,6 +3510,44 @@ async def _load_trigger_for_update(s: AsyncSession, org_id: uuid.UUID, tid: uuid
     return trigger
 
 
+async def _validate_ongoing_config_change(
+    s: AsyncSession,
+    trigger: Any,
+    max_concurrent_runs: int | None,
+    daily_spend_limit: float | None,
+    config_json: dict[str, Any] | None,
+    active: bool | None,
+) -> dict[str, Any] | None:
+    """Validate an ongoing trigger's config change; returns None if valid or an error dict."""
+    from fastapi import HTTPException
+
+    from modulo.core.trigger_validation import validate_ongoing_config
+    from modulo.db.models.pipeline import Pipeline
+
+    ongoing_fields_changing = any(x is not None for x in [max_concurrent_runs, config_json, active]) or (
+        daily_spend_limit is not None
+    )
+    if not ongoing_fields_changing:
+        return None
+    pipeline = await s.get(Pipeline, trigger.pipeline_id)
+    pipeline_cap = pipeline.max_concurrent_runs if pipeline is not None else 0
+    try:
+        validate_ongoing_config(
+            trigger.trigger_type,
+            max_concurrent_runs=(
+                max_concurrent_runs if max_concurrent_runs is not None else trigger.max_concurrent_runs
+            ),
+            daily_spend_limit=(Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else None)
+            if daily_spend_limit is not None
+            else trigger.daily_spend_limit,
+            config_json=(config_json if config_json is not None else trigger.config_json),
+            pipeline_max_concurrent_runs=pipeline_cap,
+        )
+    except HTTPException as exc:
+        return {"error": "validation", "detail": str(exc.detail)}
+    return None
+
+
 async def _validate_ongoing_trigger_update(
     s: AsyncSession,
     trigger: Any,
@@ -3520,11 +3558,6 @@ async def _validate_ongoing_trigger_update(
     clear_daily_spend_limit: bool,
 ) -> tuple[bool, dict[str, Any] | None]:
     """FAR-158 ongoing guards (identical to REST PUT); returns (scan_interval_changed, error)."""
-    from fastapi import HTTPException
-
-    from modulo.core.trigger_validation import validate_ongoing_config
-    from modulo.db.models.pipeline import Pipeline
-
     ongoing_scan_interval_changed = False
     if trigger.trigger_type == "ongoing":
         if clear_daily_spend_limit:
@@ -3532,26 +3565,11 @@ async def _validate_ongoing_trigger_update(
                 "error": "validation",
                 "detail": "ongoing triggers require daily_spend_limit; clearing it is not allowed",
             }
-        ongoing_fields_changing = any(x is not None for x in [max_concurrent_runs, config_json, active]) or (
-            daily_spend_limit is not None
+        cfg_err = await _validate_ongoing_config_change(
+            s, trigger, max_concurrent_runs, daily_spend_limit, config_json, active
         )
-        if ongoing_fields_changing:
-            pipeline = await s.get(Pipeline, trigger.pipeline_id)
-            pipeline_cap = pipeline.max_concurrent_runs if pipeline is not None else 0
-            try:
-                validate_ongoing_config(
-                    trigger.trigger_type,
-                    max_concurrent_runs=(
-                        max_concurrent_runs if max_concurrent_runs is not None else trigger.max_concurrent_runs
-                    ),
-                    daily_spend_limit=(Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else None)
-                    if daily_spend_limit is not None
-                    else trigger.daily_spend_limit,
-                    config_json=(config_json if config_json is not None else trigger.config_json),
-                    pipeline_max_concurrent_runs=pipeline_cap,
-                )
-            except HTTPException as exc:
-                return False, {"error": "validation", "detail": str(exc.detail)}
+        if cfg_err:
+            return False, cfg_err
         if config_json is not None:
             old_scan = int((trigger.config_json or {}).get("scan_interval_seconds") or 60)
             new_scan = int(config_json.get("scan_interval_seconds") or 60)
