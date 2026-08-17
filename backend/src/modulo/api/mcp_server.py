@@ -3165,6 +3165,26 @@ async def create_connector(
         return _tool_error("Failed to create connector")
 
 
+def _validate_trigger_create_inputs(
+    pipeline_id: str,
+    max_concurrent_runs: int,
+    daily_spend_limit: float | None,
+) -> tuple[uuid.UUID | None, dict[str, Any] | None]:
+    try:
+        pid = uuid.UUID(pipeline_id)
+    except ValueError:
+        return None, {
+            "error": "invalid_id",
+            "field": "pipeline_id",
+            "detail": f"Invalid UUID format: {pipeline_id}",
+        }
+    if max_concurrent_runs < 1:
+        return None, {"error": "validation", "field": "max_concurrent_runs", "detail": "must be >= 1"}
+    if daily_spend_limit is not None and daily_spend_limit < 0:
+        return None, {"error": "validation", "field": "daily_spend_limit", "detail": "must be >= 0"}
+    return pid, None
+
+
 @mcp.tool(description="Create a new trigger for a pipeline.")
 @_RETRY_DB
 async def create_trigger(
@@ -3185,15 +3205,10 @@ async def create_trigger(
 
         org_id = _ctx_org_id_val()
         account_id = _ctx_user_id_val()
-        try:
-            pid = uuid.UUID(pipeline_id)
-        except ValueError:
-            return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
-
-        if max_concurrent_runs < 1:
-            return {"error": "validation", "field": "max_concurrent_runs", "detail": "must be >= 1"}
-        if daily_spend_limit is not None and daily_spend_limit < 0:
-            return {"error": "validation", "field": "daily_spend_limit", "detail": "must be >= 0"}
+        pid, input_err = _validate_trigger_create_inputs(pipeline_id, max_concurrent_runs, daily_spend_limit)
+        if input_err:
+            return input_err
+        assert pid is not None
 
         from modulo.core.trigger_validation import validate_ongoing_config
         from modulo.db.models.pipeline import Pipeline
