@@ -2528,6 +2528,7 @@ def make_sandbox_agent_fn(
                     template=template_id,
                     timeout=sandbox_timeout,
                     allow_internet_access=(egress_policy != "deny_all"),
+                    # deny_all -> no internet; default/None -> internet allowed (e2b default).
                     metadata=_metadata or None,
                 ),
                 timeout=min(sandbox_timeout, 120),
