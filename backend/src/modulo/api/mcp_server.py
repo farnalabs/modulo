@@ -2814,6 +2814,40 @@ async def _build_trigger_event_query(
     return q, None
 
 
+async def _paginate_trigger_events(
+    s: AsyncSession,
+    q: Any,
+    cursor: str | None,
+    lim: int,
+) -> tuple[list[Any], str | None, bool]:
+    from modulo.db.crud.pagination import CursorPaginator
+    from modulo.db.models.trigger_event import TriggerEvent
+
+    if cursor is not None:
+        paginator = CursorPaginator(sort_field="created_at", sort_dir="desc")
+        cp = await paginator.paginate(
+            s,
+            q,
+            cursor=cursor,
+            limit=lim,
+            model=TriggerEvent,
+            compute_total=False,
+        )
+        items = cp.items
+        next_cursor = cp.next_cursor
+        has_more = cp.has_more
+    else:
+        q = q.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc())
+        rows = list((await s.execute(q.limit(lim + 1))).scalars().all())
+        has_more = len(rows) > lim
+        items = rows[:lim]
+        next_cursor = None
+        if has_more:
+            last = items[-1]
+            next_cursor = CursorPaginator.encode_cursor(last.created_at, last.id)
+    return items, next_cursor, has_more
+
+
 @mcp.tool(
     name="list_trigger_events",
     description=(
@@ -2835,9 +2869,6 @@ async def list_trigger_events(
         check_tool_scope(_ctx_role_val(), "list_trigger_events")
         from sqlalchemy import func, select
 
-        from modulo.db.crud.pagination import CursorPaginator
-        from modulo.db.models.trigger_event import TriggerEvent
-
         org_id = _ctx_org_id_val()
         lim = max(1, min(limit, 100))
 
@@ -2847,29 +2878,7 @@ async def list_trigger_events(
             if q_err:
                 return q_err
             total = (await s.execute(select(func.count()).select_from(q.subquery()))).scalar_one_or_none() or 0
-
-            if cursor is not None:
-                paginator = CursorPaginator(sort_field="created_at", sort_dir="desc")
-                cp = await paginator.paginate(
-                    s,
-                    q,
-                    cursor=cursor,
-                    limit=lim,
-                    model=TriggerEvent,
-                    compute_total=False,
-                )
-                items = cp.items
-                next_cursor = cp.next_cursor
-                has_more = cp.has_more
-            else:
-                q = q.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc())
-                rows = list((await s.execute(q.limit(lim + 1))).scalars().all())
-                has_more = len(rows) > lim
-                items = rows[:lim]
-                next_cursor = None
-                if has_more:
-                    last = items[-1]
-                    next_cursor = CursorPaginator.encode_cursor(last.created_at, last.id)
+            items, next_cursor, has_more = await _paginate_trigger_events(s, q, cursor, lim)
 
         return {
             "data": [
