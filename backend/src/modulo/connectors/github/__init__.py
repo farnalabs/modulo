@@ -19,6 +19,10 @@ from modulo.connectors._retry_headers import (
 )
 from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors.base import (
+    CompensationContext,
+    CompensationOperation,
+    CompensationOutcome,
+    CompensationResult,
     ConnectorBase,
     ConnectorPayload,
     ConnectorQuery,
@@ -801,6 +805,57 @@ class GitHubConnector(ConnectorBase):
             )
 
         return HealthResult(ok=True, detail=user_login)
+
+    async def compensate(
+        self,
+        operation: CompensationOperation,
+        *,
+        context: CompensationContext,
+        error: str,
+    ) -> CompensationResult:
+        """Compensate a performed GitHub write (FAR-213): close a PR the run opened.
+
+        Supports the ``pr`` write resource (a pull request the run created is
+        closed). Any other resource has no invertible inverse and returns
+        ``not_supported``. Best-effort: an API failure returns ``failed`` with a
+        summary detail and never raises into the terminalization path.
+        """
+        if operation.resource != "pr":
+            return CompensationResult(
+                outcome=CompensationOutcome.NOT_SUPPORTED,
+                detail=f"no inverse for GitHub write resource {operation.resource!r}",
+            )
+        repo = operation.data.get("repo")
+        pr_number = operation.output.get("number")
+        if not isinstance(repo, str) or not repo:
+            return CompensationResult(
+                outcome=CompensationOutcome.NOT_SUPPORTED,
+                detail="cannot compensate a GitHub pr write without a 'repo' in the write payload",
+            )
+        if pr_number is None:
+            return CompensationResult(
+                outcome=CompensationOutcome.NOT_SUPPORTED,
+                detail="cannot compensate a GitHub pr write without a 'number' in the created PR output",
+            )
+        try:
+            r = await self._call_api(
+                "PATCH",
+                f"/repos/{repo}/pulls/{pr_number}",
+                json={"state": "closed"},
+            )
+            await self._parse_json_object(r)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            return CompensationResult(
+                outcome=CompensationOutcome.FAILED,
+                detail=f"close PR failed: {type(exc).__name__}",
+            )
+        return CompensationResult(
+            outcome=CompensationOutcome.COMPENSATED,
+            detail=f"closed PR #{pr_number} on {repo}",
+            resource_id=str(pr_number),
+        )
 
     def _require_filter(self, filters: dict[str, Any], key: str, resource: str) -> str:
         """Get a required filter or raise a descriptive ValueError."""

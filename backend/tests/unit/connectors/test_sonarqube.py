@@ -418,6 +418,132 @@ async def test_query_unsupported_resource(connector):
         await connector.query(ConnectorQuery(resource="unknown"))
 
 
+# --- corrupt list payload hardening ---
+
+
+@respx.mock
+async def test_query_projects_corrupt_body_no_crash(connector):
+    """A non-dict body from the projects search endpoint must degrade to an
+    empty page, not crash."""
+    respx.get(f"{API_BASE}/projects/search", params={"ps": "100"}).mock(
+        return_value=httpx.Response(200, json=["garbage"]),
+    )
+    result = await connector.query(ConnectorQuery(resource="projects", limit=100))
+    assert not result.records
+    assert result.total is None
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_projects_corrupt_components_field_no_crash(connector):
+    """A corrupt body placing a non-list in ``components`` must fall back to an
+    empty page, not crash."""
+    respx.get(f"{API_BASE}/projects/search", params={"ps": "100"}).mock(
+        return_value=httpx.Response(200, json={"components": "garbage", "paging": {"total": 42}}),
+    )
+    result = await connector.query(ConnectorQuery(resource="projects", limit=100))
+    assert not result.records
+    assert result.total == 42
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_measures_corrupt_component_no_crash(connector):
+    """A corrupt body placing a non-dict in ``component`` must degrade to an
+    empty page, not crash."""
+    respx.get(f"{API_BASE}/measures/component").mock(
+        return_value=httpx.Response(200, json={"component": ["garbage"]}),
+    )
+    result = await connector.query(
+        ConnectorQuery(
+            resource="measures",
+            filters={"component": "proj1", "metricKeys": "coverage,bugs"},
+        )
+    )
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_measures_corrupt_body_no_crash(connector):
+    """A non-dict body from the measures endpoint must degrade to an empty
+    page, not crash."""
+    respx.get(f"{API_BASE}/measures/component").mock(
+        return_value=httpx.Response(200, json=["garbage"]),
+    )
+    result = await connector.query(
+        ConnectorQuery(
+            resource="measures",
+            filters={"component": "proj1", "metricKeys": "coverage,bugs"},
+        )
+    )
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_issues_corrupt_body_no_crash(connector):
+    """A non-dict body from the issues search endpoint must degrade to an
+    empty page, not crash."""
+    respx.get(f"{API_BASE}/issues/search", params={"ps": "100"}).mock(
+        return_value=httpx.Response(200, json=["garbage"]),
+    )
+    result = await connector.query(ConnectorQuery(resource="issues", limit=100))
+    assert not result.records
+    assert result.total is None
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_quality_gates_corrupt_body_no_crash(connector):
+    """A non-dict body from the qualitygates list endpoint must degrade to an
+    empty page, not crash."""
+    respx.get(f"{API_BASE}/qualitygates/list").mock(
+        return_value=httpx.Response(200, json=["garbage"]),
+    )
+    result = await connector.query(ConnectorQuery(resource="quality_gates"))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_metrics_corrupt_body_no_crash(connector):
+    """A non-dict body from the metrics search endpoint must degrade to an
+    empty page, not crash."""
+    respx.get(f"{API_BASE}/metrics/search", params={"ps": "100"}).mock(
+        return_value=httpx.Response(200, json=["garbage"]),
+    )
+    result = await connector.query(ConnectorQuery(resource="metrics", limit=100))
+    assert not result.records
+    assert result.total is None
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_plugins_corrupt_body_no_crash(connector):
+    """A non-dict body from the plugins list endpoint must degrade to an empty
+    page, not crash."""
+    respx.get(f"{API_BASE}/plugins/installed").mock(
+        return_value=httpx.Response(200, json=["garbage"]),
+    )
+    result = await connector.query(ConnectorQuery(resource="plugins"))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_hotspots_corrupt_body_no_crash(connector):
+    """A non-dict body from the hotspots search endpoint must degrade to an
+    empty page, not crash."""
+    respx.get(f"{API_BASE}/hotspots/search", params={"project": "p1", "ps": "100"}).mock(
+        return_value=httpx.Response(200, json=["garbage"]),
+    )
+    result = await connector.query(ConnectorQuery(resource="hotspots", filters={"project": "p1"}, limit=100))
+    assert not result.records
+    assert result.total is None
+    assert result.next_cursor is None
+
+
 # --- write: issue_comment ---
 
 

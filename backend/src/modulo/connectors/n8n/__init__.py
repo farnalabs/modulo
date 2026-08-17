@@ -16,6 +16,10 @@ from modulo.connectors.base import (
     HealthResult,
 )
 
+# Repeated REST path and cast type alias (S1192).
+_WORKFLOWS_PATH = "/rest/workflows"
+type _DICT_STR_ANY = dict[str, Any]
+
 
 class N8NConnector(ConnectorBase):
     def __init__(self, token: str, base_url: str = "http://localhost:5678") -> None:
@@ -39,7 +43,7 @@ class N8NConnector(ConnectorBase):
     async def health_check(self) -> HealthResult:
         try:
             async with self._client() as c:
-                resp = await c.get("/rest/workflows", params={"limit": 1})
+                resp = await c.get(_WORKFLOWS_PATH, params={"limit": 1})
                 if resp.status_code == 200:
                     return HealthResult(ok=True, detail="n8n API is reachable and token is valid")
                 if resp.status_code == 401:
@@ -107,7 +111,7 @@ class N8NConnector(ConnectorBase):
                 params[key] = q.filters[key]
         if q.cursor:
             params["cursor"] = q.cursor
-        resp = await c.get("/rest/workflows", params=params)
+        resp = await c.get(_WORKFLOWS_PATH, params=params)
         resp.raise_for_status()
         body = resp.json()
         records = _safe_records(body, "data")
@@ -245,10 +249,10 @@ class N8NConnector(ConnectorBase):
             body["staticData"] = data["staticData"]
         if "tags" in data:
             body["tags"] = data["tags"]
-        resp = await c.post("/rest/workflows", json=body)
+        resp = await c.post(_WORKFLOWS_PATH, json=body)
         resp.raise_for_status()
-        result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("data", {}))
+        result = cast(_DICT_STR_ANY, resp.json())
+        return cast(_DICT_STR_ANY, result.get("data", {}))
 
     async def _update_workflow(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         workflow_id = data.get("id")
@@ -260,8 +264,8 @@ class N8NConnector(ConnectorBase):
                 body[key] = data[key]
         resp = await c.put(f"/rest/workflows/{workflow_id}", json=body)
         resp.raise_for_status()
-        result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("data", {}))
+        result = cast(_DICT_STR_ANY, resp.json())
+        return cast(_DICT_STR_ANY, result.get("data", {}))
 
     async def _activate_workflow(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         workflow_id = data.get("id")
@@ -269,8 +273,8 @@ class N8NConnector(ConnectorBase):
             raise ValueError("n8n workflow activation requires 'id' in data")
         resp = await c.post(f"/rest/workflows/{workflow_id}/activate")
         resp.raise_for_status()
-        result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("data", {}))
+        result = cast(_DICT_STR_ANY, resp.json())
+        return cast(_DICT_STR_ANY, result.get("data", {}))
 
     async def _deactivate_workflow(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         workflow_id = data.get("id")
@@ -278,8 +282,8 @@ class N8NConnector(ConnectorBase):
             raise ValueError("n8n workflow deactivation requires 'id' in data")
         resp = await c.post(f"/rest/workflows/{workflow_id}/deactivate")
         resp.raise_for_status()
-        result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("data", {}))
+        result = cast(_DICT_STR_ANY, resp.json())
+        return cast(_DICT_STR_ANY, result.get("data", {}))
 
     async def _delete_workflow(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         workflow_id = data.get("id")
@@ -289,8 +293,8 @@ class N8NConnector(ConnectorBase):
         if resp.status_code == 204:
             return {"id": workflow_id, "deleted": True}
         resp.raise_for_status()
-        result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("data", {}))
+        result = cast(_DICT_STR_ANY, resp.json())
+        return cast(_DICT_STR_ANY, result.get("data", {}))
 
     async def _delete_execution(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         execution_id = data.get("id")
@@ -300,8 +304,8 @@ class N8NConnector(ConnectorBase):
         if resp.status_code == 204:
             return {"id": execution_id, "deleted": True}
         resp.raise_for_status()
-        result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("data", {}))
+        result = cast(_DICT_STR_ANY, resp.json())
+        return cast(_DICT_STR_ANY, result.get("data", {}))
 
     async def _create_credential(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         name = data.get("name")
@@ -311,8 +315,8 @@ class N8NConnector(ConnectorBase):
         body: dict[str, Any] = {"name": name, "type": cred_type, "data": data.get("data", {})}
         resp = await c.post("/rest/credentials", json=body)
         resp.raise_for_status()
-        result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("data", {}))
+        result = cast(_DICT_STR_ANY, resp.json())
+        return cast(_DICT_STR_ANY, result.get("data", {}))
 
     async def _retry_execution(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         execution_id = data.get("id")
@@ -320,5 +324,5 @@ class N8NConnector(ConnectorBase):
             raise ValueError("n8n execution retry requires 'id' in data")
         resp = await c.post(f"/rest/executions/{execution_id}/retry")
         resp.raise_for_status()
-        result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("data", {}))
+        result = cast(_DICT_STR_ANY, resp.json())
+        return cast(_DICT_STR_ANY, result.get("data", {}))

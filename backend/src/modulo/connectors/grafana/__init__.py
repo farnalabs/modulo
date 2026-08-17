@@ -14,6 +14,10 @@ from modulo.connectors.base import (
     HealthResult,
 )
 
+# Type aliases used in ``cast`` for response payloads (S1192).
+type _DICT_STR_ANY = dict[str, Any]
+type _LIST_DICT_STR_ANY = list[dict[str, Any]]
+
 
 class GrafanaConnector(ConnectorBase):
     def __init__(self, token: str, base_url: str = "http://localhost:3000") -> None:
@@ -95,7 +99,7 @@ class GrafanaConnector(ConnectorBase):
         resp = await c.get("/api/search", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = cast("list[dict[str, Any]]", body)
+        records = cast(_LIST_DICT_STR_ANY, body)
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
@@ -108,7 +112,7 @@ class GrafanaConnector(ConnectorBase):
         resp = await c.get(f"/api/dashboards/uid/{uid}")
         resp.raise_for_status()
         body = resp.json()
-        return ConnectorResult(records=[cast("dict[str, Any]", body)])
+        return ConnectorResult(records=[cast(_DICT_STR_ANY, body)])
 
     async def _list_alerts(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
         params: dict[str, Any] = {}
@@ -120,7 +124,7 @@ class GrafanaConnector(ConnectorBase):
         resp = await c.get("/api/alerts", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = cast("list[dict[str, Any]]", body)
+        records = cast(_LIST_DICT_STR_ANY, body)
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
@@ -133,7 +137,7 @@ class GrafanaConnector(ConnectorBase):
         resp = await c.get("/api/v1/provisioning/alert-rules", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = cast("list[dict[str, Any]]", body)
+        records = cast(_LIST_DICT_STR_ANY, body)
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
@@ -143,7 +147,7 @@ class GrafanaConnector(ConnectorBase):
         resp = await c.get("/api/datasources")
         resp.raise_for_status()
         body = resp.json()
-        records = cast("list[dict[str, Any]]", body)
+        records = cast(_LIST_DICT_STR_ANY, body)
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
@@ -156,7 +160,7 @@ class GrafanaConnector(ConnectorBase):
         resp = await c.get("/api/folders", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = cast("list[dict[str, Any]]", body)
+        records = cast(_LIST_DICT_STR_ANY, body)
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
@@ -169,7 +173,7 @@ class GrafanaConnector(ConnectorBase):
         resp = await c.get("/api/orgs", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = cast("list[dict[str, Any]]", body)
+        records = cast(_LIST_DICT_STR_ANY, body)
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
@@ -184,7 +188,7 @@ class GrafanaConnector(ConnectorBase):
         resp = await c.get("/api/users", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = cast("list[dict[str, Any]]", body)
+        records = cast(_LIST_DICT_STR_ANY, body)
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
@@ -200,7 +204,7 @@ class GrafanaConnector(ConnectorBase):
         resp = await c.get("/api/annotations", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = cast("list[dict[str, Any]]", body)
+        records = cast(_LIST_DICT_STR_ANY, body)
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
@@ -223,7 +227,7 @@ class GrafanaConnector(ConnectorBase):
             body["timeEnd"] = data["timeEnd"]
         resp = await c.post("/api/annotations", json=body)
         resp.raise_for_status()
-        return cast("dict[str, Any]", resp.json())
+        return cast(_DICT_STR_ANY, resp.json())
 
     async def _create_dashboard(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         dashboard = data.get("dashboard")
@@ -242,4 +246,4 @@ class GrafanaConnector(ConnectorBase):
             body["message"] = data["message"]
         resp = await c.post("/api/dashboards/db", json=body)
         resp.raise_for_status()
-        return cast("dict[str, Any]", resp.json())
+        return cast(_DICT_STR_ANY, resp.json())

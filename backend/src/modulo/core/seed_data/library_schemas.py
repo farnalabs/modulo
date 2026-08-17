@@ -4,6 +4,10 @@ Each entry has a ``name`` (URL-safe slug), ``description``, and
 ``definition`` (a valid Draft 2020-12 JSON Schema).
 """
 
+# Field descriptions shared across schema definitions (S1192).
+_DESC_SPRINT_NAME = "Sprint name"
+_DESC_ASSIGNED_PERSON = "Assigned person"
+
 SCHEMAS: list[dict[str, object]] = [
     {
         "name": "meeting-notes",
@@ -247,7 +251,7 @@ SCHEMAS: list[dict[str, object]] = [
             "description": "Sprint plan with goals, tickets, capacity, and team assignments",
             "type": "object",
             "properties": {
-                "sprint-name": {"type": "string", "description": "Sprint name"},
+                "sprint-name": {"type": "string", "description": _DESC_SPRINT_NAME},
                 "start-date": {"type": "string", "format": "date", "description": "Sprint start date"},
                 "end-date": {"type": "string", "format": "date", "description": "Sprint end date"},
                 "goals": {"type": "array", "items": {"type": "string"}, "description": "Sprint goals"},
@@ -517,7 +521,7 @@ SCHEMAS: list[dict[str, object]] = [
                 "environment": {"type": "string", "description": "Environment details"},
                 "severity": {"type": "string", "description": "Bug severity"},
                 "priority": {"type": "string", "description": "Bug priority"},
-                "assignee": {"type": "string", "description": "Assigned person"},
+                "assignee": {"type": "string", "description": _DESC_ASSIGNED_PERSON},
                 "status": {"type": "string", "description": "Bug status"},
             },
             "required": ["title", "description", "steps-to-reproduce", "expected-behavior", "actual-behavior"],
@@ -541,9 +545,9 @@ SCHEMAS: list[dict[str, object]] = [
                 },
                 "priority": {"type": "string", "description": "Ticket priority"},
                 "status": {"type": "string", "description": "Ticket status"},
-                "assignee": {"type": "string", "description": "Assigned person"},
+                "assignee": {"type": "string", "description": _DESC_ASSIGNED_PERSON},
                 "labels": {"type": "array", "items": {"type": "string"}, "description": "Labels"},
-                "sprint": {"type": "string", "description": "Sprint name"},
+                "sprint": {"type": "string", "description": _DESC_SPRINT_NAME},
                 "story-points": {"type": "number", "description": "Story points"},
             },
             "required": ["id", "title", "type"],
@@ -598,8 +602,8 @@ SCHEMAS: list[dict[str, object]] = [
                 "story-points": {"type": "number", "description": "Story points"},
                 "priority": {"type": "string", "description": "Story priority"},
                 "epic": {"type": "string", "description": "Parent epic"},
-                "sprint": {"type": "string", "description": "Sprint name"},
-                "assignee": {"type": "string", "description": "Assigned person"},
+                "sprint": {"type": "string", "description": _DESC_SPRINT_NAME},
+                "assignee": {"type": "string", "description": _DESC_ASSIGNED_PERSON},
                 "status": {"type": "string", "description": "Story status"},
             },
             "required": ["id", "title", "description", "acceptance-criteria"],

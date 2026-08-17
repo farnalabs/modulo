@@ -36,6 +36,9 @@ from modulo.db.models.run import TERMINAL_STATUSES, Run
 
 _log = logging.getLogger(__name__)
 
+# Error raised when the target org no longer exists mid-deletion flow.
+_ERR_ORG_NOT_FOUND = "Organisation not found"
+
 DELETION_TOKEN_BYTES = 48
 CONFIRMATION_WINDOW_HOURS = 24
 RUN_RETENTION_DAYS = 30
@@ -201,7 +204,7 @@ async def request_org_deletion(
     result = await session.execute(select(Organisation).where(Organisation.id == org_id).with_for_update())
     org = result.scalar_one_or_none()
     if org is None:
-        raise ValueError("Organisation not found")
+        raise ValueError(_ERR_ORG_NOT_FOUND)
     if org.status == "deleted":
         raise ValueError("Organisation is already deleted")
 
@@ -250,7 +253,7 @@ async def confirm_org_deletion(
     result = await session.execute(select(Organisation).where(Organisation.id == org_id).with_for_update())
     org = result.scalar_one_or_none()
     if org is None:
-        raise ValueError("Organisation not found")
+        raise ValueError(_ERR_ORG_NOT_FOUND)
 
     if not immediate:
         if org.deletion_token is None or org.deletion_token != token:
@@ -295,7 +298,7 @@ async def cancel_org_deletion(
     result = await session.execute(select(Organisation).where(Organisation.id == org_id).with_for_update())
     org = result.scalar_one_or_none()
     if org is None:
-        raise ValueError("Organisation not found")
+        raise ValueError(_ERR_ORG_NOT_FOUND)
     if org.status != "deleted" or org.deletion_token is None:
         raise ValueError("No pending deletion found")
 
@@ -317,7 +320,7 @@ async def export_org_data(
     result = await session.execute(select(Organisation).where(Organisation.id == org_id).with_for_update())
     org = result.scalar_one_or_none()
     if org is None:
-        raise ValueError("Organisation not found")
+        raise ValueError(_ERR_ORG_NOT_FOUND)
 
     if org.export_bundle_json is not None:
         return org.export_bundle_json

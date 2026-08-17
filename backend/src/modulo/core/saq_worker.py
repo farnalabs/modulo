@@ -78,6 +78,12 @@ _DEQUEUE_TIMEOUT = 5
 # worker_info:89 -> TTL 90 (timer+1 is ALWAYS the TTL in saq 0.26.4).
 _TIMERS: dict[str, float] = {"schedule": 5, "worker_info": 89, "sweep": 60, "abort": 1}
 
+# System-cron cadences (5-field form — croniter parses 5 fields, so the 30s
+# intent is not achievable; every minute is the floor).
+_CRON_EVERY_MINUTE = "* * * * *"
+_CRON_EVERY_5_MINUTES = "*/5 * * * *"
+_CRON_HOURLY = "0 * * * *"
+
 # Web UI bind (F8): fly ssh only.
 _SYSTEM_WEB_HOST = "127.0.0.1"
 _SYSTEM_WEB_PORT = 8081
@@ -840,7 +846,7 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # advance makes multi-machine ticks safe (unique=True only prevents overlap).
         CronJob(
             fire_due_triggers,
-            cron="* * * * *",
+            cron=_CRON_EVERY_MINUTE,
             unique=True,
             timeout=300,
             heartbeat=30,
@@ -850,7 +856,7 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # dispatcher_reconcile: every 60s (timeout=120 per plan F1).
         CronJob(
             dispatcher_reconcile,
-            cron="* * * * *",
+            cron=_CRON_EVERY_MINUTE,
             unique=True,
             timeout=120,
             heartbeat=30,
@@ -860,7 +866,7 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # claim-expiry: every 60s — SAQ cron is the SOLE writer/notifier (F1).
         CronJob(
             claim_expiry,
-            cron="* * * * *",
+            cron=_CRON_EVERY_MINUTE,
             unique=True,
             timeout=120,
             heartbeat=30,
@@ -872,7 +878,7 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # claim-expiry sweep; unique so overlapping ticks cannot double-dispatch.
         CronJob(
             hitl_overdue,
-            cron="*/5 * * * *",
+            cron=_CRON_EVERY_5_MINUTES,
             unique=True,
             timeout=120,
             heartbeat=30,
@@ -882,7 +888,7 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # retention: hourly (matches the in-process _run_retention_loop cadence).
         CronJob(
             retention_cleanup,
-            cron="0 * * * *",
+            cron=_CRON_HOURLY,
             unique=True,
             timeout=300,
             heartbeat=30,
@@ -892,7 +898,7 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # webhook-dedup cleanup: hourly (matches _CLEANUP_INTERVAL_SECONDS).
         CronJob(
             webhook_dedup_cleanup,
-            cron="0 * * * *",
+            cron=_CRON_HOURLY,
             unique=True,
             timeout=300,
             heartbeat=30,
@@ -904,7 +910,7 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # find nothing left to delete).
         CronJob(
             trigger_events_cleanup,
-            cron="0 * * * *",
+            cron=_CRON_HOURLY,
             unique=True,
             timeout=300,
             heartbeat=30,
@@ -915,7 +921,7 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # non-SAQ rows in the sweep itself).
         CronJob(
             stale_run_recovery,
-            cron="*/5 * * * *",
+            cron=_CRON_EVERY_5_MINUTES,
             unique=True,
             timeout=120,
             heartbeat=30,
@@ -930,7 +936,7 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # per-5-hours instead of per-5-minutes (bug class #680).
         CronJob(
             cost_probe,
-            cron="*/5 * * * *",
+            cron=_CRON_EVERY_5_MINUTES,
             unique=True,
             timeout=300,
             heartbeat=30,
@@ -955,7 +961,7 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # oldest-first across ticks.
         CronJob(
             journey_reconcile,
-            cron="0 * * * *",
+            cron=_CRON_HOURLY,
             unique=True,
             timeout=300,
             heartbeat=30,
@@ -969,7 +975,7 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # class #680).
         CronJob(
             check_missed_fire_alerts_cron,
-            cron="0 * * * *",
+            cron=_CRON_HOURLY,
             unique=True,
             timeout=300,
             heartbeat=30,
