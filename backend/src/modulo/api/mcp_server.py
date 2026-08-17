@@ -3145,6 +3145,55 @@ def _validate_cron_update(
     return next_fire_at, None
 
 
+async def _apply_trigger_field_updates(
+    s: AsyncSession,
+    trigger: Any,
+    active: bool | None,
+    max_concurrent_runs: int | None,
+    daily_spend_limit: float | None,
+    clear_daily_spend_limit: bool,
+    config_json: dict[str, Any] | None,
+    cron_expression: str | None,
+    cron_timezone: str | None,
+    next_fire_at: datetime | None,
+    prev_active: bool | None,
+) -> None:
+    """Apply the field updates to the trigger row in place."""
+    if active is not None:
+        trigger.active = active
+        # FAR-190: re-anchor the no-delivery streak epoch on any
+        # active=True transition (no un-epoch'd re-enable path).
+        if trigger.active and not prev_active:
+            await anchor_trigger_streak_epoch(s, trigger_id=trigger.id)
+    if max_concurrent_runs is not None:
+        trigger.max_concurrent_runs = max_concurrent_runs
+    if clear_daily_spend_limit:
+        trigger.daily_spend_limit = None
+    elif daily_spend_limit is not None:
+        trigger.daily_spend_limit = Decimal(str(daily_spend_limit))
+    if config_json is not None:
+        # MERGE into the existing blob — never wholesale replace.
+        current_cfg = trigger.config_json or {}
+        merged_cfg = dict(current_cfg)
+        for k, v in config_json.items():
+            if isinstance(v, str) and v == SENSITIVE_VALUE_MASK:
+                # A masked placeholder must never clobber the stored secret
+                # (read-modify-write round-trip guard). Keep the existing value.
+                continue
+            if v is None:
+                # Explicit null clears the key; a missing key leaves it intact.
+                merged_cfg.pop(k, None)
+            else:
+                merged_cfg[k] = v
+        trigger.config_json = merged_cfg
+    if cron_expression is not None:
+        trigger.cron_expression = cron_expression
+    if cron_timezone is not None:
+        trigger.cron_timezone = cron_timezone
+    if next_fire_at is not None:
+        trigger.next_fire_at = next_fire_at
+
+
 @mcp.tool(
     description="Update an existing trigger's configuration. "
     "Mirrors PUT /api/v1/triggers/{id}. Setting cron_expression or "
@@ -3194,40 +3243,19 @@ async def update_trigger(
 
             prev_max = trigger.max_concurrent_runs
             prev_active = trigger.active
-
-            if active is not None:
-                trigger.active = active
-                # FAR-190: re-anchor the no-delivery streak epoch on any
-                # active=True transition (no un-epoch'd re-enable path).
-                if trigger.active and not prev_active:
-                    await anchor_trigger_streak_epoch(s, trigger_id=trigger.id)
-            if max_concurrent_runs is not None:
-                trigger.max_concurrent_runs = max_concurrent_runs
-            if clear_daily_spend_limit:
-                trigger.daily_spend_limit = None
-            elif daily_spend_limit is not None:
-                trigger.daily_spend_limit = Decimal(str(daily_spend_limit))
-            if config_json is not None:
-                # MERGE into the existing blob — never wholesale replace.
-                current_cfg = trigger.config_json or {}
-                merged_cfg = dict(current_cfg)
-                for k, v in config_json.items():
-                    if isinstance(v, str) and v == SENSITIVE_VALUE_MASK:
-                        # A masked placeholder must never clobber the stored secret
-                        # (read-modify-write round-trip guard). Keep the existing value.
-                        continue
-                    if v is None:
-                        # Explicit null clears the key; a missing key leaves it intact.
-                        merged_cfg.pop(k, None)
-                    else:
-                        merged_cfg[k] = v
-                trigger.config_json = merged_cfg
-            if cron_expression is not None:
-                trigger.cron_expression = cron_expression
-            if cron_timezone is not None:
-                trigger.cron_timezone = cron_timezone
-            if next_fire_at is not None:
-                trigger.next_fire_at = next_fire_at
+            await _apply_trigger_field_updates(
+                s,
+                trigger,
+                active,
+                max_concurrent_runs,
+                daily_spend_limit,
+                clear_daily_spend_limit,
+                config_json,
+                cron_expression,
+                cron_timezone,
+                next_fire_at,
+                prev_active,
+            )
 
             # Ongoing triggers recompute next_fire_at when the pool / cadence /
             # active actually changes so the new config takes effect promptly.
