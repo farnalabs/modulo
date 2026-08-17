@@ -54,6 +54,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from contextvars import ContextVar
+from functools import partial
 from typing import Any
 
 import jinja2
@@ -1868,6 +1869,14 @@ def make_sandbox_agent_fn(
         idle watchdog treats the command as stalled (default 300)
       - context_files: dict[str, str] —  optional files to write into the sandbox
         keyed by path
+      - loop_intercept: dict | None —  optional agent-loop interior tool-call
+        interception config (FAR-211 / ADR 003 amendment). When enabled AND the
+        pipeline has bound guardrails, a Modulo-hosted bridge runs inside the
+        sandbox: tool calls are evaluated against the SAME bound guardrails as
+        the T1 ingestion edge before execution and before results re-enter the
+        model context, under a per-call latency budget (fail-open with audit,
+        never wedges the loop). Best-effort: a bridge setup failure disables it
+        for that node but never blocks the dispatch.
 
     The node creates an E2B sandbox. In llm mode it writes the rendered prompt +
     context files and runs the external agent; in script mode it writes the full
@@ -1896,6 +1905,32 @@ def make_sandbox_agent_fn(
     # single-node guard (the gate is inert on multi-node graphs).
     delivery_sentinel: str | None = node_def.get("delivery_sentinel")
     delivery_sentinel = delivery_sentinel if isinstance(delivery_sentinel, str) and delivery_sentinel else None
+
+    # FAR-211: agent-loop interior tool-call interception (ADR 003 amendment).
+    # When the node carries a ``loop_intercept`` config, a Modulo-hosted bridge
+    # runs INSIDE the sandbox alongside the agent: tool calls are reported to
+    # the Modulo side BEFORE execution and tool results BEFORE they re-enter
+    # the model context, evaluated against the SAME bound guardrails as the T1
+    # ingestion edge. A malformed config is a programming error (graph
+    # validation already rejects it at save-time) — fail the node construction,
+    # never silently disable a declared control.
+    from modulo.core.guardrails.loop_intercept import (
+        LoopInterceptCallbackServer,
+        LoopInterceptConfig,
+        LoopInterceptConfigError,
+        bridge_client_source,
+        load_loop_intercept_guardrails,
+        parse_loop_intercept_config,
+        persist_loop_interception_audit,
+    )
+
+    loop_intercept_config: LoopInterceptConfig | None = None
+    loop_intercept_raw = node_def.get("loop_intercept")
+    if loop_intercept_raw:
+        try:
+            loop_intercept_config = parse_loop_intercept_config(loop_intercept_raw)
+        except LoopInterceptConfigError as exc:
+            raise ValueError(f"sandbox_agent node '{node_id}' has malformed loop_intercept config: {exc}") from exc
 
     from e2b import AsyncSandbox  # type: ignore[import-untyped]
     from opentelemetry import trace as _otel_trace
@@ -2053,6 +2088,11 @@ def make_sandbox_agent_fn(
         # instead of raising UnboundLocalError that replaces the cancellation.
         _drain_fn: Any = None
         _drained_chunks: list[str] = []
+        # FAR-211: the local loop-interception callback server, started when the
+        # node's loop_intercept config is enabled AND the pipeline has bound
+        # guardrails. Pre-bound at function scope so the finally-block teardown
+        # short-circuits safely (None) when the bridge was never started.
+        _bridge_server: LoopInterceptCallbackServer | None = None
 
         # FAR-228 guard A (early skipped-return / fallback): when the run has
         # ALREADY delivered (a prior attempt's marker carries delivery_done=True)
@@ -2458,7 +2498,6 @@ def make_sandbox_agent_fn(
                 # the process writes to a regular file — never a pipe that can
                 # fill and block a long session (FAR-97). The subshell preserves
                 # the command's exit code for the SDK's wait().
-                wrapped_command = f"( {rendered_agent_command} ) > {_SANDBOX_LOG_PATH} 2>&1"
                 # System env vars first — provide defaults from the host. DO NOT
                 # move pipeline env before these: pipelines need to override
                 # GITHUB_TOKEN for identity separation (e.g. PR Reviewer uses
@@ -2476,6 +2515,63 @@ def make_sandbox_agent_fn(
                     or os.environ.get("GITHUB_TOKEN", ""),
                 }
                 sandbox_envs.update(env_vars_extra)
+                _bridge_wrapped_command = rendered_agent_command
+                # FAR-211: start the loop-interception callback server + write
+                # the bridge client into the sandbox. Best-effort and
+                # fail-open in EVERY direction: the bridge is only started when
+                # the node's loop_intercept config is enabled AND the pipeline
+                # has bound guardrails (zero guardrails -> the bridge is
+                # inert); a setup failure disables the bridge for this node but
+                # NEVER blocks the dispatch or wedges the agent loop. The
+                # endpoint is the Modulo sandbox-agent process's localhost —
+                # the ADR 003 amendment documents how it is exposed into the
+                # sandbox (in the test-driven slice it is the same host).
+                if loop_intercept_config is not None and loop_intercept_config.enabled:
+                    try:
+                        bridge_defs = await load_loop_intercept_guardrails(
+                            session_factory,
+                            org_id=state.get("_org_id"),
+                            pipeline_id=state.get("_pipeline_id"),
+                        )
+                        if bridge_defs:
+                            _bridge_server = LoopInterceptCallbackServer(
+                                engine=EvalEngine(),
+                                definitions=bridge_defs,
+                                config=loop_intercept_config,
+                                audit_sink=partial(
+                                    persist_loop_interception_audit,
+                                    session_factory=session_factory,
+                                    org_id=org_id,
+                                    run_id=run_id,
+                                    node_id=node_id,
+                                ),
+                            )
+                            _bridge_port = await _bridge_server.start()
+                            await asyncio.wait_for(
+                                sandbox.files.write("/home/user/modulo_bridge.py", bridge_client_source()),
+                                timeout=_SANDBOX_IO_TIMEOUT,
+                            )
+                            await asyncio.wait_for(
+                                sandbox.files.write(
+                                    "/home/user/modulo_bridge_config.json",
+                                    json.dumps(loop_intercept_config.model_dump(mode="json")),
+                                ),
+                                timeout=_SANDBOX_IO_TIMEOUT,
+                            )
+                            sandbox_envs["MODULO_BRIDGE_ENDPOINT"] = f"http://127.0.0.1:{_bridge_port}"
+                            sandbox_envs["MODULO_BRIDGE_CONFIG"] = "/home/user/modulo_bridge_config.json"
+                            _bridge_wrapped_command = (
+                                f"python3 /home/user/modulo_bridge.py --wrap -- {rendered_agent_command}"
+                            )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        _log.exception(
+                            "sandbox_agent.loop_intercept_setup_failed",
+                            extra={"node_id": node_id, "run_id": run_id},
+                        )
+                        _bridge_server = None
+                wrapped_command = f"( {_bridge_wrapped_command} ) > {_SANDBOX_LOG_PATH} 2>&1"
                 cmd_handle = await asyncio.wait_for(
                     sandbox.commands.run(
                         wrapped_command,
@@ -3049,6 +3145,20 @@ def make_sandbox_agent_fn(
                 },
             }
         finally:
+            # FAR-211: stop the loop-interception callback server. Best-effort
+            # (shielded + bounded) — a teardown failure must not mask the
+            # sandbox kill or the marker clear below.
+            if _bridge_server is not None:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(_bridge_server.close()),
+                        timeout=_OUTPUT_READ_TIMEOUT,
+                    )
+                except Exception:
+                    _log.exception(
+                        "sandbox_agent.loop_intercept_teardown_failed",
+                        extra={"node_id": node_id, "run_id": run_id},
+                    )
             if sandbox is not None:
                 try:
                     # Shield the kill so a second CancelledError cannot abort the
