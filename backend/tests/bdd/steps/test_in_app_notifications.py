@@ -162,6 +162,11 @@ def _() -> None:
     pass
 
 
+@when("the user dismisses the notification for all users")
+def _() -> None:
+    pass
+
+
 @when("the user dismisses the notification for the org")
 def _() -> None:
     pass

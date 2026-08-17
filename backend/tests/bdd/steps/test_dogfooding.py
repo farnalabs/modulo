@@ -169,7 +169,7 @@ def _check_step_count(ctx: dict[str, Any]) -> None:
 
 @then(parsers.parse('the steps are in order: "{steps}"'))
 def _check_step_order(ctx: dict[str, Any], steps: str) -> None:
-    expected = [s.strip() for s in steps.split(",")]
+    expected = [s.strip().strip('"') for s in steps.split(",")]
     actual = [s["id"] for s in ctx["steps"]]
     assert actual == expected, f"Expected steps {expected}, got {actual}"
 

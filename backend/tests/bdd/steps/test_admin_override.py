@@ -124,8 +124,10 @@ def bulk_reassign(team_name: str, request, ctx) -> None:
 
 @when(parsers.parse("I request GET /api/pipelines/{pipeline_name}"))
 def request_pipeline(pipeline_name: str, request, ctx) -> None:
+    from tests.bdd.conftest import _shared_state
+
     pipeline = ctx["pipelines"].get(pipeline_name)
-    org_role = ctx.get("org_role", "admin")
+    org_role = _shared_state(request).get("org_role", "admin")
 
     if org_role == "viewer" and pipeline and pipeline.get("visibility") == "team":
         resp = MagicMock()

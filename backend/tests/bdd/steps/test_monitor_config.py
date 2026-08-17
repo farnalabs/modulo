@@ -67,15 +67,19 @@ def _bdd_get_monitor_config(client: TestClient, request) -> None:
     stored = getattr(request.node, "_monitor_stored_backends", None)
     if getattr(request.node, "_viewer_auth", False):
         from modulo.api.main import app
-        from modulo.auth.dependencies import get_current_user
-        from modulo.auth.jwt import AuthenticatedPrincipal
+        from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
+        from modulo.auth.jwt import TenantPrincipal
 
-        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-            username="viewer",
-            organisation_id=_ORG_ID,
-            account_id=uuid.uuid4(),
-            org_role="viewer",
-        )
+        async def _override_tenant() -> TenantPrincipal:
+            return TenantPrincipal(
+                username="viewer",
+                organisation_id=_ORG_ID,
+                account_id=uuid.uuid4(),
+                org_role="viewer",
+            )
+
+        app.dependency_overrides[get_current_tenant_user] = _override_tenant
+        app.dependency_overrides[get_current_tenant_user_or_api_key] = _override_tenant
         with patch(
             "modulo.api.routes.admin_monitor_config.get_config",
             new_callable=AsyncMock,
