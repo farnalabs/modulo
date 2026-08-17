@@ -1197,6 +1197,7 @@ def _sandbox_node(**overrides: Any) -> dict[str, Any]:
         "id": _UUID_A,
         "node_type": "sandbox_agent",
         "agent_command": "opencode run --format json",
+        "agent_prompt": "Do the thing",
         "template_id": "opencode",
     }
     node.update(overrides)
