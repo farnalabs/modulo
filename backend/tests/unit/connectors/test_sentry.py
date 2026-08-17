@@ -283,3 +283,32 @@ async def test_query_http_500(connector: SentryConnector) -> None:
     )
     with pytest.raises(httpx.HTTPStatusError):
         await connector.query(ConnectorQuery(resource="issues", filters={"project": "project-alpha"}))
+
+
+@respx.mock
+async def test_query_projects_non_list_body_no_crash(connector: SentryConnector) -> None:
+    """A corrupt/hostile non-list body must degrade to an empty page."""
+    respx.get(f"{_BASE}/projects/").mock(return_value=httpx.Response(200, json={"not": "a list"}))
+    result = await connector.query(ConnectorQuery(resource="projects"))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_issues_non_list_body_no_crash(connector: SentryConnector) -> None:
+    """A corrupt/hostile string body must degrade to an empty page."""
+    respx.get(f"{_BASE}/projects/{ORG}/project-alpha/issues/").mock(return_value=httpx.Response(200, json="corrupt"))
+    result = await connector.query(ConnectorQuery(resource="issues", filters={"project": "project-alpha"}))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_projects_list_with_non_dict_entries(connector: SentryConnector) -> None:
+    """Non-dict entries within a list must be dropped rather than crash the query."""
+    respx.get(f"{_BASE}/projects/").mock(
+        return_value=httpx.Response(200, json=[{"id": "p1", "slug": "project-alpha"}, "corrupt", 42])
+    )
+    result = await connector.query(ConnectorQuery(resource="projects"))
+    assert len(result.records) == 1
+    assert result.records[0]["slug"] == "project-alpha"
