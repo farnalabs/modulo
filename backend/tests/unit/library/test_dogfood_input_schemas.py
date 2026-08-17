@@ -51,7 +51,9 @@ INVALID_SAMPLES: dict[str, dict[str, Any]] = {
 
 @pytest.mark.parametrize("name", ["pr-review-input", "ticket-input"])
 def test_schema_is_defined(name: str) -> None:
+    """The schema is defined in library seed data and is a valid JSON Schema."""
     definition = _definition(name)
+    assert definition
     Draft202012Validator.check_schema(definition)
 
 
