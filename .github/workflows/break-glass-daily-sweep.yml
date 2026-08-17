@@ -1,4 +1,4 @@
-# Break-glass daily status sweep (break-glass admin recovery plan §3, "(A)
+# Break-glass daily status sweep (break-glass admin recovery plan sec. 3, "(A)
 # alerting = ... + the daily modulo-break-glass status --all operator sweep").
 #
 # A scheduled workflow that connects as modulo_breakglass with secrets from the

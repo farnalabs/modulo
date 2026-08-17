@@ -494,7 +494,7 @@ cd frontend
 pnpm run generate:api
 ```
 
-This runs `scripts/generate-api-types.ps1` which imports the backend, dumps the OpenAPI
+This runs `scripts/run_generate_api_types.py` which imports the backend, dumps the OpenAPI
 schema as JSON, and feeds it to `openapi-typescript` to produce the typed client.
 
 There is no pre-commit hook for this — the pre-commit framework runs `generate-api-types` as a manual-stage hook only (`gate.ps1` Phase 1d). You must regenerate manually or run `pre-commit run generate-api-types` when the backend API changes. If CI fails because `schema.ts` is out of date, run `pnpm run generate:api`, commit the updated file, and retry.
@@ -726,8 +726,33 @@ vue-tsc, pip-audit) run when you gate via `gate.ps1`, which calls
 
 ### Platform-agnostic hooks (Windows + Linux)
 
-The `eslint`, `vue-tsc`, `semgrep`, and `vulture` hooks are platform-agnostic
-wrappers in `scripts/`:
+The `eslint`, `vue-tsc`, `semgrep`, `vulture`, and the formerly
+PowerShell-only tool hooks are platform-agnostic wrappers in `scripts/`:
+
+- `scripts/run_graph_validate.py` — product map graph integrity (formerly
+  `tools/graph-validate.ps1`); supports `--fix` to regenerate `_index.md` and
+  `--ci` for CI-friendly raw output.
+- `scripts/run_validate_enforcement_gates.py` — CI/delivery gate integrity
+  (formerly `tools/validate-enforcement-gates.ps1`).
+- `scripts/run_check_migration_heads.py` — Alembic migration collision check
+  (formerly `tools/check-migration-heads.ps1`); supports `--diff-range`.
+- `scripts/run_check_c1_chars.py` — workflow-file character scan (formerly
+  `tools/check-c1-chars.ps1`); supports `--fix`.
+- `scripts/run_check_utf8_encoding.py` — UTF-8 BOM scan of tracked files
+  (formerly `tools/check-utf8-encoding.ps1`); supports `--fix`.
+- `scripts/run_changed_tests.py` — runs pytest on changed unit-test files
+  (formerly `tools/run-changed-tests.ps1`).
+- `scripts/run_check_uv_lock.py` — `uv lock --check` freshness (formerly
+  `tools/check-uv-lock.ps1`).
+- `scripts/run_generate_api_types.py` — OpenAPI → TS types (formerly
+  `frontend/scripts/generate-api-types.ps1`).
+- `scripts/run_pester_tests.py` — Pester is PowerShell-only, so this wrapper
+  skips on non-Windows (exit 0) and shells out to
+  `tools/run-pester-tests.ps1` on Windows (formerly
+  `tools/run-pester-tests.ps1` directly).
+
+All of these run identically on Windows, Linux and macOS (except
+`run_pester_tests.py`, which is inherently PowerShell-gated).
 
 - `scripts/run_frontend_npm.py` runs `pnpm run <script>` in `frontend/` (npm
   fallback only) via the platform's package manager (`pnpm.cmd`/`npm.cmd` on
@@ -759,7 +784,7 @@ report "files were modified by this hook", they have normalised a Windows-tool
 CRLF file back to LF (the committed blob is LF via `.gitattributes`). `git add`
 the fixed files and re-commit — that is the fixer loop working as designed.
 
-Migration collision check (`check-migration-heads.ps1`) runs both in
+Migration collision check (`check-migration-heads`) runs both in
 pre-commit (when migration files staged) and in gate.ps1 Phase 0 (even
 with `-SkipTests`). If blocked: renumber your migration to the next free
 sequential number and fix its `down_revision` to point at the current head.
@@ -907,7 +932,7 @@ pnpm records os/cpu per package in pnpm-lock.yaml, so a lockfile generated on Wi
 - When running `improve-architecture` on a feature entry, always check that `bdd:` and `unit-tests:` frontmatter fields are populated — **especially `bdd:`** which is commonly missing even when feature files exist.
 - **Frontmatter YAML**: Never set `delivery-tasks: []` (flow empty list) on a line followed by orphaned indented list items. The `[]` terminates the value; subsequent `- item` lines become parse errors. Either keep `[]` empty with nothing after it, or use a block list without `[]` and add the proper parent key (e.g. `bdd:`).
 - **`bdd:` field**: Every connector product map entry must have a `bdd:` field listing its BDD feature files. File paths like `backend/tests/bdd/features/connectors/foo.feature` belong in `bdd:`, never in `delivery-tasks:` (which holds delivery-plan task IDs, not file paths).
-- **`depends-on` field**: Every connector file must declare `feat-connectors-hub` as a dependency. Features that use the connector hub's sampling/query interface (e.g. schema-inference) must also declare it. `graph-validate.ps1` will flag missing `depends-on` as orphaned refs.
+- **`depends-on` field**: Every connector file must declare `feat-connectors-hub` as a dependency. Features that use the connector hub's sampling/query interface (e.g. schema-inference) must also declare it. `run_graph_validate.py` will flag missing `depends-on` as orphaned refs.
 - **`delivery-tasks` contains task IDs, not file paths**: The `delivery-tasks` field links to delivery-plan task IDs (e.g. `task-connector-hub-01`), not file paths. File paths for BDD features, unit tests, and code paths belong in their respective frontmatter fields (`bdd:`, `unit-tests:`, `code:`).
 - **Known Gaps with `[x]` (checked) items**: The "Known Gaps" section must only list genuine gaps — items that are missing or incomplete. Do not list accomplished items (BDD scenarios that exist, unit tests that exist, working features) with `[x]` checkboxes in Known Gaps. Those belong in the Behaviours section or as plain prose notes.
 - **`status: gap` vs `status: partial`**: If a feature has zero implemented behaviours (all `[ ]`), no tests, and "No implementation exists" in Known Gaps, use `status: gap`, not `status: partial`. `partial` implies some work is done.
@@ -915,8 +940,8 @@ pnpm records os/cpu per package in pnpm-lock.yaml, so a lockfile generated on Wi
 - The HTTPBearer FastAPI dependency with `auto_error=False` returns `None` for missing credentials (not 403). The handler must raise 401 explicitly. Product map entries commonly claim 403 for missing bearer — verify against the actual code.
 - SCIM CRUD functions (`scim_create_group`, `scim_create_user`) call Team/Account CRUD directly, bypassing REST API validation. Any validation gap in the underlying CRUD (e.g. duplicate name enforcement) is inherited by SCIM. Document this cross-module concern in the product map entry's Known Gaps.
 - When auditing behaviours in the product map, do NOT assume an unchecked `[ ]` means "not implemented" — it often means "not verified." Read the test files and run `grep` for each behaviour before deciding status.
-- The `prd:` frontmatter field must contain only the bare section number (e.g. `8.17`), never wrapped in quotes or prefixed with `§`. The `§` prefix or quotes cause `graph-validate.ps1` to fail section matching because `TrimStart('§')` cannot strip quotes, leaving a `"8.17"` string that doesn't match the PRD index.
-- **`graph-validate.ps1 -Fix` can corrupt `_index.md` with literal `\n` strings.** The `-Fix` flag's PowerShell string replacement can produce raw `\n` (backslash-n) text instead of actual newlines. If `_index.md` shows visible `\n` in the rendered file, re-run `graph-validate.ps1` without `-Fix` to regenerate a clean index. File a bug against `deploy/harness/tools/graph-validate.ps1` if `-Fix` remains broken.
+- The `prd:` frontmatter field must contain only the bare section number (e.g. `8.17`), never wrapped in quotes or prefixed with `§`. The `§` prefix or quotes cause `run_graph_validate.py` to fail section matching because `TrimStart('§')` cannot strip quotes, leaving a `"8.17"` string that doesn't match the PRD index.
+- **`run_graph_validate.py --fix` regenerates `_index.md`.** It uses real newlines (not the old PowerShell string-replacement that could emit literal `\n`). If `_index.md` shows visible `\n` text, re-run `run_graph_validate.py --fix` to regenerate a clean index.
 
 ### Backend / API Schema Migrations
 
@@ -1367,7 +1392,7 @@ migrations in place, deleting applied migrations). Rules:
 - NEVER delete a migration file that has been applied. `alembic_version`
   points at a now-missing revision, breaking the next `alembic upgrade` on
   every existing environment (PR #518).
-- If `check-migration-heads.ps1` blocks you: renumber your migration to the
+- If `check-migration-heads` blocks you: renumber your migration to the
   next free sequential number and fix its `down_revision` to point at the
   current head.
 
