@@ -1020,6 +1020,63 @@ async def _dispatch_unauth_paths(
     return None
 
 
+async def _finalize_oauth_principal(
+    request: Request,
+    token: str,
+    claims: Any,
+    settings: Any,
+    call_next: Callable[[Request], Awaitable[Response]],
+) -> Response:
+    """Resolve the OAuth principal role, set request context, and continue.
+
+    Fail-closed: a DB read failure or missing/deactivated membership denies
+    the request (ADR 017 — the scope grant is clamped to the account's live
+    org role so a demoted operator loses scope on the next call).
+    """
+    # Resolve role from scopes (highest scope wins) — the scope grant is then
+    # CLAMPED to the account's LIVE org role so a demoted operator loses scope
+    # on the very next call. Fail-closed: a DB read failure or
+    # missing/deactivated membership denies.
+    scope_role = scopes_required_role(claims.scopes)
+    try:
+        async with _session(claims.organisation_id) as s:
+            live_role = await resolve_role_from_membership(
+                s,
+                str(claims.account_id),
+                str(claims.organisation_id),
+            )
+    except (SQLAlchemyError, OperationalError, TimeoutError):
+        _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
+        return Response(
+            _JSON_AUTH_DB_UNAVAILABLE,
+            status_code=503,
+            media_type=_CT_APPLICATION_JSON,
+        )
+    if live_role is None:
+        return Response(
+            _JSON_FORBIDDEN_ORG_MEMBERSHIP,
+            status_code=403,
+            media_type=_CT_APPLICATION_JSON,
+        )
+    role = clamp_oauth_role(scope_role, live_role)
+
+    _ctx_org_id.set(claims.organisation_id)
+    _ctx_role.set(role)
+    _ctx_key_id.set(uuid.UUID(int=0))  # sentinel for OAuth clients
+    _ctx_user_id.set(claims.account_id)
+    _ctx_auth_token.set(token)
+    _ctx_auth_type.set("oauth")
+    _ctx_team_id.set(None)  # user tokens carry no team boundary
+    request.scope["auth_principal"] = {
+        "type": "user",
+        "org_id": str(claims.organisation_id),
+        "user_id": str(claims.account_id),
+    }
+
+    await _set_authz_enforce(claims.organisation_id)
+    return await call_next(request)
+
+
 # ---------------------------------------------------------------------------
 # Auth middleware
 # ---------------------------------------------------------------------------
@@ -1066,48 +1123,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
         if family_err is not None:
             return family_err
 
-        # Resolve role from scopes (highest scope wins) — ADR 017: the scope
-        # grant is then CLAMPED to the account's LIVE org role so a demoted
-        # operator loses scope on the very next call. Fail-closed: a DB read
-        # failure or missing/deactivated membership denies.
-        scope_role = scopes_required_role(claims.scopes)
-        try:
-            async with _session(claims.organisation_id) as s:
-                live_role = await resolve_role_from_membership(
-                    s,
-                    str(claims.account_id),
-                    str(claims.organisation_id),
-                )
-        except (SQLAlchemyError, OperationalError, TimeoutError):
-            _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
-            return Response(
-                _JSON_AUTH_DB_UNAVAILABLE,
-                status_code=503,
-                media_type=_CT_APPLICATION_JSON,
-            )
-        if live_role is None:
-            return Response(
-                _JSON_FORBIDDEN_ORG_MEMBERSHIP,
-                status_code=403,
-                media_type=_CT_APPLICATION_JSON,
-            )
-        role = clamp_oauth_role(scope_role, live_role)
-
-        _ctx_org_id.set(claims.organisation_id)
-        _ctx_role.set(role)
-        _ctx_key_id.set(uuid.UUID(int=0))  # sentinel for OAuth clients
-        _ctx_user_id.set(claims.account_id)
-        _ctx_auth_token.set(token)
-        _ctx_auth_type.set("oauth")
-        _ctx_team_id.set(None)  # user tokens carry no team boundary
-        request.scope["auth_principal"] = {
-            "type": "user",
-            "org_id": str(claims.organisation_id),
-            "user_id": str(claims.account_id),
-        }
-
-        await _set_authz_enforce(claims.organisation_id)
-        return await call_next(request)
+        return await _finalize_oauth_principal(request, token, claims, settings, call_next)
 
 
 # ---------------------------------------------------------------------------
