@@ -2381,6 +2381,56 @@ async def _check_human_only_gate(
     return None
 
 
+async def _dispatch_hitl_action(
+    mgr: HITLManager,
+    s: AsyncSession,
+    action: str,
+    rid: uuid.UUID,
+    gate_id: str,
+    org_id: uuid.UUID,
+    key_id: uuid.UUID,
+    claim_token: str | None,
+    output: dict[str, Any] | None,
+    reason: str | None,
+) -> dict[str, Any]:
+    """Dispatch a validated HITL action to the manager and return the success dict.
+
+    Raises the domain exceptions (GateNotFoundError, NotTeamMemberError, etc.)
+    which the caller maps to error responses.
+    """
+    if action == "claim":
+        gate = await mgr.claim(s, run_id=rid, gate_id=gate_id, org_id=org_id, claimant_id=key_id)
+        return {
+            "status": "claimed",
+            "claim_token": gate.claim_token,
+            "expires_at": gate.expires_at.isoformat() if gate.expires_at else None,
+        }
+    if action == "approve":
+        await mgr.approve(s, run_id=rid, gate_id=gate_id, org_id=org_id, claim_token=claim_token or "")
+        return {"status": "approved", "gate_id": gate_id}
+    if action == "deliver_manual":
+        await mgr.deliver_manual(
+            s,
+            run_id=rid,
+            gate_id=gate_id,
+            org_id=org_id,
+            claim_token=claim_token or "",
+            output=output or {},
+            actor_id=key_id,
+        )
+        return {"status": "delivered_manual", "gate_id": gate_id}
+    await mgr.reject(
+        s,
+        run_id=rid,
+        gate_id=gate_id,
+        org_id=org_id,
+        claim_token=claim_token or "",
+        actor_id=key_id,
+        reason=reason,
+    )
+    return {"status": "rejected", "gate_id": gate_id}
+
+
 @mcp.tool(
     description=(
         "Unified HITL gate action: claim, approve, reject, or deliver_manual. "
@@ -2430,37 +2480,9 @@ async def review_hitl(
                     return human_only_err
 
             try:
-                if action == "claim":
-                    gate = await mgr.claim(s, run_id=rid, gate_id=gate_id, org_id=org_id, claimant_id=key_id)
-                    return {
-                        "status": "claimed",
-                        "claim_token": gate.claim_token,
-                        "expires_at": gate.expires_at.isoformat() if gate.expires_at else None,
-                    }
-                if action == "approve":
-                    await mgr.approve(s, run_id=rid, gate_id=gate_id, org_id=org_id, claim_token=claim_token or "")
-                    return {"status": "approved", "gate_id": gate_id}
-                if action == "deliver_manual":
-                    await mgr.deliver_manual(
-                        s,
-                        run_id=rid,
-                        gate_id=gate_id,
-                        org_id=org_id,
-                        claim_token=claim_token or "",
-                        output=output or {},
-                        actor_id=key_id,
-                    )
-                    return {"status": "delivered_manual", "gate_id": gate_id}
-                await mgr.reject(
-                    s,
-                    run_id=rid,
-                    gate_id=gate_id,
-                    org_id=org_id,
-                    claim_token=claim_token or "",
-                    actor_id=key_id,
-                    reason=reason,
+                return await _dispatch_hitl_action(
+                    mgr, s, action, rid, gate_id, org_id, key_id, claim_token, output, reason
                 )
-                return {"status": "rejected", "gate_id": gate_id}
             except GateNotFoundError:
                 return {"error": "gate_not_found", "run_id": run_id, "gate_id": gate_id}
             except NotTeamMemberError:
