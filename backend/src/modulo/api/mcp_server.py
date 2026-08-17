@@ -4499,6 +4499,24 @@ async def resource_pipelines() -> str:
     return f"Pipelines ({result.total} total):\n" + "\n".join(lines)
 
 
+def _format_run_line(r: Any, child_rollups: dict[Any, tuple[Any, int]]) -> str:
+    """Render a single run row as a text line for MCP resources."""
+    child_cost, child_count = child_rollups.get(r.id, (_MCP_COST_ROLLUP_ZERO, 0))
+    own_cost = Decimal(str(r.total_cost_usd)) if r.total_cost_usd is not None else _MCP_COST_ROLLUP_ZERO
+    aggregate_cost = _quantize_mcp_cost_rollup(own_cost + child_cost)
+    line = (
+        f"- Run {r.id} | status={r.status} | trigger={r.trigger_type} | "
+        f"created={r.created_at.isoformat()} | "
+        f"tokens={r.total_tokens or 0} | cost=${r.total_cost_usd or 0} | "
+        f"child_count={child_count} | child_cost=${child_cost} | aggregate_cost=${aggregate_cost}"
+    )
+    if r.cost_breakdown is not None:
+        breakdown = _sanitize_cost_breakdown(r.cost_breakdown)
+        if breakdown:
+            line += " | breakdown={" + ", ".join(_format_breakdown_line(e) for e in breakdown) + "}"
+    return line
+
+
 @mcp.resource("modulo://pipelines/{pipeline_id}/runs")
 async def resource_pipeline_runs(pipeline_id: str) -> str:
     if not await validate_current_auth():
@@ -4527,22 +4545,7 @@ async def resource_pipeline_runs(pipeline_id: str) -> str:
     if not result.items:
         return f"Pipeline '{pipeline.name}' has no runs."
 
-    lines = []
-    for r in result.items:
-        child_cost, child_count = child_rollups.get(r.id, (_MCP_COST_ROLLUP_ZERO, 0))
-        own_cost = Decimal(str(r.total_cost_usd)) if r.total_cost_usd is not None else _MCP_COST_ROLLUP_ZERO
-        aggregate_cost = _quantize_mcp_cost_rollup(own_cost + child_cost)
-        line = (
-            f"- Run {r.id} | status={r.status} | trigger={r.trigger_type} | "
-            f"created={r.created_at.isoformat()} | "
-            f"tokens={r.total_tokens or 0} | cost=${r.total_cost_usd or 0} | "
-            f"child_count={child_count} | child_cost=${child_cost} | aggregate_cost=${aggregate_cost}"
-        )
-        if r.cost_breakdown is not None:
-            breakdown = _sanitize_cost_breakdown(r.cost_breakdown)
-            if breakdown:
-                line += " | breakdown={" + ", ".join(_format_breakdown_line(e) for e in breakdown) + "}"
-        lines.append(line)
+    lines = [_format_run_line(r, child_rollups) for r in result.items]
     return f"Runs for pipeline {pipeline.name} ({result.total} total):\n" + "\n".join(lines)
 
 
