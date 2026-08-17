@@ -32,8 +32,8 @@ from modulo.core.eval_engine import EvalDefinition as EvalDefinitionDTO
 from modulo.core.feedback_manager import (
     ConcurrentModificationError,
     FeedbackManager,
-    FeedbackManagerError,
     FeedbackRecordNotFoundError,
+    FeedbackRecordRunNotFoundError,
     InvalidTransitionError,
 )
 from modulo.db.models.eval_definition import EvalDefinition
@@ -708,14 +708,14 @@ async def review_feedback(
                         status_code=status.HTTP_404_NOT_FOUND,
                         detail=str(exc),
                     ) from exc
+                except FeedbackRecordRunNotFoundError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=str(exc),
+                    ) from exc
                 except (InvalidTransitionError, ConcurrentModificationError) as exc:
                     raise HTTPException(
                         status_code=status.HTTP_409_CONFLICT,
-                        detail=str(exc),
-                    ) from exc
-                except FeedbackManagerError as exc:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
                         detail=str(exc),
                     ) from exc
 
@@ -756,6 +756,11 @@ async def review_feedback(
             detail=str(exc),
         ) from exc
     except FeedbackRecordNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except FeedbackRecordRunNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),

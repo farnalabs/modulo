@@ -9,8 +9,8 @@ import pytest
 from modulo.core.feedback_manager import (
     ConcurrentModificationError,
     FeedbackManager,
-    FeedbackManagerError,
     FeedbackRecordNotFoundError,
+    FeedbackRecordRunNotFoundError,
     InvalidTransitionError,
     ValidationError,
 )
@@ -885,7 +885,7 @@ class TestSpawnCorrectionRun:
         with (
             patch.object(mgr, "get_feedback_record", return_value=sample_record),
             patch("modulo.core.feedback_manager.get_run", return_value=None),
-            pytest.raises(FeedbackManagerError, match=r"Original run .* not found"),
+            pytest.raises(FeedbackRecordRunNotFoundError, match=r"Original run .* not found"),
         ):
             await mgr.spawn_correction_run(sample_record.id)
 

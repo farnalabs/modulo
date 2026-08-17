@@ -52,6 +52,17 @@ class FeedbackRecordNotFoundError(FeedbackManagerError):
     """Raised when a FeedbackRecord is not found."""
 
 
+class FeedbackRecordRunNotFoundError(FeedbackManagerError):
+    """Raised when the original run referenced by a FeedbackRecord is not found.
+
+    Distinct from :class:`FeedbackRecordNotFoundError`: the record exists, but
+    the run it points at is gone. API routes map this to 404 while leaving the
+    base :class:`FeedbackManagerError` catch free for genuinely unexpected
+    subclasses (e.g. :class:`ValidationError`) rather than also collapsing them
+    to 404.
+    """
+
+
 class InvalidTransitionError(FeedbackManagerError):
     """Raised when a feedback status transition is not allowed."""
 
@@ -417,7 +428,9 @@ class FeedbackManager:
 
         original_run = await get_run(self._session, record.run_id)
         if original_run is None:
-            raise FeedbackManagerError(f"Original run {record.run_id} not found for FeedbackRecord {record_id}")
+            raise FeedbackRecordRunNotFoundError(
+                f"Original run {record.run_id} not found for FeedbackRecord {record_id}"
+            )
 
         feedback_correction: dict[str, Any] = {
             "rejection_reason": record.rejection_reason,

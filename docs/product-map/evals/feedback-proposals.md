@@ -93,6 +93,14 @@ Discovered from 1 completed delivery task.
 
 ## QA History
 
+### 2026-08-15 — Coverage-completion round 2 (dist partial-evals-d)
+- **Verified** all remaining unchecked behaviours against code + tests. Every unchecked item is a genuine new-feature gap requiring a dedicated eval-proposal entity/agent/UI, none of which exists and none of which is a backend-only change in this worktree's scope:
+  - **Proposed Eval Generation** (AI correction / eval-proposal agent drafting a case from rejected output, negative example, rejection-reason rubric, suggested eval type) — no agent exists (`grep` for a drafting path returns nothing beyond `detect_eval_gap` tagging).
+  - **Human Curation** (draft eval editor, edit, publish-to-active) — `EvalProposalsQueueView.vue` "Publish" only transitions the record to `resolved`; no `EvalDefinition` is created, so published evals cannot be immediately active for future runs.
+  - **Library contribution (v2)** — deferred by design.
+- **Confirmed** gap-detection surface remains complete: `detect_eval_gap`, `POST /feedback/{id}/detect-gap`, `GET /feedback/proposals`, filtering/ordering all `[x]` and covered by existing tests.
+- **Status**: partial — gap-detection + proposal-queue plumbing are done; generation + curation are genuine feature work, not coverage gaps.
+
 ### 2026-08-15 — Coverage-completion (FAR-233)
 - **Verified**: eval proposals queue UI now exists (`EvalProposalsQueueView.vue` at `/evals/proposals`, router line 273) — the "API-only" claim is stale; queue UI checkbox split from the draft-eval-editor gap.
 - **Marked `[x]`**: BDD feature file exists (7 real scenarios), double gap detection idempotent (`test_double_detection_is_idempotent`).

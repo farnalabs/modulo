@@ -112,6 +112,15 @@ Mapping eval suites to organisational OKRs so teams can track quality targets ov
 
 ## QA History
 
+### 2026-08-15 — Coverage-completion round 2 (dist partial-evals-d)
+- **Verified** every remaining unchecked behaviour against code + tests. All unchecked items are genuine infrastructure/feature gaps that require a DB migration and/or a notifier/dashboard — none are backend-only fixes within this worktree's scope:
+  - **Suite-to-OKR mapping** (suite `pass_threshold`/`target_date`/`owner` columns, an OKR identifier column, multi-suite OKR aggregation, aggregate flag) — `eval_definitions` has no OKR column and no dedicated suite DB entity; `OkrSuite.target_date`/owner are Pydantic-only. An OKR-level rollup endpoint (`?okr_id=...` or `aggregate=true`) is not implemented.
+  - **Breach notification** (webhook/in-app event with suite_id/score/threshold/trend, one notification per breached suite) — `alert_on_breach` is a pure function with no delivery mechanism; no scheduled quality report includes OKR breach summaries.
+  - **Org with no suites / large OKR groups** — the endpoint is per-`suite_id` (no suite-list or aggregation surface to return an empty set or paginate).
+  - **Dashboard surfacing** — no OKR visualization UI (frontend).
+- **Confirmed** the tracking/bucketing/trend/breach/admin-endpoint surface remains complete and covered: `track_okr_progress`, trend direction, breach, `GET /admin/evals/okr-progress/{suite_id}`, 401/403/404/501/503/500 all `[x]` with 50+ tests.
+- **Status**: partial — the progress engine is done; OKR-level grouping/aggregation + breach delivery + dashboard are genuine feature work (need a migration + notifier + UI).
+
 ### 2026-08-15 — Coverage completion (FAR-232)
 
 **What was fixed:**
