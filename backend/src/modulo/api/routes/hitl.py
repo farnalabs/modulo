@@ -34,6 +34,7 @@ from modulo.core.hitl_manager import (
     HITLManager,
     NotTeamMemberError,
 )
+from modulo.core.notifier import Notifier
 from modulo.core.pipeline_engine.executor import PipelineExecutor, org_sandbox_capacity_free
 from modulo.db.crud.run import get_run, update_run_status
 from modulo.db.models.hitl_claim import HitlClaim
@@ -43,6 +44,26 @@ from modulo.settings import get_settings
 
 _MSG_DATABASE_ERROR_PLEASE_TRY = "Database error. Please try again."
 _CODE_HITL_APPROVE = "hitl.approve"
+
+
+def _build_resume_executor(engine: AsyncEngine) -> PipelineExecutor:
+    """Build a resume executor wired with the ``hitl_awaiting`` notifier.
+
+    Closes the team-hitl-gates Known Gap: a resume that re-interrupts on a
+    further HITL gate must dispatch the webhook/in-app notification, not just
+    the WebSocket broker event. Notifier init is failure-isolated (fail-open —
+    the resume still runs if the notifier cannot be constructed).
+    """
+    notifier: Notifier | None = None
+    try:
+        notifier = Notifier(engine, get_settings().fernet_key)
+    except Exception:
+        logger.exception("hitl.build_resume_executor.notifier_init_failed")
+    return PipelineExecutor(
+        engine,
+        checkpointer_conn_string=pg_connection_string(get_settings().database_url),
+        notifier=notifier,
+    )
 
 
 logger = logging.getLogger(__name__)
@@ -278,10 +299,7 @@ async def approve_gate(
         ) from e
 
     try:
-        executor = PipelineExecutor(
-            engine,
-            checkpointer_conn_string=pg_connection_string(get_settings().database_url),
-        )
+        executor = _build_resume_executor(engine)
         await executor.resume(
             run_id=run_id,
             org_id=principal.organisation_id,
@@ -375,10 +393,7 @@ async def approve_gate_with_modification(
         ) from e
 
     try:
-        executor = PipelineExecutor(
-            engine,
-            checkpointer_conn_string=pg_connection_string(get_settings().database_url),
-        )
+        executor = _build_resume_executor(engine)
         await executor.resume(
             run_id=run_id,
             org_id=principal.organisation_id,
@@ -466,10 +481,7 @@ async def reject_gate(
     # Resume the graph with rejection data so the gate router picks the
     # reject_target branch.
     try:
-        executor = PipelineExecutor(
-            engine,
-            checkpointer_conn_string=pg_connection_string(str(engine.url)),
-        )
+        executor = _build_resume_executor(engine)
         await executor.resume(
             run_id=run_id,
             org_id=principal.organisation_id,
@@ -564,10 +576,7 @@ async def deliver_manual_output(
         ) from e
 
     try:
-        executor = PipelineExecutor(
-            engine,
-            checkpointer_conn_string=pg_connection_string(str(engine.url)),
-        )
+        executor = _build_resume_executor(engine)
         await executor.resume(
             run_id=run_id,
             org_id=principal.organisation_id,
@@ -652,10 +661,7 @@ async def submit_manual_output(
         ) from e
 
     try:
-        executor = PipelineExecutor(
-            engine,
-            checkpointer_conn_string=pg_connection_string(str(engine.url)),
-        )
+        executor = _build_resume_executor(engine)
         await executor.resume(
             run_id=run_id,
             org_id=principal.organisation_id,

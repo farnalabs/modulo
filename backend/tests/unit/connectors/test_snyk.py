@@ -734,3 +734,95 @@ async def test_write_ignore_with_reason(connector):
 async def test_write_unsupported_resource(connector):
     with pytest.raises(ValueError, match="Unsupported Snyk write resource"):
         await connector.write(ConnectorPayload(resource="invalid", data={}))
+
+
+# --- corrupt list payload hardening ---
+
+
+@respx.mock
+async def test_query_projects_corrupt_body_no_crash(connector):
+    """A non-dict body from the projects endpoint must degrade to an empty
+    page, not crash."""
+    respx.get(f"{API_BASE}/orgs/my-org/projects", params={"version": VERSION, "limit": "100"}).mock(
+        return_value=httpx.Response(200, json=["garbage"]),
+    )
+    result = await connector.query(
+        ConnectorQuery(
+            resource="projects",
+            filters={"org_id": "my-org"},
+            limit=100,
+        )
+    )
+    assert not result.records
+    assert result.total == 0
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_projects_corrupt_data_field_no_crash(connector):
+    """A corrupt body placing a non-list in ``data`` must fall back to an
+    empty page, not crash."""
+    respx.get(f"{API_BASE}/orgs/my-org/projects", params={"version": VERSION, "limit": "100"}).mock(
+        return_value=httpx.Response(200, json={"data": "garbage", "meta": {"count": 42}}),
+    )
+    result = await connector.query(
+        ConnectorQuery(
+            resource="projects",
+            filters={"org_id": "my-org"},
+            limit=100,
+        )
+    )
+    assert not result.records
+    assert result.total == 42
+
+
+@respx.mock
+async def test_query_issues_corrupt_body_no_crash(connector):
+    """A non-dict body from the issues endpoint must degrade to an empty
+    page, not crash."""
+    respx.get(
+        f"{API_BASE}/orgs/my-org/projects/proj-1/issues",
+        params={"version": VERSION, "limit": "100"},
+    ).mock(
+        return_value=httpx.Response(200, json=["garbage"]),
+    )
+    result = await connector.query(
+        ConnectorQuery(
+            resource="issues",
+            filters={"org_id": "my-org", "project_id": "proj-1"},
+            limit=100,
+        )
+    )
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_orgs_corrupt_data_field_no_crash(connector):
+    """A corrupt body placing a non-list in ``data`` must fall back to an
+    empty page, not crash."""
+    respx.get(f"{API_BASE}/orgs", params={"version": VERSION, "limit": "100"}).mock(
+        return_value=httpx.Response(200, json={"data": {"id": "org-1"}}),
+    )
+    result = await connector.query(ConnectorQuery(resource="orgs", limit=100))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_tests_corrupt_body_no_crash(connector):
+    """A non-dict body from the tests endpoint must degrade to an empty
+    page, not crash."""
+    respx.get(f"{API_BASE}/orgs/my-org/tests", params={"version": VERSION, "limit": "100"}).mock(
+        return_value=httpx.Response(200, json=["garbage"]),
+    )
+    result = await connector.query(
+        ConnectorQuery(
+            resource="tests",
+            filters={"org_id": "my-org"},
+            limit=100,
+        )
+    )
+    assert not result.records
+    assert result.total == 0
+    assert result.next_cursor is None

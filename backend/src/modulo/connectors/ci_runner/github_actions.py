@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import CIRun, CIRunLog, CIRunStatus, HealthResult
 from modulo.connectors.ci_runner.base import CIRunnerBase
 
@@ -148,7 +149,7 @@ class GitHubActionsCIRunner(CIRunnerBase):
                         params=params,
                     )
                     workflows_r.raise_for_status()
-                    runs = workflows_r.json().get("workflow_runs", [])
+                    runs = _safe_records(workflows_r.json(), "workflow_runs")
                     if runs:
                         return self._parse_run(runs[0])
 
@@ -252,7 +253,7 @@ class GitHubActionsCIRunner(CIRunnerBase):
             async with self._client() as client:
                 r = await client.get(f"/repos/{owner_repo}/actions/runs", params=params)
                 r.raise_for_status()
-                raw_runs = r.json().get("workflow_runs", [])
+                raw_runs = _safe_records(r.json(), "workflow_runs")
                 return [self._parse_run(run) for run in raw_runs]
         except httpx.HTTPStatusError as exc:
             raise ValueError(f"GitHub API error ({exc.response.status_code}): {exc.response.text[:200]}") from exc

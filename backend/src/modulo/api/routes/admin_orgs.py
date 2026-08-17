@@ -754,7 +754,7 @@ async def admin_get_org_guardrails_kill_switch(
         logger.exception("Unexpected error in admin_get_org_guardrails_kill_switch")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
 
@@ -840,5 +840,5 @@ async def admin_set_org_guardrails_kill_switch(
         logger.exception("Unexpected error in admin_set_org_guardrails_kill_switch")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None

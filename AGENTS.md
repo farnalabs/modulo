@@ -587,6 +587,19 @@ Wait-Process -Name "uv" -ErrorAction SilentlyContinue  # doesn't block; just con
 
 ## Lessons Learned
 
+### Squashing alembic migrations: stamp the live DB to the last still-existing revision, never rely on `upgrade heads` to recover from an orphaned version
+
+When a migration squash deletes revision files (e.g. replacing 94 post-squash migrations with a reconciliation chain), any live DB whose `alembic_version` points at a DELETED revision becomes an **orphan**. `alembic upgrade heads` does NOT gracefully stamp forward from an orphan — it fails hard with `Can't locate revision identified by '<deleted_rev>'` (alembic.util.messaging). This crashed the staging deploy (app + worker both ran `alembic upgrade heads` at boot, both failed, both crash-looped on the migration advisory lock).
+
+The correct rollout for a squash that deletes revisions:
+
+1. **Stamp the live DB to the last revision that still exists in the new chain** — a single-row `UPDATE alembic_version SET version_num = '<last_existing_rev>'`. Do NOT wipe the table; stamp to a known-good revision so `upgrade heads` can walk forward. (For the 2026-08-16 squash: `0107_guardrail_t1_remainder` was deleted, so we stamped staging and prod to `0005_v2_features_system`, then `upgrade heads` ran `0005 -> 0108 -> 0109 -> 0110`.)
+2. **The reconciliation migrations must be idempotent** (CREATE ... IF NOT EXISTS / existence guards / data-safe SET NOT NULL) so they no-op on the existing schema and just stamp forward — this is what makes the squash "compatible with existing datasets".
+3. **Do this BEFORE the deploy's release command runs** — the Fly `[release]` command (`release.sh`) is the single migrator that runs `alembic upgrade heads` once per deploy before machines roll out. If the DB is orphaned, the release command fails and every machine then fails in the boot-time fallback loop.
+4. **Verify the DB is at the new head after deploy** (`SELECT version_num FROM alembic_version`) and that the app health check passes — a crash-looping app on the advisory lock is the symptom of an orphaned version.
+
+Also: a squash that deletes revisions will break (a) tests that pin deleted revision IDs (adapt them to assert final schema state), (b) `check-migration-heads` numeric-prefix collisions (renumber to the next free prefix after main's current head), and (c) product-map `code:` paths referencing deleted migration files (repoint to the reconciliation file). The `check-migration-heads` CI gate compares the PR's migration filenames against main's still-present files, so new reconciliation files must use prefixes higher than main's current head.
+
 ### Canonicalizing a value at an API boundary requires auditing every other consumer of the raw column
 
 When the runs API started canonicalizing run error codes to the dotted taxonomy at the read boundary (present_error / _do_list_runs / MCP), the raw `runs.error_code` column was STILL consumed raw by other surfaces — the analytics facts table stores the raw spelling, so the analytics error-code filter and `dimension=error_code` chart silently disagreed with the runs UI until reconciled in the same change. Two reconciliation patterns shipped (dist #1423): `expand_code_variants()` matches dotted + legacy + class-name spellings of one canonical code (IN clause over the variants), and the `harness.unknown` aggregate filter uses `error_code NOT IN known_error_codes()` to round-trip the dimension's "Unknown error" slice. Rule: any boundary canonicalization must grep for EVERY reader of the raw value (analytics facts/filter/dimension, MCP resources, run classification, notifier events) and reconcile them in the same change — a filter/dimension asymmetry silently returns zero rows or shows keys that no longer match the UI.
