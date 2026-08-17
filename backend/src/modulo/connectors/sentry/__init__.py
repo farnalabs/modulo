@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._safe_page import safe_records_list as _safe_records_list
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -93,7 +94,7 @@ class SentryConnector(ConnectorBase):
             params["cursor"] = q.cursor
         resp = await c.get(f"/projects/{org}/{project}/issues/", params=params)
         resp.raise_for_status()
-        data: list[dict[str, Any]] = resp.json()
+        data = _safe_records_list(resp.json())
         return ConnectorResult(records=data[: q.limit], total=len(data))
 
     async def _list_events(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -111,7 +112,7 @@ class SentryConnector(ConnectorBase):
             params["cursor"] = q.cursor
         resp = await c.get(f"/projects/{org}/{project}/events/", params=params)
         resp.raise_for_status()
-        data: list[dict[str, Any]] = resp.json()
+        data = _safe_records_list(resp.json())
         return ConnectorResult(records=data[: q.limit], total=len(data))
 
     async def _list_projects(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -122,7 +123,7 @@ class SentryConnector(ConnectorBase):
             params["cursor"] = q.cursor
         resp = await c.get("/projects/", params=params)
         resp.raise_for_status()
-        data: list[dict[str, Any]] = resp.json()
+        data = _safe_records_list(resp.json())
         return ConnectorResult(records=data[: q.limit], total=len(data))
 
     async def _list_releases(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -137,7 +138,7 @@ class SentryConnector(ConnectorBase):
             params["cursor"] = q.cursor
         resp = await c.get(f"/organizations/{org}/releases/", params=params)
         resp.raise_for_status()
-        data: list[dict[str, Any]] = resp.json()
+        data = _safe_records_list(resp.json())
         return ConnectorResult(records=data[: q.limit], total=len(data))
 
     async def _list_teams(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -149,7 +150,7 @@ class SentryConnector(ConnectorBase):
             params["cursor"] = q.cursor
         resp = await c.get(f"/organizations/{org}/teams/", params=params)
         resp.raise_for_status()
-        data: list[dict[str, Any]] = resp.json()
+        data = _safe_records_list(resp.json())
         return ConnectorResult(records=data[: q.limit], total=len(data))
 
     async def _list_issue_events(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -163,7 +164,7 @@ class SentryConnector(ConnectorBase):
             params["cursor"] = q.cursor
         resp = await c.get(f"/issues/{issue_id}/events/", params=params)
         resp.raise_for_status()
-        data: list[dict[str, Any]] = resp.json()
+        data = _safe_records_list(resp.json())
         return ConnectorResult(records=data[: q.limit], total=len(data))
 
     async def _update_issue_status(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:

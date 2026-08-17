@@ -487,3 +487,33 @@ async def test_write_http_500(connector: DiscordConnector) -> None:
                 data={"channel_id": channel_id, "content": "Hello"},
             )
         )
+
+
+@respx.mock
+async def test_query_guilds_non_list_body_no_crash(connector: DiscordConnector) -> None:
+    """A corrupt/hostile non-list body must degrade to an empty page."""
+    respx.get(f"{_BASE}/users/@me/guilds").mock(return_value=httpx.Response(200, json={"not": "a list"}))
+    result = await connector.query(ConnectorQuery(resource="guilds"))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_channels_non_list_body_no_crash(connector: DiscordConnector) -> None:
+    """A corrupt/hostile string body must degrade to an empty page."""
+    guild_id = "guild-123"
+    respx.get(f"{_BASE}/guilds/{guild_id}/channels").mock(return_value=httpx.Response(200, json="corrupt"))
+    result = await connector.query(ConnectorQuery(resource="channels", filters={"guild_id": guild_id}))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_guilds_list_with_non_dict_entries(connector: DiscordConnector) -> None:
+    """Non-dict entries within a list must be dropped rather than crash the query."""
+    respx.get(f"{_BASE}/users/@me/guilds").mock(
+        return_value=httpx.Response(200, json=[{"id": "111", "name": "Modulo Dev"}, "corrupt", 42])
+    )
+    result = await connector.query(ConnectorQuery(resource="guilds"))
+    assert len(result.records) == 1
+    assert result.records[0]["name"] == "Modulo Dev"

@@ -187,6 +187,49 @@
         <JsonViewer :data="runIO.input_payload" :show-toolbar="true" :max-height="'16rem'" />
       </div>
 
+      <!-- Guardrail Summary -->
+      <section v-if="guardrailBuckets.length > 0" class="rounded-lg border bg-card p-6 mb-6" data-testid="run-detail-guardrail-summary">
+        <h2 class="mb-3 text-base font-semibold tracking-tight">{{ $t('views.RunDetailGuardrailSummary.guardrail_summary_title') }}</h2>
+        <div class="flex flex-wrap gap-3">
+          <div
+            v-for="bucket in guardrailBuckets"
+            :key="bucket.key"
+            data-testid="run-detail-guardrail-bucket"
+            class="inline-flex items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2 text-sm"
+          >
+            <span :class="bucketClass(bucket.key)" class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium capitalize">
+              {{ bucket.label }}
+            </span>
+            <span class="tabular-nums font-semibold">{{ bucket.value }}</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Guardrail-blocked override (terminal eval_failed / eval_blocked) -->
+      <div
+        v-if="isGuardrailBlocked"
+        data-testid="run-detail-guardrail-override-panel"
+        class="rounded-lg border border-warning/50 bg-warning/10 p-4 mb-4"
+      >
+        <h3 class="text-sm font-semibold text-warning mb-1">{{ $t('views.RunDetailGuardrailSummary.override_guardrail') }}</h3>
+        <p class="text-xs text-warning/80 mb-3">{{ $t('views.RunDetailGuardrailSummary.override_disclosure') }}</p>
+        <Button
+          v-if="isOrgOperator"
+          data-testid="run-detail-override-guardrail"
+          variant="default"
+          @click="openOverrideDialog"
+        >
+          {{ $t('views.RunDetailGuardrailSummary.override_guardrail') }}
+        </Button>
+        <p
+          v-else
+          data-testid="run-detail-override-role-note"
+          class="text-xs text-muted-foreground"
+        >
+          {{ $t('views.RunDetailGuardrailSummary.override_requires_operator') }}
+        </p>
+      </div>
+
       <!-- Per-Node Execution Trace -->
       <section class="space-y-4 rounded-lg border bg-card p-6">
         <div class="flex items-baseline justify-between gap-4">
@@ -497,6 +540,51 @@
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <!-- Guardrail Override Dialog -->
+      <Dialog :open="overrideDialogOpen" @update:open="overrideDialogOpen = false">
+        <DialogContent class="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{{ $t('views.RunDetailGuardrailSummary.override_guardrail') }}</DialogTitle>
+            <DialogDescription>
+              {{ $t('views.RunDetailGuardrailSummary.override_guardrail_description') }}
+            </DialogDescription>
+          </DialogHeader>
+          <div class="space-y-4">
+            <label for="run-detail-override-input" class="mb-1 block text-sm font-medium">
+              {{ $t('views.RunDetailGuardrailSummary.input_payload') }}
+            </label>
+            <textarea
+              id="run-detail-override-input"
+              v-model="overrideInput"
+              rows="10"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              data-testid="run-detail-override-input"
+              :aria-label="$t('views.RunDetailGuardrailSummary.input_payload')"
+            />
+            <p class="text-xs text-muted-foreground">{{ $t('views.RunDetailGuardrailSummary.override_disclosure') }}</p>
+            <div
+              v-if="overrideMessage"
+              :data-testid="overrideMessage.type === 'error' ? 'run-detail-override-error' : 'run-detail-override-success'"
+              role="status"
+              aria-live="polite"
+              class="text-sm font-medium"
+              :class="overrideMessage.type === 'error' ? 'text-destructive' : 'text-success'"
+            >
+              {{ overrideMessage.text }}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              data-testid="run-detail-override-submit"
+              :disabled="overrideSubmitting"
+              @click="submitOverride"
+            >
+              {{ overrideSubmitting ? '...' : $t('views.RunDetailGuardrailSummary.override_guardrail') }}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </template>
   </div>
 </template>
@@ -505,8 +593,9 @@
 import { computed, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { api } from '../lib/api/client'
+import { api, getAccessToken } from '../lib/api/client'
 import type { components } from '../lib/api/client'
+import { decodeJwtPayload } from '../lib/jwt'
 import { useApi } from '../composables/useApi'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -614,10 +703,121 @@ const hitlNotes = ref('')
 const hitlMessage = ref<{ type: string; text: string } | null>(null)
 const liveOutput = ref<Record<string, string>>({})
 const liveOutputSeq = ref(0)
+const overrideDialogOpen = ref(false)
+const overrideInput = ref('')
+const overrideSubmitting = ref(false)
+const overrideMessage = ref<{ type: string; text: string } | null>(null)
 
 // agent_stdout strings can reach ~512KB; cap the Logs pre for display.
 // (FAR-123 delivers the full truncation UX later.)
 const MAX_LOG_CHARS = 20000
+
+interface JwtPayload {
+  org_role?: string
+}
+
+function readJwtPayload(): JwtPayload | null {
+  return decodeJwtPayload(getAccessToken()) as JwtPayload | null
+}
+
+const isOrgOperator = computed(() => {
+  const role = readJwtPayload()?.org_role
+  return role === 'operator' || role === 'admin'
+})
+
+const isGuardrailBlocked = computed(() =>
+  run.value?.status === 'eval_failed' && run.value?.error_code === 'eval_blocked',
+)
+
+const guardrailSummary = computed<Record<string, number>>(() => {
+  const s = run.value?.guardrail_summary
+  return s && typeof s === 'object' ? (s as Record<string, number>) : {}
+})
+
+const GUARDRAIL_BUCKET_KEYS = ['evaluated', 'passed', 'violated', 'observed', 'errored', 'redacted', 'skipped'] as const
+
+const guardrailBuckets = computed(() => {
+  const summary = guardrailSummary.value
+  if (Object.keys(summary).length === 0) return []
+  return GUARDRAIL_BUCKET_KEYS
+    .filter(key => typeof summary[key] === 'number' && summary[key] > 0)
+    .map(key => ({
+      key,
+      value: summary[key] as number,
+      label: t(`views.RunDetailGuardrailSummary.${key}`),
+    }))
+})
+
+function bucketClass(key: string): string {
+  const classes: Record<string, string> = {
+    evaluated: 'bg-muted text-muted-foreground',
+    passed: 'bg-success/10 text-success',
+    violated: 'bg-destructive/10 text-destructive',
+    observed: 'bg-warning/10 text-warning',
+    errored: 'bg-destructive/10 text-destructive',
+    redacted: 'bg-purple-500/10 text-purple-600',
+    skipped: 'bg-muted text-muted-foreground',
+  }
+  return classes[key] || 'bg-muted text-muted-foreground'
+}
+
+function openOverrideDialog() {
+  overrideInput.value = ''
+  overrideMessage.value = null
+  overrideDialogOpen.value = true
+}
+
+async function submitOverride() {
+  const runId = route.params.id as string
+  if (!runId || overrideSubmitting.value) return
+  let inputData: unknown
+  try {
+    inputData = JSON.parse(overrideInput.value || '{}')
+  } catch {
+    overrideMessage.value = {
+      type: 'error',
+      text: t('views.RunDetailGuardrailSummary.override_invalid_json'),
+    }
+    return
+  }
+  overrideSubmitting.value = true
+  overrideMessage.value = null
+  try {
+    const { data, error: err } = await api.POST('/api/v1/runs/{run_id}/guardrail-override', {
+      params: { path: { run_id: runId } },
+      body: { input_data: inputData } as any,
+    })
+    if (err) {
+      const status = (err as Record<string, unknown>)?.status
+      // 422 = still-violating supplied input — re-block safe.
+      overrideMessage.value = {
+        type: 'error',
+        text: status === 422
+          ? t('views.RunDetailGuardrailSummary.override_reblocked')
+          : `${t('views.RunDetailGuardrailSummary.override_failed')} ${formatApiError(err)}`,
+      }
+      return
+    }
+    if (data) {
+      if (run.value) run.value.status = (data as { status?: string }).status ?? 'pending'
+      overrideMessage.value = {
+        type: 'success',
+        text: t('views.RunDetailGuardrailSummary.override_success'),
+      }
+      setTimeout(() => {
+        overrideDialogOpen.value = false
+        overrideMessage.value = null
+      }, 1500)
+    }
+  } catch (e: unknown) {
+    overrideMessage.value = {
+      type: 'error',
+      text: `${t('views.RunDetailGuardrailSummary.override_failed')} ${formatApiError(e)}`,
+    }
+  } finally {
+    overrideSubmitting.value = false
+  }
+}
 
 const shareSummary = computed(() => {
   const r = run.value

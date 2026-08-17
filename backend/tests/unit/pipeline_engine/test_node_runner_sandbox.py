@@ -891,6 +891,84 @@ async def test_streaming_skipped_when_no_broker_registered_for_run():
     assert result["output"]["summary"] == "done"
 
 
+# FAR-306: live stdout/stderr streaming must redact injected credentials before
+# publishing to the run broker (the persistence path already redacts raw output).
+# ---------------------------------------------------------------------------
+
+
+async def test_stream_redacts_credentials_from_live_stdout_chunk():
+    """A credential-bearing stdout chunk is scrubbed before the broker payload
+    is published, so live output in the Run UI never exposes injected tokens
+    (tokenized git URLs, ghp_/Bearer tokens). (FAR-306)"""
+    from modulo.core.pipeline_engine.event_broker import RunEventBroker
+
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+    broker = RunEventBroker(uuid.uuid4())
+
+    try:
+        with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+            result = await fn(_with_registered_broker(broker))
+
+        assert result["output"]["status"] == "completed"
+        on_stdout = sandbox.commands.run.call_args.kwargs["on_stdout"]
+        with patch("modulo.core.pipeline_engine.node_runner._STREAM_FLUSH_INTERVAL", 0.0):
+            await on_stdout("cloning https://x-access-token:ghp_ABC123@github.com/farnalabs/modulo.git\n")
+            await on_stdout('auth "Bearer sk-proj-SECRETKEY" token=myapikey\n')
+
+        chunk_events = [e for e in broker.replay_since(0) if e.event_type == "node.stdout_chunk"]
+        assert chunk_events, "expected at least one streamed chunk event"
+        joined = "".join(ev.payload["chunk"] for ev in chunk_events)
+
+        assert "ghp_ABC123" not in joined
+        assert "sk-proj-SECRETKEY" not in joined
+        assert "myapikey" not in joined
+        assert "https://<redacted>@github.com/farnalabs/modulo.git" in joined
+        assert "Bearer <redacted>" in joined
+        assert "token=<redacted>" in joined
+    finally:
+        get_registry().close(broker.run_id)
+
+
+async def test_stream_redaction_is_idempotent_on_already_redacted_chunk():
+    """Re-publishing an already-redacted chunk does not double-scrub it into
+    mojibake — redacting an already-redacted chunk yields the same output
+    (drained content can be re-streamed safely). (FAR-306)"""
+    from modulo.core.pipeline_engine.event_broker import RunEventBroker
+
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+    broker = RunEventBroker(uuid.uuid4())
+
+    try:
+        with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+            result = await fn(_with_registered_broker(broker))
+
+        assert result["output"]["status"] == "completed"
+        on_stdout = sandbox.commands.run.call_args.kwargs["on_stdout"]
+        with patch("modulo.core.pipeline_engine.node_runner._STREAM_FLUSH_INTERVAL", 0.0):
+            await on_stdout("https://x-access-token:ghp_ABC123@github.com/farnalabs/modulo.git\n")
+            await on_stdout("token=abc123\n")
+
+        chunk_events = [e for e in broker.replay_since(0) if e.event_type == "node.stdout_chunk"]
+        joined = "".join(ev.payload["chunk"] for ev in chunk_events)
+        assert "ghp_ABC123" not in joined
+        assert "abc123" not in joined
+
+        # Draining the already-scrubbed buffer must be stable (no double scrub).
+        on_stderr = sandbox.commands.run.call_args.kwargs["on_stderr"]
+        with patch("modulo.core.pipeline_engine.node_runner._STREAM_FLUSH_INTERVAL", 0.0):
+            await on_stderr(joined)
+
+        stderr_events = [e for e in broker.replay_since(0) if e.event_type == "node.stderr_chunk"]
+        redrained = "".join(ev.payload["chunk"] for ev in stderr_events)
+        assert redrained == joined
+    finally:
+        get_registry().close(broker.run_id)
+
+
 # ---------------------------------------------------------------------------
 # FAR-97 observability: stdout_length/stderr_length + sandbox trace at death
 # ---------------------------------------------------------------------------

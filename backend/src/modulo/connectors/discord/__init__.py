@@ -5,6 +5,7 @@ from typing import Any, cast
 
 import httpx
 
+from modulo.connectors._safe_page import safe_records_list as _safe_records_list
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -18,7 +19,6 @@ _DISCORD_API = "https://discord.com/api/v10"
 
 # Type aliases used in ``cast`` for response payloads (S1192).
 type _DICT_STR_ANY = dict[str, Any]
-type _LIST_DICT_STR_ANY = list[dict[str, Any]]
 
 
 class DiscordConnector(ConnectorBase):
@@ -60,7 +60,7 @@ class DiscordConnector(ConnectorBase):
                 case "guilds":
                     resp = await c.get("/users/@me/guilds", params={"limit": min(q.limit, 200)})
                     resp.raise_for_status()
-                    data: list[dict[str, Any]] = resp.json()
+                    data = _safe_records_list(resp.json())
                     return ConnectorResult(records=data, total=len(data))
                 case "channels":
                     guild_id = q.filters.get("guild_id", "")
@@ -68,7 +68,7 @@ class DiscordConnector(ConnectorBase):
                         raise ValueError("Discord channels query requires 'guild_id' in filters")
                     resp = await c.get(f"/guilds/{guild_id}/channels")
                     resp.raise_for_status()
-                    data = cast(_LIST_DICT_STR_ANY, resp.json())
+                    data = _safe_records_list(resp.json())
                     return ConnectorResult(records=data[: q.limit] if q.limit else data, total=len(data))
                 case "messages":
                     channel_id = q.filters.get("channel_id", "")
@@ -80,7 +80,7 @@ class DiscordConnector(ConnectorBase):
                             params[key] = q.filters[key]
                     resp = await c.get(f"/channels/{channel_id}/messages", params=params)
                     resp.raise_for_status()
-                    data = cast(_LIST_DICT_STR_ANY, resp.json())
+                    data = _safe_records_list(resp.json())
                     return ConnectorResult(records=data, total=len(data))
                 case "guild_members":
                     guild_id = q.filters.get("guild_id", "")
@@ -88,7 +88,7 @@ class DiscordConnector(ConnectorBase):
                         raise ValueError("Discord guild_members query requires 'guild_id' in filters")
                     resp = await c.get(f"/guilds/{guild_id}/members", params={"limit": min(q.limit, 100)})
                     resp.raise_for_status()
-                    data = cast(_LIST_DICT_STR_ANY, resp.json())
+                    data = _safe_records_list(resp.json())
                     return ConnectorResult(records=data, total=len(data))
                 case "roles":
                     guild_id = q.filters.get("guild_id", "")
@@ -96,7 +96,7 @@ class DiscordConnector(ConnectorBase):
                         raise ValueError("Discord roles query requires 'guild_id' in filters")
                     resp = await c.get(f"/guilds/{guild_id}/roles")
                     resp.raise_for_status()
-                    data = cast(_LIST_DICT_STR_ANY, resp.json())
+                    data = _safe_records_list(resp.json())
                     return ConnectorResult(records=data, total=len(data))
                 case "guild":
                     guild_id = q.filters.get("guild_id", "")

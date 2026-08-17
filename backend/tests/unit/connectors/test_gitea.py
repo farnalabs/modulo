@@ -165,3 +165,32 @@ async def test_custom_base_url():
     result = await custom.health_check()
     assert result.ok is True
     assert result.detail == "admin"
+
+
+@respx.mock
+async def test_query_repos_non_list_body_no_crash(connector):
+    """A corrupt/hostile non-list body must degrade to an empty page."""
+    respx.get(f"{_API}/user/repos").mock(return_value=httpx.Response(200, json={"not": "a list"}))
+    result = await connector.query(ConnectorQuery(resource="repos"))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_pulls_non_list_body_no_crash(connector):
+    """A corrupt/hostile string body must degrade to an empty page."""
+    respx.get(f"{_API}/repos/owner/repo/pulls").mock(return_value=httpx.Response(200, json="corrupt"))
+    result = await connector.query(ConnectorQuery(resource="pulls", filters={"repo": "owner/repo"}))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_repos_list_with_non_dict_entries(connector):
+    """Non-dict entries within a list must be dropped rather than crash the query."""
+    respx.get(f"{_API}/user/repos").mock(
+        return_value=httpx.Response(200, json=[{"id": 1, "name": "repo-a"}, "corrupt", 42])
+    )
+    result = await connector.query(ConnectorQuery(resource="repos"))
+    assert len(result.records) == 1
+    assert result.records[0]["name"] == "repo-a"

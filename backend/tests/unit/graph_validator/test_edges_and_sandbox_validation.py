@@ -255,7 +255,7 @@ def test_sandbox_timeout_too_low_warns():
 
 
 def test_sandbox_timeout_too_high_warns():
-    graph = {"nodes": [_sandbox_node(timeout_seconds=7200)], "edges": []}
+    graph = {"nodes": [_sandbox_node(timeout_seconds=700000)], "edges": []}
     result = ValidationResult()
     GraphValidator._check_sandbox_agent_config(graph, result)
     assert "SANDBOX_TIMEOUT_BOUNDS" in _codes(result)

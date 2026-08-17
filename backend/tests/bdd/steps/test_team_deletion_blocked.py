@@ -2,7 +2,6 @@
 
 import contextlib
 import uuid
-from unittest.mock import MagicMock
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
@@ -52,28 +51,20 @@ def team_no_resources(ctx) -> None:
 
 
 @when(parsers.parse('I delete the team "{team_name}"'))
-def delete_team(team_name: str, request, ctx) -> None:
+def delete_team(team_name: str, request, ctx, client=None) -> None:
+    from unittest.mock import AsyncMock, patch
+
+    from fastapi import HTTPException
+
+    from tests.bdd.conftest import _active_client, _store_response
+
     team = ctx["teams"].get(team_name)
-    org_role = ctx.get("org_role", "admin")
-
-    if org_role == "viewer":
-        resp = MagicMock()
-        resp.status_code = 403
-        resp.json = lambda: {"detail": "Insufficient permissions"}
-        request.node._resp = resp
-        return
-
-    if team is None:
-        resp = MagicMock()
-        resp.status_code = 404
-        resp.json = lambda: {"detail": "Team not found"}
-        request.node._resp = resp
-        return
+    team_id = team.get("id") if team else str(uuid.uuid4())
 
     has_resources = False
     for key in ("pipelines", "connectors", "model_backends"):
         for data in ctx.get(key, {}).values():
-            if str(data.get("owner_team_id")) == str(team.get("id")):
+            if str(data.get("owner_team_id")) == str(team_id):
                 has_resources = True
                 break
         if has_resources:
@@ -86,19 +77,30 @@ def delete_team(team_name: str, request, ctx) -> None:
         resource_types.extend("model backend" for _ in ctx.get("model_backends", {}))
 
         details = ", ".join(f"{rt}(s)" for rt in set(resource_types))
-        resp = MagicMock()
-        resp.status_code = 409
-        resp.json = lambda d=f"Cannot delete team: still has resources — {details}": {"detail": d}
-        request.node._resp = resp
+        side_effect = HTTPException(
+            status_code=409,
+            detail=f"Cannot delete team: still has resources — {details}",
+        )
     else:
-        resp = MagicMock()
-        resp.status_code = 204
-        request.node._resp = resp
+        side_effect = None
+
+    with (
+        patch("modulo.api.routes.teams.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
+        patch("modulo.api.routes.teams.delete_team", new_callable=AsyncMock, side_effect=side_effect),
+    ):
+        resp = _active_client(request, client).delete(f"/api/v1/teams/{team_id}")
+    _store_response(request, ctx, resp)
 
 
-@when("I reassign all resources from team {team_name} to org-wide")
-def reassign_all(when_arg, request, ctx):
-    pass
+@when(parsers.parse('I reassign all resources from team "{team_name}" to org-wide'))
+def reassign_all(team_name: str, ctx) -> None:
+    team = ctx["teams"].get(team_name, {})
+    team_id = team.get("id")
+    for key in ("pipelines", "connectors", "model_backends"):
+        ctx[key] = {
+            name: data for name, data in ctx.get(key, {}).items() if str(data.get("owner_team_id")) != str(team_id)
+        }
 
 
 @then("the error indicates the team still has resources")

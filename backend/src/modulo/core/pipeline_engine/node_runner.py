@@ -42,6 +42,7 @@ Eval-before-interrupt ((Section 8.17):
 
 import asyncio
 import base64
+import concurrent.futures
 import difflib
 import hashlib
 import json
@@ -52,7 +53,7 @@ import re as _re
 import time
 import urllib.request
 import uuid
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from contextlib import suppress
 from contextvars import ContextVar
 from functools import partial
@@ -69,7 +70,7 @@ from modulo.core.cost_controller.breakdown.constants import (
     MAX_REPORTABLE_USD_MIN,
 )
 from modulo.core.cost_controller.breakdown.metrics import record_out_of_band
-from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult
+from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult, EvalType
 from modulo.core.pipeline_engine.decorator import cancellable_node
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
 from modulo.core.pipeline_engine.input_truncation import truncate_input
@@ -1341,6 +1342,83 @@ def make_node_fn(
     return _node
 
 
+async def _invoke_backend(
+    hub: Any,
+    backend_id: uuid.UUID,
+    messages: list[Any],
+) -> Any:
+    """Resolve a backend from the hub and invoke it asynchronously."""
+    backend = await hub.get(backend_id)
+    return await backend.invoke(messages)
+
+
+_JUDGE_EXECUTOR: concurrent.futures.ThreadPoolExecutor | None = None
+
+
+def _run_coroutine_sync(coro: Coroutine[Any, Any, Any]) -> Any:
+    """Run an async coroutine to completion from a sync context.
+
+    ``make_hitl_gate_fn`` runs inside an already-running asyncio event loop,
+    so ``asyncio.run`` and ``loop.run_until_complete`` both raise "This event
+    loop is already running". The LLMJudgeCallable protocol is synchronous, so
+    we bridge sync -> async by executing the coroutine on a dedicated event
+    loop in a worker thread and blocking on the result.
+    """
+    global _JUDGE_EXECUTOR
+    if _JUDGE_EXECUTOR is None:
+        _JUDGE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="llm-judge",
+        )
+
+    def _run() -> Any:
+        return asyncio.run(coro)
+
+    future: concurrent.futures.Future[Any] = _JUDGE_EXECUTOR.submit(_run)
+    return future.result()
+
+
+def _build_llm_judge_callable(
+    hub: Any,
+    backend_id_str: str,
+) -> Callable[[dict[str, Any], EvalDefinition], dict[str, Any]]:
+    """Build a synchronous LLM judge callable backed by a model backend.
+
+    The ``LLMJudgeCallable`` protocol is synchronous, but ``make_hitl_gate_fn``
+    runs inside an already-running asyncio event loop. We bridge sync -> async
+    by running the async backend invoke on a dedicated event loop in a worker
+    thread via ``_run_coroutine_sync``.
+    """
+    backend_id = uuid.UUID(backend_id_str)
+
+    def _judge(
+        output: dict[str, Any],
+        eval_def: EvalDefinition,
+    ) -> dict[str, Any]:
+        field = eval_def.config.get("field", "")
+        content = output.get(field, "")
+        prompt = (
+            "Evaluate the following output and return JSON with keys passed "
+            "(bool), score (float 0-1), detail (str).\n\n"
+            f"Output:\n{content}"
+        )
+        messages = [HumanMessage(content=prompt)]
+        response = _run_coroutine_sync(_invoke_backend(hub, backend_id, messages))
+        text = response.content if hasattr(response, "content") else str(response)
+        try:
+            parsed = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            parsed = {"passed": False, "score": 0.0, "detail": text}
+        detail = parsed.get("detail", "")
+        return {
+            "passed": bool(parsed.get("passed", False)),
+            "score": parsed.get("score"),
+            "detail": str(detail) if detail is not None else "",
+        }
+
+    return _judge
+
+
 def make_hitl_gate_fn(
     hitl_gate_config: dict[str, Any],
     *,
@@ -1444,7 +1522,19 @@ def make_hitl_gate_fn(
         if eval_definitions:
             engine = EvalEngine()
             for eval_def in eval_definitions:
-                eval_result = engine.evaluate(state, eval_def)
+                llm_judge_callable: Any = None
+                if eval_def.eval_type == EvalType.LLM_JUDGE and eval_def.config.get("model_backend_id"):
+                    from modulo.core.pipeline_engine.decorator import (
+                        get_model_backend_hub,
+                    )
+
+                    hub = get_model_backend_hub()
+                    if hub is not None:
+                        llm_judge_callable = _build_llm_judge_callable(
+                            hub,
+                            str(eval_def.config["model_backend_id"]),
+                        )
+                eval_result = engine.evaluate(state, eval_def, llm_judge_callable=llm_judge_callable)
                 eval_results_by_name[eval_def.name] = eval_result
                 _log.info(
                     "hitl_gate.eval_result",
@@ -2508,7 +2598,7 @@ def make_sandbox_agent_fn(
                         return
                     payload: dict[str, Any] = {
                         "node_id": node_id,
-                        "chunk": "".join(buf),
+                        "chunk": _redact_raw_output("".join(buf)),
                         "ts": int(now * 1000),
                     }
                     buf.clear()

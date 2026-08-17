@@ -29,6 +29,7 @@ import json
 import time
 import uuid
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
@@ -37,6 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from modulo.connectors.base import CompensationOutcome, CompensationResult
 from modulo.core.guardrails.compensation import compensate_blocked_run
+from modulo.core.pipeline_engine.executor import PipelineExecutor
 from modulo.core.trigger_engine import is_guardrail_blocked_run
 from modulo.db.crud.run import create_run
 from modulo.db.rls import set_rls_org
@@ -72,6 +74,17 @@ class _FakeHub:
 
     def get(self, _connector_id: Any) -> Any:
         return self._connector
+
+    async def __aexit__(
+        self,
+        _exc_type: type[BaseException] | None,
+        _exc: BaseException | None,
+        _tb: object,
+    ) -> None:
+        # The executor's compensation window tears the hub down after the
+        # summary write; a no-op teardown keeps the stub faithful to the real
+        # ConnectorHub's async-context-manager contract.
+        return None
 
 
 @pytest_asyncio.fixture
@@ -310,6 +323,145 @@ class TestCompensateBlockedRunAgainstRealDB:
         assert summary is not None
         assert summary["blocked"] is True
         assert not summary["executed_nodes"]
+
+
+class TestExecutorMidRunCompensationWiring:
+    """FAR-291 — the executor's mid-run guardrail-block terminalization seam.
+
+    The existing tests call ``compensate_blocked_run`` directly, which cannot
+    catch a MISSING wiring line. These drive the executor's shared finalization
+    tail (``_finalize_run_after_stream`` — used by BOTH ``execute()`` and
+    ``resume()``) through a real ``eval_failed``/``eval_blocked`` outcome with
+    executed node outputs, and assert the compensating callback fired. If the
+    wiring line is removed, the callback is never invoked and the test fails.
+    """
+
+    async def _seed_midrun_run(
+        self,
+        db_engine: AsyncEngine,
+        comp_rig: dict[str, uuid.UUID | str],
+        org_id: uuid.UUID,
+    ) -> uuid.UUID:
+        run_id = uuid.uuid4()
+        run_number = int(run_id.int % 10**9) + 1
+        async with db_engine.connect() as conn, conn.begin():
+            await conn.execute(
+                text(
+                    "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
+                    "trigger_type, input_hash, input_payload, langgraph_thread_id, "
+                    "run_number, status, claim_token) "
+                    "VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, "
+                    ":rn, 'running', :tok)"
+                ),
+                {
+                    "id": str(run_id),
+                    "oid": str(org_id),
+                    "pid": str(comp_rig["pipeline_id"]),
+                    "sid": str(comp_rig["snapshot_id"]),
+                    "ih": uuid.uuid4().hex,
+                    "thread": f"{org_id}:{run_id}",
+                    "rn": run_number,
+                    "tok": "claim-1",
+                },
+            )
+        return run_id
+
+    async def test_mid_run_block_compensates_executed_connector_node(
+        self,
+        db_engine: AsyncEngine,
+        test_org: uuid.UUID,
+        comp_rig: dict[str, uuid.UUID | str],
+    ) -> None:
+        """A real mid-run guardrail block through the executor fires compensation.
+
+        The run executed ``node_create_pr`` (pushed a PR) and then a later
+        node's output was guardrail-blocked (terminal ``eval_failed`` /
+        ``eval_blocked``). The executor's finalization tail must compensate the
+        PR side effect via a compensating connector callback.
+        """
+        run_id = await self._seed_midrun_run(db_engine, comp_rig, test_org)
+
+        connector = _StubConnector()
+        fake_hub = _FakeHub(connector)
+
+        executor = PipelineExecutor(db_engine)
+        # The compensation window uses a FRESH hub (the run's own hub was torn
+        # down before finalization). Substitute the real hub factory with a stub
+        # hub so the test observes the compensating callback.
+        with patch.object(executor, "_init_connector_hub", new=AsyncMock(return_value=fake_hub)):
+            await executor._finalize_run_after_stream(
+                run_id=run_id,
+                org_id=test_org,
+                pipeline_id=comp_rig["pipeline_id"],
+                node_type_map={"node_create_pr": "connector"},
+                final_status="eval_failed",
+                error_code="eval_blocked",
+                error_detail="no-secrets blocked",
+                node_token_usage=None,
+                completed_node_outputs={"node_create_pr": {"output": {"number": 42}}},
+                node_ids={"node_create_pr"},
+            )
+
+        # The compensating callback fired through the real executor seam.
+        assert connector.calls and connector.calls[0][0] == "pr"
+        assert connector.calls[0][1].output == {"number": 42}
+
+        # The blocked_partial summary was written with the executed node marked
+        # compensated.
+        persisted = await _load_summary(db_engine, run_id)
+        assert persisted is not None
+        assert persisted["blocked"] is True
+        assert persisted["executed_nodes"] == ["node_create_pr"]
+        assert persisted["nodes"][0]["publish_status"] == "compensated"
+        assert persisted["nodes"][0]["output_ref"] == {"run_id": str(run_id), "node_id": "node_create_pr"}
+
+        # Summary-only audit events were appended.
+        async with db_engine.connect() as conn:
+            audit_types = (
+                (
+                    await conn.execute(
+                        text(
+                            "SELECT event_type FROM audit_events WHERE resource_id = :rid AND "
+                            "event_type IN ('guardrail.compensation_attempted', 'guardrail.blocked_partial_written')"
+                        ),
+                        {"rid": str(run_id)},
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        assert "guardrail.compensation_attempted" in audit_types
+        assert "guardrail.blocked_partial_written" in audit_types
+
+    async def test_mid_run_non_blocked_run_does_not_compensate(
+        self,
+        db_engine: AsyncEngine,
+        test_org: uuid.UUID,
+        comp_rig: dict[str, uuid.UUID | str],
+    ) -> None:
+        """A non-blocked terminalization must NOT invoke compensation."""
+        run_id = await self._seed_midrun_run(db_engine, comp_rig, test_org)
+
+        connector = _StubConnector()
+        fake_hub = _FakeHub(connector)
+
+        executor = PipelineExecutor(db_engine)
+        with patch.object(executor, "_init_connector_hub", new=AsyncMock(return_value=fake_hub)):
+            await executor._finalize_run_after_stream(
+                run_id=run_id,
+                org_id=test_org,
+                pipeline_id=comp_rig["pipeline_id"],
+                node_type_map={"node_create_pr": "connector"},
+                final_status="complete",
+                error_code=None,
+                error_detail=None,
+                node_token_usage=None,
+                completed_node_outputs={"node_create_pr": {"output": {"number": 42}}},
+                node_ids={"node_create_pr"},
+            )
+
+        # No compensation fired for a complete run.
+        assert not connector.calls
 
 
 class TestDependentTriggerSuppression:

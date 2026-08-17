@@ -108,12 +108,17 @@ def _prior_states_for_retry(prior_states: list[dict[str, Any]]) -> list[dict[str
     unchanged across attempts, so a prior state's own ``input_fingerprint``
     would match on every retry and spuriously converge the correction before
     the fresh LM attempt runs. Output fingerprints are preserved so a repeated
-    produced output (genuine oscillation) still converges.
+    produced output (genuine oscillation) still converges. The INPUT violation
+    metric is likewise stripped (the same input carries the same metric on
+    every retry — a repeated input metric is not oscillation); the OUTPUT
+    violation metric is preserved so a strictly-worse OR repeated output
+    violation still converges.
     """
     stripped: list[dict[str, Any]] = []
     for state in prior_states:
         entry = dict(state)
         entry.pop("input_fingerprint", None)
+        entry.pop("input_violation_metric", None)
         stripped.append(entry)
     return stripped
 
@@ -652,6 +657,7 @@ class FeedbackManager:
                     attempt=attempt,
                     revalidation_config=revalidation_config,
                     judge_callable=judge_callable,
+                    bound_guardrails=bound_guardrails,
                 )
                 outcome.state["produced_output"] = outcome.produced_output
                 record.correction_state = outcome.state

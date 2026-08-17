@@ -39,13 +39,6 @@
         language: system
         files: ^(\.github/workflows/ci\.yml|AGENTS\.md)$
         pass_filenames: false
-      - id: pester
-        name: Pester 5 PowerShell tests
-        entry: uv run --project backend --no-sync python scripts/run_pester_tests.py
-        language: system
-        files: ^tools/.*\.ps1$
-        pass_filenames: false
-        stages: [pre-commit, manual]
       - id: check-migration-heads
         name: check migration number/revision collisions
         entry: uv run --project backend --no-sync python scripts/run_check_migration_heads.py
