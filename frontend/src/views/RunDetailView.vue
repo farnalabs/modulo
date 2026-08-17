@@ -1414,6 +1414,10 @@ async function fetchLiveOutput(runId: string) {
         const nodeId = evt.payload.node_id
         next[nodeId] = (next[nodeId] ?? '') + (evt.payload.chunk ?? '')
       }
+      if (evt.event_type === 'node.stderr_chunk' && evt.payload?.node_id) {
+        const nodeId = evt.payload.node_id
+        next[nodeId] = (next[nodeId] ?? '') + (evt.payload.chunk ?? '')
+      }
       if (evt.seq > maxSeq) maxSeq = evt.seq
     }
     liveOutput.value = next
