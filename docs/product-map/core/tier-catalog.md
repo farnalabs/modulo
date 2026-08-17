@@ -2,7 +2,8 @@
 id: feat-core-tier-catalog
 prd: 6
 delivery-tasks: []
-bdd: []
+bdd:
+  - backend/tests/bdd/features/admin/tier_catalog.feature
 unit-tests:
   - backend/tests/unit/core/test_feature_flag_registry.py
   - backend/tests/unit/core/test_plan_context.py
@@ -72,19 +73,21 @@ Plan tier definitions and feature flag catalog governing which features are avai
 
 ## Security
 
-- [x] Auth guard via `get_current_user` dependency
-- [x] All tier/flag routes require admin role
+- [x] Auth guard via `get_current_tenant_user` dependency (any authenticated tenant user)
+- [ ] `GET /api/v1/admin/tiers` is **not** admin-role gated — the route depends only on `get_current_tenant_user`, so viewers can list tiers. If tier visibility should be admin-only, add a `require_permission`/role gate (mirroring the plan-context resolver used elsewhere).
 
 ## Known Gaps
 
 - Tier rank conflict — two tiers with the same `rank` produce undefined ordering (no uniqueness constraint on `rank`)
 - Feature flag `depends_on` circular reference — no cycle detection (a flag depending on itself/its own dependency chain is not rejected)
 - No audit logging for tier catalog reads — the admin read routes emit no audit events
+- `GET /api/v1/admin/tiers` is unauthenticated-gated but not role-gated (see Security) — viewers can list tiers
 
 ## QA History
 
+- 2026-08-17: improve-architecture (product-map walk): **RESOLVED the "No BDD feature files for tier catalog operations" known gap** — added `backend/tests/bdd/features/admin/tier_catalog.feature` + step module `test_tier_catalog_steps.py` covering the `GET /api/v1/admin/tiers` contract: admin lists tiers ordered by rank with all required fields, an authenticated non-admin (viewer) can also list tiers, unauthenticated request → 401, empty catalog → empty `tiers` array, ProgrammingError → 501, SQLAlchemyError → 503. Set the `bdd:` frontmatter field. 6/6 scenarios pass. Entry stays `partial` (feature-flag registry, seed-script, and `get_feature_flag`/`list_feature_flags` behaviours remain unit/integration-only).
+  - **ARCHITECTURE NOTE**: the BDD test surfaced that `GET /api/v1/admin/tiers` is NOT admin-role gated — it depends only on `get_current_tenant_user`, so any authenticated tenant (incl. viewers) can list tiers. The old "All tier/flag routes require admin role" security claim was inaccurate; corrected it and added it to Known Gaps. If tier visibility should be admin-only, add a role/permission gate.
 - 2026-08-15: feat-core-tier-catalog → partial, product-map coverage sweep: **RESOLVED the standalone `seed_tier_catalog.py` drift** — it now imports `TIERS`/`FLAGS` from `modulo.core.seed_data.catalog` (the same source the boot-time `_seed_tier_catalog` uses) instead of maintaining a stale private copy, so `observability` is `community` again and the previously-missing flags (`notification_log`, `api_changelog`, `email_config`, `error_tracking`, `scim`, `external_secrets`, `schema_union_types`, `migration_cli`, `checkpoint_encryption`, `audit_crypto_chain`, `community_registry`, `prompt_optimization`, `pipeline_diff_rollback`, `pipeline_delete`, `rate_limits`, `runtime_config`, etc.) can never drift again. Added output validation: the script reads back the seeded row counts and raises on an empty table. Marked the "Seed script idempotency" and "Seed script output validation" checkboxes `[ ]`→`[x]` (idempotency via `ON CONFLICT ... DO NOTHING` was already implemented; validation added this session). Remaining genuine gaps kept unchecked: tier-rank conflict ordering, `depends_on` cycle detection, and audit logging for tier-catalog reads (none PRD-mandated).
 - No dedicated unit tests for `admin_tiers` route or `tier_catalog` CRUD. Tier catalog functions are tested indirectly through `test_feature_flag_registry.py` and `test_plan_context.py` (which mock `tier_catalog` functions).
-- No BDD feature files for tier catalog operations.
 - No CRUD endpoints for individual tier/flag management (create, update, delete) — only read/list endpoints exist.
 - No frontend integration consuming the tiers endpoint (frontend still hardcodes tier labels per PRD §6.2 migration path item 5).
