@@ -2342,6 +2342,45 @@ async def _load_hitl_run(
     return run
 
 
+async def _check_human_only_gate(
+    s: AsyncSession,
+    org_id: uuid.UUID,
+    rid: uuid.UUID,
+    gate_id: str,
+) -> dict[str, Any] | None:
+    """Return an error dict when the gate is human_only, else ``None``.
+
+    Only called for the ``approve`` action: a ``human_only`` gate can only be
+    approved by a browser-authenticated human, never by an API key.
+    """
+    from sqlalchemy import select
+
+    gate_row = (
+        await s.execute(
+            select(HitlClaim).where(
+                HitlClaim.run_id == rid,
+                HitlClaim.gate_id == gate_id,
+                HitlClaim.organisation_id == org_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if gate_row is not None:
+        edge = (
+            (
+                await s.execute(
+                    select(PipelineEdge).where(
+                        PipelineEdge.pipeline_id == gate_row.pipeline_id,
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if edge and edge.hitl_gate_config and edge.hitl_gate_config.get("human_only", False):
+            return {"error": "human_only_gate", "detail": "human_only gate requires browser auth"}
+    return None
+
+
 @mcp.tool(
     description=(
         "Unified HITL gate action: claim, approve, reject, or deliver_manual. "
@@ -2362,8 +2401,6 @@ async def review_hitl(
 ) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
-
-    from sqlalchemy import select
 
     org_id = _ctx_org_id_val()
     key_id = _ctx_key_id.get(uuid.UUID("00000000-0000-0000-0000-000000000002"))
@@ -2387,31 +2424,10 @@ async def review_hitl(
             if run is None:
                 return {"error": "gate_not_found", "run_id": run_id, "gate_id": gate_id}
 
-            # Check human_only for approve action
             if action == "approve":
-                gate_row = (
-                    await s.execute(
-                        select(HitlClaim).where(
-                            HitlClaim.run_id == rid,
-                            HitlClaim.gate_id == gate_id,
-                            HitlClaim.organisation_id == org_id,
-                        )
-                    )
-                ).scalar_one_or_none()
-                if gate_row is not None:
-                    edge = (
-                        (
-                            await s.execute(
-                                select(PipelineEdge).where(
-                                    PipelineEdge.pipeline_id == gate_row.pipeline_id,
-                                )
-                            )
-                        )
-                        .scalars()
-                        .first()
-                    )
-                    if edge and edge.hitl_gate_config and edge.hitl_gate_config.get("human_only", False):
-                        return {"error": "human_only_gate", "detail": "human_only gate requires browser auth"}
+                human_only_err = await _check_human_only_gate(s, org_id, rid, gate_id)
+                if human_only_err:
+                    return human_only_err
 
             try:
                 if action == "claim":
