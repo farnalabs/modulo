@@ -714,7 +714,6 @@ first-party endpoint:
 | `eslint` (staged .vue/.ts) | |
 | `check-migration-heads` (if migrations staged) | |
 | `graph-validate` (if product-map changed) | |
-| `pre-commit-checks.ps1` (pattern scan) | |
 | `check-merge-conflict` | |
 | `check-yaml` / `check-toml` / `check-json` | |
 | `end-of-file-fixer` | |
@@ -826,12 +825,7 @@ Rules:
 4. Pre-commit hooks (eslint via `pnpm run lint`, etc.) work in a worktree once its own node_modules is installed.
 5. If a worktree's node_modules is corrupt/missing, delete it and re-run `pnpm install --frozen-lockfile` — it is an isolated tree; nothing else is affected.
 
-**Gotcha:** `pre-commit-checks.ps1` (harness Check 5) flags pre-existing
-admin-view gaps whenever an `Admin*.vue` file is touched — every
-`frontend/src/views/Admin*.vue` must contain a `<FeatureGate>` wrapper. If your
-change touches an admin view that lacks one (e.g. `AdminViewsView.vue` until
-FAR-117), the commit is blocked — add the wrapper with the correct feature name
-(match sibling views) rather than bypassing the hook.
+**Gotcha (farnalabs sessions only):** the Lessons-Learned pattern scan (`pre-commit-checks.ps1`, harness Check 5) no longer runs in this repo's pre-commit — it runs via farnalabs gate.ps1 (devtools). The admin-view rule it enforces still applies: every `frontend/src/views/Admin*.vue` must contain a `<FeatureGate>` wrapper. If your change touches an admin view that lacks one (e.g. `AdminViewsView.vue` until FAR-117), add the wrapper with the correct feature name (match sibling views) — the scan will block the gate if you don't.
 
 ### Systemic patterns: apply as bulk sweeps, not per-feature QA
 
