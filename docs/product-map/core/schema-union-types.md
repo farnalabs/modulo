@@ -126,8 +126,8 @@ Union type validation (oneOf/anyOf) and array schema validation for the Schema R
 - [x] SQLAlchemyError on infer schema returns 503
 - [x] SQLAlchemyError on generate schema returns 503
 - [x] SQLAlchemyError on migrate data returns 503
-- [x] IntegrityError on create schema (duplicate name per org) returns 409
-- [ ] Validate endpoint error for non-dict JSON parsed body returns 400 — UNTESTED, add as unchecked
+- [x] IntegrityError on create schema (duplicate name per org) returns 409 — verified + tested (`test_create_schema_integrity_error_returns_409` in `test_schemas_endpoint.py`; route catches `IntegrityError` at `schemas.py:272` → 409)
+- [x] Validate endpoint error for non-dict JSON parsed body returns a request-validation error — verified + tested (`test_validate_schema_non_dict_definition_returns_422` / `test_validate_schema_non_object_body_returns_422` in `test_schemas_endpoint.py`). Actual behaviour is **422** (FastAPI request-validation), not 400 as the prior claim assumed.
 
 ### Backward Compatibility
 
@@ -146,6 +146,11 @@ Union type validation (oneOf/anyOf) and array schema validation for the Schema R
 
 ## QA History
 
+### 2026-08-15 — distribute coverage sweep toward covered
+- Marked `IntegrityError on create schema → 409` `[x]` — added `test_create_schema_integrity_error_returns_409` (create-schema route catches `IntegrityError` at `schemas.py:272` and returns 409 "A schema with this name already exists."). Previously listed UNTESTED.
+- Marked `Validate endpoint non-dict body` `[x]` — added `test_validate_schema_non_dict_definition_returns_422` + `test_validate_schema_non_object_body_returns_422`. Corrected the prior claim: a non-dict JSON body/definition returns **422** (FastAPI request validation), not 400.
+- All tests in `test_schemas_endpoint.py` pass.
+
 ### 2026-08-15 — Schema versioning + duplicate-name error tests (dist/partial-core3)
 
 **Tests added to `test_schemas_endpoint.py`:**
@@ -155,7 +160,7 @@ Union type validation (oneOf/anyOf) and array schema validation for the Schema R
 
 Flipped `Schema version creation is explicit action, not auto-save` and `IntegrityError on create schema returns 409` checkboxes `[ ]`→`[x]`. The `Validate endpoint non-dict JSON parsed body → 400` behaviour remains untested (no test added this session) — left unchecked.
 
-
+### 2026-07-12 — Round 3 (systemic sweep: B904, exc_info, dead code)
 - No B904 violations or exc_info issues in schema_registry code paths
 - Frontmatter valid with extensive test coverage; Known Gaps accurate
 
