@@ -1501,6 +1501,59 @@ def _parse_analytics_concurrency_params(
     return params, None
 
 
+async def _query_analytics_impl(
+    dimension: str | None,
+    group_by: str,
+    auto_granularity: bool,
+    trigger_type: str | None,
+    status: str | None,
+    pipeline_id: list[str] | None,
+    error_code: str | None,
+    folder_id: str | None,
+    date_from: str | None,
+    date_to: str | None,
+    limit: int,
+) -> dict[str, Any]:
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    check_tool_scope(_ctx_role_val(), "query_analytics")
+
+    org_id = _ctx_org_id_val()
+    settings = get_settings()
+
+    feat_err = await _require_analytics_feature(org_id, settings)
+    if feat_err:
+        return feat_err
+
+    params, p_err = _parse_analytics_params(
+        dimension,
+        group_by,
+        auto_granularity,
+        trigger_type,
+        status,
+        pipeline_id,
+        folder_id,
+        error_code,
+        date_from,
+        date_to,
+        limit,
+    )
+    if p_err:
+        return p_err
+    assert params is not None
+
+    result = await run_analytics_query(
+        org_id=org_id,
+        params=params,
+        factory=_get_session_factory(),
+        settings=settings,
+        account_id=_ctx_user_id_val(),
+        org_role=_ctx_role_val() or "",
+    )
+    result["deep_link"] = _analytics_deep_link(result, params)
+    return result
+
+
 @mcp.tool(
     name="query_analytics",
     description=(
@@ -1529,44 +1582,19 @@ async def query_analytics(
     limit: int = 1000,
 ) -> dict[str, Any]:
     try:
-        if not await validate_current_auth():
-            return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "query_analytics")
-
-        org_id = _ctx_org_id_val()
-        settings = get_settings()
-
-        feat_err = await _require_analytics_feature(org_id, settings)
-        if feat_err:
-            return feat_err
-
-        params, p_err = _parse_analytics_params(
+        return await _query_analytics_impl(
             dimension,
             group_by,
             auto_granularity,
             trigger_type,
             status,
             pipeline_id,
-            folder_id,
             error_code,
+            folder_id,
             date_from,
             date_to,
             limit,
         )
-        if p_err:
-            return p_err
-        assert params is not None
-
-        result = await run_analytics_query(
-            org_id=org_id,
-            params=params,
-            factory=_get_session_factory(),
-            settings=settings,
-            account_id=_ctx_user_id_val(),
-            org_role=_ctx_role_val() or "",
-        )
-        result["deep_link"] = _analytics_deep_link(result, params)
-        return result
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except AnalyticsRateLimitedError:
@@ -1585,6 +1613,53 @@ async def query_analytics(
     except Exception:
         _log.exception("query_analytics failed")
         return _tool_error("Failed to query analytics")
+
+
+async def _query_analytics_concurrency_impl(
+    group_by: str,
+    auto_granularity: bool,
+    trigger_type: str | None,
+    status: str | None,
+    pipeline_id: list[str] | None,
+    folder_id: str | None,
+    date_from: str | None,
+    date_to: str | None,
+    limit: int,
+) -> dict[str, Any]:
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    check_tool_scope(_ctx_role_val(), "query_analytics_concurrency")
+
+    org_id = _ctx_org_id_val()
+    settings = get_settings()
+
+    feat_err = await _require_analytics_feature(org_id, settings)
+    if feat_err:
+        return feat_err
+
+    params, p_err = _parse_analytics_concurrency_params(
+        group_by,
+        auto_granularity,
+        trigger_type,
+        status,
+        pipeline_id,
+        folder_id,
+        date_from,
+        date_to,
+        limit,
+    )
+    if p_err:
+        return p_err
+    assert params is not None
+
+    return await run_concurrency_query(
+        org_id=org_id,
+        params=params,
+        factory=_get_session_factory(),
+        settings=settings,
+        account_id=_ctx_user_id_val(),
+        org_role=_ctx_role_val() or "",
+    )
 
 
 @mcp.tool(
@@ -1614,18 +1689,7 @@ async def query_analytics_concurrency(
     limit: int = 1000,
 ) -> dict[str, Any]:
     try:
-        if not await validate_current_auth():
-            return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "query_analytics_concurrency")
-
-        org_id = _ctx_org_id_val()
-        settings = get_settings()
-
-        feat_err = await _require_analytics_feature(org_id, settings)
-        if feat_err:
-            return feat_err
-
-        params, p_err = _parse_analytics_concurrency_params(
+        return await _query_analytics_concurrency_impl(
             group_by,
             auto_granularity,
             trigger_type,
@@ -1635,18 +1699,6 @@ async def query_analytics_concurrency(
             date_from,
             date_to,
             limit,
-        )
-        if p_err:
-            return p_err
-        assert params is not None
-
-        return await run_concurrency_query(
-            org_id=org_id,
-            params=params,
-            factory=_get_session_factory(),
-            settings=settings,
-            account_id=_ctx_user_id_val(),
-            org_role=_ctx_role_val() or "",
         )
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
