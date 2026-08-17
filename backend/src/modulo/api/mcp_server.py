@@ -21,7 +21,7 @@ import threading
 import time
 import traceback as _traceback
 import uuid
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from datetime import date as _date
@@ -5041,6 +5041,50 @@ def _frontend_url(settings: Any) -> str:
     return origins[0] if origins else "http://localhost:5173"
 
 
+def _oauth_authorize_param_errors(params: Mapping[str, str]) -> JSONResponse | None:
+    """First validation error for the authorize query, or None. Runs in wire order."""
+    if params.get("response_type", "") != "code":
+        return JSONResponse({"error": "unsupported_response_type"}, status_code=400)
+    if not params.get("client_id", "") or not params.get("redirect_uri", ""):
+        return JSONResponse(
+            {"error": "invalid_request", "detail": "client_id and redirect_uri required"},
+            status_code=400,
+        )
+    if not params.get("state", ""):
+        return JSONResponse(
+            {"error": "invalid_request", "detail": "state parameter required"},
+            status_code=400,
+        )
+    # S256-only (RFC 7636) — the challenge is verified at token exchange, so
+    # rejecting plain/empty here keeps every stored challenge verifiable.
+    code_challenge_method = params.get("code_challenge_method", "")
+    try:
+        from modulo.auth.oauth import InvalidGrantError, validate_pkce_method
+
+        validate_pkce_method(code_challenge_method)
+    except InvalidGrantError as exc:
+        return JSONResponse(
+            {"error": "invalid_request", "detail": str(exc)},
+            status_code=400,
+        )
+    if not params.get("code_challenge", "") or not params.get("code_challenge", "").strip():
+        return JSONResponse(
+            {"error": "invalid_request", "detail": "code_challenge parameter required"},
+            status_code=400,
+        )
+    return None
+
+
+def _oauth_authorize_settings_error(settings: Any) -> JSONResponse | None:
+    """Return an error response when the public URL is unconfigured."""
+    if not settings.modulo_public_url or settings.modulo_public_url == "http://localhost:8000":
+        return JSONResponse(
+            {"error": "server_error", "detail": "MODULO_PUBLIC_URL must be configured"},
+            status_code=500,
+        )
+    return None
+
+
 async def _oauth_authorize(request: Request) -> JSONResponse | RedirectResponse:
     """GET /mcp/oauth/authorize — thin 302 to the SPA consent route.
 
@@ -5054,58 +5098,27 @@ async def _oauth_authorize(request: Request) -> JSONResponse | RedirectResponse:
     the authenticated consent approve endpoint (ADR 017 DECISION 1).
     """
     params = request.query_params
-    response_type = params.get("response_type", "")
-    if response_type != "code":
-        return JSONResponse({"error": "unsupported_response_type"}, status_code=400)
+    param_error = _oauth_authorize_param_errors(params)
+    if param_error is not None:
+        return param_error
+
+    settings = get_settings()
+    settings_error = _oauth_authorize_settings_error(settings)
+    if settings_error is not None:
+        return settings_error
 
     client_id = params.get("client_id", "")
     redirect_uri = params.get("redirect_uri", "")
     scope = params.get("scope", "")
     state = params.get("state", "")
     code_challenge = params.get("code_challenge", "")
-    code_challenge_method = params.get("code_challenge_method", "")
-
-    if not client_id or not redirect_uri:
-        return JSONResponse(
-            {"error": "invalid_request", "detail": "client_id and redirect_uri required"},
-            status_code=400,
-        )
-    if not state:
-        return JSONResponse(
-            {"error": "invalid_request", "detail": "state parameter required"},
-            status_code=400,
-        )
 
     from modulo.auth.oauth import (
-        InvalidGrantError,
         create_consent_state,
         get_oauth_client_by_client_id,
         normalize_scopes,
         validate_client_scopes,
-        validate_pkce_method,
     )
-
-    # S256-only (RFC 7636) — the challenge is verified at token exchange, so
-    # rejecting plain/empty here keeps every stored challenge verifiable.
-    try:
-        validate_pkce_method(code_challenge_method)
-    except InvalidGrantError as exc:
-        return JSONResponse(
-            {"error": "invalid_request", "detail": str(exc)},
-            status_code=400,
-        )
-    if not code_challenge or not code_challenge.strip():
-        return JSONResponse(
-            {"error": "invalid_request", "detail": "code_challenge parameter required"},
-            status_code=400,
-        )
-
-    settings = get_settings()
-    if not settings.modulo_public_url or settings.modulo_public_url == "http://localhost:8000":
-        return JSONResponse(
-            {"error": "server_error", "detail": "MODULO_PUBLIC_URL must be configured"},
-            status_code=500,
-        )
 
     try:
         session_factory = _get_session_factory()
