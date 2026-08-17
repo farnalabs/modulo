@@ -307,3 +307,62 @@ def test_present_error_coerces_non_str_detail():
     code, detail = present_error("task_failure", 12345, 5000)
     assert code == "harness.worker_failed"
     assert detail == "12345"
+
+
+# ---------------------------------------------------------------------------
+# FAR-296 Phase 2 — script-mode stage-split codes
+# ---------------------------------------------------------------------------
+
+
+def test_script_codes_are_never_retryable():
+    """Every post-claim script-mode code is TERMINAL (never retryable).
+
+    Once a script-mode node's process started (fencing lease claimed), a fault
+    can never be retried — re-dispatching could double-execute a side effect.
+    """
+    for code in (
+        "script.failed",
+        "script.invalid_output",
+        "script.side_effect_unknown",
+        "script.session_lost",
+    ):
+        assert is_retryable(code) is False, code
+        assert ERROR_CODE_REGISTRY[code].error_class == "script"
+        assert ERROR_CODE_REGISTRY[code].retryable is False
+
+
+def test_script_schema_and_no_output_aliases_canonicalize_to_contract():
+    """``script.schema_failed`` / ``script.no_output`` canonicalize to ONE string."""
+    assert map_legacy_code("script.schema_failed") == "contract.schema"
+    assert map_legacy_code("script.no_output") == "contract.no_output"
+    assert class_for("script.schema_failed") == "contract"
+    assert is_retryable("script.schema_failed") is False
+    assert is_retryable("script.no_output") is False
+
+
+def test_script_exception_class_names_map_to_script_codes():
+    """The executor's generic catch publishes exception class names — they map
+    to the canonical script.* codes so the never-retryable classification holds."""
+    assert map_legacy_code("ScriptFailedError") == "script.failed"
+    assert map_legacy_code("ScriptInvalidOutputError") == "script.invalid_output"
+    assert map_legacy_code("ScriptSideEffectUnknownError") == "script.side_effect_unknown"
+    assert map_legacy_code("ScriptSessionLostError") == "script.session_lost"
+    for name in (
+        "ScriptFailedError",
+        "ScriptInvalidOutputError",
+        "ScriptSideEffectUnknownError",
+        "ScriptSessionLostError",
+    ):
+        assert is_retryable(name) is False, name
+
+
+def test_script_codes_are_known_and_expand():
+    """The script.* spellings resolve via known_error_codes and expand_code_variants."""
+    known = known_error_codes()
+    assert "script.failed" in known
+    assert "script.side_effect_unknown" in known
+    assert "script.schema_failed" in known
+    assert "script.no_output" in known
+    assert "contract.schema" in expand_code_variants("script.schema_failed")
+    assert "contract.no_output" in expand_code_variants("script.no_output")
+    assert "script.failed" in expand_code_variants("ScriptFailedError")

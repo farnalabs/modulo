@@ -77,6 +77,38 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity="warning",
         guidance="Node produced no usable output.",
     ),
+    # --- script (script-mode sandbox) codes ------------------------------
+    # FAR-296 Phase 2 stage-split contract: once a script-mode node's script
+    # PROCESS has started (the fencing lease is claimed), every fault is
+    # TERMINAL (never retryable) — re-dispatching could double-execute a
+    # side-effecting script. These are the post-claim terminal codes.
+    # ``script.schema_failed`` / ``script.no_output`` canonicalize to the
+    # existing contract.* codes (one string per failure class) — see
+    # LEGACY_ALIASES.
+    "script.failed": ErrorCodeSpec(
+        error_class="script",
+        retryable=False,
+        alert_severity="critical",
+        guidance="Script-mode sandbox failed after the script process started (post-claim, terminal).",
+    ),
+    "script.invalid_output": ErrorCodeSpec(
+        error_class="script",
+        retryable=False,
+        alert_severity="warning",
+        guidance="Script-mode sandbox produced invalid output after the script process started (post-claim, terminal).",
+    ),
+    "script.side_effect_unknown": ErrorCodeSpec(
+        error_class="script",
+        retryable=False,
+        alert_severity="critical",
+        guidance="Script terminated mid-execution, side-effect state unknown; never retried (needs human).",
+    ),
+    "script.session_lost": ErrorCodeSpec(
+        error_class="script",
+        retryable=False,
+        alert_severity="critical",
+        guidance="Script-mode sandbox session was lost after the script process started (post-claim, terminal).",
+    ),
     # --- harness (machinery) codes ---------------------------------------
     # ``harness.unknown`` is the fallback for unmapped legacy codes — any code
     # that has no alias and no registry entry resolves here so presentation
@@ -323,6 +355,17 @@ LEGACY_ALIASES: dict[str, str] = {
     # Executor maps manual/agent output schema validation failures to this
     # domain code (PRD §8.9 error table) instead of a raw "ValueError".
     "schema_validation_failure": "contract.schema",
+    # FAR-296 Phase 2: script-mode stage-split aliases. These canonicalize to
+    # ONE string per failure class — ``script.schema_failed`` is the same
+    # contract.schema class, ``script.no_output`` the same contract.no_output
+    # class. A script exception class name that the executor's generic catch
+    # publishes (``type(exc).__name__``) also resolves to its canonical code.
+    "script.schema_failed": "contract.schema",
+    "script.no_output": "contract.no_output",
+    "ScriptFailedError": "script.failed",
+    "ScriptInvalidOutputError": "script.invalid_output",
+    "ScriptSideEffectUnknownError": "script.side_effect_unknown",
+    "ScriptSessionLostError": "script.session_lost",
     # Harness machinery (§3.2). ``TypeError``/``OperationalError`` are the
     # raw exception class names that executor's generic catch publishes.
     "OperationalError": "harness.db.connection_lost",

@@ -22,6 +22,7 @@ Does NOT handle WebSocket fan-out, HITL claim/approve/reject, or webhook trigger
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import os
@@ -288,6 +289,33 @@ def _timeout_event_matches(event_set: set[Any], code: str, mapped: str) -> bool:
     )
 
 
+# FAR-296 Phase 2: never-retryable script-mode terminal codes. Once a script-mode
+# node's script PROCESS has started (fencing lease claimed), a fault can never be
+# retried — re-dispatching could double-execute a side-effecting script. These
+# MUST be excluded from EVERY retry path (run-level ``_retry_after_policy`` AND
+# node-level A-series fenced reset).
+_NEVER_RETRYABLE_SCRIPT_CODES: frozenset[str] = frozenset(
+    {
+        "script.failed",
+        "script.invalid_output",
+        "script.side_effect_unknown",
+        "script.session_lost",
+        "contract.schema",  # script.schema_failed canonicalizes here
+        "contract.no_output",  # script.no_output canonicalizes here
+    }
+)
+_NEVER_RETRYABLE_SCRIPT_RAW: frozenset[str] = frozenset(
+    {
+        "ScriptFailedError",
+        "ScriptInvalidOutputError",
+        "ScriptSideEffectUnknownError",
+        "ScriptSessionLostError",
+        "script.schema_failed",
+        "script.no_output",
+    }
+)
+
+
 def _failure_event_matches(
     event_set: set[Any],
     final_status: str,
@@ -298,17 +326,24 @@ def _failure_event_matches(
     """``failure`` event matches a failed outcome, excluding hang deaths.
 
     A sandbox-agent HANG death terminalizes as ``node_cancelled`` + "likely
-    hung" in ``error_detail`` — re-dispatching would burn a full node timeout
+    hung" in ``error_detail`` �?" re-dispatching would burn a full node timeout
     with zero recovery probability, so it is excluded from ``"failure"`` retries.
     """
     if (
         "failure" not in event_set
         or final_status != "failed"
-        # Timeout is a distinct event — a "failure"-only policy must not retry
+        # Timeout is a distinct event �?" a "failure"-only policy must not retry
         # a timeout outcome, and a stall is not a generic failure.
         or code in ("node_timeout", "TimeoutError", "executor_stalled")
         or mapped in ("node.timeout", "node.runaway", "agent.stall")
     ):
+        return False
+    # FAR-296 Phase 2: never-retryable script-mode terminal codes are excluded
+    # from ``failure`` retries regardless of the policy — re-dispatching a
+    # script-mode node whose process started could double-execute a side effect.
+    # This covers both the canonical mapped code and the raw exception-class
+    # spelling the generic catch publishes.
+    if mapped in _NEVER_RETRYABLE_SCRIPT_CODES or code in _NEVER_RETRYABLE_SCRIPT_RAW:
         return False
     # FAR-136 Gap 2: exclude sandbox-agent hang deaths.
     is_cancel = code == "node_cancelled" or mapped == "node.cancelled"
@@ -450,6 +485,93 @@ def _sandbox_agent_for_snapshot(snapshot_id: uuid.UUID, graph_json: dict[str, An
         _SANDBOX_AGENT_CACHE.clear()
     _SANDBOX_AGENT_CACHE[key] = result
     return result
+
+
+def _graph_has_script_mode(graph_json: dict[str, Any] | None) -> bool:
+    """True when the graph contains a ``sandbox_agent`` node in ``mode="script"``.
+
+    FAR-296 Phase 2: the fencing lease + stage-split contract apply ONLY to
+    script-mode nodes. Any script-mode sandbox node in the graph means a retry
+    of this run must first prove no script process could still be alive (the
+    lease probe) before a requeue.
+    """
+    if not isinstance(graph_json, dict):
+        return False
+    for node in graph_json.get("nodes", []) or []:
+        if not isinstance(node, dict):
+            continue
+        if (
+            str(node.get("node_type", "")).strip() == "sandbox_agent"
+            and str(node.get("mode", "llm")).strip() == "script"
+        ):
+            return True
+    return False
+
+
+async def _script_lease_probe_ok(
+    session_factory: Callable[..., Any] | None,
+    run_id: str,
+    org_id: Any,
+    claim_token: str | None,
+) -> bool:
+    """FAR-296 Phase 2 stale-claim probe: is it SAFE to requeue this run?
+
+    Reads ``runs.sandbox_dispatch_state`` for a live ``script_executing`` lease
+    (execution claimed, completion marker pending) that belongs to THIS claim.
+    A stale lease means a script PROCESS could still have been alive — requeue
+    is forbidden (exactly-once). Returns True (safe to requeue) when:
+      - no session factory / claim / org (fail-open to the normal path), or
+      - the dispatch state carries NO ``script_executing`` lease (no process
+        could have been alive for this claim).
+    Returns False (DO NOT requeue) only when a live script lease exists.
+    NEVER auto-retries a stale claim — the caller escalates to needs-human.
+    """
+    if session_factory is None or not claim_token:
+        return True
+    org_uuid: uuid.UUID | None = None
+    try:
+        org_uuid = uuid.UUID(str(org_id)) if org_id else None
+    except (TypeError, ValueError):
+        org_uuid = None
+    if org_uuid is None:
+        return True
+    try:
+        from sqlalchemy import text as _sql_text
+
+        from modulo.db.rls import set_rls_org
+
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, org_uuid)
+            row = (
+                await session.execute(
+                    _sql_text(
+                        "SELECT sandbox_dispatch_state FROM runs WHERE id=:rid "
+                        "AND organisation_id=:oid AND claim_token=:tok"
+                    ),
+                    {"rid": run_id, "oid": str(org_uuid), "tok": claim_token},
+                )
+            ).fetchone()
+            if row is None:
+                return True
+            raw = row[0]
+            if not raw:
+                return True
+            try:
+                state = json.loads(raw)
+            except (TypeError, ValueError):
+                return True
+            return not (isinstance(state, dict) and state.get("state") == "script_executing")
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "script.lease_probe_failed",
+            extra={"run_id": str(run_id), "exc_type": "probe"},
+            exc_info=True,
+        )
+        # Fail-closed on a probe error: a script-mode run whose lease we cannot
+        # read is NEVER requeued (a hidden live process would double-execute).
+        return False
 
 
 def _node_output_stall_reason(node_output: Any) -> str | None:
@@ -1969,7 +2091,30 @@ class PipelineExecutor:
                 # below — fall through to the existing finalization with
                 # final_status="complete". run_completed is published after the
                 # eval-skip point (below), while the broker is still open.
-            elif node_attempt_count < retries and not superseded and not stalled:
+            # FAR-296 Phase 2: before ANY requeue of a script-mode run, prove no
+            # script process could still be alive (stale-claim lease probe).
+            # A stale ``script_executing`` lease means a script may have run —
+            # requeue is forbidden (exactly-once). Only when the probe proves no
+            # live lease does the run stay eligible for the fenced reset below.
+            script_lease_ok = True
+            if _graph_has_script_mode(graph_json):
+                try:
+                    script_lease_ok = await _script_lease_probe_ok(
+                        self._session_factory, str(run_id), org_id, self._claim_token
+                    )
+                except Exception:
+                    _log.warning(
+                        "script.lease_probe_eval_failed",
+                        extra={"run_id": str(run_id)},
+                        exc_info=True,
+                    )
+                    script_lease_ok = False
+                if not script_lease_ok:
+                    _log.warning(
+                        "script.lease_probe.blocked_requeue",
+                        extra={"run_id": str(run_id), "reason": "stale script_executing lease"},
+                    )
+            elif node_attempt_count < retries and not superseded and not stalled and script_lease_ok:
                 # Fenced pending-reset: a conditional UPDATE guarded by OUR
                 # captured claim token + status='running' so a superseded
                 # original cannot demote the successor's running row, a stalled
@@ -2032,22 +2177,34 @@ class PipelineExecutor:
                 # surfaces truncate to 200 by design. A 500-char write cap cut
                 # the stderr + log tails entirely for large-output failures.
                 final_status = "failed"
-                error_code = "node_cancelled"
-                if isinstance(exc, NodeCancelledError):
+                if not script_lease_ok:
+                    # FAR-296 Phase 2: a stale script_executing lease blocked the
+                    # requeue — a script process may have run, so the side-effect
+                    # state is unknown. Terminal (never retried) with the
+                    # needs-human ``script.side_effect_unknown`` code.
+                    error_code = "script.side_effect_unknown"
                     error_detail = _sanitize_detail(
-                        "Sandbox node cancelled (transient) after retries exhausted: " + str(exc), limit=5000
+                        "Script-mode sandbox has an unresolved execution claim (side effect unknown); "
+                        "not retried — needs human review: " + str(exc),
+                        limit=5000,
                     )
                 else:
-                    # SandboxNodeFailedError: the FAR-197 no-output diagnostic
-                    # is a fully bounded message designed to survive this
-                    # surface in full — keep the limit at the sanitizer/column
-                    # cap (5000), not the 500 used for the short
-                    # NodeCancelledError string, or the kill-reason log tail
-                    # would be the first thing truncated (FAR-197 review).
-                    error_detail = _sanitize_detail(
-                        "Sandbox node failed (transient) after retries exhausted: " + str(exc), limit=5000
-                    )
-                broker.publish("run_failed", {"error": "node_cancelled", "detail": error_detail})
+                    error_code = "node_cancelled"
+                    if isinstance(exc, NodeCancelledError):
+                        error_detail = _sanitize_detail(
+                            "Sandbox node cancelled (transient) after retries exhausted: " + str(exc), limit=5000
+                        )
+                    else:
+                        # SandboxNodeFailedError: the FAR-197 no-output diagnostic
+                        # is a fully bounded message designed to survive this
+                        # surface in full — keep the limit at the sanitizer/column
+                        # cap (5000), not the 500 used for the short
+                        # NodeCancelledError string, or the kill-reason log tail
+                        # would be the first thing truncated (FAR-197 review).
+                        error_detail = _sanitize_detail(
+                            "Sandbox node failed (transient) after retries exhausted: " + str(exc), limit=5000
+                        )
+                broker.publish("run_failed", {"error": error_code, "detail": error_detail})
         except Exception as exc:
             import traceback
 
@@ -2089,7 +2246,27 @@ class PipelineExecutor:
             # 1 retry, 2 attempts. ``< retry_budget`` would have yielded N
             # total attempts (N-1 retries), contradicting the API's
             # "max_retries means retries" contract.
-            if node_attempt_count <= retry_budget and not superseded:
+            # FAR-296 Phase 2: before ANY requeue of a script-mode run, prove
+            # no script process could still be alive (stale-claim lease probe).
+            script_retry_probe_ok = True
+            if _graph_has_script_mode(graph_json):
+                try:
+                    script_retry_probe_ok = await _script_lease_probe_ok(
+                        self._session_factory, str(run_id), org_id, self._claim_token
+                    )
+                except Exception:
+                    _log.warning(
+                        "script.lease_probe_eval_failed_retry_policy",
+                        extra={"run_id": str(run_id)},
+                        exc_info=True,
+                    )
+                    script_retry_probe_ok = False
+                if not script_retry_probe_ok:
+                    _log.warning(
+                        "script.lease_probe.blocked_retry_policy",
+                        extra={"run_id": str(run_id), "reason": "stale script_executing lease"},
+                    )
+            if node_attempt_count <= retry_budget and not superseded and script_retry_probe_ok:
                 _log.warning(
                     "pipeline.retry_policy",
                     extra={
@@ -2137,6 +2314,24 @@ class PipelineExecutor:
                 # function of the attempt number — covered by unit tests.
                 await asyncio.sleep(_retry_backoff_seconds(node_attempt_count))
                 raise RunRetryPolicyError(final_status, retry_budget)
+            if not script_retry_probe_ok:
+                # FAR-296 Phase 2: the lease probe blocked the requeue — a
+                # script process may have run with unknown side-effect state.
+                # Terminal-fail with ``script.side_effect_unknown`` (never
+                # retried) so the run reaches a needs-human state instead of
+                # silently looping or being left stuck in ``running``.
+                _log.warning(
+                    "script.lease_probe.terminal_side_effect_unknown",
+                    extra={"run_id": str(run_id), "error_code": "script.side_effect_unknown"},
+                )
+                final_status = "failed"
+                error_code = "script.side_effect_unknown"
+                error_detail = _sanitize_detail(
+                    "Script-mode sandbox has an unresolved execution claim (side effect unknown); "
+                    "not retried — needs human review.",
+                    limit=5000,
+                )
+                broker.publish("run_failed", {"error": "script.side_effect_unknown", "detail": error_detail})
 
         try:
             # (The eval_blocked audit for this run is recorded in

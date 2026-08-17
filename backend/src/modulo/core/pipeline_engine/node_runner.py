@@ -139,6 +139,47 @@ class SupersededNodeError(Exception):
     """
 
 
+class ScriptModeError(Exception):
+    """Base for FAR-296 Phase 2 script-mode TERMINAL faults.
+
+    Script mode is exactly-once: once the script PROCESS has started (the
+    fencing lease is claimed), re-dispatching could double-execute a
+    side-effecting script, so every post-claim fault is TERMINAL — the executor
+    must never fenced-reset / retry these. ``SandboxNodeFailedError`` (the
+    retryable sandbox-infra failure) is deliberately NOT a parent — the two
+    retryability classes must be disjoint so the executor's retry machinery can
+    never confuse them.
+    """
+
+
+class ScriptSideEffectUnknownError(ScriptModeError):
+    """The script process was terminated mid-execution with exit undetermined.
+
+    Raised on a timeout / budget / watchdog kill while the process is alive or
+    its exit is undetermined — the side effect may or may not have happened, so
+    this maps to the never-retryable ``script.side_effect_unknown`` code and is
+    treated as needs-human.
+    """
+
+
+class ScriptFailedError(ScriptModeError):
+    """The script-mode sandbox failed after the process started (post-claim).
+
+    Raised for a non-zero exit / missing output AFTER the script process
+    started — maps to the never-retryable ``script.failed`` code. Re-dispatching
+    is forbidden (exactly-once).
+    """
+
+
+class ScriptInvalidOutputError(ScriptModeError):
+    """The script-mode output was invalid after the process started (post-claim).
+
+    Raised for invalid / oversized / unparseable output.json AFTER the script
+    process started — maps to the never-retryable ``script.invalid_output``
+    code. Re-dispatching is forbidden (exactly-once).
+    """
+
+
 class OutputSchemaValidationError(ValueError):
     """A node's output failed validation against its output_schema_json.
 
@@ -2031,6 +2072,12 @@ def make_sandbox_agent_fn(
         # sandbox for a run a successor owns.
         claim_lease: str | None = state.get("_claim_lease")
         dispatch_marker_set = False
+        # FAR-296 Phase 2 fencing lease: True once the script-mode fencing lease
+        # is persisted IMMEDIATELY BEFORE ``sandbox.commands.run`` — i.e. the
+        # script PROCESS has started (execution claimed). Gates the stage-split:
+        # a fault with ``_script_lease_claimed`` True is POST-CLAIM (terminal,
+        # never retryable); before it the fault is PRE-CLAIM (retryable).
+        _script_lease_claimed = False
         # Per-node, per-claim-attempt idempotency key (dist/cleanup-idempotency D5):
         # ``run:{run_id}:node:{node_id}:{claim_count}``. Derived from the run row's
         # claim_count inside the fenced acquire, carried by the dispatch marker, and
@@ -2184,6 +2231,46 @@ def make_sandbox_agent_fn(
                         "tok": claim_lease,
                         "sid": sandbox_id_value,
                         "marker": _dispatch_marker_json(attempt_key or ""),
+                    },
+                )
+
+        async def _store_script_lease() -> None:
+            """FAR-296 Phase 2 fencing lease: record the script-mode execution claim.
+
+            Reuses the EXISTING ``runs.sandbox_dispatch_state`` machinery — no
+            parallel lease store. Persists ``{"state": "script_executing",
+            "attempt_key": ...}`` IMMEDIATELY BEFORE ``sandbox.commands.run``, so
+            the durable marker proves "the script PROCESS started (execution
+            claimed, completion marker pending)". Fenced on the claim token +
+            status so a superseded original cannot stamp a lease on a successor's
+            row. Fail-open (no session factory / claim lease / org) — the lease
+            is a safety backstop, never a correctness dependency.
+            """
+            if session_factory is None or not claim_lease:
+                return
+            org_id_raw = state.get("_org_id")
+            try:
+                org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
+            except (TypeError, ValueError):
+                org_uuid = None
+            if org_uuid is None:
+                return
+            from sqlalchemy import text as _sql_text
+
+            from modulo.db.rls import set_rls_org
+
+            async with session_factory() as session, session.begin():
+                await set_rls_org(session, org_uuid)
+                await session.execute(
+                    _sql_text(
+                        "UPDATE runs SET sandbox_dispatch_state=:marker "
+                        "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running'"
+                    ),
+                    {
+                        "rid": run_id,
+                        "oid": str(org_uuid),
+                        "tok": claim_lease,
+                        "marker": json.dumps({"state": "script_executing", "attempt_key": attempt_key or ""}),
                     },
                 )
 
@@ -2476,6 +2563,14 @@ def make_sandbox_agent_fn(
                     or os.environ.get("GITHUB_TOKEN", ""),
                 }
                 sandbox_envs.update(env_vars_extra)
+                # FAR-296 Phase 2 fencing lease (script mode only): persist the
+                # execution claim IMMEDIATELY BEFORE the script process starts so
+                # a durable marker proves the script RAN. Once claimed, any fault
+                # is POST-CLAIM (terminal — never retryable, exactly-once). LLM
+                # mode does NOT take a lease (at-least-once, no fencing).
+                if sandbox_mode == "script":
+                    await _store_script_lease()
+                    _script_lease_claimed = True
                 cmd_handle = await asyncio.wait_for(
                     sandbox.commands.run(
                         wrapped_command,
@@ -2599,6 +2694,16 @@ def make_sandbox_agent_fn(
                     stderr_length=_stderr_len,
                     delivery_sentinel=delivery_sentinel,
                 )
+                if sandbox_mode == "script" and _script_lease_claimed:
+                    # FAR-296 Phase 2 stage-split (3): the script PROCESS started
+                    # (fencing lease claimed) and was terminated mid-execution
+                    # (timeout / budget / watchdog) with exit undetermined — the
+                    # side effect may or may not have happened. Never retryable:
+                    # escalate to needs-human via ``script.side_effect_unknown``.
+                    raise ScriptSideEffectUnknownError(
+                        "Script-mode sandbox terminated mid-execution (side effect unknown): "
+                        + (command_error or f"no output within {sandbox_timeout}s")
+                    )
                 raise SandboxNodeFailedError(
                     command_error or f"Sandbox agent command failed (no output within {sandbox_timeout}s)",
                     node_id=node_id,
@@ -2675,6 +2780,20 @@ def make_sandbox_agent_fn(
                     # kill, while the sandbox is still alive — the logs endpoint
                     # only serves live sandboxes.
                     _no_output_log_tail = await _fetch_sandbox_log_tail(_sandbox_id)
+                    if sandbox_mode == "script" and _script_lease_claimed:
+                        # FAR-296 Phase 2 stage-split (2): the script PROCESS
+                        # started (lease claimed) and produced no parseable
+                        # output.json — post-claim, TERMINAL (never retryable).
+                        raise ScriptInvalidOutputError(
+                            _build_no_output_message(
+                                exit_code=exit_code,
+                                stdout_raw=agent_stdout_raw,
+                                stderr_raw=agent_stderr_raw,
+                                sandbox_id=_sandbox_id,
+                                read_raw=raw_output,
+                                log_tail=_no_output_log_tail,
+                            )
+                        )
                     raise SandboxNodeFailedError(
                         _build_no_output_message(
                             exit_code=exit_code,
@@ -2724,6 +2843,15 @@ def make_sandbox_agent_fn(
                         "sandbox_agent.schema_validation_failed",
                         extra={"node_id": node_id},
                     )
+                    if sandbox_mode == "script" and _script_lease_claimed:
+                        # FAR-296 Phase 2 stage-split (2): the script PROCESS
+                        # started (lease claimed) and its output failed schema
+                        # validation — post-claim, TERMINAL (never retryable).
+                        # ``script.schema_failed`` canonicalizes to the
+                        # non-retryable ``contract.schema`` class.
+                        raise OutputSchemaValidationError(
+                            f"Script-mode output failed schema validation for node '{node_id}'"
+                        ) from None
                     elapsed = time.monotonic() - start_time
                     _cost_estimate_usd = _compute_sandbox_cost(elapsed, output_json)
                     return {
@@ -2781,6 +2909,12 @@ def make_sandbox_agent_fn(
             sandbox_session_lost: bool = False
 
             if sandbox_mode == "script":
+                # FAR-296 Phase 2 stage-split (2): a non-zero exit AFTER the
+                # script process started (the fencing lease is claimed) is a
+                # POST-CLAIM fault — TERMINAL, never retryable (exactly-once).
+                # Re-dispatching could double-execute the side-effecting script.
+                if exit_code != 0:
+                    raise ScriptFailedError(f"Script-mode sandbox exited with code {exit_code} (post-claim, terminal)")
                 # FAR-296 script mode: the raw parsed output IS the node output.
                 # No LLM envelope extraction (summary/changed_files/pr_url/
                 # status/outcome elevation) — output_json carries the script's
@@ -2971,11 +3105,15 @@ def make_sandbox_agent_fn(
                             extra={"node_id": node_id, "run_id": run_id},
                         )
             raise
-        except (SupersededNodeError, SandboxNodeFailedError):
+        except (SupersededNodeError, SandboxNodeFailedError, ScriptModeError):
             # A6: the retryable/superseded node-failure classes propagate to the
             # executor — they must NOT be swallowed into a failed-node output
             # dict (a superseded dispatch must never look like a completed/failed
             # node, and a retryable infra failure must reach the retry path).
+            # FAR-296 Phase 2: the TERMINAL ScriptModeError subclasses (post-claim
+            # script-mode faults) also propagate so the executor maps them to the
+            # never-retryable ``script.*`` codes — never to a silent failed-node
+            # output dict that would let the run land 'complete'.
             raise
         except Exception as _exc:
             elapsed = time.monotonic() - start_time
