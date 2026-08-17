@@ -2965,6 +2965,26 @@ async def create_trigger(
         return _tool_error("Failed to create trigger")
 
 
+def _trigger_detail_dict(trigger: Any, in_flight: int, streak_status: Any) -> dict[str, Any]:
+    """Serialize a trigger row to the MCP response shape."""
+    return {
+        "id": str(trigger.id),
+        "pipeline_id": str(trigger.pipeline_id),
+        "trigger_type": trigger.trigger_type,
+        "active": trigger.active,
+        "max_concurrent_runs": trigger.max_concurrent_runs,
+        "daily_spend_limit": float(trigger.daily_spend_limit) if trigger.daily_spend_limit is not None else None,
+        "config_json": trigger.config_json or {},
+        "cron_expression": trigger.cron_expression,
+        "cron_timezone": trigger.cron_timezone,
+        "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
+        "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
+        "input_template": (trigger.config_json or {}).get("input_template"),
+        "in_flight": in_flight,
+        "streak_status": streak_status,
+    }
+
+
 @mcp.tool(description="Get a single trigger by ID.")
 @_RETRY_DB
 async def get_trigger(trigger_id: str) -> dict[str, Any]:
@@ -3007,22 +3027,7 @@ async def get_trigger(trigger_id: str) -> dict[str, Any]:
         if trigger is None:
             return {"error": "not_found", "detail": _MSG_TRIGGER_NOT_FOUND}
 
-        return {
-            "id": str(trigger.id),
-            "pipeline_id": str(trigger.pipeline_id),
-            "trigger_type": trigger.trigger_type,
-            "active": trigger.active,
-            "max_concurrent_runs": trigger.max_concurrent_runs,
-            "daily_spend_limit": float(trigger.daily_spend_limit) if trigger.daily_spend_limit is not None else None,
-            "config_json": trigger.config_json or {},
-            "cron_expression": trigger.cron_expression,
-            "cron_timezone": trigger.cron_timezone,
-            "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
-            "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
-            "input_template": (trigger.config_json or {}).get("input_template"),
-            "in_flight": in_flight,
-            "streak_status": streak_status,
-        }
+        return _trigger_detail_dict(trigger, in_flight, streak_status)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
