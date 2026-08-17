@@ -590,7 +590,7 @@ def test_notify_cli_exit_code_3_on_block(monkeypatch):
     )
 
 
-def test_notify_cli_downgraded_block_exit_0(monkeypatch, capsys):
+def test_notify_cli_downgraded_block_exit_0(monkeypatch):
     """A ``block_on_guardrail: false`` downgrade (action=block, blocked=false)
     must NOT make the ``--notify`` CLI exit non-zero — the block is record-only."""
     import modulo.core.guardrails.sandbox_bridge as sb
