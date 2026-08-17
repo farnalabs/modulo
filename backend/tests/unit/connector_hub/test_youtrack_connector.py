@@ -182,6 +182,41 @@ async def test_query_unsupported_resource(connector):
         await connector.query(ConnectorQuery(resource="unknown"))
 
 
+async def test_query_issues_corrupt_body(connector):
+    for bad in [{"not": "a list"}, "garbage", 42, None]:
+        with respx.mock:
+            respx.get(f"{_BASE}/issues").mock(return_value=httpx.Response(200, json=bad))
+            result = await connector.query(ConnectorQuery(resource="issues"))
+        assert result.records == []
+        assert result.total == 0
+
+
+async def test_query_issues_mixed_items(connector):
+    with respx.mock:
+        payload = [{"id": "1-1", "idReadable": "PRJ-1", "summary": "First"}, "junk", 7, None]
+        respx.get(f"{_BASE}/issues").mock(return_value=httpx.Response(200, json=payload))
+        result = await connector.query(ConnectorQuery(resource="issues"))
+    assert len(result.records) == 1
+    assert result.records[0]["idReadable"] == "PRJ-1"
+
+
+async def test_query_projects_corrupt_body(connector):
+    with respx.mock:
+        respx.get(f"{_BASE}/admin/projects").mock(return_value=httpx.Response(200, json={"oops": "not a list"}))
+        result = await connector.query(ConnectorQuery(resource="projects"))
+    assert result.records == []
+    assert result.total == 0
+
+
+async def test_query_users_corrupt_body(connector):
+    for bad in ["oops", 99]:
+        with respx.mock:
+            respx.get(f"{_BASE}/users").mock(return_value=httpx.Response(200, json=bad))
+            result = await connector.query(ConnectorQuery(resource="users"))
+        assert result.records == []
+        assert result.total == 0
+
+
 async def test_write_create_issue(connector):
     with respx.mock:
         created = {"id": "1-10", "idReadable": "PRJ-50", "summary": "New bug"}
