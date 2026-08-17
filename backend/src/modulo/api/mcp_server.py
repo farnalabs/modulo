@@ -3035,6 +3035,36 @@ def _trigger_event_payloads(items: list[Any]) -> list[dict[str, Any]]:
     ]
 
 
+async def _list_trigger_events_impl(
+    trigger_id: str | None,
+    pipeline_id: str | None,
+    cursor: str | None,
+    limit: int,
+) -> dict[str, Any]:
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    check_tool_scope(_ctx_role_val(), "list_trigger_events")
+    from sqlalchemy import func, select
+
+    org_id = _ctx_org_id_val()
+    lim = max(1, min(limit, 100))
+
+    async with _session(org_id) as s:
+        key_team_id = _ctx_team_id_val()
+        q, q_err = await _build_trigger_event_query(s, org_id, key_team_id, trigger_id, pipeline_id)
+        if q_err:
+            return q_err
+        total = int((await s.execute(select(func.count()).select_from(q.subquery()))).scalar_one_or_none() or 0)
+        items, next_cursor, has_more = await _paginate_trigger_events(s, q, cursor, lim)
+
+    return {
+        "data": _trigger_event_payloads(items),
+        "total": total,
+        "next_cursor": next_cursor,
+        "has_more": has_more,
+    }
+
+
 @mcp.tool(
     name="list_trigger_events",
     description=(
@@ -3051,28 +3081,7 @@ async def list_trigger_events(
     limit: int = 20,
 ) -> dict[str, Any]:
     try:
-        if not await validate_current_auth():
-            return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "list_trigger_events")
-        from sqlalchemy import func, select
-
-        org_id = _ctx_org_id_val()
-        lim = max(1, min(limit, 100))
-
-        async with _session(org_id) as s:
-            key_team_id = _ctx_team_id_val()
-            q, q_err = await _build_trigger_event_query(s, org_id, key_team_id, trigger_id, pipeline_id)
-            if q_err:
-                return q_err
-            total = (await s.execute(select(func.count()).select_from(q.subquery()))).scalar_one_or_none() or 0
-            items, next_cursor, has_more = await _paginate_trigger_events(s, q, cursor, lim)
-
-        return {
-            "data": _trigger_event_payloads(items),
-            "total": total,
-            "next_cursor": next_cursor,
-            "has_more": has_more,
-        }
+        return await _list_trigger_events_impl(trigger_id, pipeline_id, cursor, limit)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
