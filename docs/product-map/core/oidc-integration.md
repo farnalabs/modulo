@@ -280,3 +280,6 @@ status: partial
 - **Major**: `sso_providers` route (`sso.py:49-64`) had no try/except at all — unexpected errors would propagate as raw 500. Added structured Exception→500 handler.
 - **Major**: `oidc_login` route (`sso.py:72-88`) only caught `ValueError` — non-ValueError exceptions (e.g. `RuntimeError`, `KeyError`) would propagate as raw 500. Added HTTPException pass-through and generic Exception→500 handler.
 - **Minor**: Added 2 new tests for the error-handling paths (login 500 on unexpected error, sso_providers 500 on unexpected error).
+
+### 2026-08-15 — Cross-cutting QA (FAR-244 partial-sso sweep)
+- Re-verified every `[x]` behaviour against the code and unit/BDD tests — all provider configuration, authorization redirect, callback/code exchange, ID token processing (incl. signature verification via `oidc_verify.py`), JIT provisioning, group-to-team mapping, token issuance, admin CRUD, connection testing, error handling, and resilience behaviours are implemented and tested. No unchecked behaviour checkboxes remained; all `[ ]` items are genuine Known Gaps (fallback to unverified decode when JWKS absent, `MODULO_OIDC_PROVIDERS` env deprecation, SCIM deferred, no real-provider E2E, no logout, refresh rotation not tested end-to-end, group-mapping integration-test coverage). No code changes required. Status: partial (known gaps unchanged).

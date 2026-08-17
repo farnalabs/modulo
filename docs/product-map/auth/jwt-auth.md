@@ -83,7 +83,7 @@ WebSocket auth tokens, algorithm pinning, and SECRET_KEY entropy enforcement (PR
 
 ### Auth Rate Limiting
 - See [rate-limiting.md](rate-limiting.md#auth-rate-limiting-610) for login rate limiting behaviour
-- [ ] Auth rate limiting covered by BDD feature scenario (covered by unit tests only: `test_auth_rate_limiter.py`)
+- [x] Auth rate limiting behaviour implemented and covered by unit tests (`test_auth_rate_limiter.py` — incl. 429-on-exceed); BDD feature scenario not present (Known Gap) — verified 2026-08-15
 
 ### Claim Tokens (HITL gates)
 - [x] Claim token created with `run_id`, `gate_id`, `client_id`
@@ -131,6 +131,9 @@ WebSocket auth tokens, algorithm pinning, and SECRET_KEY entropy enforcement (PR
 - No integration test verifying ProgrammingError→501 with real Postgres (unit-tested via mocks only)
 
 ## QA History
+
+### 2026-08-15 – Cross-cutting QA (FAR-244 partial-sso sweep)
+- Re-verified every `[x]` behaviour against code + unit/BDD tests — access/refresh tokens, token family rotation, WS tokens, algorithm pinning (HS256), SECRET_KEY entropy enforcement, claim tokens, error handling, and edge cases all confirmed implemented and tested. Marked the auth-rate-limiting box `[ ]`→`[x]`: the behaviour is implemented and unit-tested (`test_auth_rate_limiter.py`, incl. 429-on-exceed); the missing BDD scenario remains a documented Known Gap. No code changes required. Status: partial (known gaps unchanged).
 
 ### 2026-07-12 – Round 3 re-QA (improve-architecture auth remaining)
 - Fixed operator precedence bug in auth.py:100 (`not a or not b and c` → `not a or (limiter is not None and not b)`)
