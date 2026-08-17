@@ -14,8 +14,9 @@ constraint with the FULL 21-value vocabulary. This file asserts:
   model (the single source of truth) — a value added to one side and not the
   other breaks the constraint/model contract,
 * the chain has a single linear head ``0110_schema_pipeline_runtime`` (the
-  FAR-213 ``0111_run_blocked_partial_summary`` and FAR-210
-  ``0112_feedback_correction_state`` migrations chain on top of it).
+  FAR-213 ``0111_run_blocked_partial_summary``, FAR-210
+  ``0112_feedback_correction_state``, and FAR-223
+  ``0113_guardrail_summary`` migrations chain on top of it).
 
 The old SQLite round-trip (which ran the migration's upgrade/downgrade against
 a mock ``op``) is obsolete: the reconciliation migration expresses the
@@ -39,8 +40,8 @@ _MIGRATION_PATH = (
     Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 )
 
-# The chain head after the FAR-210 feedback correction_state migration (0112).
-_CHAIN_HEAD_MIGRATION_NAME = "0112_feedback_correction_state"
+# The chain head after the FAR-223 guardrail_summary migration (0113).
+_CHAIN_HEAD_MIGRATION_NAME = "0113_guardrail_summary"
 
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
