@@ -85,7 +85,7 @@
                   rows="6"
                   data-testid="eval-editor-config"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  :placeholder="$t('views.EvalEditorView.config_placeholder')"
+                  :placeholder="configPlaceholder"
                 />
                 <div v-if="configParseError" class="mt-1 text-xs text-destructive">{{ configParseError }}</div>
               </div>
@@ -341,6 +341,10 @@ const configParseError = computed(() => {
   } catch {
     return t('views.EvalEditorView.invalid_json')
   }
+})
+
+const configPlaceholder = computed(() => {
+  return t(`views.EvalEditorView.configPlaceholder.${form.eval_type || 'llm_judge'}`)
 })
 
 const canSave = computed(() => {
