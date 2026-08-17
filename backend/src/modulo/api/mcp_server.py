@@ -718,6 +718,23 @@ async def validate_current_auth() -> bool:
         return False
 
 
+def _extract_bearer_token(request: Request) -> tuple[str | None, Response | None]:
+    """Extract the Bearer token from the Authorization header.
+
+    Returns ``(token, None)`` on success or ``(None, error_response)`` when the
+    header is missing or not a Bearer token.
+    """
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return None, Response(
+            '{"error":"unauthorized","detail":"Bearer token required"}',
+            status_code=401,
+            media_type=_CT_APPLICATION_JSON,
+        )
+    token = auth_header[len("Bearer ") :].strip()
+    return token, None
+
+
 async def _dispatch_unauth_paths(
     request: Request,
     call_next: Callable[[Request], Awaitable[Response]],
@@ -755,14 +772,10 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
         if unauth is not None:
             return unauth
 
-        auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer "):
-            return Response(
-                '{"error":"unauthorized","detail":"Bearer token required"}',
-                status_code=401,
-                media_type=_CT_APPLICATION_JSON,
-            )
-        token = auth_header[len("Bearer ") :].strip()
+        token, auth_err = _extract_bearer_token(request)
+        if auth_err is not None:
+            return auth_err
+        assert token is not None
 
         # Try API key first (backwards compatible).
         if token.startswith("mk_"):
