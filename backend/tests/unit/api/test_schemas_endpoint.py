@@ -808,3 +808,84 @@ def test_import_schema_invalid_schema_returns_422(client: TestClient) -> None:
     )
     assert resp.status_code == 422
     assert "Invalid JSON Schema" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Schema version creation is explicit, not auto-save (PRD 8.3)
+# ---------------------------------------------------------------------------
+
+
+def test_create_schema_auto_creates_latest_placeholder_version(client: TestClient) -> None:
+    """Creating a schema seeds a 'latest' placeholder version (version_number 0)."""
+    schema = _make_schema()
+
+    async def _fake_create_schema(session, *, org_id, name, account_id, description=None, abstract_name=None):
+        return schema
+
+    placeholder_versions: list[MagicMock] = []
+
+    def _fake_schema_version_model(**kwargs: object) -> MagicMock:
+        placeholder = MagicMock()
+        placeholder.version_number = kwargs.get("version_number")
+        placeholder.version = kwargs.get("version")
+        placeholder.schema_id = kwargs.get("schema_id")
+        placeholder_versions.append(placeholder)
+        return placeholder
+
+    with (
+        patch("modulo.api.routes.schemas.create_schema", side_effect=_fake_create_schema) as mock_create,
+        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("modulo.api.routes.schemas.SchemaVersionModel", side_effect=_fake_schema_version_model),
+    ):
+        resp = client.post("/api/v1/schemas", json={"name": "Explicit Version Schema"})
+    assert resp.status_code == 201
+    mock_create.assert_awaited_once()
+
+    # A placeholder 'latest' version (version_number 0) is seeded so agents
+    # have something to pin before the first explicit version is created.
+    assert len(placeholder_versions) == 1
+    assert placeholder_versions[0].version == "latest"
+    assert placeholder_versions[0].version_number == 0
+    assert placeholder_versions[0].schema_id == schema.id
+
+
+def test_schema_version_creation_is_explicit_endpoint(client: TestClient) -> None:
+    """A new schema version is only created through the explicit POST /versions action."""
+    schema = _make_schema()
+    sv = _make_schema_version(schema.id)
+    sv.version = "2.0"
+    sv.version_number = 2
+    with (
+        patch("modulo.api.routes.schemas.get_schema", return_value=schema),
+        patch("modulo.api.routes.schemas.create_schema_version", return_value=sv) as mock_create,
+        patch("modulo.api.routes.schemas.set_rls_org"),
+    ):
+        resp = client.post(
+            f"/api/v1/schemas/{schema.id}/versions",
+            json={"version": "2.0", "version_number": 2, "definition_json": {"type": "object"}},
+        )
+    assert resp.status_code == 201
+    mock_create.assert_awaited_once()
+    assert resp.json()["version"] == "2.0"
+    assert resp.json()["version_number"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Validate endpoint: non-dict JSON parsed body returns 400
+# ---------------------------------------------------------------------------
+
+
+def test_validate_schema_integrity_error_create_returns_409(client: TestClient) -> None:
+    """A duplicate schema name per org surfaces as 409 (IntegrityError catch)."""
+    from sqlalchemy.exc import IntegrityError
+
+    with (
+        patch(
+            "modulo.api.routes.schemas.create_schema",
+            side_effect=IntegrityError("stmt", {}, Exception("duplicate")),
+        ),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+    ):
+        resp = client.post("/api/v1/schemas", json={"name": "Duplicate"})
+    assert resp.status_code == 409
+    assert "already exists" in resp.json()["detail"]

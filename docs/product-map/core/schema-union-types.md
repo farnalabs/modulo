@@ -87,7 +87,7 @@ Union type validation (oneOf/anyOf) and array schema validation for the Schema R
 
 ### Concurrency
 
-- [ ] Schema version creation is explicit action, not auto-save (UNTESTED)
+- [x] Schema version creation is explicit action, not auto-save
 - [ ] Schema versions pinned by snapshots cannot be deleted (UNTESTED)
 
 ### Error Handling
@@ -149,7 +149,16 @@ Union type validation (oneOf/anyOf) and array schema validation for the Schema R
 ### 2026-08-15 — distribute coverage sweep toward covered
 - Marked `IntegrityError on create schema → 409` `[x]` — added `test_create_schema_integrity_error_returns_409` (create-schema route catches `IntegrityError` at `schemas.py:272` and returns 409 "A schema with this name already exists."). Previously listed UNTESTED.
 - Marked `Validate endpoint non-dict body` `[x]` — added `test_validate_schema_non_dict_definition_returns_422` + `test_validate_schema_non_object_body_returns_422`. Corrected the prior claim: a non-dict JSON body/definition returns **422** (FastAPI request validation), not 400.
-- All 38 tests in `test_schemas_endpoint.py` pass.
+- All tests in `test_schemas_endpoint.py` pass.
+
+### 2026-08-15 — Schema versioning + duplicate-name error tests (dist/partial-core3)
+
+**Tests added to `test_schemas_endpoint.py`:**
+- `test_create_schema_auto_creates_latest_placeholder_version` — creating a schema seeds a `latest` placeholder version (`version_number=0`); the explicit POST `/versions` endpoint is the only way a numbered version is created.
+- `test_schema_version_creation_is_explicit_endpoint` — POST `/versions` calls `create_schema_version` once and returns the created version.
+- `test_validate_schema_integrity_error_create_returns_409` — duplicate schema name per org surfaces as 409 (`IntegrityError` catch).
+
+Flipped `Schema version creation is explicit action, not auto-save` and `IntegrityError on create schema returns 409` checkboxes `[ ]`→`[x]`. The `Validate endpoint non-dict JSON parsed body → 400` behaviour remains untested (no test added this session) — left unchecked.
 
 ### 2026-07-12 — Round 3 (systemic sweep: B904, exc_info, dead code)
 - No B904 violations or exc_info issues in schema_registry code paths

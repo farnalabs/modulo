@@ -495,6 +495,42 @@ async def test_create_workspace_sandbox_constructor_raises() -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_workspace_sandbox_constructor_failure_is_structured() -> None:
+    """Sandbox constructor failure surfaces a structured error naming the template."""
+    provider = E2BRuntimeProvider(api_key="sk-test")
+    spec = WorkspaceSpec(
+        environment_profile_id=uuid.uuid4(),
+        organisation_id=uuid.uuid4(),
+        image_ref="bad-template",
+    )
+    with patch("e2b.AsyncSandbox") as mock_cls:
+        mock_cls.create = AsyncMock(side_effect=RuntimeError("E2B API unavailable"))
+        with pytest.raises(RuntimeError, match=r"Failed to create E2B sandbox with template 'bad-template'"):
+            await provider.create_workspace(spec)
+
+
+@pytest.mark.asyncio
+async def test_create_workspace_provisioning_timeout_is_structured() -> None:
+    """A provisioning timeout (asyncio.TimeoutError from wait_for) surfaces as a clear RuntimeError."""
+    provider = E2BRuntimeProvider(api_key="sk-test")
+    spec = WorkspaceSpec(
+        environment_profile_id=uuid.uuid4(),
+        organisation_id=uuid.uuid4(),
+        image_ref="slow-template",
+        timeout_seconds=1,
+    )
+
+    async def _hang(*args: object, **kwargs: object) -> object:
+        await asyncio.sleep(10)
+        return object()
+
+    with patch("e2b.AsyncSandbox") as mock_cls:
+        mock_cls.create = AsyncMock(side_effect=_hang)
+        with pytest.raises(RuntimeError, match=r"Timed out after 1s provisioning E2B sandbox with template"):
+            await provider.create_workspace(spec)
+
+
+@pytest.mark.asyncio
 async def test_create_workspace_clone_failure_propagates(
     mock_sandbox_cls: MagicMock,
     mock_sandbox: MagicMock,

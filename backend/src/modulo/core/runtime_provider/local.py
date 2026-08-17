@@ -66,7 +66,12 @@ class LocalRuntimeProvider(RuntimeProvider):
         workspace directory. If the clone fails, the temp directory is
         cleaned up before propagating the error.
         """
-        workspace_dir = tempfile.mkdtemp(prefix=f"modulo-workspace-{spec.environment_profile_id}-")
+        try:
+            workspace_dir = tempfile.mkdtemp(prefix=f"modulo-workspace-{spec.environment_profile_id}-")
+        except OSError as exc:
+            raise RuntimeError(
+                f"Failed to create workspace temp directory for profile {spec.environment_profile_id}: {exc}"
+            ) from exc
         ref = str(uuid.uuid4())
 
         try:
