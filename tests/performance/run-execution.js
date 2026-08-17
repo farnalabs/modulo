@@ -156,3 +156,28 @@ export default function (data) {
 
   sleep(1);
 }
+
+export function teardown(data) {
+  if (!data || !data.token) return;
+
+  const params = {
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${data.token}`,
+    },
+  };
+
+  // setup() created a perf-target-* pipeline per run; re-query the API and
+  // delete any such pipelines so an interrupted run cannot leak them. k6 runs
+  // teardown in its own runtime, so module-level per-VU state is never visible
+  // here, matching the pipeline-crud.js / audit-query.js patterns.
+  const listRes = http.get(`${BASE_URL}/pipelines?page=1&page_size=100`, params);
+  if (listRes.status !== 200) return;
+
+  const pipelines = JSON.parse(listRes.body).items || [];
+  for (const p of pipelines) {
+    if (p.name && p.name.startsWith('perf-target-')) {
+      http.del(`${BASE_URL}/pipelines/${p.id}`, null, params);
+    }
+  }
+}
