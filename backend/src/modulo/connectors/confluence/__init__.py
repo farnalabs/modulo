@@ -133,7 +133,7 @@ class ConfluenceConnector(ConnectorBase):
                         params["type"] = space_type
                     r = await client.get("/wiki/api/v2/spaces", params=params)
                     r.raise_for_status()
-                    body: dict[str, Any] = r.json()
+                    body = r.json()
                     results = _safe_records(body, "results")
                     return ConnectorResult(records=results)
 
@@ -152,7 +152,7 @@ class ConfluenceConnector(ConnectorBase):
                     params = {"cql": cql}
                     r = await client.get("/wiki/rest/api/content/search", params=params)
                     r.raise_for_status()
-                    body: dict[str, Any] = r.json()
+                    body = r.json()
                     results = _safe_records(body, "results")
                     return ConnectorResult(records=results)
 
@@ -162,7 +162,7 @@ class ConfluenceConnector(ConnectorBase):
                         raise ValueError("Confluence children query requires 'page_id' filter")
                     r = await client.get(f"/wiki/api/v2/pages/{page_id}/children")
                     r.raise_for_status()
-                    body: dict[str, Any] = r.json()
+                    body = r.json()
                     results = _safe_records(body, "results")
                     return ConnectorResult(records=results)
 
@@ -172,7 +172,7 @@ class ConfluenceConnector(ConnectorBase):
                         raise ValueError("Confluence labels query requires 'page_id' filter")
                     r = await client.get(f"/wiki/api/v2/pages/{page_id}/labels")
                     r.raise_for_status()
-                    body: dict[str, Any] = r.json()
+                    body = r.json()
                     results = _safe_records(body, "results")
                     return ConnectorResult(records=results)
 
