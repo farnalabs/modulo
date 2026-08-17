@@ -224,7 +224,7 @@ def test_pattern_hash_is_deterministic_and_empty_for_unknown() -> None:
     regex_def = _def("regex-guard", "block")
     defs = [regex_def]
     assert guardrail_pattern_hash(defs, regex_def.id) == guardrail_pattern_hash(defs, regex_def.id)
-    assert guardrail_pattern_hash(defs, uuid.uuid4()) == ""
+    assert not guardrail_pattern_hash(defs, uuid.uuid4())
 
 
 # ---------------------------------------------------------------------------
