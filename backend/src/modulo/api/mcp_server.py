@@ -3445,9 +3445,6 @@ def _validate_trigger_update_inputs(
     return tid, None
 
 
-_TEAM_SCOPE_ERROR: object = object()
-
-
 async def _load_trigger_for_update(s: AsyncSession, org_id: uuid.UUID, tid: uuid.UUID) -> Any | None:
     """Load the trigger row for update; None if not found, _TEAM_SCOPE_ERROR if team-scope mismatch."""
     from sqlalchemy import select
