@@ -5665,6 +5665,34 @@ async def _oauth_authorize(request: Request) -> JSONResponse | RedirectResponse:
     return redirect
 
 
+async def _parse_oauth_form(request: Request) -> tuple[dict[str, str] | None, JSONResponse | None]:
+    """Parse an RFC 6749 request body into a string dict.
+
+    Accepts form-urlencoded (``request.form()``) and JSON bodies for backwards
+    compatibility; anything else is ``invalid_request``. Returns
+    ``(params, error)`` — exactly one is non-None.
+    """
+    content_type = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if content_type == "application/x-www-form-urlencoded":
+        form = await request.form()
+        params: dict[str, str] = {k: (str(v) if v is not None else "") for k, v in form.items()}
+        return params, None
+    if content_type == _CT_APPLICATION_JSON:
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            return None, JSONResponse(
+                {"error": "invalid_request", "detail": "Request body must be JSON"},
+                status_code=400,
+            )
+        params = {k: str(v) if v is not None else "" for k, v in body.items()}
+        return params, None
+    return None, JSONResponse(
+        {"error": "invalid_request", "detail": "Content-Type must be application/x-www-form-urlencoded"},
+        status_code=400,
+    )
+
+
 async def _oauth_token(request: Request) -> JSONResponse:
     """POST /mcp/oauth/token — exchange code for access token.
 
@@ -5676,24 +5704,10 @@ async def _oauth_token(request: Request) -> JSONResponse:
     consenting account's LIVE org role is re-verified against the granted
     scopes — a demoted account is denied a token (ADR 017).
     """
-    content_type = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
-    if content_type == "application/x-www-form-urlencoded":
-        form = await request.form()
-        params: dict[str, str] = {k: (str(v) if v is not None else "") for k, v in form.items()}
-    elif content_type == _CT_APPLICATION_JSON:
-        try:
-            body = await request.json()
-        except json.JSONDecodeError:
-            return JSONResponse(
-                {"error": "invalid_request", "detail": "Request body must be JSON"},
-                status_code=400,
-            )
-        params = {k: str(v) if v is not None else "" for k, v in body.items()}
-    else:
-        return JSONResponse(
-            {"error": "invalid_request", "detail": "Content-Type must be application/x-www-form-urlencoded"},
-            status_code=400,
-        )
+    params, parse_err = await _parse_oauth_form(request)
+    if parse_err:
+        return parse_err
+    assert params is not None
 
     grant_type = params.get("grant_type", "")
     if grant_type != "authorization_code":
