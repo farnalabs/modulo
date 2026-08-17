@@ -9,6 +9,7 @@ import pytest
 
 from modulo.core.library import DOGFOODING_PIPELINE as IMPORTED_DOGFOODING
 from modulo.core.library.workflows.definitions import DOGFOODING_PIPELINE
+from modulo.core.seed_data.library_schemas import SCHEMAS
 
 from .helpers import KNOWN_AGENTS, VALID_CONNECTOR_TYPES
 
@@ -150,3 +151,18 @@ def _step_by_id(step_id: str) -> dict[str, Any]:
             return step
     msg = f"Step '{step_id}' not found"
     raise AssertionError(msg)
+
+
+def test_dogfood_input_step_binds_defined_schema() -> None:
+    """The Dogfooding Pipeline's input step binds a registered reusable schema."""
+    schemas = {entry["name"]: entry["definition"] for entry in SCHEMAS}
+
+    for step in DOGFOODING_PIPELINE["pipeline_steps"]:
+        bound = step.get("input_schema")
+        if bound is None:
+            continue
+        assert bound in schemas, f"Step '{step['id']}' binds unknown schema '{bound}'"
+
+    read_issue = _step_by_id("read-issue")
+    assert read_issue.get("input_schema") == "ticket-input"
+    assert "ticket-input" in schemas

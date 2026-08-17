@@ -1,4 +1,4 @@
-"""Seed 22 library schema definitions into the database.
+"""Seed the library schema definitions into the database.
 
 Usage:
     uv run python -m scripts.seed_library_schemas

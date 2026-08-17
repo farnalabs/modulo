@@ -1,4 +1,4 @@
-"""22 built-in library schema definitions as JSON Schema objects.
+"""24 built-in library schema definitions as JSON Schema objects.
 
 Each entry has a ``name`` (URL-safe slug), ``description``, and
 ``definition`` (a valid Draft 2020-12 JSON Schema).
@@ -607,6 +607,46 @@ SCHEMAS: list[dict[str, object]] = [
                 "status": {"type": "string", "description": "Story status"},
             },
             "required": ["id", "title", "description", "acceptance-criteria"],
+        },
+    },
+    {
+        "name": "pr-review-input",
+        "description": "Input payload for a pull-request review pipeline",
+        "definition": {
+            "title": "PR Review Input",
+            "description": "Identifiers for the pull request a reviewer pipeline should review",
+            "type": "object",
+            "properties": {
+                "number": {"type": "integer", "description": "Pull request number"},
+                "repository": {"type": "string", "description": "Repository in 'owner/name' format"},
+                "head-ref": {"type": "string", "description": "Name of the head (source) branch"},
+                "head-sha": {"type": "string", "description": "SHA of the head commit"},
+                "action": {"type": "string", "description": "Triggering event action (e.g. opened, synchronize)"},
+            },
+            "required": ["number", "repository", "head-ref", "head-sha"],
+        },
+    },
+    {
+        "name": "ticket-input",
+        "description": "Input payload for a ticket-to-PR wrap",
+        "definition": {
+            "title": "Ticket Input",
+            "description": "Issue or ticket to be turned into code changes by a dogfood pipeline",
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "Ticket/issue id"},
+                "title": {"type": "string", "description": "Ticket title"},
+                "body": {"type": "string", "description": "Ticket description"},
+                "type": {
+                    "type": "string",
+                    "enum": ["bug", "feature", "enhancement", "chore"],
+                    "description": "Ticket type",
+                },
+                "priority": {"type": "string", "description": "Ticket priority"},
+                "labels": {"type": "array", "items": {"type": "string"}, "description": "Labels"},
+                "repo": {"type": "string", "description": "Repository the ticket belongs to"},
+            },
+            "required": ["id", "title", "type"],
         },
     },
 ]
