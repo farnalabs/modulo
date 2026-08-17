@@ -120,7 +120,7 @@ def test_config_malformed_raises(raw):
 def test_config_error_validation_helper():
     errors = validate_loop_intercept_config_errors({"latency_budget_ms": 0})
     assert errors and any("latency_budget_ms" in e for e in errors)
-    assert validate_loop_intercept_config_errors({"latency_budget_ms": 300}) == []
+    assert not validate_loop_intercept_config_errors({"latency_budget_ms": 300})
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +141,7 @@ def test_serialize_tool_event_round_trips_args():
     assert payload["tool"] == "git push"
     assert payload["args"] == {"url": "https://x", "nested": {"a": [1, 2]}}
     assert payload["direction"] == "before"
-    assert payload["result_summary"] == ""
+    assert not payload["result_summary"]
 
 
 def test_serialize_tool_event_caps_oversized_args():
@@ -157,7 +157,7 @@ def test_serialize_tool_event_stringifies_non_json_args():
 
 def test_serialize_tool_event_non_dict_args():
     payload = serialize_tool_event("git push", "not-a-dict", "before")
-    assert payload["args"] == {}
+    assert not payload["args"]
 
 
 # ---------------------------------------------------------------------------
@@ -394,7 +394,7 @@ async def test_callback_server_invokes_audit_sink():
         await server.close()
 
 
-async def test_bridge_client_fails_open_on_unreachable_endpoint():
+def test_bridge_client_fails_open_on_unreachable_endpoint():
     client = BridgeClient("http://127.0.0.1:1", timeout=0.5)
     allowed, masked, _ = client.decide_before("git push", _event()["args"])
     assert allowed is True
