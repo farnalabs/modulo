@@ -52,7 +52,7 @@ import re as _re
 import time
 import urllib.request
 import uuid
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from contextlib import suppress
 from contextvars import ContextVar
 from functools import partial
@@ -1354,7 +1354,7 @@ async def _invoke_backend(
 _JUDGE_EXECUTOR: concurrent.futures.ThreadPoolExecutor | None = None
 
 
-def _run_coroutine_sync(coro: Awaitable[Any]) -> Any:
+def _run_coroutine_sync(coro: Coroutine[Any, Any, Any]) -> Any:
     """Run an async coroutine to completion from a sync context.
 
     ``make_hitl_gate_fn`` runs inside an already-running asyncio event loop,
@@ -1369,7 +1369,11 @@ def _run_coroutine_sync(coro: Awaitable[Any]) -> Any:
             max_workers=1,
             thread_name_prefix="llm-judge",
         )
-    future = _JUDGE_EXECUTOR.submit(asyncio.run, coro)
+
+    def _run() -> Any:
+        return asyncio.run(coro)
+
+    future: concurrent.futures.Future[Any] = _JUDGE_EXECUTOR.submit(_run)
     return future.result()
 
 
