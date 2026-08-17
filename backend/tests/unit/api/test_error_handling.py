@@ -1341,6 +1341,99 @@ def test_model_backend_recheck_health_404_when_missing(client: TestClient) -> No
     assert resp.status_code == 404
 
 
+def test_delete_model_backend_blocked_by_non_terminal_run_snapshot(client: TestClient) -> None:
+    """PRD §8.1 deletion protection — a backend pinned by a PipelineSnapshot tied
+    to a non-terminal run cannot be hard-deleted (the in-flight run may still
+    resolve the pinned backend, e.g. after a HITL pause/resume)."""
+    from unittest.mock import AsyncMock, patch
+
+    from modulo.api.dependencies import get_db_session
+
+    backend_id = uuid.uuid4()
+    snapshot_id = uuid.uuid4()
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncMock:
+        yield mock_session
+
+    with (
+        patch(
+            "modulo.api.routes.model_backends.list_backends_referencing_fallback",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "modulo.api.routes.model_backends._list_snapshots_referencing_backend",
+            new=AsyncMock(return_value=[{"snapshot_id": snapshot_id, "pipeline_id": uuid.uuid4()}]),
+        ),
+        patch("modulo.api.routes.model_backends.delete_model_backend") as mock_delete,
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.delete(f"/api/v1/model-backends/{backend_id}")
+
+    assert resp.status_code == 409
+    assert "non-terminal run" in resp.json()["detail"]
+    assert str(snapshot_id) in resp.json()["detail"]
+    mock_delete.assert_not_awaited()
+
+
+def test_delete_model_backend_allowed_when_snapshot_runs_terminal(client: TestClient) -> None:
+    """A backend whose only referencing snapshots are tied to terminal runs
+    hard-deletes normally (204) — deletion protection is scoped to in-flight runs."""
+    from datetime import UTC, datetime
+    from unittest.mock import AsyncMock, patch
+
+    from modulo.api.dependencies import get_db_session
+    from modulo.db.models.model_backend import ModelBackend
+
+    backend_id = uuid.uuid4()
+    now = datetime.now(UTC)
+    mb = ModelBackend(
+        id=backend_id,
+        organisation_id=_ORG_ID,
+        name="test-backend",
+        display_name="Test Backend",
+        provider="openai",
+        model_id="gpt-4o",
+        credentials_ciphertext=b"gAAAAAB",
+        default_params={},
+        visibility="org",
+        tier="native",
+        account_id=_USER_ID,
+    )
+    mb.created_at = now
+    mb.updated_at = now
+
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncMock:
+        yield mock_session
+
+    with (
+        patch(
+            "modulo.api.routes.model_backends.list_backends_referencing_fallback",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "modulo.api.routes.model_backends._list_snapshots_referencing_backend",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch("modulo.api.routes.model_backends.get_model_backend", new=AsyncMock(return_value=mb)),
+        patch("modulo.api.routes.model_backends.delete_model_backend", return_value=True),
+        patch(
+            "modulo.api.routes.model_backends.append_audit_event_isolated",
+            new=AsyncMock(return_value=MagicMock()),
+        ),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.delete(f"/api/v1/model-backends/{backend_id}")
+
+    assert resp.status_code == 204
+
+
 class TestTriggerPaginationValidation:
     """Query-param bounds on the trigger listing endpoints.
 
