@@ -14,6 +14,9 @@ from modulo.api.middleware.sensitive_mask import is_sensitive_env_key, mask_sens
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.runtime_config.store import KNOWN_KEYS, RuntimeConfigStore, get_runtime_config_store
 
+_CODE_RUNTIME_CONFIG_MANAGE = "runtime_config.manage"
+
+
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/runtime-config", tags=["admin-runtime-config"])
@@ -48,7 +51,7 @@ def _build_response(store: RuntimeConfigStore) -> dict[str, Any]:
 
 @router.get("", dependencies=[require_feature("runtime_config")])
 def get_runtime_config(
-    current_user: TenantPrincipal = require_permission("runtime_config.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_RUNTIME_CONFIG_MANAGE),
 ) -> dict[str, Any]:
     try:
         return _build_response(get_runtime_config_store())
@@ -65,7 +68,7 @@ def get_runtime_config(
 @router.put("", dependencies=[require_feature("runtime_config")])
 def set_runtime_config_overrides(
     req: dict[str, Any],
-    current_user: TenantPrincipal = require_permission("runtime_config.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_RUNTIME_CONFIG_MANAGE),
 ) -> dict[str, Any]:
     try:
         store = get_runtime_config_store()
@@ -120,7 +123,7 @@ def set_runtime_config_overrides(
 
 @router.post("/reload", dependencies=[require_feature("runtime_config")])
 def reload_runtime_config(
-    current_user: TenantPrincipal = require_permission("runtime_config.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_RUNTIME_CONFIG_MANAGE),
 ) -> dict[str, Any]:
     try:
         store = get_runtime_config_store()

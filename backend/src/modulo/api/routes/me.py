@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_THIS_FEATURE_NOT_AVAILABLE
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.api.routes.admin_remy import (
@@ -31,6 +32,10 @@ from modulo.db.crud.account import get_account_by_id, update_account_preferences
 from modulo.db.crud.token_family import blacklist_family, list_families_for_account
 from modulo.db.models.remy_skill import RemySkill
 from modulo.db.rls import set_rls_org
+
+_CODE_ROUTES_ME = "routes.me"
+_MSG_ACCOUNT_NOT_FOUND = "Account not found"
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["user"])
@@ -56,14 +61,14 @@ async def get_user_settings(
         async with session.begin():
             account = await get_account_by_id(session, current_user.account_id)
     except ProgrammingError:
-        logger.exception("routes.me")
+        logger.exception(_CODE_ROUTES_ME)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
     if account is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ACCOUNT_NOT_FOUND)
     return account.preferences
 
 
@@ -79,14 +84,14 @@ async def update_user_settings(
             async with session.begin():
                 account = await get_account_by_id(session, current_user.account_id)
         except ProgrammingError:
-            logger.exception("routes.me")
+            logger.exception(_CODE_ROUTES_ME)
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                detail="This feature is not available. Run database migrations to enable it.",
+                detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
             ) from None
 
         if account is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ACCOUNT_NOT_FOUND)
         return account.preferences
     prefs: dict[str, object] = {}
     if req.theme is not None:
@@ -97,10 +102,10 @@ async def update_user_settings(
         async with session.begin():
             return await update_account_preferences(session, current_user.account_id, prefs)
     except ProgrammingError:
-        logger.exception("routes.me")
+        logger.exception(_CODE_ROUTES_ME)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
 
@@ -120,7 +125,7 @@ async def change_password(
         async with session.begin():
             account = await get_account_by_id(session, current_user.account_id)
             if account is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ACCOUNT_NOT_FOUND)
 
             if not account.password_hash or not verify_password(req.current_password, account.password_hash):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
@@ -175,10 +180,10 @@ async def change_password(
                 logger.exception("me.change_password audit write failed")
 
     except ProgrammingError:
-        logger.exception("routes.me")
+        logger.exception(_CODE_ROUTES_ME)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
     return {"detail": "Password changed successfully"}
@@ -198,10 +203,10 @@ async def list_user_skills(
             await set_rls_org(session, current_user.organisation_id)
             skills = await get_user_skills(session, current_user.account_id, current_user.organisation_id)
     except ProgrammingError:
-        logger.exception("routes.me")
+        logger.exception(_CODE_ROUTES_ME)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
     return [_skill_to_response(s) for s in skills]
@@ -230,10 +235,10 @@ async def create_user_skill(
             session.add(skill)
             await session.flush()
     except ProgrammingError:
-        logger.exception("routes.me")
+        logger.exception(_CODE_ROUTES_ME)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
     return _skill_to_response(skill)
@@ -263,10 +268,10 @@ async def update_user_skill(
                 skill.active = req.active
             await session.flush()
     except ProgrammingError:
-        logger.exception("routes.me")
+        logger.exception(_CODE_ROUTES_ME)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
     return _skill_to_response(skill)
@@ -288,10 +293,10 @@ async def delete_user_skill(
     # ── User-level Context Sources ─────────────────────────────────────────
 
     except ProgrammingError:
-        logger.exception("routes.me")
+        logger.exception(_CODE_ROUTES_ME)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
 
@@ -311,10 +316,10 @@ async def get_user_context_sources(
             config = await service.get_effective_config(current_user.organisation_id, current_user.account_id)
             user_overrides = await service.get_user_overrides(current_user.organisation_id, current_user.account_id)
     except ProgrammingError:
-        logger.exception("routes.me")
+        logger.exception(_CODE_ROUTES_ME)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
     return service.build_effective_items(config.context_sources, user_overrides)
@@ -340,10 +345,10 @@ async def set_user_context_source(
             config = await service.get_effective_config(current_user.organisation_id, current_user.account_id)
             user_overrides = await service.get_user_overrides(current_user.organisation_id, current_user.account_id)
     except ProgrammingError:
-        logger.exception("routes.me")
+        logger.exception(_CODE_ROUTES_ME)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
     return service.build_effective_items(config.context_sources, user_overrides)
@@ -361,10 +366,10 @@ async def reset_user_context_sources(
             await service.reset_user_overrides(current_user.organisation_id, current_user.account_id)
             config = await service.get_effective_config(current_user.organisation_id, current_user.account_id)
     except ProgrammingError:
-        logger.exception("routes.me")
+        logger.exception(_CODE_ROUTES_ME)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="This feature is not available. Run database migrations to enable it.",
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
     return service.build_effective_items(config.context_sources, {})

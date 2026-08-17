@@ -90,6 +90,8 @@ _EXPECTED_MAPPING = {
     "eval_regression": ("warning", "org", "eval.regression", "any_scope", True, 336),
     "eval_blocked": ("error", "org", "eval.blocked", "any_scope", True, 168),
     "feedback_pending": ("info", "user", "feedback.pending", "user_only", False, 336),
+    "guardrail_enforcement_gap": ("error", "admin", "guardrails.enforcement_gap", "org_admin", True, 168),
+    "guardrail_kill_switch": ("warning", "admin", "guardrails.kill_switch", "org_admin", True, 168),
 }
 
 
@@ -231,6 +233,31 @@ async def test_feedback_pending_static_action_url_independent_of_payload(
     kwargs = mock_create.await_args.kwargs
     assert kwargs["action_url"] == "/feedback/inbox"
     assert kwargs["body"] == "A feedback record is pending your review."
+
+
+async def test_guardrail_enforcement_gap_templates_resolved(mapper: NotificationEventMapper) -> None:
+    """The enforcement-gap alert pages the operator straight to the run."""
+    run_id = str(uuid.uuid4())
+    payload = {"guardrail": "no-secrets", "reason": "soft_deleted", "run_id": run_id}
+    _, mock_create = await _call(mapper, "guardrail_enforcement_gap", payload=payload)
+    kwargs = mock_create.await_args.kwargs
+    assert kwargs["title"] == "Guardrail enforcement gap — no-secrets"
+    assert kwargs["body"] == (
+        'Guardrail "no-secrets" could not be evaluated (soft_deleted) and is not enforcing. See the run for details.'
+    )
+    assert kwargs["action_url"] == f"/runs/{run_id}"
+
+
+async def test_guardrail_kill_switch_templates_resolved(mapper: NotificationEventMapper) -> None:
+    """The kill-switch alert is static (no payload fields, no action URL)."""
+    _, mock_create = await _call(mapper, "guardrail_kill_switch")
+    kwargs = mock_create.await_args.kwargs
+    assert kwargs["title"] == "Guardrails downgraded to observe (kill-switch enabled)"
+    assert kwargs["body"] == (
+        "The org-wide guardrails kill-switch was enabled: every bound guardrail is now "
+        "observe-only (shadow mode). Guardrails are computed and logged but never block or redact."
+    )
+    assert kwargs["action_url"] is None
 
 
 # ---------------------------------------------------------------------------

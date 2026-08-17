@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_UNEXPECTED_ERROR_NO_PERIOD
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
@@ -243,7 +244,7 @@ async def publish_primitive_endpoint(
         _log.exception("registry.publish_primitive.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
     return RegistryEntryResponse.model_validate(entry)
 
@@ -329,7 +330,7 @@ async def download_registry_primitive_endpoint(
         _log.exception("registry.download_primitive.unexpected_error", extra={"slug": slug})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
 
     return PullResponse(
@@ -466,7 +467,7 @@ async def publish_primitive_v2(
         _log.exception("registry.publish_primitive_v2.unexpected_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
 
     return PublishResponseV2(
@@ -615,7 +616,7 @@ async def verify_registry_primitive_v2(
             )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="An unexpected error occurred",
+                detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
             ) from e
     else:
         verified = verify_primitive_signature(entry)

@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -84,7 +85,7 @@ class CodeClimateConnector(ConnectorBase):
         resp = await c.get("/repos", params=params)
         resp.raise_for_status()
         body = resp.json()
-        data: list[dict[str, Any]] = body.get("data", [])
+        data: list[dict[str, Any]] = _safe_records(body, "data")
         return ConnectorResult(records=data[: q.limit] if q.limit else data, total=len(data))
 
     async def _get_repo(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -107,7 +108,7 @@ class CodeClimateConnector(ConnectorBase):
         resp = await c.get(f"/repos/{repo_id}/snapshots", params=params)
         resp.raise_for_status()
         body = resp.json()
-        data: list[dict[str, Any]] = body.get("data", [])
+        data: list[dict[str, Any]] = _safe_records(body, "data")
         return ConnectorResult(records=data[: q.limit] if q.limit else data, total=len(data))
 
     async def _get_snapshot(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -133,7 +134,7 @@ class CodeClimateConnector(ConnectorBase):
         resp = await c.get(f"/repos/{repo_id}/test_reports", params=params)
         resp.raise_for_status()
         body = resp.json()
-        data: list[dict[str, Any]] = body.get("data", [])
+        data: list[dict[str, Any]] = _safe_records(body, "data")
         return ConnectorResult(records=data[: q.limit] if q.limit else data, total=len(data))
 
     async def _get_test_report(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:

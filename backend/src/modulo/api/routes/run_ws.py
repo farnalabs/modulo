@@ -28,6 +28,7 @@ from redis.asyncio import Redis
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from modulo.api.constants import MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import _get_engine
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -38,6 +39,9 @@ from modulo.db.crud.run import get_run
 from modulo.db.models.run import TERMINAL_STATUSES
 from modulo.db.rls import set_rls_org
 from modulo.settings import get_settings
+
+_CODE_RUN_WS_RUN_WEBSOCKET = "run_ws.run_websocket"
+
 
 _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/runs", tags=["runs-ws"])
@@ -64,7 +68,7 @@ def _sanitize_event(event: RunEvent) -> dict[str, Any]:
 
 
 @router.websocket("/{run_id}/ws")
-@handle_db_errors("run_ws.run_websocket")
+@handle_db_errors(_CODE_RUN_WS_RUN_WEBSOCKET)
 async def run_websocket(
     ws: WebSocket,
     run_id: uuid.UUID,
@@ -91,7 +95,7 @@ async def run_websocket(
     except WsTokenExpiredError:
         payload = None
     except Exception as exc:
-        _log.exception("run_ws.run_websocket")
+        _log.exception(_CODE_RUN_WS_RUN_WEBSOCKET)
         _log.warning("ws_token.consume_failed", extra={"error": str(exc)})
         payload = None
     finally:
@@ -126,18 +130,18 @@ async def run_websocket(
             await set_rls_org(session, principal.organisation_id)
             run = await get_run(session, run_id)
     except ProgrammingError:
-        _log.exception("run_ws.run_websocket")
+        _log.exception(_CODE_RUN_WS_RUN_WEBSOCKET)
         await ws.send_json({"error": "migration_required", "detail": "Run database migrations to enable this feature."})
         await ws.close(code=1011)
         return
     except SQLAlchemyError:
-        _log.exception("run_ws.run_websocket")
+        _log.exception(_CODE_RUN_WS_RUN_WEBSOCKET)
         await ws.send_json({"error": "db_unavailable", "detail": "Database temporarily unavailable."})
         await ws.close(code=1011)
         return
     except Exception:
         _log.exception("run_ws.db_check_failed")
-        await ws.send_json({"error": "internal_error", "detail": "An unexpected error occurred."})
+        await ws.send_json({"error": "internal_error", "detail": MSG_UNEXPECTED_ERROR})
         await ws.close(code=1011)
         return
 

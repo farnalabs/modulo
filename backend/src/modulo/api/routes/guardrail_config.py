@@ -47,10 +47,13 @@ from modulo.core.guardrails.config import (
     to_eval_config,
     utc_now_iso,
 )
-from modulo.db.crud.guardrail_config import get_guardrail_pin, set_guardrail_pin
+from modulo.db.crud.guardrail_config import get_guardrail_pin, load_pipeline_guardrail_rows, set_guardrail_pin
 from modulo.db.models.eval_definition import EvalDefinition as EvalDefinitionRow
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.rls import set_rls_org
+
+_CODE_EVAL_DEFINITION_CREATE = "eval.definition.create"
+
 
 _log = logging.getLogger(__name__)
 
@@ -216,18 +219,10 @@ async def _reconcile_guardrail_rows(
     pipelines_rows: list[tuple[Pipeline, dict[str, EvalDefinitionRow]]] = []
     colliding: list[str] = []
     for pipeline in pipelines:
-        rows = (
-            (
-                await session.execute(
-                    select(EvalDefinitionRow).where(
-                        EvalDefinitionRow.pipeline_id == pipeline.id,
-                        EvalDefinitionRow.organisation_id == org_id,
-                        EvalDefinitionRow.eval_type == "guardrail",
-                    )
-                )
-            )
-            .scalars()
-            .all()
+        rows = await load_pipeline_guardrail_rows(
+            session,
+            pipeline_id=pipeline.id,
+            organisation_id=org_id,
         )
         rows_by_name = {row.name: row for row in rows}
         pipelines_rows.append((pipeline, rows_by_name))
@@ -240,7 +235,11 @@ async def _reconcile_guardrail_rows(
     for pipeline, rows_by_name in pipelines_rows:
         for gid, item in proposed_by_id.items():
             row = rows_by_name.get(gid)
-            config_json = to_eval_config(item)
+            config_json = to_eval_config(
+                item,
+                max_guardrails_per_node=config_set.max_guardrails_per_node,
+                guardrail_timeout_seconds=config_set.guardrail_timeout_seconds,
+            )
             if row is None:
                 session.add(
                     EvalDefinitionRow(
@@ -343,7 +342,7 @@ async def get_guardrail_config(
 async def propose_guardrail_config(
     req: ProposeGuardrailConfigRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("eval.definition.create"),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_DEFINITION_CREATE),
 ) -> GuardrailProposalResponse:
     """Validate + hash a proposed config set, diff it, and store the proposal."""
     try:
@@ -401,7 +400,7 @@ async def propose_guardrail_config(
 @handle_db_errors("guardrail_config.apply")
 async def apply_guardrail_config(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("eval.definition.create"),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_DEFINITION_CREATE),
 ) -> GuardrailApplyResponse:
     """Apply the pending proposal — the approve/merge step (admin only).
 
@@ -489,7 +488,7 @@ async def apply_guardrail_config(
 @handle_db_errors("guardrail_config.reject")
 async def reject_guardrail_config(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("eval.definition.create"),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_DEFINITION_CREATE),
 ) -> GuardrailRejectResponse:
     """Discard the pending proposal (admin only). 409 when none exists.
 

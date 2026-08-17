@@ -25,6 +25,14 @@ class TestFilesystemConnector:
         assert result.ok is False
         assert "does not exist" in result.detail
 
+    async def test_health_check_fails_on_file_base(self, tmp_path: Path) -> None:
+        base_file = tmp_path / "not_a_dir"
+        base_file.write_text("x", encoding="utf-8")
+        c = FilesystemConnector(base_path=str(base_file))
+        result = await c.health_check()
+        assert result.ok is False
+        assert "not a directory" in result.detail
+
     async def test_browse_root(self, fs_connector: FilesystemConnector) -> None:
         result = await fs_connector.query(ConnectorQuery(resource="directory"))
         assert_result_shape(result)
@@ -82,6 +90,20 @@ class TestFilesystemConnector:
     async def test_invalid_path_empty(self, fs_connector: FilesystemConnector) -> None:
         with pytest.raises(IsADirectoryError, match="Cannot read directory as file"):
             await fs_connector.query(ConnectorQuery(resource="file", filters={"path": ""}))
+
+    async def test_write_requires_path_key(self, fs_connector: FilesystemConnector) -> None:
+        with pytest.raises(ValueError, match="requires 'path'"):
+            await fs_connector.write(ConnectorPayload(resource="file", data={"content": "x"}))
+
+    async def test_write_requires_content_key(self, fs_connector: FilesystemConnector) -> None:
+        with pytest.raises(ValueError, match="requires 'content'"):
+            await fs_connector.write(ConnectorPayload(resource="file", data={"path": "x.txt"}))
+
+    async def test_unknown_write_resource_raises(self, fs_connector: FilesystemConnector) -> None:
+        with pytest.raises(ValueError, match="Unsupported filesystem write resource"):
+            await fs_connector.write(
+                ConnectorPayload(resource="__nonexistent_write_resource__", data={"path": "x", "content": "x"})
+            )
 
     async def test_read_directory_as_file_raises(self, fs_connector: FilesystemConnector) -> None:
         await fs_connector.write(ConnectorPayload(resource="file", data={"path": "sub/inner.txt", "content": "x"}))

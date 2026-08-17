@@ -1,6 +1,5 @@
 """API key management — create, list, revoke. Returns MCP config snippet."""
 
-import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -11,16 +10,24 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR, MSG_RESOURCE_ALREADY_EXISTS
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
-from modulo.auth.api_key import create_api_key, list_api_keys, revoke_api_key, update_api_key
+from modulo.auth.api_key import _UNSET, create_api_key, list_api_keys, revoke_api_key, update_api_key
 from modulo.auth.dependencies import get_current_tenant_user, resolve_role_from_membership
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, org_role_level
-from modulo.core.audit_logger import append_audit_event
+from modulo.core.audit_logger import append_audit_event_isolated
 from modulo.core.feature_flags import resolve_plan_context
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
+
+_CODE_API_KEYS_CREATE_API = "api_keys.create_api_key_endpoint"
+_MSG_API_KEYS_NOT_AVAILABLE = "API keys are not available. Run database migrations to enable this feature."
+_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE = "Database temporarily unavailable. Please try again."
+_CODE_API_KEYS_UPDATE_API = "api_keys.update_api_key_endpoint"
+_CODE_API_KEYS_REVOKE_API = "api_keys.revoke_api_key_endpoint"
+
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +159,7 @@ async def _enforce_mint_cap(session: AsyncSession, principal: TenantPrincipal, r
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(deny_break_glass_mint)],
 )
-@handle_db_errors("api_keys.create_api_key_endpoint")
+@handle_db_errors(_CODE_API_KEYS_CREATE_API)
 async def create_api_key_endpoint(
     req: ApiKeyCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -198,23 +205,23 @@ async def create_api_key_endpoint(
                 expires_at=expires_at,
             )
     except IntegrityError:
-        logger.exception("api_keys.create_api_key_endpoint")
+        logger.exception(_CODE_API_KEYS_CREATE_API)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        logger.exception("api_keys.create_api_key_endpoint")
+        logger.exception(_CODE_API_KEYS_CREATE_API)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="API keys are not available. Run database migrations to enable this feature.",
+            detail=_MSG_API_KEYS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("api_keys.create_api_key_endpoint")
+        logger.exception(_CODE_API_KEYS_CREATE_API)
         logger.warning("create_api_key SQLAlchemyError", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable. Please try again.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -222,7 +229,7 @@ async def create_api_key_endpoint(
         logger.exception("Unexpected error in create_api_key_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     # PRD §8.12 ``api_key_created``: key minting was never audited. Written in a
@@ -230,30 +237,19 @@ async def create_api_key_endpoint(
     # so a broken audit append never blocks a successful key creation. RLS context
     # (SET LOCAL) reverts on COMMIT, so it must be re-established in this fresh
     # transaction or the STRICT-RLS audit INSERT is rejected (see admin_create_team).
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-            await append_audit_event(
-                session,
-                org_id=principal.organisation_id,
-                event_type="api_key_created",
-                actor_user_id=principal.account_id,
-                resource_type="api_key",
-                resource_id=key.id,
-                payload_json={
-                    "name": name,
-                    "role": req.role,
-                    "team_id": str(team_id) if team_id else None,
-                },
-            )
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.warning(
-            "api_keys.create_audit_failed",
-            extra={"org_id": str(principal.organisation_id), "key_id": str(key.id)},
-        )
+    await append_audit_event_isolated(
+        session,
+        principal,
+        resource_type="api_key",
+        event_type="api_key_created",
+        resource_id=key.id,
+        payload={
+            "name": name,
+            "role": req.role,
+            "team_id": str(team_id) if team_id else None,
+        },
+        log_key="api_keys.create_audit_failed",
+    )
 
     return ApiKeyCreatedResponse(
         id=key.id,
@@ -281,14 +277,14 @@ async def list_api_keys_endpoint(
         logger.exception("api_keys.list_api_keys_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="API keys are not available. Run database migrations to enable this feature.",
+            detail=_MSG_API_KEYS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("api_keys.list_api_keys_endpoint")
         logger.warning("list_api_keys SQLAlchemyError", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable. Please try again.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -296,12 +292,12 @@ async def list_api_keys_endpoint(
         logger.exception("Unexpected error in list_api_keys_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
 
 @router.put("/{key_id}", dependencies=[Depends(deny_break_glass_mint)])
-@handle_db_errors("api_keys.update_api_key_endpoint")
+@handle_db_errors(_CODE_API_KEYS_UPDATE_API)
 async def update_api_key_endpoint(
     key_id: uuid.UUID,
     req: ApiKeyUpdate,
@@ -322,11 +318,18 @@ async def update_api_key_endpoint(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="API key name must not be blank",
             )
-    team_id: uuid.UUID | None = None
-    if req.team_id is not None:
-        await _require_team_rbac(settings, session)
-        _require_admin(principal)
-        team_id = uuid.UUID(req.team_id)
+    team_id: uuid.UUID | object | None = _UNSET
+    if "team_id" in req.model_fields_set:
+        if req.team_id is not None:
+            await _require_team_rbac(settings, session)
+            _require_admin(principal)
+            team_id = uuid.UUID(req.team_id)
+        else:
+            # Explicitly clearing the team scope is an admin operation, same as
+            # setting one — but it needs no team-tier feature check (removing
+            # scope never enables a team feature).
+            _require_admin(principal)
+            team_id = None
     expires_at: datetime | None = None
     if req.expires_at:
         expires_at = _parse_expires_at(req.expires_at)
@@ -351,26 +354,26 @@ async def update_api_key_endpoint(
                 expires_at=expires_at,
             )
     except IntegrityError:
-        logger.exception("api_keys.update_api_key_endpoint")
+        logger.exception(_CODE_API_KEYS_UPDATE_API)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        logger.exception("api_keys.update_api_key_endpoint")
+        logger.exception(_CODE_API_KEYS_UPDATE_API)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="API keys are not available. Run database migrations to enable this feature.",
+            detail=_MSG_API_KEYS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("api_keys.update_api_key_endpoint")
+        logger.exception(_CODE_API_KEYS_UPDATE_API)
         logger.warning(
             "update_api_key SQLAlchemyError",
             extra={"org_id": str(principal.organisation_id), "key_id": str(key_id)},
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable. Please try again.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -378,7 +381,7 @@ async def update_api_key_endpoint(
         logger.exception("Unexpected error in update_api_key_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     if key is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
@@ -392,7 +395,7 @@ async def update_api_key_endpoint(
 
 
 @router.delete("/{key_id}", response_model=ApiKeyRevokeResponse, dependencies=[Depends(deny_break_glass_mint)])
-@handle_db_errors("api_keys.revoke_api_key_endpoint")
+@handle_db_errors(_CODE_API_KEYS_REVOKE_API)
 async def revoke_api_key_endpoint(
     key_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -404,26 +407,26 @@ async def revoke_api_key_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             revoked = await revoke_api_key(session, key_id, principal.organisation_id)
     except IntegrityError:
-        logger.exception("api_keys.revoke_api_key_endpoint")
+        logger.exception(_CODE_API_KEYS_REVOKE_API)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        logger.exception("api_keys.revoke_api_key_endpoint")
+        logger.exception(_CODE_API_KEYS_REVOKE_API)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="API keys are not available. Run database migrations to enable this feature.",
+            detail=_MSG_API_KEYS_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        logger.exception("api_keys.revoke_api_key_endpoint")
+        logger.exception(_CODE_API_KEYS_REVOKE_API)
         logger.warning(
             "revoke_api_key SQLAlchemyError",
             extra={"org_id": str(principal.organisation_id), "key_id": str(key_id)},
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable. Please try again.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -431,7 +434,7 @@ async def revoke_api_key_endpoint(
         logger.exception("Unexpected error in revoke_api_key_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     if not revoked:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
@@ -441,26 +444,15 @@ async def revoke_api_key_endpoint(
     # so a broken audit append never fails a completed revocation. RLS context
     # (SET LOCAL) reverts on COMMIT, so it must be re-established in this fresh
     # transaction or the STRICT-RLS audit INSERT is rejected (see admin_create_team).
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-            await append_audit_event(
-                session,
-                org_id=principal.organisation_id,
-                event_type="api_key_revoked",
-                actor_user_id=principal.account_id,
-                resource_type="api_key",
-                resource_id=key_id,
-                payload_json={"revoked_by": str(principal.account_id)},
-            )
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.warning(
-            "api_keys.revoke_audit_failed",
-            extra={"org_id": str(principal.organisation_id), "key_id": str(key_id)},
-        )
+    await append_audit_event_isolated(
+        session,
+        principal,
+        resource_type="api_key",
+        event_type="api_key_revoked",
+        resource_id=key_id,
+        payload={"revoked_by": str(principal.account_id)},
+        log_key="api_keys.revoke_audit_failed",
+    )
 
     return ApiKeyRevokeResponse(id=key_id, revoked=True)
 
@@ -488,5 +480,5 @@ async def mcp_config_endpoint(
         logger.exception("Unexpected error in mcp_config_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None

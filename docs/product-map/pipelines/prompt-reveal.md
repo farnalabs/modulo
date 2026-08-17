@@ -105,6 +105,7 @@ sensitive data.
   (PRD §8.9 calls for Redis-backed token mechanism — only the DOM timer exists)
 
 ## QA History
+- **2026-08-15 (coverage sweep partial-small-b): Verified the remaining unchecked behaviour “Agent editor UI includes prompt_always_visible toggle” is a genuine gap — the Agent API CRUD supports the field but no UI toggle exists (already in Known Gaps). All other behaviours verified against runs.py, agent.py models, RunDetailView.vue, and test_prompt_reveal.py. 50/51 behaviours covered.**
 
 ### 2026-07-03 — Cross-cutting QA (feat-pipelines-prompt-reveal-104)
 - **Finding 1 (CRITICAL)**: `reveal_node_prompt` endpoint didn't catch `ProgrammingError`

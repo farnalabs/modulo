@@ -22,6 +22,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from modulo.api.constants import (
+    MSG_DB_OPERATION_FAILED,
+    MSG_FEATURE_NOT_AVAILABLE,
+    MSG_INTERNAL_SERVER_ERROR,
+)
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import (
     _get_engine,
@@ -64,6 +69,10 @@ from modulo.db.rls import set_rls_org
 from modulo.db.settings_resolver import ensure_triggers_resumable
 from modulo.settings import get_settings
 from modulo.version import get_version
+
+_CODE_WEBHOOKS_RECEIVE_WEBHOOK = "webhooks.receive_webhook"
+_MSG_TRIGGER_NOT_FOUND = "Trigger not found"
+
 
 _log = logging.getLogger(__name__)
 
@@ -137,7 +146,7 @@ async def _dispatch_webhook_run(run_id: str, org_id: str) -> None:
 
 
 @router.post("/{trigger_id}/webhook", status_code=status.HTTP_202_ACCEPTED)
-@handle_db_errors("webhooks.receive_webhook")
+@handle_db_errors(_CODE_WEBHOOKS_RECEIVE_WEBHOOK)
 async def receive_webhook(
     trigger_id: uuid.UUID,
     request: Request,
@@ -172,7 +181,7 @@ async def receive_webhook(
         if not isinstance(raw_payload, dict):
             raise TypeError("not a JSON object")
     except Exception as exc:
-        _log.exception("webhooks.receive_webhook")
+        _log.exception(_CODE_WEBHOOKS_RECEIVE_WEBHOOK)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Request body must be a JSON object",
@@ -272,9 +281,9 @@ async def receive_webhook(
                 # acked-as-accepted, and no run was created.
                 guardrail_block_detail = exc.detail
     except TriggerNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found") from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND) from exc
     except TriggerInactiveError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found") from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND) from exc
     except TimestampExpiredError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -308,16 +317,16 @@ async def receive_webhook(
         )
         return {"run_id": None, "status": "queued", "detail": "Pipeline busy — queued for retry"}
     except ProgrammingError:
-        _log.exception("webhooks.receive_webhook")
+        _log.exception(_CODE_WEBHOOKS_RECEIVE_WEBHOOK)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("webhooks.receive_webhook")
+        _log.exception(_CODE_WEBHOOKS_RECEIVE_WEBHOOK)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -325,7 +334,7 @@ async def receive_webhook(
         _log.exception("receive_webhook failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     if guardrail_block_detail is not None:
@@ -339,6 +348,19 @@ async def receive_webhook(
         )
 
     run_id = run.id
+    # FAR-213 webhook ack-after-validate semantics: the delivery is validated
+    # (including the ingestion guardrail pass) BEFORE a success ack. A
+    # guardrail-blocked run (terminal eval_failed / eval_blocked) is created
+    # only so the failure is visible in the run list — it is NEVER dispatched
+    # and must not get a false "accepted" ack, so ack with a non-success 422.
+    # The run + TriggerEvent rows stay committed (the trigger event records the
+    # delivery attempt against the blocked run id).
+    if run.error_code == "eval_blocked":
+        _log.info("webhooks.receive_webhook.guardrail_blocked run=%s", run_id)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Delivery rejected: payload violates a bound guardrail (run created as eval_failed for visibility)",
+        )
     background_tasks.add_task(_dispatch_webhook_run, str(run_id), str(org_id))
 
     return {"run_id": str(run_id), "status": "accepted"}
@@ -497,9 +519,9 @@ async def replay_webhook(
     except ReplayNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger event not found") from exc
     except TriggerNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found") from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND) from exc
     except TriggerInactiveError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found") from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND) from exc
     except DuplicateWebhookError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -521,13 +543,13 @@ async def replay_webhook(
         _log.exception("webhooks.replay_webhook")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("webhooks.replay_webhook")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -535,10 +557,19 @@ async def replay_webhook(
         _log.exception("replay_webhook failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     run_id = run.id
+    # FAR-213 webhook ack-after-validate semantics (see receive_webhook): a
+    # guardrail-blocked replayed delivery is acked with a non-success 422, never
+    # a false "accepted" — the run + TriggerEvent rows stay committed.
+    if run.error_code == "eval_blocked":
+        _log.info("webhooks.replay_webhook.guardrail_blocked run=%s", run_id)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Delivery rejected: payload violates a bound guardrail (run created as eval_failed for visibility)",
+        )
     background_tasks.add_task(_dispatch_webhook_run, str(run_id), str(org_id))
 
     return {"run_id": str(run_id), "status": "accepted"}
@@ -573,13 +604,13 @@ async def cleanup_expired(
         _log.exception("webhooks.cleanup_expired")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("webhooks.cleanup_expired")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except Exception:
         _log.exception("Cleanup job failed")

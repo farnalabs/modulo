@@ -127,7 +127,7 @@ class CircleCIConnector(CIRunnerBase):
         async with self._client() as client:
             wf_r = await client.get(f"/pipeline/{run_id}/workflow")
             wf_r.raise_for_status()
-            workflows: list[dict[str, Any]] = wf_r.json().get("items", [])
+            workflows: list[dict[str, Any]] = _safe_records(wf_r.json(), "items")
 
             all_lines: list[str] = []
             for wf in workflows:
@@ -137,7 +137,7 @@ class CircleCIConnector(CIRunnerBase):
 
                 job_r = await client.get(f"/workflow/{wf_id}/job")
                 job_r.raise_for_status()
-                jobs: list[dict[str, Any]] = job_r.json().get("items", [])
+                jobs: list[dict[str, Any]] = _safe_records(job_r.json(), "items")
 
                 for job in jobs:
                     job_name = job.get("name", "")
@@ -148,7 +148,7 @@ class CircleCIConnector(CIRunnerBase):
                             f"/project/{project_slug}/{job_number}/outputs",
                         )
                         if out_r.status_code == 200:
-                            outputs = out_r.json().get("items", [])
+                            outputs = _safe_records(out_r.json(), "items")
                             all_lines.append(f"  Job: {job_name} (#{job_number})")
                             for out in outputs:
                                 msg = out.get("message", "") or ""

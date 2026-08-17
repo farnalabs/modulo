@@ -138,6 +138,16 @@ class SupersededNodeError(Exception):
     """
 
 
+class OutputSchemaValidationError(ValueError):
+    """A node's output failed validation against its output_schema_json.
+
+    Raised by ``_validate_against_schema`` for manual-node resume output and
+    agent-node output. The executor maps this to the domain-specific
+    ``schema_validation_failure`` error code (§8.9 error table — "The output
+    did not match the expected format.") instead of a raw ``ValueError``.
+    """
+
+
 _is_truthy = bool
 
 # Cap for the stored artifact stdout/stderr blobs. 512KB keeps storage bounded
@@ -441,26 +451,42 @@ async def _fetch_sandbox_log_tail(sandbox_id: str | None, limit: int = 60) -> st
         entries = payload.get("logEntries") if isinstance(payload, dict) else payload
         if not isinstance(entries, list):
             return raw[:4000]
-        preferred: list[str] = []
-        rest: list[str] = []
-        preferred_levels = {"info", "warn", "warning", "error"}
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            msg = entry.get("message")
-            if msg is None:
-                msg = entry.get("fields")
-            if not msg:
-                continue
-            text = str(msg)
-            if isinstance(entry.get("level"), str) and entry["level"].lower() in preferred_levels:
-                preferred.append(text)
-            else:
-                rest.append(text)
-        combined = (preferred + rest)[-limit:]
+        combined = _combine_log_entries(entries, limit)
         return "\n".join(combined)[-6000:]
     except Exception:
         return raw[:4000]
+
+
+def _combine_log_entries(entries: list[Any], limit: int) -> list[str]:
+    """Split E2B log entries into preferred-level and rest, then tail the union.
+
+    Entries at informative levels (info/warn/warning/error) sort ahead of the
+    remainder so the most actionable lines survive the ``limit`` window.
+    """
+    preferred: list[str] = []
+    rest: list[str] = []
+    preferred_levels = {"info", "warn", "warning", "error"}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        text = _log_entry_text(entry)
+        if not text:
+            continue
+        if isinstance(entry.get("level"), str) and entry["level"].lower() in preferred_levels:
+            preferred.append(text)
+        else:
+            rest.append(text)
+    return (preferred + rest)[-limit:]
+
+
+def _log_entry_text(entry: dict[str, Any]) -> str:
+    """Extract the human-readable text of one E2B log entry."""
+    msg = entry.get("message")
+    if msg is None:
+        msg = entry.get("fields")
+    if not msg:
+        return ""
+    return str(msg)
 
 
 def _bounded_tail(text: str, limit: int) -> str:
@@ -799,22 +825,7 @@ async def _persist_raw_output_marker(
                     return
                 markers = dict(run.raw_output_markers) if isinstance(run.raw_output_markers, dict) else {}
                 key = attempt_key or f"run:{run_id}:node:{node_id}:fallback"
-                existing = markers.get(key)
-                persisted_marker: dict[str, Any] = marker
-                if isinstance(existing, dict):
-                    # Monotone preservation: a prior attempt's evidence is never
-                    # wiped by a retry. pr_url is preserved as-is; FAR-228
-                    # ``delivery_done`` is OR'd so a retry marker WITHOUT the
-                    # sentinel can never unset a prior ``delivery_done=True`` —
-                    # an explicit False is never written.
-                    preserved: dict[str, Any] = {}
-                    if existing.get("pr_url"):
-                        preserved["pr_url"] = existing["pr_url"]
-                    if existing.get("delivery_done") or marker.get("delivery_done"):
-                        preserved["delivery_done"] = True
-                    if preserved:
-                        persisted_marker = dict(marker)
-                        persisted_marker.update(preserved)
+                persisted_marker = _merge_existing_raw_output_marker(marker, markers.get(key))
                 markers[key] = persisted_marker
                 run.raw_output_markers = markers
                 await session.flush()
@@ -844,6 +855,28 @@ async def _persist_raw_output_marker(
             "sandbox_agent.raw_output_marker_persist_timeout_or_error",
             extra={"run_id": run_id, "node_id": node_id, "attempt_key": attempt_key},
         )
+
+
+def _merge_existing_raw_output_marker(marker: dict[str, Any], existing: Any) -> dict[str, Any]:
+    """Monotone preservation: a prior attempt's evidence is never wiped by a retry.
+
+    A prior marker's non-empty ``pr_url`` and an OR'd ``delivery_done`` are
+    retained; all other marker fields come from the new ``marker`` unchanged
+    (pr_url is preserved as-is so a retry's empty pr_url never wipes
+    attempt-1's evidence).
+    """
+    if not isinstance(existing, dict):
+        return marker
+    preserved: dict[str, Any] = {}
+    if existing.get("pr_url"):
+        preserved["pr_url"] = existing["pr_url"]
+    if existing.get("delivery_done") or marker.get("delivery_done"):
+        preserved["delivery_done"] = True
+    if not preserved:
+        return marker
+    merged = dict(marker)
+    merged.update(preserved)
+    return merged
 
 
 def _idempotency_gate_skipped_envelope(node_id: str) -> dict[str, Any]:
@@ -1056,43 +1089,15 @@ async def _run_conformance_gate(
     if session_factory is None or not pipeline_id_raw:
         return False
     if state.get("_conformance_blocked_node") == node_id:
-        # Resume after a human reviewed THIS node's conformance block. The
-        # marker was stamped into state just before the interrupt. Only THIS
-        # branch may skip the re-check, and only for a human override.
-        decision = state.get("_hitl_decision")
-        action = decision.get("action") if isinstance(decision, dict) else None
-        if action == "rejected":
-            # Reject -> the run FAILS CLOSED: the capability the block
-            # protected is still unavailable, so the node must NOT execute.
-            # GuardrailBlockedError is mapped by the executor to terminal
-            # ``eval_failed``/``eval_blocked`` (never a resume).
-            from modulo.core.guardrails import GuardrailBlockedError
+        return _handle_conformance_resume(state, node_id)
 
-            raise GuardrailBlockedError(
-                f"conformance_gate_{node_id}",
-                "capability conformance gate was rejected by the human reviewer; the run fails closed",
-            )
-        # approved / deliver_manual -> documented human override: clear the
-        # marker (so a later foreign resume replay of this node re-runs the
-        # real check) and continue with normal execution.
-        state["_conformance_blocked_node"] = None
-        return False
-    try:
-        org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
-    except (TypeError, ValueError):
-        org_uuid = None
+    org_uuid = _parse_uuid_opt(org_id_raw)
     if org_uuid is None:
         return False
-    try:
-        pipeline_uuid = uuid.UUID(str(pipeline_id_raw))
-    except (TypeError, ValueError):
+    pipeline_uuid = _parse_uuid_opt(pipeline_id_raw)
+    if pipeline_uuid is None:
         return False
-    env_profile_uuid: uuid.UUID | None = None
-    if environment_profile_id is not None:
-        try:
-            env_profile_uuid = uuid.UUID(str(environment_profile_id))
-        except (TypeError, ValueError):
-            env_profile_uuid = None
+    env_profile_uuid = _parse_uuid_opt(environment_profile_id)
 
     from modulo.core.guardrails.conformance import check_node_start
 
@@ -1108,31 +1113,7 @@ async def _run_conformance_gate(
         claims_load_failed=claims_load_failed,
     )
     if result.blocked:
-        await _append_conformance_audit(
-            session_factory,
-            org_id=org_uuid,
-            run_id=state.get("_run_id"),
-            node_id=node_id,
-            detail=result.detail,
-            state=result.state,
-            event_type="guardrail.conformance_blocked_midrun",
-        )
-        # Stamp the per-node marker so the resume path can tell THIS node's
-        # conformance block apart from any other gate's resume decision
-        # (``_hitl_decision`` persists in state for the rest of the run).
-        # Mutations before ``interrupt()`` are persisted by the checkpointer
-        # (same pattern as ``_hitl_gate`` / ``_manual_node``).
-        state["_conformance_blocked_node"] = node_id
-        interrupt(
-            {
-                "gate_id": result.gate_id,
-                "reason": result.detail,
-                "node_id": node_id,
-                "conformance_state": result.state,
-                "conformance_blocked": True,
-            }
-        )
-        return True
+        return await _handle_conformance_block(session_factory, state, node_id, org_uuid, result)
     if result.warned:
         # Advisory (warn/observe) guardrails never block — log + audit only.
         await _append_conformance_audit(
@@ -1145,6 +1126,64 @@ async def _run_conformance_gate(
             event_type="guardrail.conformance_warned_midrun",
         )
     return False
+
+
+def _handle_conformance_resume(state: dict[str, Any], node_id: str) -> bool:
+    """Route a human's decision after a conformance block (True: fail closed).
+
+    On ``rejected`` the run FAILS CLOSED: the capability the block protected is
+    still unavailable, so the node must NOT execute. ``GuardrailBlockedError`` is
+    mapped by the executor to terminal ``eval_failed``/``eval_blocked`` (never a
+    resume). ``approved``/``deliver_manual`` is the documented human override:
+    the marker is cleared (so a later foreign resume replay of this node re-runs
+    the real check) and normal execution continues.
+    """
+    decision = state.get("_hitl_decision")
+    action = decision.get("action") if isinstance(decision, dict) else None
+    if action == "rejected":
+        from modulo.core.guardrails import GuardrailBlockedError
+
+        raise GuardrailBlockedError(
+            f"conformance_gate_{node_id}",
+            "capability conformance gate was rejected by the human reviewer; the run fails closed",
+        )
+    state["_conformance_blocked_node"] = None
+    return False
+
+
+async def _handle_conformance_block(
+    session_factory: Callable[..., Any],
+    state: dict[str, Any],
+    node_id: str,
+    org_uuid: uuid.UUID,
+    result: Any,
+) -> bool:
+    """Audit + stamp the per-node block marker, then raise the HITL interrupt."""
+    await _append_conformance_audit(
+        session_factory,
+        org_id=org_uuid,
+        run_id=state.get("_run_id"),
+        node_id=node_id,
+        detail=result.detail,
+        state=result.state,
+        event_type="guardrail.conformance_blocked_midrun",
+    )
+    # Stamp the per-node marker so the resume path can tell THIS node's
+    # conformance block apart from any other gate's resume decision
+    # (``_hitl_decision`` persists in state for the rest of the run).
+    # Mutations before ``interrupt()`` are persisted by the checkpointer
+    # (same pattern as ``_hitl_gate`` / ``_manual_node``).
+    state["_conformance_blocked_node"] = node_id
+    interrupt(
+        {
+            "gate_id": result.gate_id,
+            "reason": result.detail,
+            "node_id": node_id,
+            "conformance_state": result.state,
+            "conformance_blocked": True,
+        }
+    )
+    return True
 
 
 async def _append_conformance_audit(
@@ -1767,6 +1806,37 @@ async def _wait_command_with_idle_watchdog(
                 except Exception:
                     _log.exception("sandbox_agent.idle_watchdog_kill_failed")
                 return None, f"agent produced no output for {idle_timeout:.0f}s"
+
+
+# FAR-227: the E2B sandbox wrapper's fallback echo written to /home/user/output.json
+# when the opencode session dies without producing output. It is a PLACEHOLDER,
+# NOT an agent verdict — the agent never spoke; the session was interrupted. When
+# this echo is detected, the node must NOT be classified as ``agent.failed``
+# (a genuine self-declared verdict, non-retryable) — the session death is a
+# transient sandbox infra failure, routed to the retryable ``sandbox.no_output_json``.
+_SANDBOX_SESSION_LOST_SUMMARY = "No output from agent - session interrupted"
+
+
+def _is_sandbox_session_lost_echo(output_json: Any) -> bool:
+    """True when output.json is the E2B wrapper's fallback echo for a dead session.
+
+    Matched on the wrapper's exact placeholder summary (and the ``error`` field
+    as a secondary surface), AND on ``status == "failed"`` — the wrapper always
+    writes ``"status":"failed"`` on the echo. Requiring the failed status is the
+    anti-false-positive guard: a genuine agent verdict that merely MENTIONS
+    session interruption (e.g. "the session was interrupted, here is what I
+    completed") carries a ``summary`` without the dead-session signature, and a
+    non-failed status can never be the wrapper's dead-session echo. Non-dict /
+    non-matching output is never misread.
+    """
+    if not isinstance(output_json, dict):
+        return False
+    if output_json.get("status") != "failed":
+        return False
+    summary = output_json.get("summary")
+    error = output_json.get("error")
+    haystack = [s for s in (summary, error) if isinstance(s, str)]
+    return any(_SANDBOX_SESSION_LOST_SUMMARY in s for s in haystack)
 
 
 def make_sandbox_agent_fn(
@@ -2689,17 +2759,30 @@ def make_sandbox_agent_fn(
             # missing status can never look like a false "complete".
             agent_status: str | None = None
             agent_outcome: str | None = None
+            # FAR-227: the E2B wrapper's fallback echo for a dead opencode
+            # session is NOT an agent verdict — the agent never wrote it. Detect
+            # the placeholder, suppress the fabricated ``agent_status="failed"``
+            # (which A1-elevates to non-retryable ``agent.failed``), and stamp a
+            # distinct marker the executor routes to retryable
+            # ``sandbox.no_output_json`` instead. The summary is preserved so the
+            # failure detail stays visible.
+            sandbox_session_lost: bool = False
 
             if isinstance(output_json, dict):
                 result_summary = output_json.get("summary", "")
                 changed_files = output_json.get("changed_files", [])
                 pr_url = output_json.get("pr_url", "")
+                sandbox_session_lost = _is_sandbox_session_lost_echo(output_json)
                 _raw_status = output_json.get("status")
                 _raw_outcome = output_json.get("outcome")
-                if isinstance(_raw_status, str):
+                if isinstance(_raw_status, str) and not sandbox_session_lost:
                     agent_status = _raw_status
-                if isinstance(_raw_outcome, str):
+                if isinstance(_raw_outcome, str) and not sandbox_session_lost:
                     agent_outcome = _raw_outcome
+                if sandbox_session_lost:
+                    # A dead session is never a completed node, regardless of the
+                    # command's exit code (the wrapper may exit 0 after echoing).
+                    status = "failed"
 
             if status == "failed" and not result_summary:
                 # Never report a silent empty-summary failure — explain WHY the
@@ -2708,6 +2791,10 @@ def make_sandbox_agent_fn(
 
             _cost_estimate_usd = _compute_sandbox_cost(elapsed, output_json)
             _stall_reason_field: dict[str, str] = {"stall_reason": stall_reason} if stall_reason else {}
+            # FAR-227: distinct marker the executor routes on — present ONLY for
+            # the E2B wrapper's fallback echo (dead session). Absent for normal
+            # nodes, so ordinary envelopes stay byte-identical.
+            _session_lost_field: dict[str, bool] = {"sandbox_session_lost": True} if sandbox_session_lost else {}
 
             # Only the timeout/stall failure carries the sandbox trace — the
             # success path doesn't need it and stays small.
@@ -2774,6 +2861,7 @@ def make_sandbox_agent_fn(
                             "agent_status": agent_status,
                             "agent_outcome": agent_outcome,
                             **_stall_reason_field,
+                            **_session_lost_field,
                             **_sandbox_failure_fields,
                             "attempt_key": attempt_key,
                         },
@@ -2792,6 +2880,7 @@ def make_sandbox_agent_fn(
                     "agent_status": agent_status,
                     "agent_outcome": agent_outcome,
                     **_stall_reason_field,
+                    **_session_lost_field,
                     **_sandbox_failure_fields,
                     "attempt_key": attempt_key,
                 },
@@ -2977,10 +3066,12 @@ def make_sandbox_agent_fn(
 def _validate_against_schema(data: dict[str, Any], schema: dict[str, Any]) -> None:
     """Lightweight field-presence validation against a JSON schema.
 
-    Raises ValueError on first missing required field.  Full JSON Schema
-    validation (via a library like `jsonschema`) is deferred to v1.
+    Raises :class:`OutputSchemaValidationError` on first missing required field
+    (a ValueError subclass the executor maps to the domain-specific
+    ``schema_validation_failure`` error code). Full JSON Schema validation (via
+    a library like `jsonschema`) is deferred to v1.
     """
     required: list[str] = schema.get("required", [])
     for field in required:
         if field not in data:
-            raise ValueError(f"Manual output missing required field {field!r} (required: {required})")
+            raise OutputSchemaValidationError(f"Manual output missing required field {field!r} (required: {required})")

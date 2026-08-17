@@ -23,7 +23,6 @@ helpers.
 from __future__ import annotations
 
 import asyncio
-import importlib
 import json
 import time
 import uuid
@@ -285,18 +284,22 @@ class TestDeactivateSQL:
 
 class TestMigrationBackfillGrace:
     def test_migration_backfills_epoch_and_branches_off_current_head(self) -> None:
-        """The migration adds triggers.streak_epoch with a DEFAULT CURRENT_TIMESTAMP
-        (backfill = now()) — pre-existing no-delivery history can never
-        deactivate on tick 1 because the boundary is GREATEST(last_delivery_at,
-        streak_epoch) and every old run predates the anchored epoch. Also
-        branches off the current migration head (single Alembic head)."""
-        mod = importlib.import_module("modulo.db.migrations.versions.0102_ongoing_streak_epoch")
-        assert mod.down_revision == "0101_guardrails"
-        assert mod.revision == "0102_ongoing_streak_epoch"
-        # Structural: the upgrade adds the column with a server default (backfill)
-        # and the streak-engine partial index on runs.
-        assert mod.upgrade is not None
-        assert mod.downgrade is not None
+        """The reconciliation chain adds triggers.streak_epoch with a DEFAULT
+        CURRENT_TIMESTAMP (backfill = now()) — pre-existing no-delivery history
+        can never deactivate on tick 1 because the boundary is
+        GREATEST(last_delivery_at, streak_epoch) and every old run predates the
+        anchored epoch. The chain has a single linear head."""
+        from pathlib import Path
+
+        from alembic.script import ScriptDirectory
+
+        versions_dir = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+        source = (versions_dir / "0110_schema_pipeline_runtime.py").read_text(encoding="utf-8")
+        # The reconciliation DDL adds the column with a server default (backfill).
+        assert 'ADD COLUMN IF NOT EXISTS "streak_epoch" timestamp with time zone DEFAULT CURRENT_TIMESTAMP' in source
+        assert "ix_runs_unclassified_terminal" in source
+        heads = ScriptDirectory(str(versions_dir.parent)).get_heads()
+        assert heads == ["0112_feedback_correction_state"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------

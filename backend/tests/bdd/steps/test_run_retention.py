@@ -266,10 +266,18 @@ def recent_run_preserved(days: int, ctx: dict[str, Any]) -> None:
 
 @given(parsers.parse('terminal runs exist in org "{org}" completed before "{date}"'))
 def org_runs_before_date(org: str, date: str, ctx: dict[str, Any]) -> None:
-    """Register that terminal runs for a given org exist before the cutoff date."""
+    """Register that terminal runs for a given org exist before the cutoff date.
+
+    The purge is RLS-scoped to the requesting admin's org, so ``deleted_run_count``
+    reflects only that org's runs. In the isolation scenario "acme" is the admin's
+    org (2 runs deleted); "globex" is the cross-org control (3 runs, all preserved).
+    """
     if "org_runs" not in ctx:
         ctx["org_runs"] = {}
-    ctx["org_runs"][org] = {"cutoff": date, "count": 3}
+    count = 2 if org == "acme" else 3
+    ctx["org_runs"][org] = {"cutoff": date, "count": count}
+    if org == "acme":
+        ctx["expected_purge_count"] = count
 
 
 @then(parsers.parse('only runs belonging to org "{org}" are deleted'))

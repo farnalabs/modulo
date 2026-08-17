@@ -199,6 +199,14 @@ class Run(OrgScoped):
     # write (crud/run) and refreshed (upsert) on re-terminalization. Generic
     # JSON here for SQLite/MariaDB parity (the raw_output_markers precedent).
     run_classification: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    # FAR-213 blocked-partial summary (migration 0111) — structured
+    # run-termination compensation record written when a run terminalizes
+    # ``eval_failed``/``eval_blocked`` from a guardrail block: executed nodes
+    # (in order), per-node publish status (published/compensated/
+    # not-compensated), output references (never duplicated raw payloads), and
+    # per-attempt compensation outcomes. Generic JSON for SQLite/MariaDB
+    # parity (the run_classification precedent).
+    blocked_partial_summary: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     # Journey / work-item tracking (FAR-142, migration 0083) — additive,
     # nullable, never backfilled. ``work_item_id`` is the chain anchor written
     # ONCE at create (floor id or adopted from the parent run) and NEVER

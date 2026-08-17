@@ -629,3 +629,48 @@ async def test_execute_retry_policy_hang_death_terminal_no_redispatch():
     resets = [s for s in statements if "status='pending'" in s]
     assert resets == []
     assert result is not None
+
+
+async def test_execute_retry_policy_never_redispatch_correction_run():
+    """FAR-210: a correction-trigger run is EXCLUDED from retry_policy
+    re-dispatch even when the policy would otherwise retry the failure.
+
+    The single-node correction path owns its own bounded retry budget; the
+    pipeline retry policy must never re-dispatch a correction run (no chained
+    corrections). Prove-the-fix: without the ``not is_correction_run`` guard at
+    the dispatch site, execute() re-raises RunRetryPolicyError and resets the
+    run to pending; with the guard, the correction run terminal-fails via the
+    single finalization path (no pending-reset, no backoff sleep)."""
+    run = _make_run(node_attempt_count=1, claim_token="tok-claim-abc")
+    run.trigger_type = "correction"
+    snapshot = _make_snapshot()
+    statements: list[str] = []
+    retry_policy = {"on": ["failure"], "max_retries": 2}
+    session = _make_session(snapshot, statements=statements, retry_policy=retry_policy)
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    settings = MagicMock(saq_run_retries=5)
+    compiled = _make_failure_compiled()
+
+    sleep_mock = AsyncMock()
+    with ExitStack() as stack:
+        mock_finalize = _enter_execute_patches(stack, factory, run, compiled, registry, settings)
+        # The correction run is excluded, so the backoff sleep must NOT fire.
+        stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
+        executor = PipelineExecutor(MagicMock())
+        result = await executor.execute(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            input_payload={},
+            claim_token="tok-claim-abc",
+        )
+    # No re-dispatch: no RunRetryPolicyError escaped, no backoff sleep ran.
+    sleep_mock.assert_not_awaited()
+    # No fenced pending-reset was issued for the correction run.
+    resets = [s for s in statements if "status='pending'" in s]
+    assert resets == []
+    # Terminal failure via the single finalization path.
+    mock_finalize.assert_awaited_once()
+    assert mock_finalize.await_args.kwargs["status"] == "failed"
+    assert mock_finalize.await_args.kwargs["error_code"] == "_GenericFailureError"
+    assert result is not None

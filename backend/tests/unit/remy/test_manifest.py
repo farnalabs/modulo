@@ -238,3 +238,73 @@ class TestManifestErrorHandling:
             with patch.dict(os.environ, {"MANIFEST_PATH": str(missing)}):
                 result = load_manifest()
                 assert result == {"routes": {}, "elements": {}, "sidebar_groups": {}}
+
+
+class TestDuplicateKeyDetection:
+    def _reset_manifest(self):
+        import modulo.core.manifest as m
+
+        m._MANIFEST = None
+
+    def test_duplicate_route_key_raises(self):
+        self._reset_manifest()
+        from modulo.core.manifest import load_manifest
+
+        dup_yaml = """
+routes:
+  /:
+    name: dashboard
+  /:
+    name: dashboard-again
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p = Path(tmpdir) / "manifest.yaml"
+            p.write_text(dup_yaml)
+            with (
+                patch.dict(os.environ, {"MANIFEST_PATH": str(p)}),
+                pytest.raises(RuntimeError, match="duplicate mapping key"),
+            ):
+                load_manifest()
+
+    def test_duplicate_sidebar_group_key_raises(self):
+        self._reset_manifest()
+        from modulo.core.manifest import load_manifest
+
+        dup_yaml = """
+sidebar_groups:
+  core:
+    label: BUILD
+  core:
+    label: DUPLICATE
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p = Path(tmpdir) / "manifest.yaml"
+            p.write_text(dup_yaml)
+            with (
+                patch.dict(os.environ, {"MANIFEST_PATH": str(p)}),
+                pytest.raises(RuntimeError, match="duplicate mapping key"),
+            ):
+                load_manifest()
+
+    def test_anchor_merge_override_still_works(self):
+        """A route overriding an anchored field via merge keys is NOT a duplicate."""
+        self._reset_manifest()
+        from modulo.core.manifest import load_manifest
+
+        yaml_text = """
+x-community: &community
+  required_tier: community
+  required_roles: null
+routes:
+  /ok:
+    <<: *community
+    name: dashboard
+    required_roles: ["admin"]
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p = Path(tmpdir) / "manifest.yaml"
+            p.write_text(yaml_text)
+            with patch.dict(os.environ, {"MANIFEST_PATH": str(p)}):
+                manifest = load_manifest()
+        assert manifest["routes"]["/ok"]["required_roles"] == ["admin"]
+        assert manifest["routes"]["/ok"]["required_tier"] == "community"

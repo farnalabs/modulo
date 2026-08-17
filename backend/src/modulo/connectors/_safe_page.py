@@ -3,10 +3,17 @@
 The Azure Repos (``value``), Azure Pipelines (``value``), Azure Key Vault
 (``value``), Bitbucket (``values``), Microsoft Teams (``value``), SharePoint
 (``value``), TeamCity (``build``/``project``/``buildType``/``agent``),
-CircleCI (``items``), n8n (``data``), Opsgenie (``data``), Datadog
-(``data``), and PagerDuty (``incidents``/``services``/``teams``/``users``/
-``escalation_policies``/``schedules``/``oncalls``) connectors each guard
-their list parsing against corrupt or hostile response bodies. A corrupt or hostile response may return
+CircleCI (``items``), GitHub Actions (``workflow_runs``), n8n (``data``),
+Opsgenie (``data``), Datadog (``data``), Asana (``data``), Snyk (``data``),
+SonarQube (``components``/``analyses``/``issues``/``qualitygates``/
+``metrics``/``plugins``/``hotspots``), PagerDuty
+(``incidents``/``services``/``teams``/``users``/``escalation_policies``/
+``schedules``/``oncalls``), Slack (``channels``/``messages``/``members``/
+``scheduled_messages``), npm (``objects``), Notion (``results``),
+Confluence (``results``), CodeClimate (``data``),
+Jenkins (``builds``/``jobs``/``computer``), and Dropbox Paper
+(``doc_ids``/``entries``) connectors each guard their list parsing against
+corrupt or hostile response bodies. A corrupt or hostile response may return
 a non-dict body (list, string, number, ...) or a non-list page field — either
 crashes the connector with ``AttributeError`` on the bare
 ``body.get(key, [])`` chain or returns a bare string as the records list.

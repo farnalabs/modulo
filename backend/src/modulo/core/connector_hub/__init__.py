@@ -28,6 +28,9 @@ from modulo.connectors.azure_key_vault import AzureKeyVaultConnector
 from modulo.connectors.azure_pipelines import AzurePipelinesConnector
 from modulo.connectors.azure_repos import AzureReposConnector
 from modulo.connectors.base import (
+    CompensationContext,
+    CompensationOperation,
+    CompensationResult,
     ConnectorACL,
     ConnectorBase,
     ConnectorPayload,
@@ -79,7 +82,7 @@ from modulo.db.models.connector_instance import ConnectorInstance
 
 logger = logging.getLogger(__name__)
 
-_SAMPLE_LIMIT: int = 100
+_SAMPLE_LIMIT: int = 200
 _LOCALHOST_8080: str = "http://localhost:8080"
 _LOCALHOST_3000: str = "http://localhost:3000"
 _LOCALHOST_5678: str = "http://localhost:5678"
@@ -403,6 +406,33 @@ class _TracedConnector(ConnectorBase):
                 payload,
                 extra_attrs={"connector.resource": payload.resource},
                 acl_operation="write",
+            ),
+        )
+
+    async def compensate(
+        self,
+        operation: CompensationOperation,
+        *,
+        context: CompensationContext,
+        error: str,
+    ) -> CompensationResult:
+        """Forward a compensating callback to the wrapped connector (FAR-213).
+
+        Compensation is best-effort run-termination undo — no ACL gate (the node
+        already performed the write through this connector; compensation is not
+        a new capability grant) and never raw payloads in span attributes.
+        """
+        return cast(
+            "CompensationResult",
+            await self._run_with_tracing(
+                f"connector.{self._inner.connector_type}.compensate",
+                "compensate",
+                self._inner.compensate,
+                operation,
+                context=context,
+                error=error,
+                extra_attrs={"connector.resource": operation.resource},
+                acl_operation=None,
             ),
         )
 

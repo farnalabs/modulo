@@ -137,7 +137,7 @@ class TestCreateFeedback:
         with (
             patch("modulo.api.routes.feedback.set_rls_org"),
             patch("modulo.api.routes.feedback.FeedbackManager.create_feedback_record") as mock_create,
-            patch("modulo.api.routes.feedback.append_audit_event", new=audit),
+            patch("modulo.core.audit_logger.append_audit_event", new=audit),
         ):
             mock_create.return_value = mock_record
 
@@ -173,7 +173,7 @@ class TestCreateFeedback:
         with (
             patch("modulo.api.routes.feedback.set_rls_org"),
             patch("modulo.api.routes.feedback.FeedbackManager.create_feedback_record") as mock_create,
-            patch("modulo.api.routes.feedback.append_audit_event", side_effect=_raise_audit),
+            patch("modulo.core.audit_logger.append_audit_event", side_effect=_raise_audit),
         ):
             mock_create.return_value = _make_mock_record()
 
@@ -316,7 +316,7 @@ class TestUpdateStatus:
             patch("modulo.api.routes.feedback.set_rls_org"),
             patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
             patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
-            patch("modulo.api.routes.feedback.append_audit_event", new=audit),
+            patch("modulo.core.audit_logger.append_audit_event", new=audit),
         ):
             mock_get.return_value = _make_mock_record(feedback_status="pending")
             mock_update.return_value = mock_record
@@ -352,7 +352,7 @@ class TestUpdateStatus:
             patch("modulo.api.routes.feedback.set_rls_org"),
             patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
             patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
-            patch("modulo.api.routes.feedback.append_audit_event", side_effect=_raise_audit),
+            patch("modulo.core.audit_logger.append_audit_event", side_effect=_raise_audit),
         ):
             mock_get.return_value = _make_mock_record(feedback_status="pending")
             mock_update.return_value = mock_record
@@ -371,7 +371,7 @@ class TestUpdateStatus:
             patch("modulo.api.routes.feedback.set_rls_org"),
             patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
             patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
-            patch("modulo.api.routes.feedback.append_audit_event", new=audit),
+            patch("modulo.core.audit_logger.append_audit_event", new=audit),
         ):
             mock_get.return_value = None
             mock_update.return_value = None
@@ -624,7 +624,7 @@ class TestReviewFeedback:
             patch("modulo.api.routes.feedback.set_rls_org"),
             patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
             patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
-            patch("modulo.api.routes.feedback.append_audit_event", new=audit),
+            patch("modulo.core.audit_logger.append_audit_event", new=audit),
         ):
             mock_get.return_value = _make_mock_record(feedback_status="pending")
             mock_update.return_value = mock_record
@@ -652,7 +652,7 @@ class TestReviewFeedback:
             patch("modulo.api.routes.feedback.set_rls_org"),
             patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
             patch("modulo.api.routes.feedback.FeedbackManager.spawn_correction_run") as mock_spawn,
-            patch("modulo.api.routes.feedback.append_audit_event", new=audit),
+            patch("modulo.core.audit_logger.append_audit_event", new=audit),
         ):
             mock_get.return_value = _make_mock_record(feedback_status="pending")
             mock_spawn.return_value = uuid.uuid4()
@@ -681,7 +681,7 @@ class TestReviewFeedback:
             patch("modulo.api.routes.feedback.set_rls_org"),
             patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
             patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
-            patch("modulo.api.routes.feedback.append_audit_event", side_effect=_raise_audit),
+            patch("modulo.core.audit_logger.append_audit_event", side_effect=_raise_audit),
         ):
             mock_get.return_value = _make_mock_record(feedback_status="pending")
             mock_update.return_value = mock_record
@@ -755,6 +755,45 @@ class TestReviewFeedback:
                 json={"action": "mark_reviewed"},
             )
         assert resp.status_code == 404
+
+    def test_create_correction_run_returns_404_when_original_run_missing(self, client: TestClient) -> None:
+        """A missing original run is a specific, narrowed 404 — not the broad base-class catch."""
+        from modulo.core.feedback_manager import FeedbackRecordRunNotFoundError
+
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("modulo.api.routes.feedback.FeedbackManager.spawn_correction_run") as mock_spawn,
+        ):
+            mock_get.return_value = _make_mock_record(feedback_status="pending")
+            mock_spawn.side_effect = FeedbackRecordRunNotFoundError("Original run ... not found")
+
+            resp = client.post(
+                f"/api/v1/feedback/inbox/{_RECORD_ID}/review",
+                json={"action": "create_correction_run"},
+            )
+
+        assert resp.status_code == 404
+        assert "not found" in resp.json()["detail"]
+
+    def test_create_correction_run_validation_error_is_not_collapsed_to_404(self, client: TestClient) -> None:
+        """A non-404 FeedbackManager subclass (ValidationError) must not be masked as 404."""
+        from modulo.core.feedback_manager import ValidationError
+
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("modulo.api.routes.feedback.FeedbackManager.spawn_correction_run") as mock_spawn,
+        ):
+            mock_get.return_value = _make_mock_record(feedback_status="pending")
+            mock_spawn.side_effect = ValidationError("bad handler type")
+
+            resp = client.post(
+                f"/api/v1/feedback/inbox/{_RECORD_ID}/review",
+                json={"action": "create_correction_run"},
+            )
+
+        assert resp.status_code == 500
 
 
 class TestListEvalProposals:

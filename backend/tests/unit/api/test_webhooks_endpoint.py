@@ -356,6 +356,51 @@ def test_receive_webhook_paused_org_missing_row_returns_202_without_event(client
     m.assert_not_called()
 
 
+def test_receive_webhook_guardrail_blocked_run_acks_422(client: TestClient) -> None:
+    """FAR-213 webhook ack-after-validate: a run created guardrail-blocked
+    (terminal eval_failed / error_code eval_blocked) is acked with a non-success
+    422, NEVER a false 'accepted' — and no background dispatch fires."""
+    run_mock = _make_mock_run()
+    run_mock.error_code = "eval_blocked"
+    with (
+        patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.webhooks._dispatch_webhook_run", new_callable=AsyncMock) as dispatch,
+        patch("modulo.api.routes.webhooks.set_rls_org"),
+    ):
+        m.return_value = (run_mock, None, {})
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+            json={"event": "test"},
+            headers={"X-Modulo-Timestamp": "1700000000", "X-Modulo-Webhook-Secret": "test-hmac"},
+        )
+
+    assert resp.status_code == 422
+    assert "guardrail" in resp.json()["detail"].lower()
+    dispatch.assert_not_called()
+
+
+def test_receive_webhook_blocked_run_without_eval_blocked_acks_202(client: TestClient) -> None:
+    """A run whose error_code is NOT eval_blocked must still ack 'accepted' — the
+    422 ack is reserved strictly for guardrail-blocked runs (FAR-213)."""
+    run_mock = _make_mock_run()
+    run_mock.error_code = "node_cancelled"
+    with (
+        patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.webhooks._dispatch_webhook_run", new_callable=AsyncMock) as dispatch,
+        patch("modulo.api.routes.webhooks.set_rls_org"),
+    ):
+        m.return_value = (run_mock, None, {})
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+            json={"event": "test"},
+            headers={"X-Modulo-Timestamp": "1700000000", "X-Modulo-Webhook-Secret": "test-hmac"},
+        )
+
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "accepted"
+    dispatch.assert_called_once()
+
+
 def test_receive_webhook_duplicate_returns_400(client: TestClient) -> None:
     from modulo.core.trigger_engine import DuplicateWebhookError
 

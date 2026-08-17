@@ -5,6 +5,7 @@ from typing import Any, cast
 import httpx
 
 from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
+from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -16,6 +17,9 @@ from modulo.connectors.base import (
 
 _NOTION_API = "https://api.notion.com/v1"
 _NOTION_VERSION = "2022-06-28"
+
+# Type alias used in ``cast`` for response payloads (S1192).
+type _DICT_STR_ANY = dict[str, Any]
 
 
 class NotionConnector(ConnectorBase):
@@ -68,8 +72,8 @@ class NotionConnector(ConnectorBase):
             if r.status_code != 200:
                 return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
 
-            body: dict[str, Any] = r.json()
-            results = body.get("results", [])
+            body = r.json()
+            results = _safe_records(body, "results")
             return HealthResult(ok=True, detail=f"{len(results)} users accessible")
         except httpx.HTTPStatusError as exc:
             return HealthResult(
@@ -99,11 +103,11 @@ class NotionConnector(ConnectorBase):
                     r = await client.post("/search", json=payload)
                     r.raise_for_status()
                     body = r.json()
-                    records: list[dict[str, Any]] = body.get("results", [])
+                    records: list[dict[str, Any]] = _safe_records(body, "results")
                     return ConnectorResult(
                         records=records,
                         total=len(records),
-                        next_cursor=_safe_cursor(body.get("next_cursor")),
+                        next_cursor=_safe_cursor(body.get("next_cursor")) if isinstance(body, dict) else None,
                     )
 
                 case "database":
@@ -131,11 +135,11 @@ class NotionConnector(ConnectorBase):
                     r = await client.post(f"/databases/{database_id}/query", json=payload)
                     r.raise_for_status()
                     body = r.json()
-                    records = body.get("results", [])
+                    records = _safe_records(body, "results")
                     return ConnectorResult(
                         records=records,
                         total=len(records),
-                        next_cursor=_safe_cursor(body.get("next_cursor")),
+                        next_cursor=_safe_cursor(body.get("next_cursor")) if isinstance(body, dict) else None,
                     )
 
                 case "page":
@@ -159,11 +163,11 @@ class NotionConnector(ConnectorBase):
                     r = await client.get(f"/blocks/{block_id}/children", params=params)
                     r.raise_for_status()
                     body = r.json()
-                    records = body.get("results", [])
+                    records = _safe_records(body, "results")
                     return ConnectorResult(
                         records=records,
                         total=len(records),
-                        next_cursor=_safe_cursor(body.get("next_cursor")),
+                        next_cursor=_safe_cursor(body.get("next_cursor")) if isinstance(body, dict) else None,
                     )
 
                 case "users":
@@ -175,11 +179,11 @@ class NotionConnector(ConnectorBase):
                     r = await client.get("/users", params=params)
                     r.raise_for_status()
                     body = r.json()
-                    records = body.get("results", [])
+                    records = _safe_records(body, "results")
                     return ConnectorResult(
                         records=records,
                         total=len(records),
-                        next_cursor=_safe_cursor(body.get("next_cursor")),
+                        next_cursor=_safe_cursor(body.get("next_cursor")) if isinstance(body, dict) else None,
                     )
 
                 case _:
@@ -197,7 +201,7 @@ class NotionConnector(ConnectorBase):
                 case "database":
                     r = await client.post("/databases", json=payload.data)
                     r.raise_for_status()
-                    return cast("dict[str, Any]", r.json())
+                    return cast(_DICT_STR_ANY, r.json())
 
                 case "block_append":
                     block_id = payload.data.get("block_id")
@@ -209,7 +213,7 @@ class NotionConnector(ConnectorBase):
                         json={"children": children},
                     )
                     r.raise_for_status()
-                    return cast("dict[str, Any]", r.json())
+                    return cast(_DICT_STR_ANY, r.json())
 
                 case "page_update":
                     page_id = payload.data.get("id")
@@ -221,7 +225,7 @@ class NotionConnector(ConnectorBase):
                         json={"properties": properties},
                     )
                     r.raise_for_status()
-                    return cast("dict[str, Any]", r.json())
+                    return cast(_DICT_STR_ANY, r.json())
 
                 case _:
                     raise ValueError(f"Unsupported Notion write resource: {payload.resource!r}")

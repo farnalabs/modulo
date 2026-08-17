@@ -54,6 +54,40 @@ function registerBeforeUnload() {
   })
 }
 
+function buildLockResponseHandler(
+  channel: BroadcastChannel,
+  selector: string,
+  msgId: string,
+  resolve: (granted: boolean) => void,
+): { onMessage: (e: MessageEvent) => void; timeout: () => void } {
+  let resolved = false
+
+  const onMessage = (e: MessageEvent) => {
+    if (resolved) return
+    const data = e.data || {}
+    if (data.type === 'lock-response' && data.msgId === msgId) {
+      if (data.granted) {
+        heldLocks.set(selector, { selector, tabId: TAB_ID, acquiredAt: Date.now() })
+      }
+      cleanup()
+      resolve(data.granted === true)
+    }
+  }
+
+  const cleanup = () => {
+    channel.removeEventListener('message', onMessage)
+    resolved = true
+  }
+
+  const timeout = () => {
+    if (resolved) return
+    cleanup()
+    resolve(false)
+  }
+
+  return { onMessage, timeout }
+}
+
 async function acquireElementLock(selector: string, timeout = 5000): Promise<boolean> {
   const channel = getLockChannel()
   if (!channel) return true
@@ -61,28 +95,9 @@ async function acquireElementLock(selector: string, timeout = 5000): Promise<boo
 
   return new Promise<boolean>(resolve => {
     const msgId = `${TAB_ID}:${Date.now()}:${Math.random().toString(36).slice(2)}`
-    let resolved = false
-    let timer: ReturnType<typeof setTimeout> | null = null
+    const { onMessage, timeout: onTimeout } = buildLockResponseHandler(channel, selector, msgId, resolve)
 
-    function cleanup() {
-      if (timer) clearTimeout(timer)
-      channel?.removeEventListener('message', handleMessage)
-      resolved = true
-    }
-
-    function handleMessage(e: MessageEvent) {
-      if (resolved) return
-      const data = e.data || {}
-      if (data.type === 'lock-response' && data.msgId === msgId) {
-        if (data.granted) {
-          heldLocks.set(selector, { selector, tabId: TAB_ID, acquiredAt: Date.now() })
-        }
-        cleanup()
-        resolve(data.granted === true)
-      }
-    }
-
-    channel.addEventListener('message', handleMessage)
+    channel.addEventListener('message', onMessage)
 
     channel.postMessage({
       type: 'lock-request',
@@ -91,12 +106,7 @@ async function acquireElementLock(selector: string, timeout = 5000): Promise<boo
       tabId: TAB_ID,
     })
 
-    timer = setTimeout(() => {
-      if (!resolved) {
-        cleanup()
-        resolve(false)
-      }
-    }, timeout)
+    setTimeout(onTimeout, timeout)
   })
 }
 
@@ -180,69 +190,80 @@ export function isPaused(): boolean {
 
 const PER_COMMAND_TIMEOUT_MS = 30000
 
+async function waitForVisible(abort: AbortController): Promise<boolean> {
+  if (document.visibilityState !== 'hidden') return true
+  await new Promise<void>(resolve => {
+    const handler = () => {
+      if (document.visibilityState === 'visible') {
+        document.removeEventListener('visibilitychange', handler)
+        resolve()
+      }
+    }
+    document.addEventListener('visibilitychange', handler)
+    setTimeout(() => {
+      document.removeEventListener('visibilitychange', handler)
+      if (!abort.signal.aborted) resolve()
+    }, 60000)
+  })
+  return !abort.signal.aborted
+}
+
+async function waitForResume(abort: AbortController): Promise<boolean> {
+  if (!_paused) return true
+  await new Promise<void>(resolve => {
+    _resumeResolver = resolve
+  })
+  return !abort.signal.aborted
+}
+
+async function executeWithRetry(cmd: UiCommand, abort: AbortController): Promise<UiCommandResult> {
+  let result = await executeWithTimeout(cmd, abort.signal)
+  if (!result.success && cmd.name === 'navigate') {
+    await new Promise(r => setTimeout(r, 1000))
+    result = await executeWithTimeout(cmd, abort.signal)
+  }
+  return result
+}
+
+async function applyActionDelay() {
+  const speedDelays: Record<string, number> = {
+    lightning: 0,
+    normal: 600,
+    review: 0,
+  }
+  const delay = speedDelays[_actionSpeed] ?? 600
+  if (delay > 0) await new Promise(r => setTimeout(r, delay))
+  if (_actionSpeed === 'review') _paused = true
+}
+
 export async function executeCommandBatch(commands: UiCommand[]): Promise<UiCommandResult[]> {
   const abort = new AbortController()
   _abortControllers.add(abort)
   const results: UiCommandResult[] = []
 
-  const cleanup = () => {
-    _abortControllers.delete(abort)
-  }
+  const cancelled = (cmd: UiCommand) => ({ id: cmd.id, name: cmd.name, success: false, error: 'cancelled_by_user' })
 
   for (const cmd of commands) {
     if (abort.signal.aborted) {
-      results.push({ id: cmd.id, name: cmd.name, success: false, error: 'cancelled_by_user' })
+      results.push(cancelled(cmd))
       continue
     }
 
-    if (document.visibilityState === 'hidden') {
-      await new Promise<void>(resolve => {
-        const handler = () => {
-          if (document.visibilityState === 'visible') {
-            document.removeEventListener('visibilitychange', handler)
-            resolve()
-          }
-        }
-        document.addEventListener('visibilitychange', handler)
-        setTimeout(() => {
-          document.removeEventListener('visibilitychange', handler)
-          if (!abort.signal.aborted) resolve()
-        }, 60000)
-      })
-      if (abort.signal.aborted) {
-        results.push({ id: cmd.id, name: cmd.name, success: false, error: 'cancelled_by_user' })
-        continue
-      }
+    if (!(await waitForVisible(abort))) {
+      results.push(cancelled(cmd))
+      continue
     }
 
-    if (_paused) {
-      await new Promise<void>(resolve => {
-        _resumeResolver = resolve
-      })
-      if (abort.signal.aborted) {
-        results.push({ id: cmd.id, name: cmd.name, success: false, error: 'cancelled_by_user' })
-        continue
-      }
+    if (!(await waitForResume(abort))) {
+      results.push(cancelled(cmd))
+      continue
     }
 
-    let result = await executeWithTimeout(cmd, abort.signal)
-    if (!result.success && cmd.name === 'navigate') {
-      await new Promise(r => setTimeout(r, 1000))
-      result = await executeWithTimeout(cmd, abort.signal)
-    }
-    results.push(result)
-
-    const speedDelays: Record<string, number> = {
-      lightning: 0,
-      normal: 600,
-      review: 0,
-    }
-    const delay = speedDelays[_actionSpeed] ?? 600
-    if (delay > 0) await new Promise(r => setTimeout(r, delay))
-    if (_actionSpeed === 'review') _paused = true
+    results.push(await executeWithRetry(cmd, abort))
+    await applyActionDelay()
   }
 
-  cleanup()
+  _abortControllers.delete(abort)
   return results
 }
 
@@ -367,58 +388,69 @@ async function fill(selector: string, value: string): Promise<UiCommandResult> {
     }
     highlightElement(el)
 
-    const role = el.getAttribute('role')
-    const tag = el.tagName.toLowerCase()
-
-    if (role === 'combobox' || el.closest('[data-shadcn-select]') || el.closest('[role="listbox"]')) {
-      (el as HTMLElement).click()
-      await new Promise(r => setTimeout(r, 300))
-      const commandInput = el.querySelector<HTMLInputElement>('[role="combobox"] input, [data-shadcn-command-input]')
-      if (commandInput) {
-        commandInput.value = value
-        commandInput.dispatchEvent(new Event('input', { bubbles: true }))
-        commandInput.dispatchEvent(new Event('change', { bubbles: true }))
-      } else {
-        const globalInput = document.querySelector<HTMLInputElement>('[role="combobox"] input, [data-shadcn-command-input]')
-        if (globalInput) {
-          globalInput.value = value
-          globalInput.dispatchEvent(new Event('input', { bubbles: true }))
-          globalInput.dispatchEvent(new Event('change', { bubbles: true }))
-        }
-      }
-      return { id: `fill-${Date.now()}`, name: 'fill', success: true }
-    }
-
-    if (role === 'switch') {
-      (el as HTMLElement).click()
-      return { id: `fill-${Date.now()}`, name: 'fill', success: true }
-    }
-
-    if (el.getAttribute('contenteditable') === 'true') {
-      el.textContent = value
-      el.dispatchEvent(new Event('input', { bubbles: true }))
-      return { id: `fill-${Date.now()}`, name: 'fill', success: true }
-    }
-
-    if (tag === 'input' || tag === 'textarea') {
-      const input = el as HTMLInputElement
-      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-        window.HTMLInputElement.prototype, 'value'
-      )?.set
-      if (nativeInputValueSetter) {
-        nativeInputValueSetter.call(input, value)
-      } else {
-        input.value = value
-      }
-      input.dispatchEvent(new Event('input', { bubbles: true }))
-      input.dispatchEvent(new Event('change', { bubbles: true }))
-      return { id: `fill-${Date.now()}`, name: 'fill', success: true }
-    }
-
-    return { id: `fill-${Date.now()}`, name: 'fill', success: false, error: `Unsupported element: ${tag}` }
+    return await fillElement(el, value)
   } finally {
     releaseElementLock(selector)
   }
+}
+
+function dispatchInputChange(el: HTMLInputElement | HTMLTextAreaElement, value: string) {
+  const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype, 'value'
+  )?.set
+  if (nativeInputValueSetter) {
+    nativeInputValueSetter.call(el, value)
+  } else {
+    el.value = value
+  }
+  el.dispatchEvent(new Event('input', { bubbles: true }))
+  el.dispatchEvent(new Event('change', { bubbles: true }))
+}
+
+function setCommandInputValue(input: HTMLInputElement, value: string) {
+  input.value = value
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+  input.dispatchEvent(new Event('change', { bubbles: true }))
+}
+
+async function fillElement(el: Element, value: string): Promise<UiCommandResult> {
+  const ok = (): UiCommandResult => ({ id: `fill-${Date.now()}`, name: 'fill', success: true })
+
+  const role = el.getAttribute('role')
+  const tag = el.tagName.toLowerCase()
+
+  if (role === 'combobox' || el.closest('[data-shadcn-select]') || el.closest('[role="listbox"]')) {
+    (el as HTMLElement).click()
+    await new Promise(r => setTimeout(r, 300))
+    const commandInput = el.querySelector<HTMLInputElement>('[role="combobox"] input, [data-shadcn-command-input]')
+    if (commandInput) {
+      setCommandInputValue(commandInput, value)
+    } else {
+      const globalInput = document.querySelector<HTMLInputElement>('[role="combobox"] input, [data-shadcn-command-input]')
+      if (globalInput) {
+        setCommandInputValue(globalInput, value)
+      }
+    }
+    return ok()
+  }
+
+  if (role === 'switch') {
+    (el as HTMLElement).click()
+    return ok()
+  }
+
+  if (el.getAttribute('contenteditable') === 'true') {
+    el.textContent = value
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+    return ok()
+  }
+
+  if (tag === 'input' || tag === 'textarea') {
+    dispatchInputChange(el as HTMLInputElement, value)
+    return ok()
+  }
+
+  return { id: `fill-${Date.now()}`, name: 'fill', success: false, error: `Unsupported element: ${tag}` }
 }
 
 async function select(selector: string, value: string): Promise<UiCommandResult> {

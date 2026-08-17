@@ -1,30 +1,31 @@
-"""Name-sync test for the 0072_sync_feature_flag_catalog migration.
+"""Name-sync test for the feature-flag catalog surface (final state).
 
-The migration upserts flags into ``feature_flag_catalog`` that the seed catalog
-(``modulo.core.seed_data.catalog.FLAGS``) previously missed. If a flag is added
-to ``_KNOWN_FLAGS`` (or to ``catalog.FLAGS``) without updating the migration's
-``_FLAGS`` dict, existing deployments seeded with ``ON CONFLICT DO NOTHING``
-never pick it up. This test keeps the migration's flag list in sync with the
-current head of the chain.
+The migration chain was squashed into three idempotent reconciliation
+migrations. The old ``0072_sync_feature_flag_catalog`` migration (which
+upserted flags into ``feature_flag_catalog`` that the seed catalog missed) and
+the ``0105`` head no longer exist. The feature-flag catalog is now created by
+the reconciliation chain (``0109_schema_teams_library`` adds the table
+columns) and populated at application startup from
+``modulo.core.seed_data.catalog.FLAGS``. These tests assert:
+
+* the reconciliation chain creates the ``feature_flag_catalog`` columns the
+  seed path writes to,
+* the seed catalog covers the full ``_KNOWN_FLAGS`` set — a flag added to
+  ``_KNOWN_FLAGS`` without a matching ``catalog.FLAGS`` entry (and a startup
+  seed that upserts it) never appears for existing deployments,
+* every expected flag is present in the seed catalog.
 """
 
 import importlib.util
 from pathlib import Path
 from types import ModuleType
 
-import pytest
 from alembic.script import ScriptDirectory
 
 from modulo.core.feature_flags import _KNOWN_FLAGS
 from modulo.core.seed_data.catalog import FLAGS
 
-_MIGRATION_NAME = "0072_sync_feature_flag_catalog"
-_MIGRATION_PATH = (
-    Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
-)
-
-# The migration this branch introduces — the current head of the chain.
-_HEAD_MIGRATION_NAME = "0106_trigger_event_guardrail_blocked"
+_HEAD_MIGRATION_NAME = "0112_feedback_correction_state"
 _HEAD_MIGRATION_PATH = (
     Path(__file__).resolve().parents[3]
     / "src"
@@ -35,7 +36,8 @@ _HEAD_MIGRATION_PATH = (
     / (f"{_HEAD_MIGRATION_NAME}.py")
 )
 
-# Flags the migration must upsert (the FAR-114 sync set).
+# Flags the old 0072 sync migration upserted (the FAR-114 sync set). The seed
+# catalog must still cover all of them.
 _EXPECTED_FLAGS: set[str] = {
     "error_tracking",
     "runtime_config",
@@ -56,6 +58,18 @@ _EXPECTED_FLAGS: set[str] = {
     "web_vitals_analytics",
 }
 
+# The reconciliation migration that adds the feature_flag_catalog columns.
+_CATALOG_MIGRATION_NAME = "0109_schema_teams_library"
+_CATALOG_MIGRATION_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "src"
+    / "modulo"
+    / "db"
+    / "migrations"
+    / "versions"
+    / (f"{_CATALOG_MIGRATION_NAME}.py")
+)
+
 
 def _load_migration(name: str, path: Path) -> ModuleType:
     assert path.exists(), f"Migration file missing: {path}"
@@ -67,71 +81,37 @@ def _load_migration(name: str, path: Path) -> ModuleType:
     return module
 
 
-@pytest.fixture(scope="module")
-def migration() -> ModuleType:
-    return _load_migration(_MIGRATION_NAME, _MIGRATION_PATH)
-
-
-@pytest.fixture(scope="module")
-def head_migration() -> ModuleType:
-    return _load_migration(_HEAD_MIGRATION_NAME, _HEAD_MIGRATION_PATH)
-
-
-def _versions_dir() -> Path:
-    return _MIGRATION_PATH.parent
-
-
-def _migrations_dir() -> Path:
-    return _versions_dir().parent
-
-
 def _script() -> ScriptDirectory:
-    return ScriptDirectory(str(_migrations_dir()))
+    return ScriptDirectory(str(_HEAD_MIGRATION_PATH.parent.parent))
 
 
-class TestMigrationFlagSync:
-    def test_migration_upserts_expected_flag_set(self, migration: ModuleType) -> None:
-        assert set(migration._FLAGS) == _EXPECTED_FLAGS, (
-            "migration _FLAGS must cover exactly the FAR-114 sync set "
-            f"(missing: {sorted(_EXPECTED_FLAGS - set(migration._FLAGS))}, "
-            f"extra: {sorted(set(migration._FLAGS) - _EXPECTED_FLAGS)})"
-        )
-
-    def test_migration_flag_tiers_match_known_flags(self, migration: ModuleType) -> None:
-        known_tiers = {flag.name: flag.tier for flag in _KNOWN_FLAGS}
-        for name, (tier_id, _description) in migration._FLAGS.items():
-            assert known_tiers[name] == tier_id, (
-                f"migration tier for {name} is {tier_id!r}, _KNOWN_FLAGS says {known_tiers[name]!r}"
-            )
-
-    def test_migration_flags_are_still_known(self, migration: ModuleType) -> None:
-        known = {flag.name for flag in _KNOWN_FLAGS}
-        unknown = sorted(set(migration._FLAGS) - known)
-        assert not unknown, f"migration references flags removed from _KNOWN_FLAGS: {unknown}"
-
-    def test_migration_is_head_and_revises_existing_revision(self, head_migration: ModuleType) -> None:
+class TestReconciliationChain:
+    def test_single_head_is_0008(self) -> None:
         script = _script()
-        assert head_migration.revision in script.get_heads(), (
-            f"migration {head_migration.revision} must be a head (no other migration revises it)"
-        )
-        existing = {rev.revision for rev in script.walk_revisions()}
-        assert head_migration.down_revision in existing, (
-            f"down_revision {head_migration.down_revision!r} must reference an existing migration revision"
+        assert script.get_heads() == [_HEAD_MIGRATION_NAME], (
+            f"expected a single head {_HEAD_MIGRATION_NAME}, got {script.get_heads()}"
         )
 
-    def test_migration_is_in_chain_and_revises_existing_revision(self, migration: ModuleType) -> None:
-        script = _script()
-        chain = {rev.revision for rev in script.walk_revisions()}
-        assert migration.revision in chain, (
-            f"migration {migration.revision} must be reachable from the migration graph head "
-            f"(heads: {sorted(script.get_heads())})"
-        )
-        assert migration.down_revision in chain, (
-            f"down_revision {migration.down_revision!r} must reference an existing migration revision"
-        )
+    def test_0007_creates_feature_flag_catalog_columns(self) -> None:
+        """The reconciliation chain must create the columns the startup seed
+        writes to; a fresh DB missing any of them fails the seed upsert."""
+        path = _CATALOG_MIGRATION_PATH
+        assert path.exists(), f"Migration file missing: {path}"
+        source = path.read_text(encoding="utf-8")
+        for column in ("name", "description", "tier_id", "depends_on", "is_active"):
+            assert f'ADD COLUMN IF NOT EXISTS "{column}"' in source, f"0007 missing feature_flag_catalog.{column}"
 
 
 class TestSeedCatalogFlagSet:
+    def test_seed_catalog_covers_every_known_flag(self) -> None:
+        """Every runtime-flagged feature must have a seed catalog entry — the
+        seed (startup upsert) is the only thing that makes a flag available on
+        already-deployed DBs."""
+        seeded = {entry["name"] for entry in FLAGS}
+        known = {flag.name for flag in _KNOWN_FLAGS}
+        missing = sorted(known - seeded)
+        assert not missing, f"catalog.FLAGS missing entries for known flags: {missing}"
+
     def test_seed_catalog_contains_the_17_synced_flags(self) -> None:
         seeded = {entry["name"] for entry in FLAGS}
         missing = sorted(_EXPECTED_FLAGS - seeded)

@@ -28,6 +28,8 @@ from modulo.core.notifier import (
     EVENT_EVAL_BLOCKED,
     EVENT_EVAL_REGRESSION,
     EVENT_FEEDBACK_PENDING,
+    EVENT_GUARDRAIL_ENFORCEMENT_GAP,
+    EVENT_GUARDRAIL_KILL_SWITCH,
     EVENT_HITL_AWAITING,
     EVENT_HITL_OVERDUE,
     EVENT_RUN_FAILED,
@@ -39,6 +41,9 @@ from modulo.db.crud.notifications import create_notification
 from modulo.db.models.notification import Notification
 
 _log = logging.getLogger(__name__)
+
+# Deep-link template shared by every run-scoped notification action URL.
+_RUN_DETAIL_URL = "/runs/{run_id}"
 
 # HITL-gate guard events (hitl-gate-removal-guard-plan.md v19 §5). These are
 # emitted by the service-layer backstop as AuditEvents; the config registration
@@ -151,6 +156,22 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
         "dismissible_at_scope": True,
         "ttl_hours": 168,
     },
+    EVENT_GUARDRAIL_ENFORCEMENT_GAP: {
+        "level": "error",
+        "scope": "admin",
+        "category": "guardrails.enforcement_gap",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    EVENT_GUARDRAIL_KILL_SWITCH: {
+        "level": "warning",
+        "scope": "admin",
+        "category": "guardrails.kill_switch",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
 }
 
 _TITLE_TEMPLATES: dict[str, str] = {
@@ -167,6 +188,8 @@ _TITLE_TEMPLATES: dict[str, str] = {
     EVENT_FEEDBACK_PENDING: "Feedback awaiting review",
     EVENT_SYSTEM_ANNOUNCEMENT: "System announcement",
     EVENT_TRIGGER_DEACTIVATED: "Ongoing trigger auto-deactivated — {pipeline_name}",
+    EVENT_GUARDRAIL_ENFORCEMENT_GAP: "Guardrail enforcement gap — {guardrail}",
+    EVENT_GUARDRAIL_KILL_SWITCH: "Guardrails downgraded to observe (kill-switch enabled)",
 }
 
 _BODY_TEMPLATES: dict[str, str] = {
@@ -188,22 +211,31 @@ _BODY_TEMPLATES: dict[str, str] = {
         'Ongoing trigger "{pipeline_name}" was auto-deactivated after {streak} consecutive no-delivery runs '
         "(threshold {threshold})."
     ),
+    EVENT_GUARDRAIL_ENFORCEMENT_GAP: (
+        'Guardrail "{guardrail}" could not be evaluated ({reason}) and is not enforcing. See the run for details.'
+    ),
+    EVENT_GUARDRAIL_KILL_SWITCH: (
+        "The org-wide guardrails kill-switch was enabled: every bound guardrail is now "
+        "observe-only (shadow mode). Guardrails are computed and logged but never block or redact."
+    ),
 }
 
 _ACTION_URL_TEMPLATES: dict[str, str | None] = {
-    EVENT_HITL_AWAITING: "/runs/{run_id}",
-    EVENT_RUN_FAILED: "/runs/{run_id}",
-    EVENT_RUN_STALLED: "/runs/{run_id}",
-    EVENT_BUDGET_EXCEEDED: "/runs/{run_id}",
-    EVENT_CLAIM_EXPIRED: "/runs/{run_id}",
-    EVENT_HITL_OVERDUE: "/runs/{run_id}",
+    EVENT_HITL_AWAITING: _RUN_DETAIL_URL,
+    EVENT_RUN_FAILED: _RUN_DETAIL_URL,
+    EVENT_RUN_STALLED: _RUN_DETAIL_URL,
+    EVENT_BUDGET_EXCEEDED: _RUN_DETAIL_URL,
+    EVENT_CLAIM_EXPIRED: _RUN_DETAIL_URL,
+    EVENT_HITL_OVERDUE: _RUN_DETAIL_URL,
     EVENT_HITL_GATE_REMOVED: None,
     EVENT_HITL_GATE_REMOVAL_DENIED: None,
     EVENT_EVAL_REGRESSION: "/evals",
-    EVENT_EVAL_BLOCKED: "/runs/{run_id}",
+    EVENT_EVAL_BLOCKED: _RUN_DETAIL_URL,
     EVENT_FEEDBACK_PENDING: "/feedback/inbox",
     EVENT_SYSTEM_ANNOUNCEMENT: None,
     EVENT_TRIGGER_DEACTIVATED: None,
+    EVENT_GUARDRAIL_ENFORCEMENT_GAP: "/runs/{run_id}",
+    EVENT_GUARDRAIL_KILL_SWITCH: None,
 }
 
 

@@ -2,6 +2,7 @@
 
 import asyncio
 import sys
+import tempfile
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
@@ -308,3 +309,15 @@ class TestLocalRuntimeProvider:
         with pytest.raises(asyncio.CancelledError):
             await provider.destroy_workspace(ref)
         assert ref not in provider._workspaces
+
+    async def test_create_workspace_tempdir_failure_raises_structured_error(
+        self, provider: LocalRuntimeProvider, spec: WorkspaceSpec, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _mkdtemp_fails(*args: object, **kwargs: object) -> str:
+            raise OSError("No space left on device")
+
+        monkeypatch.setattr(tempfile, "mkdtemp", _mkdtemp_fails)
+
+        with pytest.raises(RuntimeError, match="Failed to create workspace temp directory"):
+            await provider.create_workspace(spec)
+        assert not provider._workspaces

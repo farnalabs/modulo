@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from modulo.connectors._safe_int import safe_int as _safe_int
+from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -19,7 +20,7 @@ _RATE_LIMITED_STATUS = 429
 
 
 def _next_page_cursor(body: dict[str, Any], limit: int) -> str | None:
-    paging = body.get("paging", {})
+    paging = body.get("paging", {}) if isinstance(body, dict) else {}
     if not isinstance(paging, dict):
         paging = {}
     page_index = _safe_int(paging.get("pageIndex"), 1)
@@ -39,7 +40,7 @@ def _paging_total(body: dict[str, Any]) -> int | None:
     historical ``None`` behaviour. A non-dict ``paging`` value is treated as
     absent.
     """
-    paging = body.get("paging", {})
+    paging = body.get("paging", {}) if isinstance(body, dict) else {}
     if not isinstance(paging, dict):
         paging = {}
     raw = paging.get("total")
@@ -138,8 +139,9 @@ class SonarQubeConnector(ConnectorBase):
         resp = await c.get("/projects/search", params=params)
         resp.raise_for_status()
         body = resp.json()
+        records = _safe_records(body, "components")
         return ConnectorResult(
-            records=body.get("components", []),
+            records=records,
             total=_paging_total(body),
             next_cursor=_next_page_cursor(body, q.limit),
         )
@@ -163,8 +165,9 @@ class SonarQubeConnector(ConnectorBase):
         resp = await c.get("/project_analyses/search", params=params)
         resp.raise_for_status()
         body = resp.json()
+        records = _safe_records(body, "analyses")
         return ConnectorResult(
-            records=body.get("analyses", []),
+            records=records,
             total=_paging_total(body),
             next_cursor=_next_page_cursor(body, q.limit),
         )
@@ -187,10 +190,11 @@ class SonarQubeConnector(ConnectorBase):
         resp = await c.get("/measures/component", params=params)
         resp.raise_for_status()
         body = resp.json()
-        return ConnectorResult(
-            records=body.get("component", {}).get("measures", []),
-            total=len(body.get("component", {}).get("measures", [])),
-        )
+        component = body.get("component", {}) if isinstance(body, dict) else {}
+        component = component if isinstance(component, dict) else {}
+        measures = component.get("measures", [])
+        measures = measures if isinstance(measures, list) else []
+        return ConnectorResult(records=measures, total=len(measures))
 
     async def _search_issues(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
         params: dict[str, Any] = {}
@@ -222,8 +226,9 @@ class SonarQubeConnector(ConnectorBase):
         resp = await c.get("/issues/search", params=params)
         resp.raise_for_status()
         body = resp.json()
+        records = _safe_records(body, "issues")
         return ConnectorResult(
-            records=body.get("issues", []),
+            records=records,
             total=_paging_total(body),
             next_cursor=_next_page_cursor(body, q.limit),
         )
@@ -232,9 +237,10 @@ class SonarQubeConnector(ConnectorBase):
         resp = await c.get("/qualitygates/list")
         resp.raise_for_status()
         body = resp.json()
+        records = _safe_records(body, "qualitygates")
         return ConnectorResult(
-            records=body.get("qualitygates", []),
-            total=len(body.get("qualitygates", [])),
+            records=records,
+            total=len(records),
         )
 
     async def _get_quality_gate(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -257,8 +263,9 @@ class SonarQubeConnector(ConnectorBase):
         resp = await c.get("/metrics/search", params=params)
         resp.raise_for_status()
         body = resp.json()
+        records = _safe_records(body, "metrics")
         return ConnectorResult(
-            records=body.get("metrics", []),
+            records=records,
             total=_paging_total(body),
             next_cursor=_next_page_cursor(body, q.limit),
         )
@@ -267,9 +274,10 @@ class SonarQubeConnector(ConnectorBase):
         resp = await c.get("/plugins/installed")
         resp.raise_for_status()
         body = resp.json()
+        records = _safe_records(body, "plugins")
         return ConnectorResult(
-            records=body.get("plugins", []),
-            total=len(body.get("plugins", [])),
+            records=records,
+            total=len(records),
         )
 
     async def _search_hotspots(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -291,8 +299,9 @@ class SonarQubeConnector(ConnectorBase):
         resp = await c.get("/hotspots/search", params=params)
         resp.raise_for_status()
         body = resp.json()
+        records = _safe_records(body, "hotspots")
         return ConnectorResult(
-            records=body.get("hotspots", []),
+            records=records,
             total=_paging_total(body),
             next_cursor=_next_page_cursor(body, q.limit),
         )

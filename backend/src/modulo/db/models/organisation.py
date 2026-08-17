@@ -17,6 +17,10 @@ class Organisation(Base):
             "NOT triggers_paused OR triggers_paused_at IS NOT NULL",
             name="ck_organisations_triggers_paused_at",
         ),
+        CheckConstraint(
+            "NOT guardrails_kill_switch OR guardrails_kill_switch_at IS NOT NULL",
+            name="ck_organisations_guardrails_kill_switch_at",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
@@ -43,6 +47,14 @@ class Organisation(Base):
     # pause was last enabled (CHECK-constrained to be non-NULL while paused).
     triggers_paused: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     triggers_paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Guardrails org-wide kill-switch (FAR-223 item 9): when TRUE every bound
+    # guardrail downgrades to OBSERVE at run start (shadow-only — compute +
+    # log, never block, never redact). It is NEVER a full disable — observe
+    # mode still computes and logs. ``guardrails_kill_switch_at`` records when
+    # it was last enabled (CHECK-constrained to be non-NULL while on, mirroring
+    # the triggers-pause precedent).
+    guardrails_kill_switch: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    guardrails_kill_switch_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     daily_spend_limit: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
     deletion_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
     deletion_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

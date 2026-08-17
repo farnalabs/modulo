@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
@@ -23,6 +24,10 @@ from modulo.determination.draft import generate_draft
 from modulo.determination.inference import Finding, infer
 from modulo.determination.scanner import ScanSample, run_scan
 from modulo.settings import Settings, get_settings
+
+_CODE_DETERMINATION_RUN_DETERMINATION = "determination.run_determination"
+_CODE_DETERMINATION_CREATE_DETERMINATION_DRAFT = "determination.create_determination_draft"
+
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +119,7 @@ def _sample_to_response(s: ScanSample) -> SampleResponse:
 
 
 @router.get("", response_model=DeterminationResponse)
-@handle_db_errors("determination.run_determination")
+@handle_db_errors(_CODE_DETERMINATION_RUN_DETERMINATION)
 async def run_determination(
     session: AsyncSession = Depends(get_db_session),
     _: TenantPrincipal = require_permission("determination.scan"),
@@ -163,18 +168,18 @@ async def run_determination(
     except HTTPException:
         raise
     except IntegrityError:
-        logger.exception("determination.run_determination")
+        logger.exception(_CODE_DETERMINATION_RUN_DETERMINATION)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
-        logger.exception("determination.run_determination")
+        logger.exception(_CODE_DETERMINATION_RUN_DETERMINATION)
         raise HTTPException(
             status_code=501, detail="Feature is not available. Run database migrations to enable it."
         ) from None
     except SQLAlchemyError:
-        logger.exception("determination.run_determination")
+        logger.exception(_CODE_DETERMINATION_RUN_DETERMINATION)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database service unavailable. Please try again later.",
@@ -183,11 +188,11 @@ async def run_determination(
         raise
     except Exception:
         logger.exception("Unexpected error in run_determination")
-        raise HTTPException(status_code=500, detail="Internal server error") from None
+        raise HTTPException(status_code=500, detail=MSG_INTERNAL_SERVER_ERROR) from None
 
 
 @router.post("/draft", response_model=DraftResponse)
-@handle_db_errors("determination.create_determination_draft")
+@handle_db_errors(_CODE_DETERMINATION_CREATE_DETERMINATION_DRAFT)
 async def create_determination_draft(
     session: AsyncSession = Depends(get_db_session),
     _: TenantPrincipal = require_permission("determination.scan"),
@@ -268,18 +273,18 @@ async def create_determination_draft(
     except HTTPException:
         raise
     except IntegrityError:
-        logger.exception("determination.create_determination_draft")
+        logger.exception(_CODE_DETERMINATION_CREATE_DETERMINATION_DRAFT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
-        logger.exception("determination.create_determination_draft")
+        logger.exception(_CODE_DETERMINATION_CREATE_DETERMINATION_DRAFT)
         raise HTTPException(
             status_code=501, detail="Feature is not available. Run database migrations to enable it."
         ) from None
     except SQLAlchemyError:
-        logger.exception("determination.create_determination_draft")
+        logger.exception(_CODE_DETERMINATION_CREATE_DETERMINATION_DRAFT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database service unavailable. Please try again later.",
@@ -288,4 +293,4 @@ async def create_determination_draft(
         raise
     except Exception:
         logger.exception("Unexpected error in create_determination_draft")
-        raise HTTPException(status_code=500, detail="Internal server error") from None
+        raise HTTPException(status_code=500, detail=MSG_INTERNAL_SERVER_ERROR) from None

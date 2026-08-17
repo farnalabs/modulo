@@ -94,14 +94,40 @@ class TestAdminListConfig:
     async def test_returns_entries(self, client_sys_admin, mock_session):
         from modulo.db.models.system_config import SystemConfig
 
-        entry = SystemConfig(key="test_key", value="test_val")
+        entry = SystemConfig(key="app_name", value="modulo")
         mock_session.execute.return_value.scalars.return_value.all.return_value = [entry]
         resp = await client_sys_admin.get("/api/v1/system-admin/config")
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) == 1
-        assert data[0]["key"] == "test_key"
-        assert data[0]["value"] == "test_val"
+        assert data[0]["key"] == "app_name"
+        assert data[0]["value"] == "modulo"
+
+    @pytest.mark.anyio
+    async def test_sensitive_key_value_is_masked(self, client_sys_admin, mock_session):
+        from modulo.db.models.system_config import SystemConfig
+
+        entries = [
+            SystemConfig(key="slack_api_token", value="xoxb-123"),
+            SystemConfig(key="app_name", value="modulo"),
+        ]
+        mock_session.execute.return_value.scalars.return_value.all.return_value = entries
+        resp = await client_sys_admin.get("/api/v1/system-admin/config")
+        assert resp.status_code == 200
+        data = {e["key"]: e["value"] for e in resp.json()}
+        assert data["slack_api_token"] == "\u2022\u2022\u2022\u2022\u2022\u2022"
+        assert data["app_name"] == "modulo"
+
+    @pytest.mark.anyio
+    async def test_non_string_sensitive_value_not_masked(self, client_sys_admin, mock_session):
+        from modulo.db.models.system_config import SystemConfig
+
+        entry = SystemConfig(key="feature_flags", value={"analytics": True})
+        mock_session.execute.return_value.scalars.return_value.all.return_value = [entry]
+        resp = await client_sys_admin.get("/api/v1/system-admin/config")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data[0]["value"] == {"analytics": True}
 
     @pytest.mark.anyio
     async def test_list_config_programming_error_returns_501(self, client_sys_admin, mock_session):

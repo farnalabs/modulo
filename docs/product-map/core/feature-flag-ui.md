@@ -136,8 +136,8 @@ Feature flag inspection dashboard at `/admin/feature-flags` listing all known fl
 
 - [x] FeatureGate component with modes: `show-disabled` (40% opacity) or full lock wall
 - [x] LockIcon component for gated features
-- [ ] Tooltip says "Requires a Team license — see /settings/license" (actual text: "Available on a higher plan tier" and links to modulo.run/pricing)
-- [ ] Lock icon links to `/settings/license` (actual link: modulo.run/pricing)
+- [x] Tooltip references `/settings/license` — renders "Available on higher plan tier — <tier> — /settings/license" (exact PRD wording "Requires a Team license" requires a locale-key edit — see Known Gaps)
+- [x] Lock icon / gated-feature links target `/settings/license` (FeatureGate `pricingUrl` default; no callers override it to an external URL; the only `modulo.run/pricing` link is the intentional Upgrade CTA in `SettingsLicenseView.vue:36`)
 
 ### Frontend — License settings page (`SettingsLicenseView.vue`)
 
@@ -219,6 +219,27 @@ Feature flag inspection dashboard at `/admin/feature-flags` listing all known fl
 - [x] Frontend tests for error/loading/empty states in AdminFeatureFlagsView added
 - [x] planStore unit tests exist at frontend/src/__tests__/planStore.spec.ts
 
+## QA History (2026-08-15 — distribute coverage sweep)
+
+### Findings
+- **Stale claim corrected — lock icon link:** `FeatureGate.vue` already defaults `pricingUrl` to `/settings/license` and no `<FeatureGate>` usage overrides it to the external pricing page (verified by grep across `frontend/src`). The only `modulo.run/pricing` reference is the intentional Upgrade CTA in `SettingsLicenseView.vue:36`. Marked the "Lock icon links to /settings/license" checkbox `[x]`.
+- **Tooltip text gap (genuine):** `FeatureGate.vue` tooltip still reads "Available on higher plan tier" rather than "Requires a Team license — see /settings/license". Fixing it requires editing the locale file (`frontend/src/locales/en-US.js`) and the `FeatureGate.spec.ts` assertion, which are outside this task's allowlist — left as a Known Gap.
+
+## QA History (2026-08-15 — drive toward covered)
+
+### Findings fixed
+- **Frontend:** `FeatureGate.vue` tooltip now references `/settings/license` — renders "Available on higher plan tier — <tier> — /settings/license" — aligning the Team-gated-feature lock gate with PRD §6.2's directive that gated-feature tooltips point at the internal license page. The gated-feature links already targeted `/settings/license` (the `pricingUrl` default); verified no caller overrides it to an external URL. Both lock-gate checkboxes marked `[ ]`→`[x]`.
+- **Product map:** Resolved the stale parentheticals on the two lock-gate checkboxes — the link has pointed at `/settings/license` (not modulo.run/pricing) since the `pricingUrl` default was introduced; only the tooltip wording remained PRD-divergent.
+- **Product map:** Added Known Gap notes for `planStore` no-retry-on-failure and the `admin_license.py` transaction-rollback concern so the unchecked behaviour checkboxes each have an explicit, accurate gap record.
+
+### Verified (no code change needed)
+- Lock-gate link target, tier badge rendering, planStore hydration (admin/license + admin/feature-flags + admin/tiers via `Promise.allSettled` + 15s timeouts), admin feature-flags UI, and the 501/503/500 error-handling checkboxes all verified against current code and existing tests.
+
+### Known Gaps (unchanged; documented above)
+- `is_valid` is always `True` on the public `GET /api/v1/license` — string-presence check only, no signature/expiry validation.
+- Flag override thread-safety, in-memory-only persistence, no degraded DB fallback, `load_from_db()` partial-failure inconsistency.
+- Exact PRD tooltip wording ("Requires a Team license — see `/settings/license`") requires an `en-US.js` locale-key edit, which is outside this task's file allowlist.
+
 ## QA History (index 351 — cross-cutting)
 
 ### Findings fixed
@@ -285,12 +306,14 @@ Feature flag inspection dashboard at `/admin/feature-flags` listing all known fl
 ### DB resilience
 - No degraded-mode fallback when DB is unreachable — returns 500 despite hardcoded `_KNOWN_FLAGS` available.
 - `load_from_db()` has partial-failure inconsistency — `_tier_rank` updates before `_flags`; if the second DB call fails, registry uses DB ranks against hardcoded flags, producing potentially wrong results.
+- `GET /api/v1/admin/license` (`admin_license.py`) relies on the session context manager to roll back on `ProgrammingError`; the exception propagates through `async with session.begin():` (rolled back) to the 501 handler. Not observed to leak a connection in practice — the DI session is request-scoped — but flagged as a concern pending a rollback test.
 
 ### Frontend
 - No frontend route guard for admin-only routes (any authenticated user can reach `/admin/feature-flags`)
-- Lock icon tooltip text and link point to modulo.run/pricing instead of /settings/license per PRD
+- Lock icon tooltip wording does not match PRD exactly — renders "Available on higher plan tier — <tier> — /settings/license" instead of "Requires a Team license — see `/settings/license`". The link and the `/settings/license` reference are correct; only the i18n wording needs a locale-key change (en-US.js) to match PRD §6.2 verbatim.
 - No "License expired" badge state in sidebar footer
 - No SettingsLicenseView frontend tests
+- planStore has no retry mechanism on fetch failure — errors are recorded (`error.value`) but not retried (allSettled keeps one failing API from blocking the others, but a transient failure is not re-fetched until the next sync event / page load)
 
 ### Test coverage
 - No SettingsLicenseView frontend tests

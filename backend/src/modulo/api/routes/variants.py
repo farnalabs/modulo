@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_RESOURCE_ALREADY_EXISTS
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
@@ -26,6 +27,23 @@ from modulo.db.crud.variant_group import (
     update_variant_group,
 )
 from modulo.db.rls import set_rls_org
+
+_CODE_VARIANTS_CREATE_GROUP = "variants.create_group"
+_MSG_DATABASE_ERROR_OCCURRED_PLEASE = "Database error occurred. Please try again."
+_MSG_UNEXPECTED_ERROR_VARIANT_GROUP = "Unexpected error in variant group endpoint"
+_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE = "An unexpected error occurred. Please try again."
+_CODE_VARIANT_LIST = "variant.list"
+_CODE_VARIANTS_LIST_GROUPS = "variants.list_groups"
+_CODE_VARIANTS_GET_GROUP = "variants.get_group"
+_MSG_VARIANT_GROUP_NOT_FOUND = "Variant group not found"
+_CODE_VARIANTS_UPDATE_GROUP = "variants.update_group"
+_CODE_VARIANTS_DELETE_GROUP = "variants.delete_group"
+_CODE_VARIANTS_RESTORE_GROUP = "variants.restore_group"
+_CODE_VARIANTS_RUN_VARIANT = "variants.run_variant"
+_CODE_VARIANTS_RUN_VARIANT_BATCH = "variants.run_variant_batch"
+_CODE_VARIANTS_COVERAGE_GAPS = "variants.coverage_gaps"
+_CODE_VARIANTS_PROMPT_DIFFS = "variants.prompt_diffs"
+
 
 _log = logging.getLogger(__name__)
 
@@ -107,7 +125,7 @@ def _variant_to_response(group: Any) -> dict[str, Any]:
 
 
 @router.post("", response_model=VariantGroupResponse, status_code=status.HTTP_201_CREATED)
-@handle_db_errors("variants.create_group")
+@handle_db_errors(_CODE_VARIANTS_CREATE_GROUP)
 async def create_group(
     req: CreateVariantGroupRequest,
     session: AsyncSession = Depends(get_db_session),
@@ -128,65 +146,65 @@ async def create_group(
                 degraded_evals=req.degraded_evals,
             )
     except IntegrityError:
-        _log.exception("variants.create_group")
+        _log.exception(_CODE_VARIANTS_CREATE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Resource conflict. The referenced pipeline may not exist.",
         ) from None
     except ProgrammingError:
-        _log.exception("variants.create_group")
+        _log.exception(_CODE_VARIANTS_CREATE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("variants.create_group")
+        _log.exception(_CODE_VARIANTS_CREATE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error occurred. Please try again.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
     except Exception:
-        _log.exception("Unexpected error in variant group endpoint")
+        _log.exception(_MSG_UNEXPECTED_ERROR_VARIANT_GROUP)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred. Please try again.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
 
     return _variant_to_response(group)
 
 
 @router.get("", response_model=list[VariantGroupResponse])
-@handle_db_errors("variants.list_groups")
+@handle_db_errors(_CODE_VARIANTS_LIST_GROUPS)
 async def list_groups(
     pipeline_id: uuid.UUID | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("variant.list"),
+    principal: TenantPrincipal = require_permission(_CODE_VARIANT_LIST),
 ) -> list[dict[str, Any]]:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             items, _total = await list_variant_groups(session, pipeline_id=pipeline_id, page=page, page_size=page_size)
     except IntegrityError:
-        _log.exception("variants.list_groups")
+        _log.exception(_CODE_VARIANTS_LIST_GROUPS)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("variants.list_groups")
+        _log.exception(_CODE_VARIANTS_LIST_GROUPS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("variants.list_groups")
+        _log.exception(_CODE_VARIANTS_LIST_GROUPS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error occurred. Please try again.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -194,55 +212,55 @@ async def list_groups(
         _log.exception("Unexpected error in variant group list endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred. Please try again.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
     return [_variant_to_response(g) for g in items]
 
 
 @router.get("/{group_id}", response_model=VariantGroupResponse)
-@handle_db_errors("variants.get_group")
+@handle_db_errors(_CODE_VARIANTS_GET_GROUP)
 async def get_group(
     group_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("variant.list"),
+    principal: TenantPrincipal = require_permission(_CODE_VARIANT_LIST),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             group = await get_variant_group(session, group_id)
     except IntegrityError:
-        _log.exception("variants.get_group")
+        _log.exception(_CODE_VARIANTS_GET_GROUP)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("variants.get_group")
+        _log.exception(_CODE_VARIANTS_GET_GROUP)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("variants.get_group")
+        _log.exception(_CODE_VARIANTS_GET_GROUP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error occurred. Please try again.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
     except Exception:
-        _log.exception("Unexpected error in variant group endpoint")
+        _log.exception(_MSG_UNEXPECTED_ERROR_VARIANT_GROUP)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred. Please try again.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
     if group is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variant group not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_VARIANT_GROUP_NOT_FOUND)
     return _variant_to_response(group)
 
 
 @router.put("/{group_id}", response_model=VariantGroupResponse)
-@handle_db_errors("variants.update_group")
+@handle_db_errors(_CODE_VARIANTS_UPDATE_GROUP)
 async def update_group(
     group_id: uuid.UUID,
     req: CreateVariantGroupRequest,
@@ -263,38 +281,38 @@ async def update_group(
                 degraded_evals=req.degraded_evals,
             )
     except IntegrityError:
-        _log.exception("variants.update_group")
+        _log.exception(_CODE_VARIANTS_UPDATE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Resource conflict. The referenced pipeline may not exist.",
         ) from None
     except ProgrammingError:
-        _log.exception("variants.update_group")
+        _log.exception(_CODE_VARIANTS_UPDATE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("variants.update_group")
+        _log.exception(_CODE_VARIANTS_UPDATE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error occurred. Please try again.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
     except Exception:
-        _log.exception("Unexpected error in variant group endpoint")
+        _log.exception(_MSG_UNEXPECTED_ERROR_VARIANT_GROUP)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred. Please try again.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
     if group is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variant group not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_VARIANT_GROUP_NOT_FOUND)
     return _variant_to_response(group)
 
 
 @router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
-@handle_db_errors("variants.delete_group")
+@handle_db_errors(_CODE_VARIANTS_DELETE_GROUP)
 async def delete_group(
     group_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -305,22 +323,22 @@ async def delete_group(
             await set_rls_org(session, principal.organisation_id)
             deleted = await soft_delete_variant_group(session, group_id)
     except IntegrityError:
-        _log.exception("variants.delete_group")
+        _log.exception(_CODE_VARIANTS_DELETE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Cannot delete variant group — it is referenced by existing runs.",
         ) from None
     except ProgrammingError:
-        _log.exception("variants.delete_group")
+        _log.exception(_CODE_VARIANTS_DELETE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("variants.delete_group")
+        _log.exception(_CODE_VARIANTS_DELETE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error occurred. Please try again.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -328,14 +346,14 @@ async def delete_group(
         _log.exception("Unexpected error in variant group delete endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred. Please try again.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variant group not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_VARIANT_GROUP_NOT_FOUND)
 
 
 @router.post("/{group_id}/restore", response_model=VariantGroupResponse)
-@handle_db_errors("variants.restore_group")
+@handle_db_errors(_CODE_VARIANTS_RESTORE_GROUP)
 async def restore_group(
     group_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -346,22 +364,22 @@ async def restore_group(
             await set_rls_org(session, principal.organisation_id)
             group = await restore_variant_group(session, group_id)
     except IntegrityError:
-        _log.exception("variants.restore_group")
+        _log.exception(_CODE_VARIANTS_RESTORE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Resource conflict.",
         ) from None
     except ProgrammingError:
-        _log.exception("variants.restore_group")
+        _log.exception(_CODE_VARIANTS_RESTORE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("variants.restore_group")
+        _log.exception(_CODE_VARIANTS_RESTORE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error occurred. Please try again.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -369,7 +387,7 @@ async def restore_group(
         _log.exception("Unexpected error in variant group restore endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred. Please try again.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
     if group is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variant group not found or not deleted")
@@ -377,7 +395,7 @@ async def restore_group(
 
 
 @router.post("/{group_id}/run", response_model=RunVariantResponse)
-@handle_db_errors("variants.run_variant")
+@handle_db_errors(_CODE_VARIANTS_RUN_VARIANT)
 async def run_variant(
     group_id: uuid.UUID,
     req: RunVariantRequest,
@@ -391,7 +409,7 @@ async def run_variant(
             if group is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Variant group not found",
+                    detail=_MSG_VARIANT_GROUP_NOT_FOUND,
                 )
 
             if not group.variants:
@@ -414,22 +432,22 @@ async def run_variant(
                 account_id=principal.account_id,
             )
     except IntegrityError:
-        _log.exception("variants.run_variant")
+        _log.exception(_CODE_VARIANTS_RUN_VARIANT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Resource conflict. The referenced pipeline or snapshot may not exist.",
         ) from None
     except ProgrammingError:
-        _log.exception("variants.run_variant")
+        _log.exception(_CODE_VARIANTS_RUN_VARIANT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("variants.run_variant")
+        _log.exception(_CODE_VARIANTS_RUN_VARIANT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error occurred. Please try again.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -437,7 +455,7 @@ async def run_variant(
         _log.exception("Unexpected error in variant group run endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred. Please try again.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
 
     if result is None:
@@ -454,7 +472,7 @@ async def run_variant(
 
 
 @router.post("/{group_id}/batch-run", response_model=RunVariantBatchResponse)
-@handle_db_errors("variants.run_variant_batch")
+@handle_db_errors(_CODE_VARIANTS_RUN_VARIANT_BATCH)
 async def run_batch(
     group_id: uuid.UUID,
     req: RunVariantRequest,
@@ -468,7 +486,7 @@ async def run_batch(
             if group is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Variant group not found",
+                    detail=_MSG_VARIANT_GROUP_NOT_FOUND,
                 )
 
             if not group.variants:
@@ -485,22 +503,22 @@ async def run_batch(
                 account_id=principal.account_id,
             )
     except IntegrityError:
-        _log.exception("variants.run_variant_batch")
+        _log.exception(_CODE_VARIANTS_RUN_VARIANT_BATCH)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Resource conflict. The referenced pipeline or snapshot may not exist.",
         ) from None
     except ProgrammingError:
-        _log.exception("variants.run_variant_batch")
+        _log.exception(_CODE_VARIANTS_RUN_VARIANT_BATCH)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("variants.run_variant_batch")
+        _log.exception(_CODE_VARIANTS_RUN_VARIANT_BATCH)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error occurred. Please try again.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -508,7 +526,7 @@ async def run_batch(
         _log.exception("Unexpected error in variant group batch run endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred. Please try again.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
 
     if results is None:
@@ -529,11 +547,11 @@ async def run_batch(
 
 
 @router.get("/{group_id}/coverage-gaps", response_model=list[CoverageGap])
-@handle_db_errors("variants.coverage_gaps")
+@handle_db_errors(_CODE_VARIANTS_COVERAGE_GAPS)
 async def coverage_gaps(
     group_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("variant.list"),
+    principal: TenantPrincipal = require_permission(_CODE_VARIANT_LIST),
 ) -> list[dict[str, Any]]:
     try:
         async with session.begin():
@@ -542,26 +560,26 @@ async def coverage_gaps(
             if group is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Variant group not found",
+                    detail=_MSG_VARIANT_GROUP_NOT_FOUND,
                 )
             gaps = await get_coverage_gaps(session, group)
     except IntegrityError:
-        _log.exception("variants.coverage_gaps")
+        _log.exception(_CODE_VARIANTS_COVERAGE_GAPS)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("variants.coverage_gaps")
+        _log.exception(_CODE_VARIANTS_COVERAGE_GAPS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("variants.coverage_gaps")
+        _log.exception(_CODE_VARIANTS_COVERAGE_GAPS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error occurred. Please try again.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -569,17 +587,17 @@ async def coverage_gaps(
         _log.exception("Unexpected error in variant group coverage-gaps endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred. Please try again.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
     return gaps
 
 
 @router.get("/{group_id}/prompt-diffs", response_model=list[PromptDiffEntry])
-@handle_db_errors("variants.prompt_diffs")
+@handle_db_errors(_CODE_VARIANTS_PROMPT_DIFFS)
 async def prompt_diffs(
     group_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("variant.list"),
+    principal: TenantPrincipal = require_permission(_CODE_VARIANT_LIST),
 ) -> list[dict[str, Any]]:
     try:
         async with session.begin():
@@ -588,26 +606,26 @@ async def prompt_diffs(
             if group is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Variant group not found",
+                    detail=_MSG_VARIANT_GROUP_NOT_FOUND,
                 )
             diffs = await get_prompt_diffs(session, group)
     except IntegrityError:
-        _log.exception("variants.prompt_diffs")
+        _log.exception(_CODE_VARIANTS_PROMPT_DIFFS)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("variants.prompt_diffs")
+        _log.exception(_CODE_VARIANTS_PROMPT_DIFFS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("variants.prompt_diffs")
+        _log.exception(_CODE_VARIANTS_PROMPT_DIFFS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error occurred. Please try again.",
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -615,6 +633,6 @@ async def prompt_diffs(
         _log.exception("Unexpected error in variant group prompt-diffs endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred. Please try again.",
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
     return diffs
