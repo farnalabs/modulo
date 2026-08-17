@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy import update as sa_update
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
@@ -40,7 +40,7 @@ from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _CODE_FEEDBACK_CREATE_FEEDBACK = "feedback.create_feedback"
 _MSG_RESOURCE_CONFLICT_OCCURRED_PLEASE = "A resource conflict occurred. Please try again."
@@ -80,6 +80,13 @@ class UpdateStatusRequest(BaseModel):
 class ReviewFeedbackRequest(BaseModel):
     action: str  # mark_reviewed | dismiss | create_correction_run
     annotation: str | None = None
+
+
+class PublishEvalProposalRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    eval_type: str = Field(pattern=r"^(llm_judge|regex|json_schema|custom_function)$")
+    config: dict[str, Any] = Field(default_factory=dict)
+    node_id: uuid.UUID | None = None
 
 
 def _eval_def_to_dto(row: EvalDefinition, org_id: uuid.UUID) -> EvalDefinitionDTO:
@@ -414,6 +421,176 @@ async def list_eval_proposals(
         "total": result["total"],
         "page": result["page"],
         "page_size": result["page_size"],
+    }
+
+
+async def _resolve_producing_node_uuid(
+    session: AsyncSession,
+    record: FeedbackRecord,
+    run: Run,
+) -> uuid.UUID | None:
+    """Resolve a FeedbackRecord's ``producing_node_id`` to a graph node UUID.
+
+    The published eval must be scoped to a pipeline node (``EvalDefinition.node_id``)
+    or it is never executed by the run-time eval loader (executor filters
+    ``node_id.isnot(None)``). Resolution order: explicit request ``node_id`` is
+    handled by the caller; here we parse ``producing_node_id`` as a UUID, then
+    match it (by id or name/label) against the run snapshot's graph nodes.
+    """
+    try:
+        return uuid.UUID(str(record.producing_node_id))
+    except (ValueError, TypeError):
+        pass
+    if run.snapshot_id is None:
+        return None
+    snap = (
+        await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.id == run.snapshot_id))
+    ).scalar_one_or_none()
+    if snap is None or not snap.graph_json:
+        return None
+    target = str(record.producing_node_id)
+    for node in snap.graph_json.get("nodes", []):
+        nid = node.get("id")
+        if str(nid) == target or str(node.get("name")) == target or str(node.get("label")) == target:
+            try:
+                return uuid.UUID(str(nid))
+            except (ValueError, TypeError):
+                return None
+    return None
+
+
+@router.post("/feedback/proposals/{record_id}/publish", status_code=status.HTTP_201_CREATED)
+@handle_db_errors("feedback.publish_eval_proposal")
+async def publish_eval_proposal(
+    record_id: uuid.UUID,
+    req: PublishEvalProposalRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("feedback.review"),
+) -> dict[str, Any]:
+    """Publish an eval-gap proposal as a live eval definition (PRD §8.20 ¶Eval suite growth #3).
+
+    A human reviews/edits the proposed eval (name, eval_type, config) and
+    publishes it. Publishing creates an ``EvalDefinition`` scoped to the
+    feedback record's pipeline and producing node — because run-time eval
+    execution and gap detection load definitions by ``pipeline_id`` at run
+    time, the published eval is immediately active for future runs of that
+    pipeline — then resolves the proposal record (status -> ``resolved``).
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            mgr = FeedbackManager(session, principal.organisation_id)
+            record = await mgr.get_feedback_record(record_id)
+            if record is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
+            if record.eval_gap is not True:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="Only eval-gap feedback records can be published as eval proposals",
+                )
+            if record.feedback_status not in ("pending", "routing"):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Proposal in status '{record.feedback_status}' cannot be published",
+                )
+            if record.run_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="Feedback record has no associated run — cannot resolve the pipeline",
+                )
+            run = (await session.execute(select(Run).where(Run.id == record.run_id))).scalar_one_or_none()
+            if run is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+
+            node_id = req.node_id
+            if node_id is None:
+                node_id = await _resolve_producing_node_uuid(session, record, run)
+            if node_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=(
+                        "Could not resolve producing_node_id to a pipeline node. "
+                        "Supply an explicit node_id so the published eval is scoped to a run-time node."
+                    ),
+                )
+
+            eval_def = EvalDefinition(
+                organisation_id=principal.organisation_id,
+                pipeline_id=run.pipeline_id,
+                node_id=node_id,
+                name=req.name,
+                eval_type=req.eval_type,
+                config_json=req.config,
+                failure_behaviour="warn",
+                account_id=principal.account_id,
+            )
+            session.add(eval_def)
+            await session.flush()
+
+            await mgr.update_status(record_id, "resolved")
+    except IntegrityError:
+        logger.exception("feedback.publish_eval_proposal")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource conflict occurred. Please try again.",
+        ) from None
+    except ProgrammingError:
+        logger.exception("feedback.publish_eval_proposal")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feedback system is not available. Run database migrations to enable this feature.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("feedback.publish_eval_proposal")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error occurred. Please try again later.",
+        ) from None
+    except (InvalidTransitionError, ConcurrentModificationError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except FeedbackRecordNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Unexpected error publishing eval proposal %s", record_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again later.",
+        ) from None
+
+    await append_audit_event_isolated(
+        session,
+        principal,
+        resource_type="feedback_record",
+        event_type="feedback.proposal_published",
+        resource_id=record_id,
+        payload={
+            "eval_definition_id": str(eval_def.id),
+            "pipeline_id": str(eval_def.pipeline_id),
+            "node_id": str(eval_def.node_id) if eval_def.node_id else None,
+            "eval_type": eval_def.eval_type,
+            "name": eval_def.name,
+        },
+        log_key="feedback.audit_append_failed",
+    )
+
+    return {
+        "id": str(eval_def.id),
+        "record_id": str(record_id),
+        "pipeline_id": str(eval_def.pipeline_id),
+        "node_id": str(eval_def.node_id) if eval_def.node_id else None,
+        "name": eval_def.name,
+        "eval_type": eval_def.eval_type,
+        "config": eval_def.config_json,
+        "feedback_status": "resolved",
     }
 
 
