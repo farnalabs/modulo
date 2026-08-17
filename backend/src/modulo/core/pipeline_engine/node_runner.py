@@ -71,6 +71,7 @@ from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult
 from modulo.core.pipeline_engine.decorator import cancellable_node
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
 from modulo.core.pipeline_engine.input_truncation import truncate_input
+from modulo.core.pipeline_engine.sandbox_mode import _validate_sandbox_mode_config
 from modulo.core.run_context.autonomy import (
     effective_autonomy_level,
     should_notify_on_complete,
@@ -1850,21 +1851,32 @@ def make_sandbox_agent_fn(
     agent runtime in an E2B sandbox.
 
     The node_def must have:
-      - agent_prompt: str —  Jinja2 template rendered against state
-      - template_id: str —  E2B sandbox template ID (default "base")
-      - agent_command: str —  REQUIRED command to run inside the sandbox
-        (no default — a sandbox agent cannot run without an explicit command)
+      - mode: "llm" | "script" —  (default "llm"). llm mode dispatches an LLM
+        agent; script mode runs a verbatim script.
+      - agent_prompt: str —  REQUIRED in llm mode: Jinja2 template rendered
+        against state (never required in script mode).
+      - template_id: str —  E2B sandbox template ID (default "opencode")
+      - agent_command: str —  REQUIRED in llm mode: command to run inside the
+        sandbox (no default — a sandbox agent cannot run without an explicit
+        command). Belongs to llm mode; mutually exclusive with script_command.
+      - script_command: str —  REQUIRED in script mode: command to run VERBATIM
+        inside the sandbox (no Jinja render). Mutually exclusive with
+        agent_command / agent_commands.
       - output_schema_json: dict | None —  optional output schema validation
-      - timeout_seconds: int —  max wall-clock time (default 600)
+      - timeout_seconds: int —  max wall-clock time (default 1200)
       - stall_timeout_seconds: float —  max seconds of agent silence before the
         idle watchdog treats the command as stalled (default 300)
       - context_files: dict[str, str] —  optional files to write into the sandbox
         keyed by path
 
-    The node creates an E2B sandbox, writes the rendered prompt + context files,
-    runs the external agent, reads structured output from /home/user/output.json,
-    and tears down the sandbox. Wall-clock time and exit code are captured
-    natively —  even on failure.
+    The node creates an E2B sandbox. In llm mode it writes the rendered prompt +
+    context files and runs the external agent; in script mode it writes the full
+    run input to /home/user/input.json (no 10KB truncation) and runs the script
+    verbatim. Structured output is read from /home/user/output.json and the
+    sandbox is torn down. Wall-clock time and exit code are captured natively —
+    even on failure. Script mode does NOT run the LLM envelope field extraction
+    (summary/changed_files/pr_url/status/outcome) — the raw parsed output is the
+    node output.
 
     env_vars values may reference secrets with ``{{ secrets.KEY }}``. These are
     resolved at run time from the org vault (when a ``session_factory`` is
@@ -1872,26 +1884,9 @@ def make_sandbox_agent_fn(
     takes effect on the next run and secrets never enter the compiled graph.
     """
     node_id: str = str(node_def["id"])
-    agent_prompt = node_def.get("agent_prompt")
-    if not agent_prompt or not str(agent_prompt).strip():
-        raise ValueError(
-            f"sandbox_agent node '{node_def.get('id')}' is missing required 'agent_prompt' "
-            "— an empty prompt would dispatch the agent with no instructions"
-        )
-    agent_prompt_template: str = str(agent_prompt)
+    sandbox_mode, agent_command, _sandbox_mode_config = _validate_sandbox_mode_config(node_def)
+    agent_prompt_template: str = str(_sandbox_mode_config.get("agent_prompt") or "")
     template_id: str = node_def.get("template_id", "opencode")
-    commands_concatenation_string: str = node_def.get("commands_concatenation_string", " && ")
-    agent_commands_raw: list[str] | None = node_def.get("agent_commands")
-    agent_command_raw: str | None = node_def.get("agent_command")
-    if agent_commands_raw:
-        agent_command = commands_concatenation_string.join(agent_commands_raw)
-    elif agent_command_raw:
-        agent_command = agent_command_raw
-    else:
-        raise ValueError(
-            f"sandbox_agent node '{node_def.get('id')}' is missing required 'agent_command' "
-            "(or 'agent_commands') — a sandbox agent cannot run without an explicit command"
-        )
     output_schema_json: dict[str, Any] | None = node_def.get("output_schema_json")
     sandbox_timeout: int = node_def.get("timeout_seconds", 1200)
     stall_timeout_override: Any = node_def.get("stall_timeout_seconds")
@@ -1919,17 +1914,6 @@ def make_sandbox_agent_fn(
 
         run_context: dict[str, Any] = state.get("run_context") or {}
         raw_input: Any = run_context.get("input", {})
-
-        env = SandboxedEnvironment()
-        template = env.from_string(agent_prompt_template)
-        template_vars: dict[str, Any] = {
-            "state": state,
-            "run_context": run_context,
-            "input": raw_input,
-        }
-        resolved = node_def.get("_resolved_parameters")
-        if isinstance(resolved, dict):
-            template_vars["parameter"] = resolved
 
         run_id: str = str(state.get("_run_id", ""))
         pipeline_id: str = str(state.get("_pipeline_id", ""))
@@ -1968,56 +1952,76 @@ def make_sandbox_agent_fn(
             # Fall back to process environment.
             return os.environ.get(secret_key)
 
-        try:
-            rendered_prompt = template.render(**template_vars)
-        except jinja2.UndefinedError as e:
-            _log.warning("Prompt template UndefinedError for run %s: %s", run_id, e)
-            return {
-                "status": "skipped",
-                "summary": f"Skipped: prompt template references missing input fields ({e})",
-                "agent_stdout": "",
-                "agent_stderr": "",
-                "exit_code": 0,
-            }
-
-        # Render agent_command through the same SandboxedEnvironment + template
-        # vars as the prompt, so the LLM model (or any other command flag) can
-        # be a per-run / per-parameter value (e.g. ``--model {{ input.model }}``
-        # for A/B testing). A command with NO ``{{ }}`` templates renders to
-        # itself unchanged — backward compatible with every existing pipeline.
-        try:
-            rendered_agent_command = env.from_string(agent_command).render(**template_vars)
-        except jinja2.UndefinedError as e:
-            _log.warning(
-                "agent_command template UndefinedError for run %s node %s: %s",
-                run_id,
-                node_id,
-                e,
-            )
-            return {
-                "status": "skipped",
-                "summary": f"Skipped: agent_command template references missing input fields ({e})",
-                "agent_stdout": "",
-                "agent_stderr": "",
-                "exit_code": 0,
-            }
-        except jinja2.TemplateSyntaxError as e:
-            # Legacy commands that contain Jinja-like syntax without being valid
-            # templates (e.g. ``${{ }}`` shell fragments or an unclosed ``{{``)
-            # predate #1291 and must keep running verbatim. Rendering them as
-            # templates would crash the run with an uncaught TemplateSyntaxError.
-            _log.warning(
-                "agent_command is not a valid template for run %s node %s; using verbatim: %s",
-                run_id,
-                node_id,
-                e,
-            )
+        # FAR-296 mode split: llm mode renders the prompt + agent_command through
+        # the SandboxedEnvironment; script mode runs script_command VERBATIM —
+        # no Jinja render of the command, no prompt, no template_vars.
+        if sandbox_mode == "script":
+            rendered_prompt: str = ""
             rendered_agent_command = agent_command
-        if not rendered_agent_command.strip():
-            raise ValueError(
-                f"sandbox_agent node '{node_id}' rendered agent_command is empty after template resolution"
-                " — a sandbox agent cannot run an empty command"
-            )
+        else:
+            env = SandboxedEnvironment()
+            template = env.from_string(agent_prompt_template)
+            template_vars: dict[str, Any] = {
+                "state": state,
+                "run_context": run_context,
+                "input": raw_input,
+            }
+            resolved = node_def.get("_resolved_parameters")
+            if isinstance(resolved, dict):
+                template_vars["parameter"] = resolved
+
+            try:
+                rendered_prompt = template.render(**template_vars)
+            except jinja2.UndefinedError as e:
+                _log.warning("Prompt template UndefinedError for run %s: %s", run_id, e)
+                return {
+                    "status": "skipped",
+                    "summary": f"Skipped: prompt template references missing input fields ({e})",
+                    "agent_stdout": "",
+                    "agent_stderr": "",
+                    "exit_code": 0,
+                }
+
+            # Render agent_command through the same SandboxedEnvironment +
+            # template vars as the prompt, so the LLM model (or any other
+            # command flag) can be a per-run / per-parameter value (e.g.
+            # ``--model {{ input.model }}`` for A/B testing). A command with NO
+            # ``{{ }}`` templates renders to itself unchanged — backward
+            # compatible with every existing pipeline.
+            try:
+                rendered_agent_command = env.from_string(agent_command).render(**template_vars)
+            except jinja2.UndefinedError as e:
+                _log.warning(
+                    "agent_command template UndefinedError for run %s node %s: %s",
+                    run_id,
+                    node_id,
+                    e,
+                )
+                return {
+                    "status": "skipped",
+                    "summary": f"Skipped: agent_command template references missing input fields ({e})",
+                    "agent_stdout": "",
+                    "agent_stderr": "",
+                    "exit_code": 0,
+                }
+            except jinja2.TemplateSyntaxError as e:
+                # Legacy commands that contain Jinja-like syntax without being
+                # valid templates (e.g. ``${{ }}`` shell fragments or an unclosed
+                # ``{{``) predate #1291 and must keep running verbatim.
+                # Rendering them as templates would crash the run with an
+                # uncaught TemplateSyntaxError.
+                _log.warning(
+                    "agent_command is not a valid template for run %s node %s; using verbatim: %s",
+                    run_id,
+                    node_id,
+                    e,
+                )
+                rendered_agent_command = agent_command
+            if not rendered_agent_command.strip():
+                raise ValueError(
+                    f"sandbox_agent node '{node_id}' rendered agent_command is empty after template resolution"
+                    " — a sandbox agent cannot run an empty command"
+                )
 
         start_time = time.monotonic()
         sandbox: AsyncSandbox | None = None
@@ -2244,15 +2248,23 @@ def make_sandbox_agent_fn(
                     path = path[:-4]
                 await asyncio.wait_for(sandbox.files.write(path, content), timeout=_SANDBOX_IO_TIMEOUT)
 
-            await asyncio.wait_for(
-                sandbox.files.write("/home/user/prompt.md", rendered_prompt),
-                timeout=_SANDBOX_IO_TIMEOUT,
-            )
-
+            # FAR-296 mode split: llm mode writes the rendered prompt to
+            # prompt.md; script mode writes the FULL run input (no 10KB
+            # truncation) to /home/user/input.json and never writes a prompt.
             _input_json = json.dumps(raw_input)
-            if len(_input_json) > 10240:
-                _input_json = json.dumps(
-                    {"_truncated": True, "_key_count": len(raw_input) if isinstance(raw_input, dict) else 0}
+            if sandbox_mode == "script":
+                await asyncio.wait_for(
+                    sandbox.files.write("/home/user/input.json", _input_json),
+                    timeout=_SANDBOX_IO_TIMEOUT,
+                )
+            else:
+                if len(_input_json) > 10240:
+                    _input_json = json.dumps(
+                        {"_truncated": True, "_key_count": len(raw_input) if isinstance(raw_input, dict) else 0}
+                    )
+                await asyncio.wait_for(
+                    sandbox.files.write("/home/user/prompt.md", rendered_prompt),
+                    timeout=_SANDBOX_IO_TIMEOUT,
                 )
 
             env_vars_extra: dict[str, str] = await resolve_env_var_refs(
@@ -2768,7 +2780,13 @@ def make_sandbox_agent_fn(
             # failure detail stays visible.
             sandbox_session_lost: bool = False
 
-            if isinstance(output_json, dict):
+            if sandbox_mode == "script":
+                # FAR-296 script mode: the raw parsed output IS the node output.
+                # No LLM envelope extraction (summary/changed_files/pr_url/
+                # status/outcome elevation) — output_json carries the script's
+                # output verbatim and the summary is a short auto-generated line.
+                result_summary = f"script mode: exit_code={exit_code}"
+            elif isinstance(output_json, dict):
                 result_summary = output_json.get("summary", "")
                 changed_files = output_json.get("changed_files", [])
                 pr_url = output_json.get("pr_url", "")

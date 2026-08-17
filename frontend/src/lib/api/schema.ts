@@ -11920,10 +11920,18 @@ export interface components {
             } | null;
             /** Template Id */
             template_id?: string | null;
+            /**
+             * Mode
+             * @default llm
+             * @enum {string}
+             */
+            mode: "llm" | "script";
             /** Agent Command */
             agent_command?: string | null;
             /** Agent Prompt */
             agent_prompt?: string | null;
+            /** Script Command */
+            script_command?: string | null;
             /** Delivery Sentinel */
             delivery_sentinel?: string | null;
             /** Env Vars */

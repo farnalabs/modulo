@@ -115,6 +115,63 @@ def test_check_node_config_env_vars_extra_after_system_vars_ok(tmp_path):
     fail.assert_not_called()
 
 
+def test_check_node_config_script_mode_no_prompt_ok(tmp_path):
+    """FAR-296: a script-mode sandbox node does NOT require agent_prompt."""
+    node = {
+        "node_type": "sandbox_agent",
+        "mode": "script",
+        "script_command": "python3 main.py",
+        "template_id": "opencode",
+        "timeout_seconds": 1200,
+    }
+    with patch.object(vpc, "_fail") as fail:
+        vpc._check_node_config(Path(tmp_path), node)
+    fail.assert_not_called()
+
+
+def test_check_node_config_script_mode_missing_command_fails(tmp_path):
+    """FAR-296: script mode without a non-empty script_command is flagged."""
+    node = {
+        "node_type": "sandbox_agent",
+        "mode": "script",
+        "agent_prompt": "ignored",
+        "template_id": "opencode",
+        "timeout_seconds": 1200,
+    }
+    with patch.object(vpc, "_fail") as fail:
+        vpc._check_node_config(Path(tmp_path), node)
+    fail.assert_called_once()
+    assert "requires a non-empty 'script_command'" in fail.call_args.args[0]
+
+
+def test_check_node_config_both_commands_fails(tmp_path):
+    """FAR-296: agent_command/agent_commands and script_command are mutually exclusive."""
+    node = _good_node()
+    node["agent_command"] = "opencode run"
+    node["script_command"] = "python3 main.py"
+    with patch.object(vpc, "_fail") as fail:
+        vpc._check_node_config(Path(tmp_path), node)
+    fail.assert_called_once()
+    assert "mutually exclusive" in fail.call_args.args[0]
+
+
+def test_check_node_config_script_mode_still_checks_template_and_timeout(tmp_path):
+    """FAR-296: script mode still gets template_id + timeout_seconds linting."""
+    node = {
+        "node_type": "sandbox_agent",
+        "mode": "script",
+        "script_command": "python3 main.py",
+        "template_id": "base",
+        "timeout_seconds": 600,
+    }
+    with patch.object(vpc, "_fail") as fail:
+        vpc._check_node_config(Path(tmp_path), node)
+    assert fail.call_count == 2
+    messages = " ".join(c.args[0] for c in fail.call_args_list)
+    assert "template_id is 'base'" in messages
+    assert "timeout_seconds is 600" in messages
+
+
 def test_check_node_config_env_vars_extra_alias_after_system_vars_ok(tmp_path):
     node = _good_node()
     node["envs"] = {"env_vars_extra": {"EXTRA": "1"}, "APP_MODULO_OPENCODE_API_KEY": "k"}
