@@ -3632,6 +3632,71 @@ async def _require_admin_for_team_key(org_id: uuid.UUID) -> None:
         raise MCPAuthorizationError("Only admin users can perform this action")
 
 
+def _validate_api_key_role_and_name(name: str, role: str) -> dict[str, Any] | None:
+    """Return a validation error dict for invalid role/name, or None."""
+    if role not in ("operator", "runner"):
+        return {
+            "error": "validation_failed",
+            "field": "role",
+            "detail": "role must be 'operator' or 'runner'. admin keys are prohibited.",
+        }
+    if not name.strip():
+        return {
+            "error": "validation_failed",
+            "field": "name",
+            "detail": "API key name must not be blank",
+        }
+    return None
+
+
+def _parse_api_key_expires(expires_at: str | None) -> tuple[datetime | None, dict[str, Any] | None]:
+    """Parse and validate the expiry. Returns (datetime, error_or_None)."""
+    if not expires_at:
+        return (None, None)
+    try:
+        parsed = _parse_api_key_expires_at(expires_at)
+    except ValueError:
+        return (
+            None,
+            {
+                "error": "validation_failed",
+                "field": "expires_at",
+                "detail": "expires_at must be a valid ISO-8601 datetime",
+            },
+        )
+    if parsed <= datetime.now(UTC):
+        return (
+            None,
+            {
+                "error": "validation_failed",
+                "field": "expires_at",
+                "detail": "expires_at must be in the future",
+            },
+        )
+    return (parsed, None)
+
+
+async def _parse_api_key_team_id(
+    team_id: str | None, org_id: uuid.UUID
+) -> tuple[uuid.UUID | None, dict[str, Any] | None]:
+    """Parse and validate the team_id. Returns (team_uuid, error_or_None)."""
+    if team_id is None:
+        return (None, None)
+    try:
+        team_uuid = uuid.UUID(team_id)
+    except ValueError:
+        return (
+            None,
+            {
+                "error": "invalid_id",
+                "field": "team_id",
+                "detail": f"Invalid UUID format: {team_id}",
+            },
+        )
+    await _require_admin_for_team_key(org_id)
+    return (team_uuid, None)
+
+
 @mcp.tool(
     description=(
         "Create a new organisation API key. Returns the full mk_... key value "
@@ -3655,48 +3720,19 @@ async def create_api_key(
         org_id = _ctx_org_id_val()
         account_id = _ctx_user_id_val()
 
-        if role not in ("operator", "runner"):
-            return {
-                "error": "validation_failed",
-                "field": "role",
-                "detail": "role must be 'operator' or 'runner'. admin keys are prohibited.",
-            }
+        validation_error = _validate_api_key_role_and_name(name, role)
+        if validation_error is not None:
+            return validation_error
+
         name = name.strip()
-        if not name:
-            return {
-                "error": "validation_failed",
-                "field": "name",
-                "detail": "API key name must not be blank",
-            }
 
-        parsed_expires_at: datetime | None = None
-        if expires_at:
-            try:
-                parsed_expires_at = _parse_api_key_expires_at(expires_at)
-            except ValueError:
-                return {
-                    "error": "validation_failed",
-                    "field": "expires_at",
-                    "detail": "expires_at must be a valid ISO-8601 datetime",
-                }
-            if parsed_expires_at <= datetime.now(UTC):
-                return {
-                    "error": "validation_failed",
-                    "field": "expires_at",
-                    "detail": "expires_at must be in the future",
-                }
+        parsed_expires_at, expires_error = _parse_api_key_expires(expires_at)
+        if expires_error is not None:
+            return expires_error
 
-        team_uuid: uuid.UUID | None = None
-        if team_id is not None:
-            try:
-                team_uuid = uuid.UUID(team_id)
-            except ValueError:
-                return {
-                    "error": "invalid_id",
-                    "field": "team_id",
-                    "detail": f"Invalid UUID format: {team_id}",
-                }
-            await _require_admin_for_team_key(org_id)
+        team_uuid, team_error = await _parse_api_key_team_id(team_id, org_id)
+        if team_error is not None:
+            return team_error
 
         async with _session(org_id) as s:
             await _deny_break_glass_mint(s, account_id)
