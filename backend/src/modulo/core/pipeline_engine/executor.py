@@ -2077,25 +2077,16 @@ class PipelineExecutor:
             # keyed on it, so a None node_id (plain NodeCancelledError) can
             # never suppress.
             _gated_node_id = exc.node_id if isinstance(exc, SandboxNodeFailedError) else None
-            if gate_ok and _gated_node_id is not None:
-                _log.warning(
-                    "pipeline.idempotency_gate.suppressed_retry",
-                    extra={"run_id": str(run_id), "node_id": _gated_node_id},
-                )
-                gate_suppressed = True
-                final_status = "complete"
-                error_code = "harness.idempotency_gate"
-                error_detail = "delivery already sent; transient retry suppressed by idempotency gate"
-                completed_node_outputs[_gated_node_id] = _idempotency_gate_skipped_envelope(_gated_node_id)
-                # SKIP the pending-reset, the re-raise and the run_failed publish
-                # below — fall through to the existing finalization with
-                # final_status="complete". run_completed is published after the
-                # eval-skip point (below), while the broker is still open.
             # FAR-296 Phase 2: before ANY requeue of a script-mode run, prove no
             # script process could still be alive (stale-claim lease probe).
             # A stale ``script_executing`` lease means a script may have run —
             # requeue is forbidden (exactly-once). Only when the probe proves no
             # live lease does the run stay eligible for the fenced reset below.
+            # NOTE: the probe is computed BEFORE the gate/retry chain below so
+            # the idempotency gate stays the FIRST branch (it must suppress the
+            # pending-reset when a delivery marker is present), and so the
+            # pending-reset branch remains reachable for BOTH script-mode and
+            # non-script-mode graphs (a stale lease simply disqualifies it).
             script_lease_ok = True
             if _graph_has_script_mode(graph_json):
                 try:
@@ -2114,6 +2105,20 @@ class PipelineExecutor:
                         "script.lease_probe.blocked_requeue",
                         extra={"run_id": str(run_id), "reason": "stale script_executing lease"},
                     )
+            if gate_ok and _gated_node_id is not None:
+                _log.warning(
+                    "pipeline.idempotency_gate.suppressed_retry",
+                    extra={"run_id": str(run_id), "node_id": _gated_node_id},
+                )
+                gate_suppressed = True
+                final_status = "complete"
+                error_code = "harness.idempotency_gate"
+                error_detail = "delivery already sent; transient retry suppressed by idempotency gate"
+                completed_node_outputs[_gated_node_id] = _idempotency_gate_skipped_envelope(_gated_node_id)
+                # SKIP the pending-reset, the re-raise and the run_failed publish
+                # below — fall through to the existing finalization with
+                # final_status="complete". run_completed is published after the
+                # eval-skip point (below), while the broker is still open.
             elif node_attempt_count < retries and not superseded and not stalled and script_lease_ok:
                 # Fenced pending-reset: a conditional UPDATE guarded by OUR
                 # captured claim token + status='running' so a superseded
