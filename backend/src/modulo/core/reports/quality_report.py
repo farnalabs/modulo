@@ -17,6 +17,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.reports.scheduler import _deliver_to_urls
+from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.eval_result import EvalResult
 
@@ -187,6 +188,7 @@ async def _query_eval_summary(
         EvalResult.organisation_id == org_id,
         EvalResult.evaluated_at >= start_dt,
         EvalResult.evaluated_at < end_dt,
+        non_guardrail_eval_results_clause(),
     )
     result = await session.execute(q)
     row = result.one()
@@ -218,6 +220,7 @@ async def _query_daily_eval_rates(
             EvalResult.organisation_id == org_id,
             EvalResult.evaluated_at >= start_dt,
             EvalResult.evaluated_at < end_dt,
+            non_guardrail_eval_results_clause(),
         )
         .group_by(eval_date)
         .order_by(eval_date)

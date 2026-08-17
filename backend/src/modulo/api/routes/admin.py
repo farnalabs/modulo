@@ -28,6 +28,7 @@ from modulo.core.eval_engine.regression import VALID_TRENDS, detect_regressions
 from modulo.core.feature_flags import resolve_plan_context
 from modulo.core.hitl_manager.overdue_warning import get_overdue_claims
 from modulo.db.crud.account import get_account_by_email, get_account_by_id
+from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
 from modulo.db.crud.last_admin_guard import (
     LastAdminLockoutError,
     LastAdminLockoutUnavailableError,
@@ -2308,7 +2309,7 @@ async def eval_dashboard(
                 func.count(EvalResult.id).label("total_results"),
                 func.sum(case((EvalResult.passed, 1), else_=0)).label("passed"),
                 func.sum(case((EvalResult.passed.is_(False), 1), else_=0)).label("failed"),
-            )
+            ).where(non_guardrail_eval_results_clause())
             summary_row = (await session.execute(summary_q)).one()
 
             defs_q = select(func.count(EvalDefinition.id)).select_from(EvalDefinition)
@@ -2337,6 +2338,7 @@ async def eval_dashboard(
                 )
                 .where(
                     EvalResult.organisation_id == current_user.organisation_id,
+                    non_guardrail_eval_results_clause(),
                 )
                 .group_by(
                     cast(EvalResult.evaluated_at, Date),
@@ -2368,6 +2370,7 @@ async def eval_dashboard(
                 .outerjoin(EvalResult, EvalResult.eval_id == EvalDefinition.id)
                 .where(
                     EvalDefinition.organisation_id == current_user.organisation_id,
+                    EvalDefinition.eval_type != "guardrail",
                 )
                 .group_by(
                     EvalDefinition.eval_type,
@@ -2436,6 +2439,7 @@ async def eval_dashboard(
                 FROM eval_results er
                 JOIN eval_definitions ed ON ed.id = er.eval_id
                 WHERE er.organisation_id = :org_id
+                  AND ed.eval_type != 'guardrail'
                 ORDER BY er.evaluated_at DESC
                 LIMIT 50
             """)
