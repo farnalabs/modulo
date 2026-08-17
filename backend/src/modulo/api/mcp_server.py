@@ -3038,6 +3038,23 @@ async def get_trigger(trigger_id: str) -> dict[str, Any]:
         return _tool_error("Failed to get trigger")
 
 
+def _validate_trigger_update_inputs(
+    trigger_id: str,
+    max_concurrent_runs: int | None,
+    daily_spend_limit: float | None,
+) -> tuple[uuid.UUID | None, dict[str, Any] | None]:
+    """Parse the trigger UUID and validate the numeric update inputs."""
+    try:
+        tid = uuid.UUID(trigger_id)
+    except ValueError:
+        return None, {"error": "invalid_id", "field": "trigger_id", "detail": f"Invalid UUID format: {trigger_id}"}
+    if max_concurrent_runs is not None and max_concurrent_runs < 1:
+        return None, {"error": "validation", "field": "max_concurrent_runs", "detail": "must be >= 1"}
+    if daily_spend_limit is not None and daily_spend_limit < 0:
+        return None, {"error": "validation", "field": "daily_spend_limit", "detail": "must be >= 0"}
+    return tid, None
+
+
 @mcp.tool(
     description="Update an existing trigger's configuration. "
     "Mirrors PUT /api/v1/triggers/{id}. Setting cron_expression or "
@@ -3060,15 +3077,10 @@ async def update_trigger(
         check_tool_scope(_ctx_role_val(), "update_trigger")
 
         org_id = _ctx_org_id_val()
-        try:
-            tid = uuid.UUID(trigger_id)
-        except ValueError:
-            return {"error": "invalid_id", "field": "trigger_id", "detail": f"Invalid UUID format: {trigger_id}"}
-
-        if max_concurrent_runs is not None and max_concurrent_runs < 1:
-            return {"error": "validation", "field": "max_concurrent_runs", "detail": "must be >= 1"}
-        if daily_spend_limit is not None and daily_spend_limit < 0:
-            return {"error": "validation", "field": "daily_spend_limit", "detail": "must be >= 0"}
+        tid, input_err = _validate_trigger_update_inputs(trigger_id, max_concurrent_runs, daily_spend_limit)
+        if input_err:
+            return input_err
+        assert tid is not None
 
         from sqlalchemy import select
 
