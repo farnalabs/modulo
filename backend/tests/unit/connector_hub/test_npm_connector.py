@@ -177,7 +177,7 @@ async def test_query_search_non_list_objects_no_crash(connector):
     """A corrupt body placing a non-list in ``objects`` must fall back to an empty result."""
     respx.get(f"{_BASE}/-/v1/search").mock(return_value=httpx.Response(200, json={"objects": "corrupt", "total": 1}))
     result = await connector.query(ConnectorQuery(resource="search", filters={"text": "react"}, limit=10))
-    assert result.records == []
+    assert not result.records
     assert result.total == 1
     assert result.next_cursor is None
 
@@ -187,7 +187,7 @@ async def test_query_search_non_dict_body_no_crash(connector):
     """A corrupt/hostile non-dict body must degrade to an empty result."""
     respx.get(f"{_BASE}/-/v1/search").mock(return_value=httpx.Response(200, json=["not-a-dict"]))
     result = await connector.query(ConnectorQuery(resource="search", filters={"text": "react"}, limit=10))
-    assert result.records == []
+    assert not result.records
     assert result.total == 0
 
 
