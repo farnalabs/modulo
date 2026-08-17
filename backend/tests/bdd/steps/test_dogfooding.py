@@ -147,17 +147,17 @@ def _serialize_pipeline(ctx: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
-@then('its name is "{name}"')
+@then(parsers.parse('its name is "{name}"'))
 def _check_name(ctx: dict[str, Any], name: str) -> None:
     assert ctx["pipeline"]["name"] == name
 
 
-@then('its version is "{version}"')
+@then(parsers.parse('its version is "{version}"'))
 def _check_version(ctx: dict[str, Any], version: str) -> None:
     assert ctx["pipeline"]["version"] == version
 
 
-@then('its author is "{author}"')
+@then(parsers.parse('its author is "{author}"'))
 def _check_author(ctx: dict[str, Any], author: str) -> None:
     assert ctx["pipeline"]["author"] == author
 
@@ -255,7 +255,7 @@ def _check_no_circular_deps(ctx: dict[str, Any]) -> None:
             assert not _has_cycle(sid), f"Circular dependency detected involving step '{sid}'"
 
 
-@then('the tags include "{tag}"')
+@then(parsers.parse('the tags include "{tag}"'))
 def _check_tag(ctx: dict[str, Any], tag: str) -> None:
     assert tag in ctx["tags"], f"Expected tag '{tag}' not found in {ctx['tags']}"
 
@@ -265,6 +265,6 @@ def _check_deserialize(ctx: dict[str, Any]) -> None:
     ctx["deserialized"] = json.loads(ctx["serialized"])
 
 
-@then('the deserialised name is "{name}"')
+@then(parsers.parse('the deserialised name is "{name}"'))
 def _check_deserialized_name(ctx: dict[str, Any], name: str) -> None:
     assert ctx["deserialized"]["name"] == name

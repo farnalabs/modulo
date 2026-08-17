@@ -1404,7 +1404,7 @@ def check_trigger_inactive(request: pytest.FixtureRequest) -> None:
     assert body.get("active") is False, f"Expected trigger active=false, got {body}"
 
 
-@then("the response lists {count:d} future fire times")
+@then(parsers.parse("the response lists {count:d} future fire times"))
 def check_future_fire_times(request: pytest.FixtureRequest, count: int) -> None:
     body = request.node._resp_body
     assert isinstance(body, dict), f"Response body is not a dict: {body!r}"
@@ -1597,7 +1597,7 @@ def org_has_pipeline_with_two_snapshots(
     request.node._mock_snapshots = [s1, s2]
 
 
-@when('I start a run for pipeline "{pipeline_name}"')
+@when(parsers.parse('I start a run for pipeline "{pipeline_name}"'))
 def start_run_creates_snapshot(pipeline_name: str, client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
     from tests.bdd.conftest import make_mock_snapshot
 

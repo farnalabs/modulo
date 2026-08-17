@@ -1,5 +1,6 @@
 """BDD/E2E test fixtures — pytest-bdd, Playwright, and TestClient setup."""
 
+import contextlib
 import os
 import uuid
 from collections.abc import AsyncGenerator, Generator
@@ -697,6 +698,30 @@ def operator_client(mock_session: AsyncMock) -> Generator[TestClient, None, None
         account_id=uuid.uuid4(),
         org_role="operator",
     )
+
+
+# ---------------------------------------------------------------------------
+# Patcher collection (shared by every step module)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def patches(request: pytest.FixtureRequest):
+    """Collect started patchers; stop them all at scenario teardown.
+
+    Step definitions across the BDD suite start ``unittest.mock.patch``
+    instances and append them to a ``patches: list[Any]`` step parameter.
+    pytest would otherwise treat ``patches`` as a fixture name and fail with
+    "fixture 'patches' not found".  This fixture makes the name resolve for
+    every step module and stops any started patchers when the scenario ends.
+    autouse=True is safe: it is a no-op for scenarios that never reference
+    ``patches``.
+    """
+    collected: list[Any] = []
+    yield collected
+    for p in reversed(collected):
+        with contextlib.suppress(Exception):
+            p.stop()
 
 
 # ---------------------------------------------------------------------------

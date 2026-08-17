@@ -47,7 +47,7 @@ def _(count: int) -> None:
     pass
 
 
-@given('the user has dashboard level filter set to "{level}"')
+@given(parsers.parse('the user has dashboard level filter set to "{level}"'))
 def _(level: str) -> None:
     pass
 

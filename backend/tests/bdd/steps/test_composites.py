@@ -55,6 +55,7 @@ def _make_template(**overrides: Any) -> MagicMock:
     t.parameter_ports_json = overrides.get("parameter_ports_json", [])
     t.input_schema_id = overrides.get("input_schema_id")
     t.output_schema_id = overrides.get("output_schema_id")
+    t.parameter_schema_id = overrides.get("parameter_schema_id")
     t.version = overrides.get("version", "1.0.0")
     t.account_id = uuid.UUID("00000000-0000-0000-0000-000000000002")
     t.created_at = overrides.get("created_at", datetime(2025, 1, 1, tzinfo=UTC))
@@ -82,6 +83,8 @@ def _make_mock_primitive(**overrides: Any) -> MagicMock:
     p.checksum = overrides.get("checksum")
     p.ed25519_signature = overrides.get("ed25519_signature")
     p.verified = overrides.get("verified")
+    p.trust_tier = overrides.get("trust_tier")
+    p.tier = overrides.get("tier", "native")
     p.download_count = overrides.get("download_count", 0)
     p.average_rating = overrides.get("average_rating")
     p.review_count = overrides.get("review_count", 0)
@@ -177,7 +180,7 @@ def org_has_composite_primitives(request: pytest.FixtureRequest) -> None:
     ]
 
 
-@given('a community composite primitive exists with id "{primitive_id}"')
+@given(parsers.parse('a community composite primitive exists with id "{primitive_id}"'))
 def community_composite_primitive_exists(primitive_id: str, request: pytest.FixtureRequest) -> None:
     pid = uuid.UUID(primitive_id)
     request.node._community_primitive = _make_mock_primitive(
@@ -202,7 +205,7 @@ def composite_template_with_nodes(name: str, count: int, request: pytest.Fixture
     request.node._template_name = name
 
 
-@given('a composite template with parameter "{param_name}" injected into the agent prompt')
+@given(parsers.parse('a composite template with parameter "{param_name}" injected into the agent prompt'))
 def composite_template_with_parameter(param_name: str, request: pytest.FixtureRequest) -> None:
     node = {
         "id": str(uuid.uuid4()),
@@ -213,10 +216,11 @@ def composite_template_with_parameter(param_name: str, request: pytest.FixtureRe
         name="param-composite",
         sub_pipeline_graph_json={"nodes": [node], "edges": []},
     )
+    request.node._composite_template_data = {"nodes": [node], "edges": []}
     request.node._parameter_name = param_name
 
 
-@given('a composite template with a required parameter "{param_name}" and no default')
+@given(parsers.parse('a composite template with a required parameter "{param_name}" and no default'))
 def composite_template_required_param(param_name: str, request: pytest.FixtureRequest) -> None:
     request.node._mock_template = _make_template(
         name="required-param-composite",
@@ -243,7 +247,7 @@ def composite_template_empty(name: str, request: pytest.FixtureRequest) -> None:
     )
 
 
-@given('the pipeline graph has a composite node referencing template "{template_name}"')
+@given(parsers.parse('the pipeline graph has a composite node referencing template "{template_name}"'))
 def pipeline_graph_has_composite_node(template_name: str, request: pytest.FixtureRequest) -> None:
     mock_template = getattr(request.node, "_mock_template", _make_template(name=template_name))
     request.node._composite_node = {
@@ -254,7 +258,7 @@ def pipeline_graph_has_composite_node(template_name: str, request: pytest.Fixtur
     request.node._composite_template_data = mock_template.sub_pipeline_graph_json
 
 
-@given('the pipeline run provides parameter value {param_name}="{param_value}"')
+@given(parsers.parse('the pipeline run provides parameter value {param_name}="{param_value}"'))
 def pipeline_run_provides_parameter(param_name: str, param_value: str, request: pytest.FixtureRequest) -> None:
     request.node._parameter_values = {param_name: param_value}
 
@@ -551,7 +555,7 @@ def crud_delete_composite(client, template_id: str, request: pytest.FixtureReque
     _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
 
     patcher = patch(
-        "modulo.api.routes.composite_templates.delete_composite_template",
+        "modulo.api.routes.composite_templates.soft_delete_composite_template",
         new_callable=AsyncMock,
         return_value=True,
     )
@@ -707,7 +711,7 @@ def when_snapshot_created(request: pytest.FixtureRequest) -> None:
     request.node._mock_snapshot = mock_snapshot
 
 
-@when('the user saves the composite template as a library primitive with type "{primitive_type}"')
+@when(parsers.parse('the user saves the composite template as a library primitive with type "{primitive_type}"'))
 def when_save_composite_as_library(
     client,
     primitive_type: str,
@@ -726,6 +730,13 @@ def when_save_composite_as_library(
     )
     patcher.start()
     patches.append(patcher)
+    patcher_slug = patch(
+        "modulo.api.routes.library.get_primitive_by_slug",
+        new_callable=AsyncMock,
+        return_value=None,
+    )
+    patcher_slug.start()
+    patches.append(patcher_slug)
 
     body = {
         "primitive_type": primitive_type,
@@ -737,7 +748,7 @@ def when_save_composite_as_library(
     _store_response(request, resp)
 
 
-@when("the user requests GET /api/v1/libraries?primitive_type={primitive_type}")
+@when(parsers.parse("the user requests GET /api/v1/libraries?primitive_type={primitive_type}"))
 def when_browse_composites(client, primitive_type: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
     from modulo.db.crud.base import PageResult
 
@@ -760,7 +771,7 @@ def when_browse_composites(client, primitive_type: str, request: pytest.FixtureR
     _store_response(request, resp)
 
 
-@when("the user sends POST /api/v1/libraries/{primitive_id}/adapt")
+@when(parsers.parse("the user sends POST /api/v1/libraries/{primitive_id}/adapt"))
 def when_adapt_composite(
     client,
     primitive_id: str,
@@ -787,7 +798,9 @@ def when_adapt_composite(
     _store_response(request, resp)
 
 
-@when('the user creates a library primitive with primitive_type "{primitive_type}" and empty content_json')
+@when(
+    parsers.parse('the user creates a library primitive with primitive_type "{primitive_type}" and empty content_json')
+)
 def when_create_primitive_empty(
     client,
     primitive_type: str,
@@ -807,7 +820,11 @@ def when_create_primitive_empty(
     _store_response(request, resp)
 
 
-@when('the user saves the pipeline as composite with name "{composite_name}" and selected node "{node_label}"')
+@when(
+    parsers.parse(
+        'the user saves the pipeline as composite with name "{composite_name}" and selected node "{node_label}"'
+    )
+)
 def when_save_pipeline_as_composite(
     client,
     composite_name: str,
@@ -970,7 +987,7 @@ def then_mapped_input(expected_json: str, request: pytest.FixtureRequest) -> Non
     assert mapped == expected, f"Expected mapped input {expected}, got {mapped}"
 
 
-@then('it does not contain "{key}"')
+@then(parsers.parse('it does not contain "{key}"'))
 def then_mapped_does_not_contain(key: str, request: pytest.FixtureRequest) -> None:
     mapped = getattr(request.node, "_mapped_input", {})
     assert key not in mapped, f"Expected '{key}' to not be in mapped input"
@@ -1030,7 +1047,7 @@ def then_bindings_have_fields(request: pytest.FixtureRequest) -> None:
         assert "composite_version" in b
 
 
-@then('the library primitive has primitive_type "{ptype}"')
+@then(parsers.parse('the library primitive has primitive_type "{ptype}"'))
 def then_primitive_type(ptype: str, request: pytest.FixtureRequest) -> None:
     body = request.node._resp_body
     assert isinstance(body, dict)
@@ -1061,7 +1078,7 @@ def then_at_least_one_composite(request: pytest.FixtureRequest) -> None:
     assert len(items) >= 1
 
 
-@then('the new primitive has source "{source}"')
+@then(parsers.parse('the new primitive has source "{source}"'))
 def then_primitive_source(source: str, request: pytest.FixtureRequest) -> None:
     body = request.node._resp_body
     assert isinstance(body, dict)
@@ -1146,7 +1163,7 @@ def crud_patch_composite_v1(
 def crud_delete_composite_v1(client, template_id: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
     _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
     patcher = patch(
-        "modulo.api.routes.composite_templates.delete_composite_template",
+        "modulo.api.routes.composite_templates.soft_delete_composite_template",
         new_callable=AsyncMock,
         return_value=True,
     )
@@ -1179,7 +1196,7 @@ def crud_post_composite_v1(
     client, name: str, agent_name: str, request: pytest.FixtureRequest, patches: list[Any]
 ) -> None:
     _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
-    mock_template = _make_template(name=name)
+    mock_template = _make_template(name=name, version="0.1.0")
     patcher = patch(
         "modulo.api.routes.composite_templates.create_composite_template",
         new_callable=AsyncMock,
@@ -1275,7 +1292,7 @@ def composite_node_with_mapping_pair(target: str, source: str, request: pytest.F
 
 
 @given("a pipeline graph has a composite node without composite_ref")
-@given("the pipeline graph has a composite node without providing {param}")
+@given(parsers.parse('the pipeline graph has a composite node without providing "{param}"'))
 def composite_node_no_ref(request: pytest.FixtureRequest, param: str = "") -> None:
     request.node._composite_node = {
         "id": str(uuid.uuid4()),
