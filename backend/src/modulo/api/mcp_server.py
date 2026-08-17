@@ -3185,6 +3185,37 @@ def _validate_trigger_create_inputs(
     return pid, None
 
 
+async def _validate_ongoing_trigger_create(
+    s: AsyncSession,
+    pid: uuid.UUID,
+    trigger_type: str,
+    max_concurrent_runs: int,
+    daily_spend_limit: float | None,
+    config_json: dict[str, Any] | None,
+) -> tuple[datetime | None, dict[str, Any] | None]:
+    if trigger_type != "ongoing":
+        return None, None
+    # FAR-158: identical guards to the REST create surface.
+    from fastapi import HTTPException
+
+    from modulo.core.trigger_validation import validate_ongoing_config
+    from modulo.db.models.pipeline import Pipeline
+
+    pipeline = await s.get(Pipeline, pid)
+    pipeline_cap = pipeline.max_concurrent_runs if pipeline is not None else 0
+    try:
+        validate_ongoing_config(
+            trigger_type,
+            max_concurrent_runs=max_concurrent_runs,
+            daily_spend_limit=Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else None,
+            config_json=config_json,
+            pipeline_max_concurrent_runs=pipeline_cap,
+        )
+    except HTTPException as exc:
+        return None, {"error": "validation", "detail": str(exc.detail)}
+    return datetime.now(UTC), None
+
+
 @mcp.tool(description="Create a new trigger for a pipeline.")
 @_RETRY_DB
 async def create_trigger(
@@ -3210,34 +3241,17 @@ async def create_trigger(
             return input_err
         assert pid is not None
 
-        from modulo.core.trigger_validation import validate_ongoing_config
-        from modulo.db.models.pipeline import Pipeline
         from modulo.db.models.trigger import Trigger
 
         async with _session(org_id) as s:
             owner_team_id = await _pipeline_owner_team_id(s, pid)
             if _team_scoped_key_mismatch(owner_team_id):
                 return _team_scope_error("pipeline", pipeline_id)
-            next_fire_at = None
-            if trigger_type == "ongoing":
-                # FAR-158: identical guards to the REST create surface.
-                from datetime import UTC
-
-                from fastapi import HTTPException
-
-                pipeline = await s.get(Pipeline, pid)
-                pipeline_cap = pipeline.max_concurrent_runs if pipeline is not None else 0
-                try:
-                    validate_ongoing_config(
-                        trigger_type,
-                        max_concurrent_runs=max_concurrent_runs,
-                        daily_spend_limit=Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else None,
-                        config_json=config_json,
-                        pipeline_max_concurrent_runs=pipeline_cap,
-                    )
-                except HTTPException as exc:
-                    return {"error": "validation", "detail": str(exc.detail)}
-                next_fire_at = datetime.now(UTC)
+            next_fire_at, ongoing_err = await _validate_ongoing_trigger_create(
+                s, pid, trigger_type, max_concurrent_runs, daily_spend_limit, config_json
+            )
+            if ongoing_err:
+                return ongoing_err
             trigger = Trigger(
                 organisation_id=org_id,
                 pipeline_id=pid,
