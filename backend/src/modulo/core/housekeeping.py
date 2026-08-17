@@ -96,7 +96,7 @@ _CATEGORY_DESCRIPTIONS: dict[str, str] = {
     "inactive_triggers": "Triggers that are inactive and have never fired",
     "orphan_snapshots": "Snapshots whose pipeline no longer exists",
     "expired_webhook_dedups": "Expired webhook deduplication hash entries",
-    "duplicate_triggers": "Pipelines with multiple triggers of the same type (e.g. two cron triggers on the same pipeline)",
+    "duplicate_triggers": "Pipelines with multiple triggers of the same type (e.g. two cron triggers)",
     "unused_environment_profiles": "Environment profiles not referenced by any pipeline snapshot",
     "stale_api_keys": "API keys not used in the last 4 weeks",
     "unused_sso_providers": "SSO providers with no accounts using them for authentication",
@@ -489,11 +489,16 @@ async def _scan_stale_api_keys(session: AsyncSession, org_id: uuid.UUID) -> list
         .scalars()
         .all()
     )
+    def _describe_key_usage(k: OrgApiKey) -> str:
+        if k.last_used_at is None:
+            return "never used"
+        return f"last used {k.last_used_at.isoformat()}"
+
     return [
         Candidate(
             id=str(k.id),
             name=k.name,
-            detail=f"API key (role: {k.role}) — {'never used' if k.last_used_at is None else f'last used {k.last_used_at.isoformat()}'}",
+            detail=f"API key (role: {k.role}) — {_describe_key_usage(k)}",
             created_at=k.created_at.isoformat() if k.created_at else None,
         )
         for k in keys
