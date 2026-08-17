@@ -26,7 +26,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from datetime import date as _date
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 from urllib.parse import quote, urlencode
 
 from jwt import InvalidTokenError as JWTError
@@ -1961,6 +1961,25 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
         return _tool_error("Failed to get run status")
 
 
+def _resolve_run_node_output(outputs: dict[str, Any], telemetry: dict[str, Any], node_id: str) -> dict[str, Any] | None:
+    """Resolve the node output dict, falling back to telemetry status/summary."""
+    from modulo.core.node_output_split import node_return, node_telemetry
+
+    node_output = node_return(outputs, telemetry, node_id)
+    if node_output is None:
+        node_meta = node_telemetry(telemetry, outputs, node_id)
+        if isinstance(node_meta, dict):
+            node_output = {key: node_meta[key] for key in ("status", "summary") if key in node_meta}
+    return cast("dict[str, Any] | None", node_output)
+
+
+def _detect_masked_fields(masked: Any) -> list[str]:
+    """Keys whose masked value contains the bullet mask character."""
+    if not isinstance(masked, dict):
+        return []
+    return [k for k, v in masked.items() if isinstance(v, str) and "\u2022" in v]
+
+
 @mcp.tool(
     description=(
         "Get a specific node's output from a completed pipeline run. "
@@ -1975,7 +1994,6 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "get_run_output")
         from modulo.api.routes.runs import _mask_output_value
-        from modulo.core.node_output_split import node_return, node_telemetry
 
         org_id = _ctx_org_id_val()
         try:
@@ -1993,19 +2011,11 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
         telemetry = run.node_telemetry_json
         if not isinstance(telemetry, dict):
             telemetry = {}
-        node_output = node_return(outputs, telemetry, node_id)
-        if node_output is None:
-            node_meta = node_telemetry(telemetry, outputs, node_id)
-            if isinstance(node_meta, dict):
-                node_output = {key: node_meta[key] for key in ("status", "summary") if key in node_meta}
+        node_output = _resolve_run_node_output(outputs, telemetry, node_id)
         if node_output is None:
             return {"error": "node_output_not_found", "run_id": run_id, "node_id": node_id}
         masked = _mask_output_value(node_output)
-
-        # Detect masked fields by scanning for the bullet mask character.
-        masked_fields: list[str] = []
-        if isinstance(masked, dict):
-            masked_fields = [k for k, v in masked.items() if isinstance(v, str) and "\u2022" in v]
+        masked_fields = _detect_masked_fields(masked)
 
         return {
             "node_id": node_id,
