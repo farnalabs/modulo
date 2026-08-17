@@ -2321,6 +2321,27 @@ def _parse_hitl_action(
     return rid, None
 
 
+async def _load_hitl_run(
+    s: AsyncSession,
+    org_id: uuid.UUID,
+    rid: uuid.UUID,
+    run_id: str,
+    gate_id: str,
+) -> Any | None:
+    """Load the HITL gate's run, enforcing the team boundary.
+
+    Returns the run ORM object on success, ``_TEAM_SCOPE_ERROR`` when a
+    team-scoped key must not act on the run, or ``None`` when the run is not
+    found.
+    """
+    run = await get_run(s, rid)
+    if run is None:
+        return None
+    if _team_scoped_key_mismatch(await _run_owner_team_id(s, run)):
+        return _TEAM_SCOPE_ERROR
+    return run
+
+
 @mcp.tool(
     description=(
         "Unified HITL gate action: claim, approve, reject, or deliver_manual. "
@@ -2360,15 +2381,11 @@ async def review_hitl(
 
     try:
         async with _session(org_id) as s:
-            # Team boundary: a team-scoped key must not act on a run owned by
-            # another team, even when the gate itself is org-level
-            # (required_team_id IS NULL). The run's effective owner is the
-            # source of truth with pipeline fallback for pre-stamp runs.
-            run = await get_run(s, rid)
+            run = await _load_hitl_run(s, org_id, rid, run_id, gate_id)
+            if run is _TEAM_SCOPE_ERROR:
+                return _team_scope_error("run", run_id)
             if run is None:
                 return {"error": "gate_not_found", "run_id": run_id, "gate_id": gate_id}
-            if _team_scoped_key_mismatch(await _run_owner_team_id(s, run)):
-                return _team_scope_error("run", run_id)
 
             # Check human_only for approve action
             if action == "approve":
