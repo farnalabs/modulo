@@ -188,8 +188,7 @@ def test_regex_family_requires_revalidation_pattern_at_definition_validation():
     assert ok.revalidation_config["pattern"]
 
 
-@pytest.mark.asyncio
-async def test_regex_revalidation_with_empty_pattern_fails_closed():
+def test_regex_revalidation_with_empty_pattern_fails_closed():
     """MAJOR-1: a regex revalidator with an empty pattern/field must NOT mark the
     correction resolved (fail closed) — the empty-pattern engine failure is not
     inverted into a false pass."""
