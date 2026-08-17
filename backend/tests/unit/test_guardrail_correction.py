@@ -342,6 +342,66 @@ def test_convergence_allows_fresh_state():
     )
 
 
+def test_convergence_detects_strictly_worse_state():
+    """FAR-292 prove-the-fix: a current state whose violation severity strictly
+    exceeds every recorded prior state's severity escalates to HITL immediately
+    (CONVERGED). Without the strictly-worse ordering this returns ``None``
+    (the fingerprint is fresh)."""
+    prior = [{"violation_metric": {"severity": 1, "detail_fingerprint": "prior"}}]
+    assert (
+        convergence_verdict(
+            redacted_input={"body": "new input"},
+            produced_output={"body": "new output"},
+            prior_states=prior,
+            current_violation_metric={"severity": 2, "detail_fingerprint": "current"},
+        )
+        == CorrectionVerdict.CONVERGED
+    )
+
+
+def test_convergence_allows_equal_or_better_state():
+    """FAR-292: an equal-or-better violation severity allows a fresh attempt
+    (None), even when the violation detail differs — a still-violating retry
+    with a different (but equally severe) violation keeps its budget."""
+    prior = [{"output_violation_metric": {"severity": 1, "detail_fingerprint": "prior"}}]
+    assert (
+        convergence_verdict(
+            redacted_input={"body": "new input"},
+            produced_output={"body": "new output"},
+            prior_states=prior,
+            current_violation_metric={"severity": 1, "detail_fingerprint": "different"},
+        )
+        is None
+    )
+    # A cleaner (lower-severity) current state is also allowed.
+    assert (
+        convergence_verdict(
+            redacted_input={"body": "new input"},
+            produced_output={"body": "clean"},
+            prior_states=prior,
+            current_violation_metric={"severity": 0, "detail_fingerprint": ""},
+        )
+        is None
+    )
+
+
+def test_convergence_reads_persisted_split_metric_keys():
+    """The convergence check compares against BOTH the persisted
+    ``input_violation_metric`` and ``output_violation_metric`` keys that
+    ``_build_state`` writes (retry loop strips the input metric, preserves the
+    output metric)."""
+    prior = [{"output_violation_metric": {"severity": 1, "detail_fingerprint": "prior"}}]
+    assert (
+        convergence_verdict(
+            redacted_input={"body": "new input"},
+            produced_output={"body": "new output"},
+            prior_states=prior,
+            current_violation_metric={"severity": 2, "detail_fingerprint": "current"},
+        )
+        == CorrectionVerdict.CONVERGED
+    )
+
+
 # ---------------------------------------------------------------------------
 # Single-node correction execution
 # ---------------------------------------------------------------------------
@@ -433,6 +493,71 @@ async def test_corrected_output_redacted_before_returned():
     assert outcome.verdict == CorrectionVerdict.RESOLVED
     # The produced output's embedded secret is redacted before it is returned.
     assert "hunter2" not in json.dumps(outcome.produced_output)
+
+
+@pytest.mark.asyncio
+async def test_state_persists_violation_metric():
+    """FAR-292: the engine's persisted ``outcome.state`` carries the per-state
+    violation metric (input + output) so the next attempt's convergence check
+    can compare severity against the recorded prior states."""
+    guardrail = _guardrail()
+    correction = _correction()
+    # The correction's own PII re-validation passes ("safe now"), so the
+    # produced output is RESOLVED but the state must still record its metrics.
+    backend = _StubCorrectionBackend({_fixture_key(correction, _REDACTED_BODY): json.dumps({"body": "safe now"})})
+    outcome = await run_single_node_correction(
+        correction=correction,
+        guardrail=guardrail,
+        node_input={"body": "secret: hunter2"},
+        backend=backend,
+    )
+    assert outcome.verdict == CorrectionVerdict.RESOLVED
+    assert "input_violation_metric" in outcome.state
+    assert "output_violation_metric" in outcome.state
+    assert isinstance(outcome.state["input_violation_metric"].get("severity"), int)
+    assert isinstance(outcome.state["output_violation_metric"].get("severity"), int)
+
+
+@pytest.mark.asyncio
+async def test_strictly_worse_produced_output_converges_without_burning_budget():
+    """FAR-292 prove-the-fix through the real engine: a produced output that
+    violates MORE bound guardrails than a recorded prior state (strictly worse)
+    converges to HITL immediately — the LM runs once to produce it, then the
+    output converges WITHOUT burning the remaining retry budget."""
+    guardrail = _guardrail(name="gr_no_secrets")
+    gr_digits = _guardrail(name="gr_no_digits", pattern=r"\b[0-9]{10,}\b", field="body")
+    gr_admin = _guardrail(name="gr_no_admin", pattern=r"(?i)\badmin\b", field="body")
+    correction = _correction(max_attempts=3)
+    redacted = redact_payload({"body": "secret: hunter2"}, correction.input_redaction_patterns)
+
+    # Prior state: the recorded produced output violated ONE bound guardrail
+    # (severity 1). Its input fingerprint does NOT match the current redacted
+    # input, so the input check passes and the output convergence check runs.
+    prior = [
+        {
+            "idempotency_key": "key-1",
+            "attempt": 1,
+            "input_fingerprint": fingerprint_state({"body": "some other prior input"}),
+            "output_violation_metric": {"severity": 1, "detail_fingerprint": "prior"},
+        }
+    ]
+
+    # The produced output survives redaction (no `secret:`), so it violates BOTH
+    # gr_no_digits (long digit run) and gr_no_admin ("admin") -> severity 2,
+    # strictly worse than the prior severity 1.
+    backend = _StubCorrectionBackend(
+        {_fixture_key(correction, redacted): json.dumps({"body": "admin 123456789012345"})}
+    )
+    outcome = await run_single_node_correction(
+        correction=correction,
+        guardrail=guardrail,
+        node_input={"body": "secret: hunter2"},
+        backend=backend,
+        prior_states=prior,
+        bound_guardrails=[guardrail, gr_digits, gr_admin],
+    )
+    assert outcome.verdict == CorrectionVerdict.CONVERGED
+    assert outcome.needs_human_review is True
 
 
 @pytest.mark.asyncio
