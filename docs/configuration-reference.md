@@ -219,8 +219,6 @@ LOAD.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `MODULO_DEMO_MODE` | No | `false` | **Deprecated**. Enables demo pipeline with StubModelBackend. Legacy alias for `MODULO_SEED_DEMO_DATA` — migrated automatically at startup. |
-| `MODULO_SEED_DEMO_DATA` | No | `false` | Seed demo pipeline data on startup. Uses `StubModelBackend` so no external API keys required. Replaces `MODULO_DEMO_MODE`. |
 | `MODULO_PLUGIN_DISCOVERY` | No | `true` | Enable automatic plugin discovery |
 
 ---

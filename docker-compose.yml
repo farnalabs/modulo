@@ -39,7 +39,6 @@ services:
       REDIS_URL: redis://redis:6379/0
       MODULO_PUBLIC_URL: http://localhost:8000
       MODULO_USERS: admin:admin
-      MODULO_DEMO_MODE: "true"
     ports:
       - "8000:8000"
     volumes:
@@ -62,7 +61,6 @@ services:
       REDIS_URL: redis://redis:6379/0
       MODULO_PUBLIC_URL: http://localhost:8000
       MODULO_USERS: admin:admin
-      MODULO_DEMO_MODE: "true"
     volumes:
       - ./backend/src:/app/src
 
@@ -83,7 +81,6 @@ services:
       REDIS_URL: redis://redis:6379/0
       MODULO_PUBLIC_URL: http://localhost:8000
       MODULO_USERS: admin:admin
-      MODULO_DEMO_MODE: "true"
       SAQ_AUTH_USERNAME: admin
       SAQ_AUTH_PASSWORD: modulo
     ports:
