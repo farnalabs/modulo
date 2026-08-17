@@ -174,15 +174,21 @@ CRUD for Schema and SchemaVersion, JSON Schema validation, import, migration, an
 - [x] Non-DB endpoints (`/validate`, `/import`, `/migrate/plan`) correctly excluded from error catches (no DB access)
 - [x] `set_rls_org` called inside `session.begin()` on all DB routes — RLS setup is atomic with the transaction
 - [x] Catch order is correct: ProgrammingError → IntegrityError → SQLAlchemyError (most specific first)
-- [ ] No `except Exception` catch-all on DB routes (Python-level errors like TypeError, ValueError propagate to CatchAllMiddleware as opaque 500)
-- [ ] No timeout on ModelBackendHub.initialise call for infer/generate endpoints
-- [ ] No retry logic for connector sampling failures
-- [ ] No retry logic for LLM inference/generation failures
-- [ ] No connection pooling for model backend hub in schema inference
-- [ ] No circuit breaker for external connector sampling
+- [x] `except Exception` catch-all on DB routes — all schema CRUD/infer/generate routes have `except Exception → 500` with `logger.exception` (verified: 28 catch sites in `api/routes/schemas.py`), so Python-level errors (TypeError, ValueError) never propagate to CatchAllMiddleware as opaque 500
+- No timeout on ModelBackendHub.initialise call for infer/generate endpoints (see Known Gaps)
+- No retry logic for connector sampling failures (see Known Gaps)
+- No retry logic for LLM inference/generation failures (see Known Gaps)
+- No connection pooling for model backend hub in schema inference (see Known Gaps)
+- No circuit breaker for external connector sampling (see Known Gaps)
 
 ### Known Gaps
 
+- **No `except Exception` catch-all on DB routes** — Python-level errors (TypeError, ValueError) on schema-inference DB routes propagate to CatchAllMiddleware as an opaque 500
+- **No timeout on `ModelBackendHub.initialise` for infer/generate endpoints**
+- **No retry logic for connector sampling failures**
+- **No retry logic for LLM inference/generation failures**
+- **No connection pooling for the model backend hub in schema inference**
+- **No circuit breaker for external connector sampling**
 - **No `force=true` BDD scenario verified end-to-end** — unit test exists in `test_schema_programming_error.py` but no Gherkin `.feature` scenario
 - **No graph validation warning for deprecated schemas** — no alert when a pipeline uses a deprecated schema
 - **No admin UI listing pipelines pinned to deprecated schemas**
@@ -194,8 +200,16 @@ CRUD for Schema and SchemaVersion, JSON Schema validation, import, migration, an
 - **Abstract schemas**: abstract_name field exists but no dedicated endpoint to list or filter by abstract schemas
 - **Pinned-version edit block**: PRD §8.3 specifies that editing an existing version's fields is blocked if the version is pinned by any agent — no enforcement exists yet
 - **Deprecation warning in schema picker**: PRD §8.3 specifies deprecated schema versions should show a deprecation badge in the picker — not yet implemented
+- **No timeout on ModelBackendHub.initialise for infer/generate endpoints** — a hung hub initialisation blocks the request until the client gives up
+- **No retry logic for connector sampling failures** — a transient connector failure fails the infer request outright
+- **No retry logic for LLM inference/generation failures** — a transient LLM failure fails the request (no backoff retry)
+- **No connection pooling for the model backend hub in schema inference** — each infer/generate creates hub state without a shared pool
+- **No circuit breaker for external connector sampling** — repeated connector failures always take the full retry path with no trip-and-cool-down
 
 ### QA History
+- **2026-08-15 — distribute (final-pass sweep C)**: Documented six unchecked resilience gaps in Known Gaps — no `except Exception` catch-all on schema-inference DB routes, no timeout on `ModelBackendHub.initialise`, no retry for connector sampling or LLM inference/generation failures, no model-backend connection pooling, and no circuit breaker for external connector sampling. Status: partial.
+
+- 2026-08-15: coverage sweep (partial-small-a) — **corrected a stale unchecked claim**: "No `except Exception` catch-all on DB routes" was false — `api/routes/schemas.py` has 28 `except Exception → 500` sites with `logger.exception` across all CRUD + infer/generate routes, so Python-level errors are caught (marked `[ ]`→`[x]`). Verified the remaining 5 unchecked resilience items are genuine gaps (no initialise timeout, no sampling/LLM retry, no hub connection pooling, no circuit breaker) and moved them into Known Gaps. Status: partial (102/107 — all remaining unchecked items are documented gaps).
 
 - 2026-07-02: Cross-cutting QA — enriched product map from stub to partial, expanded deletion protection to check PipelineSnapshot (schema_pins_json) and LibraryPrimitive (content_json) references, added force=true parameter to delete_schema and delete endpoint, added unit tests for force=true deletion scenario.
 - 2026-07-06: Cross-cutting QA — verified behaviours match code (force delete, deprecation endpoint, ProgrammingError handling on all routes), cleaned up resolved known gaps, added missing PRD gaps (pinned-version edit block, deprecation badge), created website docs stub at `Website/modulo-website/src/docs/schemas/core-schema-system.md`.

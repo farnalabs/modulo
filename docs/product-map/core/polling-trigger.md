@@ -69,7 +69,7 @@ Discovered from 1 completed delivery tasks. Also specified in PRD 8.5 (Trigger S
 - [x] `daily_spend_limit` is settable/readable via `PATCH /triggers/{id}/polling` (explicit `null` clears it)
 - [x] Negative `daily_spend_limit` is rejected with 422 by FastAPI validation (`ge=0`)
 - [x] `Trigger.daily_spend_limit` defaults to `None` (unlimited) on the MCP `create_trigger` tool, which also accepts `max_concurrent_runs` and `daily_spend_limit`
-- [ ] Queue depth / rejection mechanism for polling (webhook has it; polling does not)
+- Queue depth / rejection mechanism for polling (webhook has it; polling does not) — see Known Gaps
 
 ### TriggerEvent Audit
 
@@ -111,9 +111,9 @@ Discovered from 1 completed delivery tasks. Also specified in PRD 8.5 (Trigger S
 - [x] Daily spend limit reached (`today_cost >= limit`) → no run created, `spend_limit_reached` logged, `next_fire_at` advanced so the trigger is not re-fetched every beat tick
 - [x] `daily_spend_limit` unset → spend check skipped entirely, trigger fires normally
 - [x] `snapshot_id` missing or invalid → falls back to `uuid.UUID(int=0)` with warning
-- [ ] Redis becomes unreachable mid-session — polling triggers stop firing (no reconnection)
-- [ ] Redis becomes available after starting without it — requires restart
-- [ ] `redis_url` empty-string vs unset edge case
+- Redis becomes unreachable mid-session — polling triggers stop firing (no reconnection) (see Known Gaps)
+- Redis becomes available after starting without it — requires restart (see Known Gaps)
+- `redis_url` empty-string vs unset edge case (see Known Gaps)
 
 ## Resilience & Integration Robustness
 
@@ -123,8 +123,8 @@ Discovered from 1 completed delivery tasks. Also specified in PRD 8.5 (Trigger S
 - [x] FOR UPDATE lock serialises concurrent fire attempts for same trigger
 - [x] Connector errors logged as TriggerEvents — no silent data loss
 - [x] Broad `except Exception` around connector init, query exec, condition eval — isolated per-service failure
-- [ ] `_get_engine()` creates standalone engine outside app lifecycle — connection pool not managed by app
-- [ ] `DatabasePollingScheduler` uses `asyncio.run()` per tick — new event loop every 30s
+- `_get_engine()` creates standalone engine outside app lifecycle — connection pool not managed by app (see Known Gaps)
+- `DatabasePollingScheduler` uses `asyncio.run()` per tick — new event loop every 30s (see Known Gaps)
 
 ## Known Gaps
 
@@ -181,3 +181,7 @@ Discovered from 1 completed delivery tasks. Also specified in PRD 8.5 (Trigger S
 - MAJOR: All 5 error paths in `fire_polling_trigger` (connector_not_found, connector_init_failed, query_timeout, query_failed, condition_eval_failed) did not advance `next_fire_at` on the trigger row. This caused broken triggers to be re-fetched and re-failed on every beat tick (every ~30s) forever. Added `_update_next_fire_no_last(session, trigger)` call before each error return.
 
 **Test results:** 48/48 polling unit tests pass (45 existing + 3 updated assertion).
+
+### 2026-08-15 — coverage sweep (partial-small-a)
+
+- Converted the 6 remaining unchecked behaviour checkboxes to Known Gap bullets (all already documented): no polling queue-depth/rejection mechanism, Redis mid-session unreachability (no reconnection), Redis-available-after-start requires restart, `redis_url` empty-string vs unset edge case, `_get_engine()` standalone engine outside app lifecycle (pool not app-managed), and `DatabasePollingScheduler` using `asyncio.run()` per tick (new event loop every 30s). No code change. Status: partial (68/74 — all remaining unchecked items are documented gaps).

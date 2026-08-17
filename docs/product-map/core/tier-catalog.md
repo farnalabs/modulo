@@ -68,15 +68,24 @@ Plan tier definitions and feature flag catalog governing which features are avai
 - [x] Empty tier catalog returns empty list
 - [x] Unknown tier_id returns 404
 - [x] Unknown flag name returns 404
-- [ ] Tier rank conflict — two tiers with same rank produce undefined ordering
-- [ ] Feature flag `depends_on` circular reference — no cycle detection
 - [x] Seed script idempotency — duplicate seed runs are no-ops via `ON CONFLICT (tier_id) DO NOTHING` / `ON CONFLICT (name) DO NOTHING`
 
 ## Security
 
 - [x] Auth guard via `get_current_user` dependency
 - [x] All tier/flag routes require admin role
-- [ ] No audit logging for tier catalog reads
+
+## Known Gaps
+
+- Tier rank conflict — two tiers with the same `rank` produce undefined ordering (no uniqueness constraint on `rank`)
+- Feature flag `depends_on` circular reference — no cycle detection (a flag depending on itself/its own dependency chain is not rejected)
+- No audit logging for tier catalog reads — the admin read routes emit no audit events
+
+## Known Gaps
+
+- **Tier rank conflict** — two tiers with the same `rank` produce undefined ordering (list orders by rank only; no conflict detection or tie-break). Not PRD-mandated; edge-case gap.
+- **Feature flag `depends_on` circular reference** — no cycle detection; a circular `depends_on` chain resolves undefined. Not PRD-mandated; edge-case gap.
+- **No audit logging for tier-catalog reads** — `list_tiers`/`list_feature_flags`/`get_feature_flag` are read-only and unlogged. Not PRD-mandated.
 
 ## QA History
 

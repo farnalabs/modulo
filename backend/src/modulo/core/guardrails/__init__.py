@@ -40,10 +40,11 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import json
 import logging
 import uuid
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Literal
@@ -1076,6 +1077,220 @@ async def audit_guardrail_skip(
 
 
 # ---------------------------------------------------------------------------
+# Item 11 — guardrail_summary telemetry (run detail)
+# ---------------------------------------------------------------------------
+
+# A skip is EXPECTED when its reason is explained by snapshot-pin state — a
+# pinned guardrail whose live row is soft-deleted is skipped BY DESIGN (item
+# 10) and is never "unexpected". Any skip reason OUTSIDE this set is
+# unexpected: the guardrail was skipped for a reason not explained by pin
+# state, and must page an alert so the operator sees a control silently
+# stopped evaluating.
+GUARDRAIL_SKIP_EXPECTED_REASONS: frozenset[str] = frozenset({"soft_deleted"})
+
+# Detail marker written by ``_mechanism_fail_result`` (timeout / over-budget /
+# malformed config). The summary derivation recognises an errored row by this
+# marker; it is a stable substring of the persisted detail (no raw payload).
+GUARDRAIL_MECHANISM_ERROR_MARKER = "mechanism error:"
+
+
+@dataclass(frozen=True)
+class GuardrailSummary:
+    """Per-run guardrail interception snapshot (item 11).
+
+    ``bound`` is the number of guardrail rows bound to the pipeline (or pinned
+    set) at run start, INCLUDING skipped pins. The invariant
+    ``evaluated + errored + skipped == bound`` holds by construction:
+    ``errored`` absorbs every bound guardrail that did not produce a clean
+    detection (mechanism-error result rows, fail-closed blocked-mechanism
+    errors, pre-pass blocks such as a cap violation or conformance block).
+
+    ``passed`` / ``violated`` follow the GUARDRAIL detection semantics (NOT the
+    raw ``passed`` column): for a regex guardrail ``passed=True`` means the
+    pattern MATCHED — which is a violation. ``passed`` counts clean detections
+    that found NO violation; ``violated`` counts clean detections that fired.
+    """
+
+    bound: int
+    evaluated: int
+    passed: int
+    violated: int
+    observed: int
+    errored: int
+    redacted: int
+    skipped: int
+    expected_skips: int
+
+    @property
+    def unexpected_skips(self) -> int:
+        """Skips not explained by soft-deleted pin state (alert-worthy)."""
+        return self.skipped - self.expected_skips
+
+    def to_dict(self) -> dict[str, int]:
+        return {
+            "bound": self.bound,
+            "evaluated": self.evaluated,
+            "passed": self.passed,
+            "violated": self.violated,
+            "observed": self.observed,
+            "errored": self.errored,
+            "redacted": self.redacted,
+            "skipped": self.skipped,
+            "expected_skips": self.expected_skips,
+            "unexpected_skips": self.unexpected_skips,
+        }
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> GuardrailSummary:
+        """Coerce a persisted summary dict back to a dataclass.
+
+        Raises ValueError on a malformed shape — callers degrade to None.
+        """
+        if not isinstance(data, Mapping):
+            raise ValueError("guardrail summary must be a mapping")
+        try:
+            return cls(
+                bound=int(data["bound"]),
+                evaluated=int(data["evaluated"]),
+                passed=int(data["passed"]),
+                violated=int(data["violated"]),
+                observed=int(data["observed"]),
+                errored=int(data["errored"]),
+                redacted=int(data["redacted"]),
+                skipped=int(data["skipped"]),
+                expected_skips=int(data["expected_skips"]),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"malformed guardrail summary: {exc}") from exc
+
+
+def _is_mechanism_error_result(result: EvalResult) -> bool:
+    """True when *result* is a synthetic mechanism-error row (item 7/11)."""
+    return bool(result.detail) and GUARDRAIL_MECHANISM_ERROR_MARKER in result.detail
+
+
+def _result_is_violation(result: EvalResult, detection_types: Mapping[uuid.UUID, str]) -> bool:
+    """Interpret a persisted detection result as a guardrail violation.
+
+    Mirrors :func:`_interpret_violation` using the per-eval detection type so
+    the summary's passed/violated buckets match the engine semantics (regex
+    ``passed=True`` = pattern matched = violation; json_schema ``passed=False``
+    = validation failed = violation). Unknown eval ids default to regex.
+    """
+    detection_type = detection_types.get(result.eval_id, str(EvalType.REGEX))
+    return _interpret_violation(detection_type, result)
+
+
+def build_guardrail_summary(
+    *,
+    bound: int,
+    definitions: Sequence[EvalDefinition],
+    results: Sequence[EvalResult],
+    redactions: Sequence[RedactionEntry] = (),
+    skipped: Sequence[GuardrailSkip] = (),
+    observed_by_eval: Mapping[uuid.UUID, bool] | None = None,
+) -> GuardrailSummary:
+    """Derive the per-run :class:`GuardrailSummary` snapshot at create time.
+
+    *bound* is ``len(definitions) + len(skipped)`` — every bound guardrail plus
+    every skipped pin. Mechanism-error result rows (the
+    ``_mechanism_fail_result`` detail marker) are split OUT of ``evaluated``
+    into ``errored``; ``errored`` additionally absorbs any bound guardrail that
+    produced no clean detection (blocked pre-pass / blocked mechanism error),
+    guaranteeing ``evaluated + errored + skipped == bound``.
+    """
+    detection_types = {d.id: _resolve_detection(d)[0] for d in definitions}
+    clean = [r for r in results if not _is_mechanism_error_result(r)]
+    evaluated = len(clean)
+    violations = [r for r in clean if _result_is_violation(r, detection_types)]
+    observed = sum(1 for r in clean if observed_by_eval and observed_by_eval.get(r.eval_id, False))
+    skipped_count = len(skipped)
+    errored = max(0, bound - evaluated - skipped_count)
+    redacted = sum(1 for e in redactions if e.applied)
+    expected_skips = sum(1 for s in skipped if s.reason in GUARDRAIL_SKIP_EXPECTED_REASONS)
+    return GuardrailSummary(
+        bound=bound,
+        evaluated=evaluated,
+        passed=evaluated - len(violations),
+        violated=len(violations),
+        observed=observed,
+        errored=errored,
+        redacted=redacted,
+        skipped=skipped_count,
+        expected_skips=expected_skips,
+    )
+
+
+def guardrail_pattern_hash(definitions: Sequence[EvalDefinition], eval_id: uuid.UUID) -> str:
+    """Short deterministic hash of a guardrail's detection declaration.
+
+    Identifies a pattern in logs without embedding the (potentially long)
+    author-supplied regex/schema — the per-pattern fired-signature regression
+    key (item 11, 4c).
+    """
+    for eval_def in definitions:
+        if eval_def.id != eval_id:
+            continue
+        _, effective_config = _resolve_detection(eval_def)
+        try:
+            payload = json.dumps(effective_config, sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            payload = str(eval_id)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return ""
+
+
+def log_guardrail_fired_signatures(
+    *,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    definitions: Sequence[EvalDefinition],
+    results: Sequence[EvalResult],
+) -> None:
+    """Emit one ``guardrails.fired_signature`` log line per clean detection.
+
+    Per-pattern fired-signature regression (item 11, 4c): how often each
+    guardrail pattern fired (violated) per run/org, keyed by a deterministic
+    ``pattern_hash``. Minimal + deterministic — a structured log, never a UI.
+    Mechanism-error rows are excluded (they carry no detection signature).
+    """
+    detection_types = {d.id: _resolve_detection(d)[0] for d in definitions}
+    names = {d.id: d.name for d in definitions}
+    for result in results:
+        if _is_mechanism_error_result(result):
+            continue
+        _log.info(
+            "guardrails.fired_signature",
+            extra={
+                "org_id": str(org_id),
+                "run_id": str(run_id),
+                "guardrail": names.get(result.eval_id, ""),
+                "pattern_hash": guardrail_pattern_hash(definitions, result.eval_id),
+                "fired": _result_is_violation(result, detection_types),
+            },
+        )
+
+
+async def alert_unexpected_guardrail_skip(
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    skip: GuardrailSkip,
+) -> None:
+    """Page a ``guardrail_unexpected_skip`` alert (Notification Log + Error
+    Forwarders) for a skip NOT explained by soft-deleted pin state (item 11,
+    4b). Best-effort fail-open via :func:`notify_guardrail_event` — never breaks
+    the run."""
+    from modulo.core.notifier import EVENT_GUARDRAIL_UNEXPECTED_SKIP
+
+    await notify_guardrail_event(
+        org_id,
+        EVENT_GUARDRAIL_UNEXPECTED_SKIP,
+        {"guardrail": skip.name, "reason": skip.reason, "detail": skip.detail, "run_id": str(run_id)},
+        run_id=run_id,
+    )
+
+
+# ---------------------------------------------------------------------------
 # DB row → engine DTO (live rows + snapshot pins)
 # ---------------------------------------------------------------------------
 
@@ -1152,6 +1367,7 @@ __all__ = [
     "GUARDRAIL_DETECTION_TYPES",
     "GUARDRAIL_FORBIDDEN_FAILURE_BEHAVIOURS",
     "GUARDRAIL_NEVER_TOUCH_FIELDS",
+    "GUARDRAIL_SKIP_EXPECTED_REASONS",
     "REDACTION_MASK",
     "ConformanceDerivation",
     "ConformanceState",
@@ -1165,13 +1381,18 @@ __all__ = [
     "GuardrailMisroutedError",
     "GuardrailPassResult",
     "GuardrailSkip",
+    "GuardrailSummary",
     "RedactionEntry",
+    "alert_unexpected_guardrail_skip",
     "apply_redaction_masks",
     "audit_guardrail_skip",
+    "build_guardrail_summary",
     "check_payload_within_budget",
     "derive_conformance_state",
     "evaluate_guardrails",
     "guardrail_cap_violation",
+    "guardrail_pattern_hash",
+    "log_guardrail_fired_signatures",
     "non_conformant_blocking_guardrails",
     "notify_guardrail_event",
     "resolve_guardrail_cap",

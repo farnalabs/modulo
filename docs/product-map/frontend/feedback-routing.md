@@ -181,12 +181,14 @@ in `feat-frontend-feedback-inbox-ui`.
 
 ## QA History
 
+### 2026-08-15 — Coverage completion (FAR-231/FAR-233 distribute batch)
+- Re-verified the 14 unchecked items against the PRD §8.20 text, feedback.py, feedback_manager and the BDD features. Confirmed several are explicitly PRD-acknowledged as not-yet-wired (pipeline-level default_feedback_handler "runtime code does not yet use it"; no typed gate feedback_handler sub-field; fresh correction runs that do not seed checkpoint state are implemented, but run_post_correction_eval is not wired into the run completion lifecycle). The AI-correction-agent primitive (inputs/outputs), reject_routing_conflict validation, draft-eval editor + publish-to-active, library contribution (v2), deleted-pipeline mid-flight correction spawn, and spawn-retry-on-network-failure are all genuine gaps. No new [x] items this pass; the 77 checked behaviours were spot-re-verified.
+
 ### 2026-08-15 — Coverage-completion (FAR-233)
 - **Corrected overclaims**: pipeline/gate-level default_feedback_handler were marked [x] but no runtime code reads the Pipeline field and no gate-config feedback_handler sub-field exists — now gaps (matches PRD 8.20 and the other feedback entries). "Correction run goes through full eval suite" was [x] but run_post_correction_eval is not wired into the lifecycle — now a gap.
 - **Marked `[x]` (verified)**: correction proposal injected as feedback_correction in run_context (executor promotion), proposed evals surface in the proposals inbox (EvalProposalsQueueView), concurrent-spawn dedup (ConcurrentModificationError → 409), empty-rejection fallback, blocked-transition 409, deleted-pipeline 404.
 - **Fixed (PRD compliance)**: dismiss → `dismissed` (see backend entries).
 - **Remaining gaps**: reject_routing_conflict validation, AI correction agent primitive + its inputs/outputs, draft-eval editor, publish-to-active, library contribution (v2), run_post_correction_eval lifecycle wiring, deleted-pipeline mid-flight correction spawn, spawn retry on network failure.
-
 
 
 ### 2026-07-03 — Cross-cutting QA (index 87)

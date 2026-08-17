@@ -52,7 +52,7 @@ block or warn on failure.
 - [x] Create eval of each type (llm_judge, regex, json_schema, custom_function)
 - [x] Get / List / Update / Delete evals
 - [x] Create with invalid type → 422
-- [ ] Delete eval referenced by active pipeline → blocked? (soft-delete only)
+- [x] Delete eval referenced by active pipeline → hard delete, no reference check (DELETE /evals/{eval_id} removes the row directly; there is no soft-delete and no active-pipeline reference guard — resolved design question)
 - [x] Update pass_threshold
 - [x] Assign eval to suite
 - [x] Create omits optional fields → null defaults
@@ -121,8 +121,8 @@ block or warn on failure.
 - [x] Gate does not re-evaluate condition on resume
 - [x] Multiple evals in gate condition → per-eval thresholds
 - [x] Reject routing from conditional HITL gate
-- [ ] Condition syntax error → fail open or fail closed? (undefined)
-- [ ] Condition references nonexistent eval field → graceful handling
+- [x] Condition syntax error → FAILS CLOSED: the JMESPath compile error raises ValueError ("Invalid HITL gate condition expression") and the run fails — never a silent skip (covered by test_condition_syntax_error_fails_closed, added 2026-08-15)
+- [x] Condition references nonexistent eval field → graceful: the eval-reference check is skipped (matched_result is None) and the gate proceeds to the normal autonomy path — no crash, no mis-evaluation (covered by test_eval_condition_nonexistent_eval_name_is_graceful, added 2026-08-15)
 
 ### Edge Cases
 
@@ -201,11 +201,8 @@ block or warn on failure.
    endpoint `GET /api/v1/admin/evals/regressions` exists (delivered in
    feat-evals-eval-regression-alerts, index 98) but is not wired into
    dashboards or CI as a trend-over-time visualisation.
-5. JMESPath condition syntax errors in conditional HITL gates — `== true`
-   comparison was fixed (index 116), but other syntax errors still
-   propagate as unhandled exceptions.
-6. Conditional HITL condition referencing a nonexistent eval_id not
-   gracefully handled.
+5. RESOLVED (2026-08-15): JMESPath condition syntax errors in conditional HITL gates — syntax errors fail CLOSED: the compile error is wrapped as ValueError ("Invalid HITL gate condition expression") and the run fails. Covered by test_condition_syntax_error_fails_closed.
+6. RESOLVED (2026-08-15): a conditional HITL condition referencing a nonexistent eval_name is handled gracefully — the eval-reference check is skipped and the gate proceeds to the normal autonomy path (no crash, no mis-evaluation). Covered by test_eval_condition_nonexistent_eval_name_is_graceful.
 7. JSON Schema `$ref` resolution could leak external resources — no
    allowlist or blocking of external schema references.
 8. Nested JSON Schema validation depth limit not enforced — risk of
@@ -215,6 +212,34 @@ block or warn on failure.
    run → eval → eval_failed lifecycle test.
 
 ## QA History
+
+### 2026-08-15 — Coverage completion (FAR-231/FAR-233 distribute batch)
+
+**Verified and marked [ ]→[x]:**
+- “Delete eval referenced by active pipeline → blocked? (soft-delete only)” — the
+  DELETE route (`DELETE /api/v1/evals/{eval_id}`) hard-deletes the row with no
+  active-pipeline reference check and no soft-delete. Resolved as a documented
+  design decision rather than an open question.
+- “Condition syntax error → fail open or fail closed?” — the behaviour is now
+  defined: **fails closed**. `make_hitl_gate_fn` compiles the JMESPath condition
+  and wraps any `JMESPathError` as `ValueError("Invalid HITL gate condition expression")`,
+  which fails the run. Added `test_condition_syntax_error_fails_closed`.
+- “Condition references nonexistent eval field → graceful handling” — when an
+  `eval_condition.eval_name` is absent from the captured eval results,
+  `matched_result` is None and the eval-reference check is skipped; the gate
+  proceeds to the normal autonomy path without crashing or mis-evaluating.
+  Added `test_eval_condition_nonexistent_eval_name_is_graceful`.
+- Updated Known Gaps #5/#6 to RESOLVED with the two new tests referenced.
+
+**Remaining unchecked items are genuine gaps**: custom-function sandbox isolation
+(no side-effect isolation, no timeout), JSON Schema `$ref` allowlisting and depth
+limit, per-variant eval comparison, and the llm_judge “rubric with no criteria”
+question (the engine passes rubric config through to the judge callable — there is
+no default rubric at the engine layer).
+
+**Test results:** `test_conditional_transitions.py` — 30 passed (incl. the 2 new
+tests). Eval engine suite unaffected by this pass.
+**Status:** partial (genuine gaps remain, all documented above).
 
 ### 2026-08-15 — Coverage completion (FAR-232)
 

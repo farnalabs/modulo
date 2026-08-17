@@ -9,14 +9,16 @@ import uuid
 from typing import Any
 
 import pytest
+from langgraph.errors import GraphInterrupt
 
+from modulo.core.eval_engine import EvalDefinition, EvalType
 from modulo.core.pipeline_engine.graph_cache import (
     _is_truthy,
     _make_conditional_router,
     _make_gate_kickback_router,
     build_graph_from_json,
 )
-from modulo.core.pipeline_engine.node_runner import _evaluate_eval_condition
+from modulo.core.pipeline_engine.node_runner import _evaluate_eval_condition, make_hitl_gate_fn
 
 # ---------------------------------------------------------------------------
 # _is_truthy — JMESPath truthiness semantics
@@ -422,3 +424,63 @@ async def test_conditional_graph_accepts_mixed_naming():
     assert "router" in node_ids
     assert "target-a" in node_ids
     assert "target-b" not in node_ids
+
+
+# ---------------------------------------------------------------------------
+# Conditional HITL — failure semantics (eval-system.md coverage, 2026-08-15)
+# ---------------------------------------------------------------------------
+
+
+async def test_condition_syntax_error_fails_closed():
+    """An invalid JMESPath gate condition fails CLOSED — ValueError, run fails.
+
+    ``make_hitl_gate_fn`` compiles the JMESPath expression up front; a syntax
+    error raises ``ValueError`` (wrapping the JMESPathError) instead of
+    silently skipping the gate (fail-open).
+    """
+    gate_config = {"gate_id": "bad-cond", "condition": "score >>"}
+    node_fn = make_hitl_gate_fn(gate_config)
+
+    with pytest.raises(ValueError, match="Invalid HITL gate condition expression"):
+        await node_fn(
+            {
+                "artifacts": [],
+                "_hitl_gates": [],
+                "score": 0.8,
+            }
+        )
+
+
+async def test_eval_condition_nonexistent_eval_name_is_graceful(_interrupt_without_graph_runtime):
+    """A condition referencing a nonexistent eval_name does NOT crash.
+
+    With eval definitions present but the referenced ``eval_name`` absent from
+    the captured results, the eval-reference condition check is skipped and the
+    gate proceeds to the normal autonomy path (interrupt) — no KeyError, no
+    mis-evaluation of the condition.
+    """
+    gate_config = {
+        "gate_id": "eval-cond-missing",
+        "eval_condition": {"eval_name": "not-defined", "threshold": 0.8, "operator": "lt"},
+    }
+    eval_def = EvalDefinition(
+        id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        name="quality-check",
+        eval_type=EvalType.REGEX,
+        config={"pattern": "pass", "field": "level"},
+        failure_behaviour="warn",
+    )
+    node_fn = make_hitl_gate_fn(gate_config, eval_definitions=[eval_def])
+
+    with pytest.raises(GraphInterrupt) as exc_info:
+        await node_fn(
+            {
+                "artifacts": [],
+                "_hitl_gates": [],
+                "level": "pass",
+            }
+        )
+
+    interrupt_list = exc_info.value.args[0]
+    assert interrupt_list[0].value["gate_id"] == "eval-cond-missing"

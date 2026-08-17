@@ -251,7 +251,7 @@ jobs:
     # Regenerates frontend/src/lib/api/schema.ts from the backend's OpenAPI and
     # FAILS if the committed schema differs from what the generator produces.
     # Any backend API change (routes, request/response models) therefore forces
-    # `pnpm run generate:api` in the same PR. Mirrors scripts/generate-api-types.ps1:
+    # `pnpm run generate:api` in the same PR. Mirrors scripts/run_generate_api_types.py:
     # dump the OpenAPI JSON by importing modulo.api.main, then feed it to
     # openapi-typescript. Runs on ALL events (PR + push to main + manual) so a
     # schema that drifts out of sync on main is caught immediately.
@@ -329,7 +329,7 @@ jobs:
           fi
       - name: Validate product map graph
         shell: bash
-        run: pwsh -NoProfile -File tools/graph-validate.ps1 -CI
+        run: uv run --project backend --no-sync python scripts/run_graph_validate.py --ci
 
   manifest-validate:
     name: Manifest validation
@@ -468,7 +468,7 @@ jobs:
           exit 0
 
   # Break-glass deploy gate = acceptance (b) of the break-glass admin recovery
-  # plan §3: automated staging verification = the boot-time allow-list assertion
+  # plan sec. 3: automated staging verification = the boot-time allow-list assertion
   # + the connectivity smoke that FAILS boot when ENABLED AND
   # boot-failure-mode=fail. Runs the breakglass_gate-tagged regression suite
   # (test_break_glass_gate.py) against testcontainers Postgres with the

@@ -14,7 +14,7 @@ code:
   - backend/src/modulo/core/pipeline_engine/node_runner.py
   - backend/src/modulo/core/pipeline_engine/graph_cache.py
 depends-on: [feat-teams-team-crud]
-status: partial
+status: covered
 ---
 # Team HITL Gates
 

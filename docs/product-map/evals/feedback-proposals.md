@@ -40,9 +40,9 @@ Discovered from 1 completed delivery task.
 
 ### Human Curation (8.20 ¶Eval suite growth #3)
 - [ ] Human reviews proposed eval in draft eval editor — Not implemented (queue UI exists, no draft eval editor)
-- [ ] Human edits proposed eval before publishing — Not implemented
-- [ ] Human publishes proposed eval — Not implemented (EvalProposalsQueueView "Publish" only transitions the record to `resolved`; no eval definition is created)
-- [ ] Published evals become immediately active for future pipeline runs — Not implemented
+- [ ] Human edits proposed eval before publishing — Not implemented (no draft eval editor)
+- [x] Human publishes proposed eval — `POST /api/v1/feedback/proposals/{record_id}/publish` (added 2026-08-15) creates a live `EvalDefinition` scoped to the record's pipeline + node and resolves the record; the frontend "Publish" button is not yet wired to it
+- [x] Published evals become immediately active for future pipeline runs — the created EvalDefinition is node+pipeline scoped and loaded at run time (executor `node_id.isnot(None)` filter) and by gap detection
 
 ### BDD Scenarios
 - [x] BDD feature file exists for feedback system — 7 real scenarios exist (not a placeholder); eval proposal generation/publication scenarios are not covered (would need new step definitions)
@@ -88,10 +88,15 @@ Discovered from 1 completed delivery task.
 - **`detect_eval_gap()` now works** — iterates eval suite and returns True if all pass (gap) or False if any fails. The API endpoint now fetches eval definitions from the pipeline instead of passing `eval_suite=[]`.
 - **No AI correction agent** — PRD 8.20 describes an agent that produces diagnosis + correction proposal + proposed eval case, but no code exists for it.
 - **No eval proposal model** — proposals are currently just FeedbackRecords with `eval_gap=True`. No dedicated `EvalProposal` entity with draft fields (negative example, rubric, suggested eval type, publication status).
-- **No draft eval editor UI** — PRD 8.20 mentions "Eval proposals queue with draft eval editor" in the feedback inbox UI. The queue UI exists (`EvalProposalsQueueView.vue` at `/evals/proposals`) but there is no editor for drafting/editing eval content, and "Publish" only resolves the record — no eval definition is created.
+- **No draft eval editor UI** — PRD 8.20 mentions "Eval proposals queue with draft eval editor" in the feedback inbox UI. The queue UI exists (`EvalProposalsQueueView.vue` at `/evals/proposals`) but there is no editor for drafting/editing eval content, and the "Publish" button is not yet wired to the backend publish endpoint (`POST /feedback/proposals/{record_id}/publish`, added 2026-08-15) which creates the EvalDefinition.
 - **BDD feature** — `feedback_system.feature` has 7 real scenarios (create, status transitions, invalid transitions, eval gap detection, correction run spawning) but none cover eval proposal generation or publication.
 
 ## QA History
+
+### 2026-08-15 — Coverage-completion (FAR-232/233, partial-evals-b)
+- **Implemented (PRD §8.20 ¶Eval suite growth #3, publish step)**: `POST /api/v1/feedback/proposals/{record_id}/publish` in `api/routes/feedback.py` creates a live node-scoped `EvalDefinition` on the proposal's pipeline (node from explicit `node_id` → `producing_node_id` UUID → snapshot-graph node match), transitions the record to `resolved`, and emits `feedback.proposal_published`. Since run-time eval execution and gap detection load definitions by `pipeline_id` at run time, the published eval is immediately active for future runs.
+- **Marked `[x]` (implemented + tested)**: "Human publishes proposed eval" and "Published evals become immediately active". 9 new endpoint unit tests in `test_feedback_endpoint.py` + 2 new ProgrammingError→501/SQLAlchemyError→503 cases in `test_error_handling.py`.
+- **Still gaps (kept `[ ]`)**: AI correction / eval-proposal agent drafting (PRD #2 — no agent exists), proposed-eval negative-example/rubric/eval-type suggestion, draft eval editor UI + review/edit, frontend "Publish" wiring, library contribution (v2).
 
 ### 2026-08-15 — Coverage-completion round 2 (dist partial-evals-d)
 - **Verified** all remaining unchecked behaviours against code + tests. Every unchecked item is a genuine new-feature gap requiring a dedicated eval-proposal entity/agent/UI, none of which exists and none of which is a backend-only change in this worktree's scope:
@@ -106,7 +111,7 @@ Discovered from 1 completed delivery task.
 - **Marked `[x]`**: BDD feature file exists (7 real scenarios), double gap detection idempotent (`test_double_detection_is_idempotent`).
 - **Fixed (bug)**: `detect_eval_gap` treated real `EvalDefinition` objects (ORM/DTO — what the `/detect-gap` route actually passes) as "malformed" and skipped the whole suite, so gap detection always returned `True` when the pipeline had eval definitions. The malformed guard now accepts `EvalDefinition`-shaped objects; covered by `test_uses_real_eval_engine_standalone_path`.
 - **Added**: 18 ProgrammingError→501 / SQLAlchemyError→503 cases for all 9 feedback routes in `test_error_handling.py` (the file previously had none despite product-map claims).
-- **Remaining gaps**: AI correction agent, eval proposal model, draft eval editor, publish-to-active, library contribution (v2).
+- **Remaining gaps**: AI correction agent, eval proposal model, draft eval editor, frontend publish wiring (backend publish-to-active shipped 2026-08-15), library contribution (v2).
 
 ### 2026-07-12 — Round 3 improve-architecture
 - **MAJOR:** Fixed B904 (exception chaining) on all feedback route handlers — `IntegrityError`, `ProgrammingError`, `SQLAlchemyError`, and `Exception` now use `raise ... from exc` pattern

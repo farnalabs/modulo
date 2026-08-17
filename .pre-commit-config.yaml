@@ -29,26 +29,26 @@
         stages: [manual]
       - id: graph-validate
         name: graph-validate
-        entry: powershell -NoProfile -File tools/graph-validate.ps1
+        entry: uv run --project backend --no-sync python scripts/run_graph_validate.py
         language: system
         files: ^docs/product-map/
         pass_filenames: false
       - id: validate-enforcement-gates
         name: validate enforcement gates
-        entry: powershell -NoProfile -File tools/validate-enforcement-gates.ps1
+        entry: uv run --project backend --no-sync python scripts/run_validate_enforcement_gates.py
         language: system
         files: ^(\.github/workflows/ci\.yml|AGENTS\.md)$
         pass_filenames: false
       - id: pester
         name: Pester 5 PowerShell tests
-        entry: powershell -NoProfile -File tools/run-pester-tests.ps1
+        entry: uv run --project backend --no-sync python scripts/run_pester_tests.py
         language: system
         files: ^tools/.*\.ps1$
         pass_filenames: false
         stages: [pre-commit, manual]
       - id: check-migration-heads
         name: check migration number/revision collisions
-        entry: powershell -NoProfile -File tools/check-migration-heads.ps1
+        entry: uv run --project backend --no-sync python scripts/run_check_migration_heads.py
         language: system
         files: ^backend/src/modulo/db/migrations/versions/.*\.py$
         pass_filenames: false
@@ -105,7 +105,7 @@
         pass_filenames: false
       - id: generate-api-types
         name: Generate API types from OpenAPI schema
-        entry: powershell -NoProfile -File frontend/scripts/generate-api-types.ps1
+        entry: uv run --project backend --no-sync python scripts/run_generate_api_types.py
         language: system
         files: ^backend/src/
         pass_filenames: false
@@ -125,19 +125,19 @@
         stages: [manual]
       - id: check-c1-chars
         name: check C1 control characters in workflow files
-        entry: powershell -NoProfile -File tools/check-c1-chars.ps1
+        entry: uv run --project backend --no-sync python scripts/run_check_c1_chars.py
         language: system
         files: ^\\.github/workflows/.*\\.yml$
         pass_filenames: false
 
       - id: check-utf8
         name: check UTF-8 encoding (no corrupted files)
-        entry: powershell -NoProfile -File tools/check-utf8-encoding.ps1
+        entry: uv run --project backend --no-sync python scripts/run_check_utf8_encoding.py
         language: system
         pass_filenames: false
       - id: run-changed-tests
         name: run tests for changed test files
-        entry: powershell -NoProfile -File tools/run-changed-tests.ps1
+        entry: uv run --project backend --no-sync python scripts/run_changed_tests.py
         language: system
         files: ^backend/tests/.*\.py$
         pass_filenames: false
@@ -145,7 +145,7 @@
 
       - id: check-uv-lock
         name: check uv lockfile freshness
-        entry: powershell -NoProfile -File tools/check-uv-lock.ps1
+        entry: uv run --project backend --no-sync python scripts/run_check_uv_lock.py
         language: system
         files: ^backend/pyproject\.toml$
         pass_filenames: false

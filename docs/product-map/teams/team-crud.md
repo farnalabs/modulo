@@ -17,7 +17,7 @@ unit-tests:
   - backend/tests/unit/db/crud/test_team_membership.py
   - backend/tests/integration/crud/test_team_isolation.py
 depends-on: [feat-teams-org-entity]
-status: partial
+status: covered
 ---
 
 # Team CRUD

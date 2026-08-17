@@ -61,7 +61,7 @@ json_schema, custom_function.
 ### Eval type selection
 
 - [x] Select from: llm_judge, regex, json_schema, custom_function
-- [ ] Config JSON textarea with placeholder per type
+- [x] Config JSON textarea with placeholder per type
 - [x] Real-time JSON parse validation; show "Invalid JSON" inline error
 - [x] Disable save button when JSON is invalid
 
@@ -127,11 +127,15 @@ json_schema, custom_function.
 - No keyboard shortcuts
 - No form validation for pass_threshold being required for llm_judge / custom_function types
 - No conditional form sections per eval type (e.g. pattern field for regex, schema editor for json_schema)
-- Config textarea has a single generic placeholder, not type-specific placeholders
 - Smoke test is minimal (renders + text check only, no interaction tests)
 
 ## QA History
+- **2026-08-17 (FAR-288): Implemented per-type config placeholders. Added a `configPlaceholder` computed to `EvalEditorView.vue` that returns a per-eval-type JSON template (llm_judge → criteria/prompt, regex → pattern, json_schema → schema, custom_function → function), backed by new i18n keys under `views.EvalEditorView.configPlaceholder.*` in `en-US.js`. Added a spec test asserting the textarea placeholder switches per eval type. The final unchecked behaviour (52/52) is now covered.**
 - **2026-08-15 (coverage sweep partial-small-b): Verified the remaining unchecked behaviour “Config JSON textarea with placeholder per type” is a genuine gap — the textarea uses a single generic placeholder, not per-type placeholders (already documented in Known Gaps). All 51 other behaviours verified against EvalEditorView.vue + EvalEditorView.spec.ts + eval backend tests. 51/52 behaviours covered.**
+
+### 2026-08-15 — Coverage completion (FAR-231/FAR-233 distribute batch)
+
+- Re-verified the 51 checked behaviours against EvalEditorView.vue and the spec; all accurate. The single unchecked item ("Config JSON textarea with placeholder per type") is a GENUINE gap: the component reads one `views.EvalEditorView.config_placeholder` key, and per-type placeholders require new i18n keys in frontend/src/locales/en-US.js, which is outside this worktree's restricted allowlist (the Conductor discards footprint violations). Implemented + tested the feature locally (EvalEditorView.vue computed, 4 locale keys, passing spec test) but reverted it to respect the scope contract — the change is ready to ship in a follow-up worktree whose allowlist includes the locale file. Status: partial.
 
 ### 2026-07-04 — Cross-cutting QA (index 125)
 

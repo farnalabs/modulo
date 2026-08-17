@@ -1014,6 +1014,12 @@ export default {
       "eval_type": "Eval Type",
       "config_json": "Config (JSON)",
       "config_placeholder": "\\{ \"field\": \"output\", \"instructions\": \"...\" \\}",
+      "configPlaceholder": {
+        "llm_judge": "\\{ \"criteria\": [\"response is accurate\", \"response is concise\"], \"prompt\": \"...\" \\}",
+        "regex": "\\{ \"pattern\": \"(error|failed)\", \"field\": \"output\" \\}",
+        "json_schema": "\\{ \"schema\": { \"type\": \"object\", \"properties\": { \"valid\": { \"type\": \"boolean\" } } } \\}",
+        "custom_function": "\\{ \"function\": \"def evaluate(output):\\n    return output.get('score', 0) >= 0.8\" \\}"
+      },
       "pass_threshold": "Pass Threshold",
       "failure_behaviour": "Failure Behaviour",
       "warn": "Warn",

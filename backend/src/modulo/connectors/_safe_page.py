@@ -17,8 +17,10 @@ corrupt or hostile response bodies. A corrupt or hostile response may return
 a non-dict body (list, string, number, ...) or a non-list page field — either
 crashes the connector with ``AttributeError`` on the bare
 ``body.get(key, [])`` chain or returns a bare string as the records list.
-Keeping a single implementation in one place avoids drift between the copies
-(mirrors ``_safe_int`` / ``_safe_cursor`` / ``_safe_datetime``).
+The Grafana connector (a bare top-level array body) is guarded by
+``safe_records_list``. Keeping a single implementation in one place avoids
+drift between the copies (mirrors ``_safe_int`` / ``_safe_cursor`` /
+``_safe_datetime``).
 """
 
 from __future__ import annotations
@@ -37,3 +39,17 @@ def safe_records(body: object, key: str) -> list[dict[str, Any]]:
         return []
     records = body.get(key, [])
     return records if isinstance(records, list) else []
+
+
+def safe_records_list(body: object) -> list[dict[str, Any]]:
+    """Return a bare top-level array body, or an empty page for a corrupt body.
+
+    Some APIs (Grafana) return the records as the top-level JSON array rather
+    than nest them under a key. Only a list body yields records; a non-list
+    body (dict, string, number, ...) falls back to an empty page so the
+    caller's list query degrades gracefully instead of crashing on a bare
+    ``body[key]`` or ``body[: limit]`` slice against a non-sequence.
+    """
+    if not isinstance(body, list):
+        return []
+    return [rec for rec in body if isinstance(rec, dict)]

@@ -110,6 +110,7 @@ def _sandbox_node(**overrides) -> dict:
     node: dict = {
         "id": str(uuid.uuid4()),
         "node_type": "sandbox_agent",
+        "agent_prompt": "Do the thing",
         "agent_command": "opencode run",
         "template_id": "opencode",
         "timeout_seconds": 600,
@@ -151,6 +152,60 @@ def test_sandbox_missing_command_errors():
 
 def test_sandbox_whitespace_command_errors():
     graph = {"nodes": [_sandbox_node(agent_command="   ")], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_MISSING_COMMAND" in _codes(result)
+    assert not result.is_valid
+
+
+def test_sandbox_script_mode_valid_no_agent_prompt():
+    """FAR-296: script mode requires script_command and does NOT require agent_prompt."""
+    node = {
+        "id": str(uuid.uuid4()),
+        "node_type": "sandbox_agent",
+        "mode": "script",
+        "script_command": "python3 main.py",
+        "template_id": "opencode",
+        "timeout_seconds": 600,
+    }
+    graph = {"nodes": [node], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_MISSING_COMMAND" not in _codes(result)
+    assert result.is_valid
+
+
+def test_sandbox_script_mode_missing_command_errors():
+    """FAR-296: script mode without script_command is a hard error."""
+    node = {
+        "id": str(uuid.uuid4()),
+        "node_type": "sandbox_agent",
+        "mode": "script",
+        "agent_prompt": "ignored",
+        "template_id": "opencode",
+    }
+    graph = {"nodes": [node], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_MISSING_COMMAND" in _codes(result)
+    assert not result.is_valid
+
+
+def test_sandbox_both_commands_error():
+    """FAR-296: agent_command and script_command together is invalid."""
+    node = _sandbox_node()
+    node["script_command"] = "python3 main.py"
+    graph = {"nodes": [node], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_MISSING_COMMAND" in _codes(result)
+    assert not result.is_valid
+
+
+def test_sandbox_invalid_mode_error():
+    """FAR-296: an unknown mode value is a hard error."""
+    node = _sandbox_node(mode="docker")
+    graph = {"nodes": [node], "edges": []}
     result = ValidationResult()
     GraphValidator._check_sandbox_agent_config(graph, result)
     assert "SANDBOX_MISSING_COMMAND" in _codes(result)

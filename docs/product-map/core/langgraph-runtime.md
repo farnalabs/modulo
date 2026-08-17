@@ -63,7 +63,7 @@ LangGraph-based pipeline runtime — StateGraph compilation, execution, snapshot
 - [x] Node execution errors captured per-node in run state
 - [x] `CancelledError` propagation via `@cancellable_node` decorator
 - [x] `set_rls_org` called without `session.begin()` in `_do_db_cancellation_check` — relies on autobegin, will fail if disabled
-- [ ] No explicit `IntegrityError` or `SQLAlchemyError` routing in engine-level catch blocks
+- No explicit `IntegrityError` or `SQLAlchemyError` routing in engine-level catch blocks (see Known Gaps)
 
 ## Edge Cases
 
@@ -71,14 +71,28 @@ LangGraph-based pipeline runtime — StateGraph compilation, execution, snapshot
 - [x] Single-node pipeline — executes correctly
 - [x] Pipeline with all node types (agent, manual, sandbox_agent, router, trigger)
 - [x] LRU cache eviction on full cache — stale graphs gracefully recompiled
-- [ ] Concurrent checkpoint writes — no explicit isolation testing
-- [ ] State growth beyond memory limit — no enforced cap on `dict[str, Any]` state
+- Concurrent checkpoint writes — no explicit isolation testing (see Known Gaps)
+- State growth beyond memory limit — no enforced cap on `dict[str, Any]` state (see Known Gaps)
 
 ## Security
 
 - [x] RLS context set per-run — cross-org isolation enforced
 - [x] `run_context` write guard prevents non-context-setter agents from writing
-- [ ] No per-run credential isolation beyond ConnectorHub one-decrypt lifecycle
-- [ ] Checkpoint data may contain state from previous runs before LRU eviction
+- No per-run credential isolation beyond ConnectorHub one-decrypt lifecycle (see Known Gaps)
+- Checkpoint data may contain state from previous runs before LRU eviction (see Known Gaps)
 
 ## Known Gaps
+
+- **No explicit `IntegrityError`/`SQLAlchemyError` routing in engine-level catch blocks** — the pipeline engine's catch blocks don't distinguish DB error classes (they surface run-failure generically). Not PRD-mandated; hardening item.
+- **Concurrent checkpoint writes** — no explicit isolation testing (two runs checkpointing the same snapshot concurrently). LangGraph checkpointers are not tested for write-write races.
+- **State growth beyond memory limit** — no enforced cap on the `dict[str, Any]` state; a node writing unbounded data grows memory until OOM.
+- **No per-run credential isolation beyond the ConnectorHub one-decrypt lifecycle** — credentials are decrypted once per run into a run-scoped context; there is no finer-grained per-node credential scoping.
+- **Checkpoint data may contain state from previous runs before LRU eviction** — the graph cache is keyed by `(pipeline_id, snapshot_id)` with LRU eviction; a recompiled graph uses a fresh snapshot, but stale checkpoint state from a prior run is not explicitly cleared.
+
+## QA History
+
+### 2026-08-15 — coverage sweep (partial-small-a)
+
+- Verified the 5 unchecked items are genuine gaps (no engine-level exception routing, no concurrent-checkpoint isolation test, no state-size cap, no per-run credential isolation beyond ConnectorHub, checkpoint state from prior runs before LRU eviction) and documented them in a new Known Gaps section. No code change. Status: partial (21/26 — all remaining unchecked items are documented gaps).
+
+- **2026-08-15 — distribute (final-pass sweep C)**: Verified the 5 unchecked behaviours are all genuine, non-PRD hardening gaps (engine-level DB-error routing, concurrent checkpoint isolation, state-growth cap, per-run credential isolation beyond ConnectorHub, stale checkpoint state before LRU eviction) and documented them in the previously-empty Known Gaps section. No code changes — `core/pipeline_engine/` is outside this sweep's scope. Status: partial.

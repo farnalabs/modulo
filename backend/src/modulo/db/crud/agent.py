@@ -279,6 +279,16 @@ async def get_eval_results_with_defs(
             "failure_behaviour": ed.failure_behaviour,
         }
 
+    # FAR-223 item 11 §4d — the eval_results consumer contract: even though the
+    # fetch is by explicit ID, guardrail rows (eval_type='guardrail') are
+    # filtered OUT of the prompt-optimizer feed. Their passed semantics are
+    # inverted (regex passed=True = pattern MATCHED = a violation), so a
+    # guardrail row would corrupt the optimizer's failure context.
+    non_guardrail: list[EvalResult] = [
+        er for er in eval_results if definitions.get(str(er.eval_id), {}).get("eval_type") != "guardrail"
+    ]
+    eval_results = non_guardrail
+
     results_list = [
         {
             "id": str(er.id),

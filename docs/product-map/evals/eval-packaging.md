@@ -94,6 +94,10 @@ Grouping eval definitions into suites with configurable pass thresholds, includi
 - No website docs page for eval-packaging (needs creation in Website repo)
 
 ## QA History
+### 2026-08-15 — Coverage completion (FAR-231/FAR-233 distribute batch)
+
+- Re-verified the three unchecked items are genuine design gaps: cross-pipeline suite_id semantics (suite_id is a free-form string with no pipeline scoping), orphaned suite_id on last-eval deletion, and no FK/orphan protection. Confirmed `GET /evals` has no `suite_id` query parameter (list-by-suite is DB-only). Confirmed the two BDD claims (eval_suite_crud.feature 8 scenarios, eval_run.feature threshold scenario) are accurate as documented. No new [x] items this pass.
+
 ### 2026-08-15 — Coverage completion (FAR-232)
 
 **What was fixed:**

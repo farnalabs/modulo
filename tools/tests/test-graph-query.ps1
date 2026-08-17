@@ -1,24 +1,16 @@
 <#
 .SYNOPSIS
-  Pester tests for graph-query.ps1: -Uncovered lists entries with empty/missing
-  bdd, -Impact lists downstream dependents, -Depends lists upstream prereqs.
+  Pester tests for run_graph_query.py: --uncovered lists entries with empty/missing
+  bdd, --impact lists downstream dependents, --depends lists upstream prereqs.
 #>
 
 BeforeAll {
     $toolsDir = Join-Path $PSScriptRoot ".."
-    $script:GraphQueryPath = Join-Path $toolsDir "graph-query.ps1"
+    $script:GraphQueryPath = Join-Path (Join-Path $PSScriptRoot "..\..") "scripts\run_graph_query.py"
     $script:RepoRoot = Resolve-Path (Join-Path $toolsDir "..")
 
     $script:TestDir = Join-Path ([IO.Path]::GetTempPath()) "modulo-graph-query-test-$(Get-Random)"
     New-Item -ItemType Directory -Path $TestDir -Force | Out-Null
-
-    # Copy the query tool into a fixture repo rooted at TestDir.
-    Copy-Item -LiteralPath $GraphQueryPath -Destination $TestDir
-    Copy-Item -LiteralPath (Join-Path $toolsDir "product-map-metadata.ps1") -Destination $TestDir
-    $testQuery = Join-Path $TestDir "graph-query.ps1"
-    $originalContent = Get-Content -Raw -LiteralPath $GraphQueryPath
-    $testContent = $originalContent -replace [regex]::Escape('$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")'), "`$repoRoot='$TestDir'"
-    Set-Content -Path $testQuery -Value $testContent
 
     function New-FixtureEntry {
         param([string]$Name, [string]$Id, [string[]]$Bdd, [string[]]$Depends, [switch]$Inline)
@@ -48,11 +40,11 @@ BeforeAll {
 
     function Invoke-GraphQuery {
         param([switch]$Uncovered, [string]$Impact, [string]$Depends)
-        $splat = @{}
-        if ($Uncovered) { $splat["Uncovered"] = $true }
-        if ($Impact) { $splat["Impact"] = $Impact }
-        if ($Depends) { $splat["Depends"] = $Depends }
-        $output = & $testQuery @splat *>&1
+        $flagArgs = @()
+        if ($Uncovered) { $flagArgs += "--uncovered" }
+        if ($Impact) { $flagArgs += "--impact"; $flagArgs += $Impact }
+        if ($Depends) { $flagArgs += "--depends"; $flagArgs += $Depends }
+        $output = uv run --project backend --no-sync python $GraphQueryPath --repo-root $TestDir @flagArgs *>&1
         return @{ Output = $output; ExitCode = $LASTEXITCODE }
     }
 
@@ -66,7 +58,7 @@ AfterAll {
     Remove-Item -LiteralPath $TestDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Describe "graph-query -Uncovered" {
+Describe "graph-query --uncovered" {
     It "lists entries with empty or missing bdd coverage" {
         $result = Invoke-GraphQuery -Uncovered
         $result.ExitCode | Should -Be 1
@@ -84,22 +76,16 @@ Describe "graph-query -Uncovered" {
     }
 }
 
-Describe "graph-query -Uncovered on a clean repo" {
+Describe "graph-query --uncovered on a clean repo" {
     It "exits 0 when every entry has bdd coverage" {
         $cleanDir = Join-Path ([IO.Path]::GetTempPath()) "modulo-graph-query-clean-$(Get-Random)"
         New-Item -ItemType Directory -Path $cleanDir -Force | Out-Null
         try {
-            Copy-Item -LiteralPath $GraphQueryPath -Destination $cleanDir
-            Copy-Item -LiteralPath (Join-Path $toolsDir "product-map-metadata.ps1") -Destination $cleanDir
-            $cleanQuery = Join-Path $cleanDir "graph-query.ps1"
-            $cleanContent = Get-Content -Raw -LiteralPath $GraphQueryPath
-            $cleanTestContent = $cleanContent -replace [regex]::Escape('$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")'), "`$repoRoot='$cleanDir'"
-            Set-Content -Path $cleanQuery -Value $cleanTestContent
             $cleanEntryDir = Join-Path (Join-Path $cleanDir "docs") "product-map"
             New-Item -ItemType Directory -Path $cleanEntryDir -Force | Out-Null
             $cleanFront = "---`nid: feat-clean`nprd: 8.4`nstatus: partial`nbdd:`n  - backend/tests/bdd/features/x.feature`n---"
             Set-Content -Path (Join-Path $cleanEntryDir "clean.md") -Value $cleanFront
-            $output = & $cleanQuery -Uncovered *>&1
+            $output = uv run --project backend --no-sync python $GraphQueryPath --repo-root $cleanDir --uncovered *>&1
             $output | Select-String -SimpleMatch "None - every entry has bdd coverage" | Should -Not -Be $null
             $LASTEXITCODE | Should -Be 0
         } finally {
@@ -108,7 +94,7 @@ Describe "graph-query -Uncovered on a clean repo" {
     }
 }
 
-Describe "graph-query -Impact" {
+Describe "graph-query --impact" {
     It "lists downstream dependents of a feat id" {
         $result = Invoke-GraphQuery -Impact "feat-covered"
         $result.ExitCode | Should -Be 0
@@ -128,7 +114,7 @@ Describe "graph-query -Impact" {
     }
 }
 
-Describe "graph-query -Depends" {
+Describe "graph-query --depends" {
     It "lists upstream dependencies of a feat id" {
         $result = Invoke-GraphQuery -Depends "feat-leaf"
         $result.ExitCode | Should -Be 0
@@ -141,7 +127,7 @@ Describe "graph-query -Depends" {
         $result.Output | Select-String -SimpleMatch "feat-covered" | Should -Not -Be $null
     }
 
-    It "exits 1 for a known id with no dependencies (matches -Impact convention)" {
+    It "exits 1 for a known id with no dependencies (matches --impact convention)" {
         $result = Invoke-GraphQuery -Depends "feat-covered"
         $result.ExitCode | Should -Be 1
         $result.Output | Select-String -SimpleMatch "None." | Should -Not -Be $null
@@ -149,7 +135,7 @@ Describe "graph-query -Depends" {
 }
 
 Describe "graph-query argument contract" {
-    It "rejects passing both -Impact and -Depends" {
+    It "rejects passing both --impact and --depends" {
         $result = Invoke-GraphQuery -Impact "feat-covered" -Depends "feat-leaf"
         $result.ExitCode | Should -Be 1
         $result.Output | Select-String -SimpleMatch "only one of -Impact or -Depends" | Should -Not -Be $null

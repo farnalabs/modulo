@@ -364,14 +364,21 @@ def _check_agent_capabilities(
 
 
 def _check_sandbox_command(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
-    """Sandbox check 1: agent_command must be non-empty."""
-    cmd = node.get("agent_command", "")
-    if not cmd or not str(cmd).strip():
-        result.error(
-            "SANDBOX_MISSING_COMMAND",
-            f"Sandbox agent node '{nid}' is missing required agent_command",
-            node_id=nid,
-        )
+    """Sandbox check 1: the mode-scoped command must be non-empty.
+
+    FAR-296: routed through the SHARED ``_validate_sandbox_mode_config`` helper
+    (the same one the node runner, Pydantic model, MCP tool, and config linter
+    use) so save-time and run-time validation agree. llm mode requires
+    agent_command / agent_commands + agent_prompt; script mode requires
+    script_command; both commands present is an error. The ValueError message
+    (which already carries the node id) is surfaced as the issue detail.
+    """
+    from modulo.core.pipeline_engine.sandbox_mode import _validate_sandbox_mode_config
+
+    try:
+        _validate_sandbox_mode_config(node)
+    except ValueError as exc:
+        result.error("SANDBOX_MISSING_COMMAND", str(exc), node_id=nid)
 
 
 def _check_sandbox_template(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
@@ -493,6 +500,55 @@ def _check_sandbox_output_schema(node: dict[str, Any], nid: str, result: Validat
         result.warning(
             "SANDBOX_SCHEMA_INCOMPLETE",
             f"Sandbox agent node '{nid}' output_schema_json lacks 'type' or '$ref'",
+            node_id=nid,
+        )
+
+
+def _check_sandbox_loop_intercept(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
+    """Sandbox check 8: loop_intercept config shape (FAR-211).
+
+    The ``loop_intercept`` config enables the agent-loop interior tool-call
+    interception bridge (ADR 003 amendment). A malformed config is a hard
+    ERROR — a declared control must never silently no-op because its shape was
+    invalid. Absent config (the default) passes.
+    """
+    raw = node.get("loop_intercept")
+    if raw is None or raw is False:
+        return
+    if not isinstance(raw, dict):
+        result.error(
+            "SANDBOX_LOOP_INTERCEPT_MALFORMED",
+            f"Sandbox agent node '{nid}' loop_intercept must be an object (or omitted)",
+            node_id=nid,
+        )
+        return
+    try:
+        from modulo.core.guardrails.loop_intercept import validate_loop_intercept_config_errors
+    except Exception:
+        # Lazy import failure must not crash validation — surface as an error.
+        result.error(
+            "SANDBOX_LOOP_INTERCEPT_MALFORMED",
+            f"Sandbox agent node '{nid}' loop_intercept could not be validated",
+            node_id=nid,
+        )
+        return
+    errors = validate_loop_intercept_config_errors(raw)
+    for err in errors:
+        result.error(
+            "SANDBOX_LOOP_INTERCEPT_MALFORMED",
+            f"Sandbox agent node '{nid}' loop_intercept: {err}",
+            node_id=nid,
+        )
+    # The empty-patterns warning is independent of other errors: an empty list is
+    # VALID shape (so it contributes no error), yet it means the bridge would
+    # intercept nothing. Warn whenever the list is empty so a declared-but-inert
+    # control never passes silently. (Previously gated on ``errors``, which is
+    # empty exactly when the list is empty — the warning was unreachable.)
+    if isinstance(raw.get("intercepted_tool_patterns"), list) and not raw["intercepted_tool_patterns"]:
+        result.warning(
+            "SANDBOX_LOOP_INTERCEPT_EMPTY_PATTERNS",
+            f"Sandbox agent node '{nid}' loop_intercept.intercepted_tool_patterns is empty — "
+            "no tool calls will be intercepted",
             node_id=nid,
         )
 
@@ -1858,7 +1914,8 @@ class GraphValidator:
         """Validate sandbox_agent node configurations.
 
         Checks:
-        1. agent_command is non-empty.
+        1. agent_command (llm mode) / script_command (script mode) is non-empty,
+           per the shared mode-aware validator (FAR-296).
         2. template_id is set.
         3. timeout_seconds within bounds (60-3600) if set.
         4. context_files source paths start with /.
@@ -1879,6 +1936,7 @@ class GraphValidator:
             _check_sandbox_context_files(node, nid, result)
             _check_sandbox_env_vars(node, nid, _reserved_env_prefixes, result)
             _check_sandbox_output_schema(node, nid, result)
+            _check_sandbox_loop_intercept(node, nid, result)
 
     # ------------------------------------------------------------------
     # Pipeline retry_policy

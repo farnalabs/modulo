@@ -384,6 +384,58 @@ class TestConvertToAgent:
 
         assert excinfo.value.status_code == status.HTTP_501_NOT_IMPLEMENTED
 
+    async def test_graph_nodes_json_none_treated_as_empty(self) -> None:
+        """graph_nodes_json of None must be handled as an empty nodes list, not crash."""
+        session = make_session()
+        pipeline = make_pipeline_row()
+        pipeline.graph_nodes_json = None
+        setup_execute_side_effect(session, [pipeline])
+        principal = make_principal()
+        body = make_convert_body()
+
+        with pytest.raises(HTTPException) as excinfo:
+            await convert_node_to_agent_endpoint(
+                pipeline_id=PIPELINE_ID,
+                node_id=NODE_ID,
+                req=body,
+                session=session,
+                principal=principal,
+            )
+
+        assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND
+        assert "Node not found" in excinfo.value.detail
+
+    async def test_save_graph_none_returns_404(self) -> None:
+        """Pipeline deleted between locked read and _save_graph → _save_graph returns None → 404."""
+        session = make_session()
+        setup_execute_side_effect(
+            session,
+            [
+                make_pipeline_row(nodes=[make_manual_node()]),
+                [],
+                make_agent_mock(),
+                make_connector_mock(),
+                make_model_backend_mock(),
+            ],
+        )
+        principal = make_principal()
+        body = make_convert_body()
+
+        with (
+            patch("modulo.api.routes.pipelines._save_graph", AsyncMock(return_value=None)),
+            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),
+            pytest.raises(HTTPException) as excinfo,
+        ):
+            await convert_node_to_agent_endpoint(
+                pipeline_id=PIPELINE_ID,
+                node_id=NODE_ID,
+                req=body,
+                session=session,
+                principal=principal,
+            )
+
+        assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND
+
 
 # ===========================================================================
 #  Revert-to-manual tests
@@ -648,3 +700,50 @@ class TestRevertToManual:
             )
 
         assert excinfo.value.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+
+    async def test_graph_nodes_json_none_treated_as_empty(self) -> None:
+        """graph_nodes_json of None must be handled as an empty nodes list, not crash."""
+        session = make_session()
+        pipeline = make_pipeline_row(nodes=[make_agent_node()])
+        pipeline.graph_nodes_json = None
+        setup_execute_side_effect(session, [pipeline])
+        principal = make_principal()
+        snapshot = make_snapshot()
+
+        with (
+            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+            pytest.raises(HTTPException) as excinfo,
+        ):
+            await revert_node_to_manual_endpoint(
+                pipeline_id=PIPELINE_ID,
+                node_id=NODE_ID,
+                snapshot_id=SNAPSHOT_ID,
+                session=session,
+                principal=principal,
+            )
+
+        assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND
+        assert "Node not found" in excinfo.value.detail
+
+    async def test_save_graph_none_returns_404(self) -> None:
+        """Pipeline deleted between locked read and _save_graph → _save_graph returns None → 404."""
+        session = make_session()
+        setup_execute_side_effect(session, [make_pipeline_row(nodes=[make_agent_node()])])
+        principal = make_principal()
+        snapshot = make_snapshot()
+
+        with (
+            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+            patch("modulo.api.routes.pipelines._save_graph", AsyncMock(return_value=None)),
+            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),
+            pytest.raises(HTTPException) as excinfo,
+        ):
+            await revert_node_to_manual_endpoint(
+                pipeline_id=PIPELINE_ID,
+                node_id=NODE_ID,
+                snapshot_id=SNAPSHOT_ID,
+                session=session,
+                principal=principal,
+            )
+
+        assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND

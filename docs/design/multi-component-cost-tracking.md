@@ -2032,7 +2032,7 @@ The wrapper (1) checks `$LASTEXITCODE` FIRST so a uv/alembic COMMAND failure is
 distinguished from a WRONG-HEAD failure, and (2) asserts the head output is
 EXACTLY ONE line over HEAD-MARKER LINES ONLY (a two-head tree fails). PRE
 asserts `0065_reconcile_staging_schema` (the current head); POST asserts
-`0066_cost_components` (the new sole head). `check-migration-heads.ps1` still
+`0066_cost_components` (the new sole head). `scripts/run_check_migration_heads.py` (the Python port of `check-migration-heads.ps1`) still
 runs for its duplicate-prefix + multi-head-warning role.
 
 **Migration DDL maintenance-window flag:** 0065 runs in ONE migration and holds

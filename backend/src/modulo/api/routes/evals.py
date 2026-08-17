@@ -23,6 +23,7 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.node_output_split import node_return
+from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.pipeline import Pipeline
@@ -646,6 +647,7 @@ async def list_run_evals(
             total_q = select(sa_func.count(EvalResult.id)).where(
                 EvalResult.run_id == run_id,
                 EvalResult.organisation_id == principal.organisation_id,
+                non_guardrail_eval_results_clause(),
             )
             total = (await session.execute(total_q)).scalar() or 0
 
@@ -655,6 +657,7 @@ async def list_run_evals(
                 .where(
                     EvalResult.run_id == run_id,
                     EvalResult.organisation_id == principal.organisation_id,
+                    non_guardrail_eval_results_clause(),
                 )
                 .order_by(EvalResult.evaluated_at.desc())
                 .offset(offset)
@@ -772,11 +775,29 @@ async def compare_evals(
                 raise HTTPException(status_code=404, detail="Run B not found")
 
             results_a = (
-                (await session.execute(select(EvalResult).where(EvalResult.run_id == req.run_id_a))).scalars().all()
+                (
+                    await session.execute(
+                        select(EvalResult).where(
+                            EvalResult.run_id == req.run_id_a,
+                            non_guardrail_eval_results_clause(),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
             )
 
             results_b = (
-                (await session.execute(select(EvalResult).where(EvalResult.run_id == req.run_id_b))).scalars().all()
+                (
+                    await session.execute(
+                        select(EvalResult).where(
+                            EvalResult.run_id == req.run_id_b,
+                            non_guardrail_eval_results_clause(),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
             )
     except HTTPException:
         raise

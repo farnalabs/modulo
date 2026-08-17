@@ -29,7 +29,7 @@ unit-tests:
   - backend/tests/unit/api/test_pipelines_endpoint.py
   - backend/tests/bdd/steps/test_cross_team_isolation.py
 depends-on: [feat-teams-team-crud]
-status: partial
+status: covered
 ---
 # Team Isolation (RLS)
 

@@ -350,6 +350,56 @@ async def test_query_builds_missing_job_name(jenkins):
 
 
 # ---------------------------------------------------------------------------
+# Corrupt list payload hardening
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_list_runs_corrupt_body_no_crash(jenkins):
+    """A non-dict body from the builds endpoint must degrade to an empty run
+    list instead of crashing with AttributeError on ``.get()``."""
+    respx.get(f"{_JENKINS_BASE}/job/my-job/api/json").mock(return_value=httpx.Response(200, json=["garbage"]))
+    runs = await jenkins.list_runs(pipeline_id="my-job")
+    assert not runs
+
+
+@respx.mock
+async def test_list_runs_non_list_builds_value_no_crash(jenkins):
+    """A corrupt body placing a non-list in ``builds`` must fall back to an
+    empty run list instead of iterating a bare string."""
+    respx.get(f"{_JENKINS_BASE}/job/my-job/api/json").mock(return_value=httpx.Response(200, json={"builds": "boom"}))
+    runs = await jenkins.list_runs(pipeline_id="my-job")
+    assert not runs
+
+
+@respx.mock
+async def test_query_jobs_corrupt_body_no_crash(jenkins):
+    """A non-dict body from the jobs endpoint must degrade to an empty page."""
+    respx.get(f"{_JENKINS_BASE}/api/json").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await jenkins.query(ConnectorQuery(resource="jobs"))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_builds_corrupt_body_no_crash(jenkins):
+    """A non-dict body from the builds endpoint must degrade to an empty page."""
+    respx.get(f"{_JENKINS_BASE}/job/my-job/api/json").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await jenkins.query(ConnectorQuery(resource="builds", filters={"job_name": "my-job"}))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_nodes_corrupt_body_no_crash(jenkins):
+    """A non-dict body from the nodes endpoint must degrade to an empty page."""
+    respx.get(f"{_JENKINS_BASE}/computer/api/json").mock(return_value=httpx.Response(200, json=["garbage"]))
+    result = await jenkins.query(ConnectorQuery(resource="nodes"))
+    assert not result.records
+    assert result.total == 0
+
+
+# ---------------------------------------------------------------------------
 # Test double
 # ---------------------------------------------------------------------------
 
