@@ -1806,17 +1806,10 @@ async def update_pipeline_graph(
         # FAR-296 mode-aware sandbox_agent gate — the SAME shared helper the
         # Pydantic model, node runner, and GraphValidator use, applied to the
         # raw node dicts so this gate agrees with save-time and run-time
-        # validation even if the Pydantic surface is bypassed. Imported from the
-        # lightweight sandbox_mode module (no LangGraph) to keep the API layer
-        # import-linter-clean.
-        from modulo.core.pipeline_engine.sandbox_mode import _validate_sandbox_mode_config
-
-        for node in nodes:
-            if node.get("node_type") == "sandbox_agent":
-                try:
-                    _validate_sandbox_mode_config(node)
-                except ValueError as exc:
-                    return {"error": "validation_failed", "field": "nodes", "detail": str(exc)}
+        # validation even if the Pydantic surface is bypassed.
+        sandbox_err = _validate_sandbox_nodes(nodes)
+        if sandbox_err:
+            return sandbox_err
 
         try:
             async with _session(org_id) as s:
@@ -1884,6 +1877,25 @@ async def update_pipeline_graph(
     except Exception:
         _log.exception("update_pipeline_graph failed")
         return _tool_error("Failed to update pipeline graph")
+
+
+def _validate_sandbox_nodes(nodes: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Mode-aware sandbox_agent gate over raw node dicts.
+
+    Applies the same shared validation helper the Pydantic model, node runner,
+    and GraphValidator use. Imported from the lightweight sandbox_mode module
+    (no LangGraph) to keep the API layer import-linter-clean. Returns None if
+    all sandbox_agent nodes validate, otherwise the error dict.
+    """
+    from modulo.core.pipeline_engine.sandbox_mode import _validate_sandbox_mode_config
+
+    for node in nodes:
+        if node.get("node_type") == "sandbox_agent":
+            try:
+                _validate_sandbox_mode_config(node)
+            except ValueError as exc:
+                return {"error": "validation_failed", "field": "nodes", "detail": str(exc)}
+    return None
 
 
 def _apply_node_connector_binding(
