@@ -204,11 +204,11 @@ def _clamp_mcp_number(value: float) -> float:
     return float(d)
 
 
-def _sanitize_mcp_mapping(value: dict) -> dict:
+def _sanitize_mcp_mapping(value: dict[str, Any]) -> dict[str, Any]:
     return {k: _sanitize_mcp_basis_value(v) for k, v in value.items()}
 
 
-def _sanitize_mcp_sequence(value: list) -> list:
+def _sanitize_mcp_sequence(value: list[Any]) -> list[Any]:
     return [_sanitize_mcp_basis_value(v) for v in value]
 
 
@@ -1135,7 +1135,7 @@ async def create_pipeline(
     description="List pipeline runs with filtering and cursor-based pagination.",
 )
 @_RETRY_DB
-def _mcp_run_item(r: Any, child_rollup: dict) -> dict[str, Any]:
+def _mcp_run_item(r: Any, child_rollup: dict[Any, tuple[Any, int]]) -> dict[str, Any]:
     child_cost, child_count = child_rollup.get(r.id, (_MCP_COST_ROLLUP_ZERO, 0))
     child_cost = _quantize_mcp_cost_rollup(child_cost)
     own_cost = r.total_cost_usd if r.total_cost_usd is not None else _MCP_COST_ROLLUP_ZERO
