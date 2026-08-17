@@ -107,7 +107,7 @@ def oidc_providers_configured(p1: str, p2: str, ctx: dict[str, Any]) -> None:
 # ── License gating ────────────────────────────────────────────────────────
 
 
-@given("I do not have a team license")
+@given("I do not have a Team license")
 def no_team_license(ctx: dict[str, Any]) -> None:
     ctx["license_key"] = ""
 
@@ -142,11 +142,22 @@ def callback_valid(request: Any, ctx: dict[str, Any], client: Any) -> None:
     with (
         patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
         patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
+        patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
         patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
         patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
     ):
-        mock_disc.return_value = {"token_endpoint": "https://oauth2.googleapis.com/token"}
+        mock_disc.return_value = {
+            "token_endpoint": "https://oauth2.googleapis.com/token",
+            "jwks_uri": "https://www.googleapis.com/oauth2/v3/certs",
+            "issuer": "https://accounts.google.com",
+        }
         mock_ex.return_value = {"id_token": id_token}
+        mock_verify.return_value = {
+            "email": email,
+            "name": name,
+            "sub": "abc123",
+            "groups": ctx.get("idp_groups", []),
+        }
 
         if ctx.get("is_new_user", True):
             user_mock = MagicMock()
@@ -154,7 +165,7 @@ def callback_valid(request: Any, ctx: dict[str, Any], client: Any) -> None:
             user_mock.id = uuid.uuid4()
             user_mock.organisation_id = _ORG_ID
             user_mock.org_role = "runner"
-            mock_jit.return_value = user_mock
+            mock_jit.return_value = (user_mock, _ORG_ID, "runner")
         else:
             existing = MagicMock()
             existing.email = email
@@ -163,7 +174,7 @@ def callback_valid(request: Any, ctx: dict[str, Any], client: Any) -> None:
             existing.org_role = "admin"
             existing.sso_subject = "google:existing"
             existing.auth_provider = "oidc"
-            mock_jit.return_value = existing
+            mock_jit.return_value = (existing, _ORG_ID, "admin")
 
         mock_tok.return_value = {
             "access_token": "at-oidc-test",
@@ -273,8 +284,9 @@ def no_duplicate_account(ctx: dict[str, Any]) -> None:
     assert mock_jit is not None, "No mock_jit reference found in context"
     mock_jit.assert_awaited_once()
     returned = mock_jit.return_value
-    assert returned.email == ctx.get("expected_email", ""), (
-        f"Expected returning user {ctx.get('expected_email')}, got {returned.email}"
+    account = returned[0] if isinstance(returned, tuple) else returned
+    assert account.email == ctx.get("expected_email", ""), (
+        f"Expected returning user {ctx.get('expected_email')}, got {account.email}"
     )
 
 

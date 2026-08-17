@@ -90,6 +90,7 @@ const MyProfileView = () => import('../views/MyProfileView.vue')
 const SettingsLicenseView = () => import('../views/SettingsLicenseView.vue')
 const SettingsMcpView = () => import('../views/SettingsMcpView.vue')
 const SettingsTriggersView = () => import('../views/SettingsTriggersView.vue')
+const SettingsGuardrailsView = () => import('../views/SettingsGuardrailsView.vue')
 const SettingsHitlReviewView = () => import('../views/SettingsHitlReviewView.vue')
 const AdminNotificationDeliveryLogView = () => import('../views/AdminNotificationDeliveryLogView.vue')
 const AdminHousekeepingView = () => import('../views/AdminHousekeepingView.vue')
@@ -218,6 +219,11 @@ const router = createRouter({
       path: '/settings/triggers',
       name: 'settings-triggers',
       component: SettingsTriggersView,
+    },
+    {
+      path: '/settings/guardrails',
+      name: 'settings-guardrails',
+      component: SettingsGuardrailsView,
     },
     {
       path: '/settings/hitl-review',

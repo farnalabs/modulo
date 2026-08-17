@@ -332,6 +332,17 @@ routes:
         <<: *community
         deprecated: false
 
+    /settings/guardrails:
+        name: settings-guardrails
+        breadcrumb: Guardrails
+        parent: /
+        product_map:
+        sidebar_group: configure
+        sidebar_order: 6
+        type: form_page
+        <<: *community
+        deprecated: false
+
     /settings/runtime-config:
         name: settings-runtime-config
         breadcrumb: Runtime Config

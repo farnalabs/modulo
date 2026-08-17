@@ -117,7 +117,7 @@ def make_mock_pipeline(**kwargs: Any) -> MagicMock:
     p.lock_wait_timeout_seconds = kwargs.get("lock_wait_timeout_seconds", 300)
     p.node_timeout_seconds = kwargs.get("node_timeout_seconds", 300)
     p.run_context_defaults = kwargs.get("run_context_defaults", {})
-    p.default_autonomy_level = kwargs.get("default_autonomy_level")
+    p.default_autonomy_level = kwargs.get("default_autonomy_level", "manual_approval")
     p.max_duration_seconds = kwargs.get("max_duration_seconds")
     p.stale_run_timeout_minutes = kwargs.get("stale_run_timeout_minutes", 30)
     p.rate_limit_config = kwargs.get("rate_limit_config")

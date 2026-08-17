@@ -110,6 +110,7 @@ block or warn on failure.
 - [x] Multiple evals on same node → AND logic, first block fails remaining
 - [x] Mix of block and warn on same node → block takes precedence
 - [x] Eval gate runs AFTER node execution, BEFORE next node
+- [x] Node-scoped evals run as a standalone post-node step (FAR-305) — independent of HITL gates. `_run_post_node_evals` (executor.py) evaluates each node's eval definitions against the node's inner output dict after the node completes and persists results to the `eval_results` table, so plain nodes (no gate) get their node-scoped evals evaluated too. A `block` eval failure propagates `EvalBlockedError` → run transitions to `eval_failed` (`error_code="eval_blocked"`). Covered by `backend/tests/unit/pipeline_engine/test_post_node_evals.py`. (If a node also feeds a HITL gate with eval-before-interrupt, the evals run twice — once post-node, once in the gate.)
 - [x] Block failure recorded in AuditEvent — pipeline executor (executor.py:445-458) calls `append_audit_event` with event_type="eval.blocked" when eval_blocked causes eval_failed status. Audit event written to `audit_event` table. (Fixed since index 118; executor.py now wires eval_blocked→audit_event.)
 
 ### Conditional HITL

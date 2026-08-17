@@ -238,8 +238,16 @@ def acs_valid_response(request: Any, ctx: dict[str, Any], client: Any) -> None:
 @when("the SAML ACS endpoint receives a malformed SAMLResponse")
 def acs_malformed_response(request: Any, ctx: dict[str, Any], client: Any) -> None:
     _setup_saml_client()
-    with patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch:
+    from modulo.auth.saml_handler import SamlAuthError
+
+    with (
+        patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch,
+        patch("modulo.auth.sso.ModuloSamlAuth") as mock_handler,
+    ):
         mock_fetch.return_value = _SAMPLE_IDP_METADATA
+        mock_handler.return_value.process_response.side_effect = SamlAuthError(
+            "SAML response validation failed: invalid_response"
+        )
         resp = client.post(
             "/api/v1/auth/saml/acs",
             data={"SAMLResponse": base64.b64encode(b"<bad/>").decode()},
@@ -358,10 +366,9 @@ def no_duplicate_account(ctx: dict[str, Any]) -> None:
     assert mock_jit is not None, "No mock_jit reference found in context"
     mock_jit.assert_awaited_once()
     returned = mock_jit.return_value
-    user = returned[0] if isinstance(returned, tuple) else returned
-    assert user.email == ctx.get("expected_email", ""), (
-        f"Expected returning user {ctx.get('expected_email')}, got {user.email}"
-        f"Expected returning user {ctx.get('expected_email')}, got {user.email}"
+    account = returned[0] if isinstance(returned, tuple) else returned
+    assert account.email == ctx.get("expected_email", ""), (
+        f"Expected returning user {ctx.get('expected_email')}, got {account.email}"
     )
 
 
