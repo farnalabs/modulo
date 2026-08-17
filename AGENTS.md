@@ -732,6 +732,8 @@ PowerShell-only tool hooks are platform-agnostic wrappers in `scripts/`:
 - `scripts/run_graph_validate.py` — product map graph integrity (formerly
   `tools/graph-validate.ps1`); supports `--fix` to regenerate `_index.md` and
   `--ci` for CI-friendly raw output.
+- `scripts/run_validate_manifest.py` - frontend/src/manifest.yaml integrity
+  (formerly `tools/validate-manifest.ps1`); supports `--repo-root` and `--ci`.
 - `scripts/run_validate_enforcement_gates.py` — CI/delivery gate integrity
   (formerly `tools/validate-enforcement-gates.ps1`).
 - `scripts/run_check_migration_heads.py` — Alembic migration collision check
@@ -746,13 +748,7 @@ PowerShell-only tool hooks are platform-agnostic wrappers in `scripts/`:
   `tools/check-uv-lock.ps1`).
 - `scripts/run_generate_api_types.py` — OpenAPI → TS types (formerly
   `frontend/scripts/generate-api-types.ps1`).
-- `scripts/run_pester_tests.py` — Pester is PowerShell-only, so this wrapper
-  skips on non-Windows (exit 0) and shells out to
-  `tools/run-pester-tests.ps1` on Windows (formerly
-  `tools/run-pester-tests.ps1` directly).
-
-All of these run identically on Windows, Linux and macOS (except
-`run_pester_tests.py`, which is inherently PowerShell-gated).
+All of these run identically on Windows, Linux and macOS.
 
 - `scripts/run_frontend_npm.py` runs `pnpm run <script>` in `frontend/` (npm
   fallback only) via the platform's package manager (`pnpm.cmd`/`npm.cmd` on
