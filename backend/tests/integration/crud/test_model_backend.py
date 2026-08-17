@@ -326,6 +326,114 @@ async def test_update_model_backend_with_fallback_round_trips_real_endpoint(
     assert "primary-" in del_resp.json()["detail"]
 
 
+async def _seed_pipeline_snapshot_run(
+    db_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    backend_id: uuid.UUID,
+    run_status: str,
+) -> tuple[uuid.UUID, uuid.UUID]:
+    """Seed a pipeline, a snapshot pinned to ``backend_id``, and a run in
+    ``run_status`` in the given org, returning ``(snapshot_id, run_id)``.
+
+    Inserted via the raw ``db_engine`` (superuser) connection so the rows are
+    owned by the seeded org and remain visible to the RLS-context endpoint.
+    """
+    pipeline_id, snapshot_id, run_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
+                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
+                "run_context_defaults, graph_nodes_json) "
+                "VALUES (:id, :oid, :name, :uid, 10, 300, 300, '{}'::json, '[]'::json)",
+            ),
+            {
+                "id": str(pipeline_id),
+                "oid": str(org_id),
+                "name": f"snap-pipe-{uuid.uuid4().hex[:6]}",
+                "uid": str(user_id),
+            },
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, "
+                "snapshot_version, graph_json, connector_bindings_json, "
+                "schema_pins_json, prompt_pins_json, model_backend_pins_json, "
+                "run_context_defaults, config_json) "
+                "VALUES (:id, :pid, :oid, 1, '{}'::json, '[]'::json, "
+                "'[]'::json, '[]'::json, :mb_pins::json, '{}'::json, '{}'::json)",
+            ),
+            {
+                "id": str(snapshot_id),
+                "pid": str(pipeline_id),
+                "oid": str(org_id),
+                "mb_pins": str([{"model_backend_id": str(backend_id)}]),
+            },
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
+                "trigger_type, langgraph_thread_id, run_number, input_hash, status) "
+                "VALUES (:id, :oid, :pid, :sid, 'manual', :thread, 1, :hash, :status)",
+            ),
+            {
+                "id": str(run_id),
+                "oid": str(org_id),
+                "pid": str(pipeline_id),
+                "sid": str(snapshot_id),
+                "thread": str(uuid.uuid4()),
+                "hash": "0" * 64,
+                "status": run_status,
+            },
+        )
+    return snapshot_id, run_id
+
+
+async def test_delete_model_backend_blocked_by_non_terminal_snapshot_run_real_endpoint(
+    db_engine: AsyncEngine,
+    model_backend_client: AsyncClient,
+) -> None:
+    """PRD §8.1 deletion protection — the REAL query path: a snapshot pinned to
+    a backend and tied to a NON-terminal run hard-deletes are rejected (409).
+
+    Unlike the unit tests (which patch ``_list_snapshots_referencing_backend``
+    and therefore never exercise the terminal-vs-non-terminal filter), this
+    drives the actual JOIN of ``PipelineSnapshot`` -> ``Run`` with a real
+    ``awaiting_human`` run row, proving the ``NOT IN TERMINAL_STATUSES`` filter
+    and the ``model_backend_pins_json`` match end-to-end.
+    """
+    org_id, user_id = await _seed_org_and_admin(db_engine)
+    _, backend_id = await _seed_backends(db_engine, org_id, user_id)
+    await _seed_pipeline_snapshot_run(db_engine, org_id, user_id, backend_id, run_status="awaiting_human")
+
+    headers = {"Authorization": f"Bearer {_token(org_id, user_id)}"}
+    resp = await model_backend_client.delete(f"/api/v1/model-backends/{backend_id}", headers=headers)
+    assert resp.status_code == 409, resp.text
+    assert "non-terminal run" in resp.json()["detail"]
+
+
+async def test_delete_model_backend_allowed_when_snapshot_runs_terminal_real_endpoint(
+    db_engine: AsyncEngine,
+    model_backend_client: AsyncClient,
+) -> None:
+    """A backend pinned only by snapshots tied to TERMINAL runs hard-deletes
+    (204) via the real delete endpoint + real query.
+
+    This is the distinguishing security behaviour the unit tests mock around:
+    with a real ``complete`` run row the query must return nothing so the
+    deletion protection does NOT block. A regression where the ``NOT IN
+    TERMINAL_STATUSES`` filter were inverted would (correctly) fail this test.
+    """
+    org_id, user_id = await _seed_org_and_admin(db_engine)
+    _, backend_id = await _seed_backends(db_engine, org_id, user_id)
+    await _seed_pipeline_snapshot_run(db_engine, org_id, user_id, backend_id, run_status="complete")
+
+    headers = {"Authorization": f"Bearer {_token(org_id, user_id)}"}
+    resp = await model_backend_client.delete(f"/api/v1/model-backends/{backend_id}", headers=headers)
+    assert resp.status_code == 204, resp.text
+
+
 async def test_update_model_backend_self_reference_rejected_real_endpoint(
     db_engine: AsyncEngine,
     model_backend_client: AsyncClient,
