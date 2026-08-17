@@ -85,6 +85,7 @@ def _run(repo: str, manifest_content: str) -> tuple[int, str]:
         [sys.executable, SCRIPT, "--repo-root", repo, "--ci"],
         capture_output=True,
         text=True,
+        timeout=30,
     )
     return result.returncode, result.stdout
 

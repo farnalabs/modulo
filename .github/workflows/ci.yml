@@ -336,7 +336,7 @@ jobs:
           enable-cache: false
       - name: Validate manifest.yaml
         shell: bash
-        run: uv run --project backend --no-sync python scripts/run_validate_manifest.py --ci
+        run: uv run --project backend --no-sync --with pyyaml python scripts/run_validate_manifest.py --ci
 
   gitleaks:
     name: Secret scan
