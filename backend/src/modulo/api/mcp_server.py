@@ -1701,6 +1701,31 @@ async def update_pipeline_graph(
         return _tool_error("Failed to update pipeline graph")
 
 
+def _apply_node_connector_binding(
+    pipeline: Any,
+    nid: uuid.UUID,
+    node_id: str,
+    connector_type: str,
+    connector_instance_id: str,
+) -> dict[str, Any] | None:
+    """Bind the connector onto the matching node. Returns an error dict, or None."""
+    nodes = list(pipeline.graph_nodes_json) if pipeline.graph_nodes_json else []
+    target = None
+    for node in nodes:
+        if uuid.UUID(node["id"]) == nid:
+            target = node
+            break
+    if target is None:
+        return {"error": "node_not_found", "detail": f"Node {node_id} not found in pipeline graph"}
+
+    target["connector_binding"] = {
+        "type": connector_type,
+        "instance_id": connector_instance_id,
+    }
+    pipeline.graph_nodes_json = nodes
+    return None
+
+
 @mcp.tool(
     description="Bind a connector instance to a pipeline node. "
     "Updates the node's connector_binding in the pipeline graph. "
@@ -1763,20 +1788,9 @@ async def bind_connector_to_node(
                     ),
                 }
 
-            nodes = list(pipeline.graph_nodes_json) if pipeline.graph_nodes_json else []
-            target = None
-            for node in nodes:
-                if uuid.UUID(node["id"]) == nid:
-                    target = node
-                    break
-            if target is None:
-                return {"error": "node_not_found", "detail": f"Node {node_id} not found in pipeline graph"}
-
-            target["connector_binding"] = {
-                "type": connector_type,
-                "instance_id": connector_instance_id,
-            }
-            pipeline.graph_nodes_json = nodes
+            bind_error = _apply_node_connector_binding(pipeline, nid, node_id, connector_type, connector_instance_id)
+            if bind_error is not None:
+                return bind_error
             await s.flush()
 
         return {
