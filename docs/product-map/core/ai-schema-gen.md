@@ -74,14 +74,14 @@ Schema Inference (8.16) samples records from a connected tool and uses an LLM to
 - [x] Unparseable response wrapped in `SchemaInferenceError`
 - [x] Deeply nested object/array structures
 - [x] Non-string `AIMessage` content #### PRD scope gaps (8.16) — not yet implemented
-- [ ] Configurable sample count (default 200 per PRD, not 50 as today)
-- [ ] Enum detection for `issue_type`, `status`, `priority` fields
-- [ ] Fields appearing in <10% of records flagged as rarely-used, excluded from default draft
-- [ ] Inferred `abstract_name` suggestion surfaced in response
-- [ ] Draft opens in schema editor for operator review before publishing
+- Configurable sample count (default 200 per PRD, not 50 as today) — see Known Gaps
+- Enum detection for `issue_type`, `status`, `priority` fields — see Known Gaps
+- Fields appearing in <10% of records flagged as rarely-used, excluded from default draft — see Known Gaps
+- Inferred `abstract_name` suggestion surfaced in response — see Known Gaps
+- Draft opens in schema editor for operator review before publishing — see Known Gaps
 - [x] ~~**Sandboxed LLM prompt (`SandboxedEnvironment`) for untrusted record data**~~ **RESOLVED 2026-08-12/15**: sample/example data is sanitised (`schema_registry/sanitize.py`) and rendered between `<<<SAMPLE_DATA>>>` / `<<<END_SAMPLE_DATA>>>` structural separators with an explicit untrusted-input instruction in the system prompt; Jinja `SandboxedEnvironment` itself is not used because there is no user-authored template in the inference/generation path
 - [x] ~~**Sampled data not stored after inference completes**~~ **RESOLVED 2026-08-15**: regression test (`test_infer_schema_response_does_not_contain_or_persist_sample_records`) asserts the infer response carries no raw sample records and only the documented response keys; samples are held in memory for the request only and never written to the DB
-- [ ] SDLC onboarding path: connect, infer, review, publish, browse library, wire agents — PARTIAL: OnboardingWizard.vue implements connect → Run Inference → Review Schemas → publish (and browse-library/wire-pipeline steps exist as UI steps); the library-browse step filtered by inferred `abstract_name` is blocked on the `abstract_name` inference gap #### BDD coverage
+- SDLC onboarding path: connect, infer, review, publish, browse library, wire agents — PARTIAL: OnboardingWizard.vue implements connect → Run Inference → Review Schemas → publish (and browse-library/wire-pipeline steps exist as UI steps); the library-browse step filtered by inferred `abstract_name` is blocked on the `abstract_name` inference gap (see Known Gaps) #### BDD coverage
 - [x] Gherkin scenarios in `schema_inference.feature` — 6 scenarios covering infer, 404, 400, validation, migration plan, and unsupported connector types #### Error Handling — DB ProgrammingError → 501
 - [x] `list_schemas_endpoint` (line 142) — caught, returns 501
 - [x] `create_schema_endpoint` (line 173) — caught, returns 501
@@ -152,6 +152,10 @@ Schema Inference (8.16) samples records from a connected tool and uses an LLM to
 ### 2026-08-15 — Coverage drive (FAR-234)
 
 Verified and checked off: retry/backoff on LLM calls (`_common.invoke_and_parse`: up to 3 attempts, exponential backoff, timeout path retries without sleep — proven by `test_infer_retries_transient_failures_then_succeeds`); no-DB-access endpoints (validate/import are pure; migrate/plan's audit ProgrammingError is caught+logged); resolved the SandboxedEnvironment PRD-gap (sanitisation + structural separators, matching `feat-core-schema-inference` 2026-08-12); resolved the sampled-data-lifecycle gap with a no-sample-persistence regression test. Added ProgrammingError→501 + SQLAlchemyError→503 tests for the generate endpoint (`test_schema_generate_endpoint.py`). Clarified the SDLC onboarding path gap: the wizard implements connect → infer → review → publish; the browse-library-by-`abstract_name` step stays blocked on the `abstract_name` inference gap. **Status:** partial (remaining PRD gaps: sample cap 200 vs 50/100, enum detection, rare-field flagging, `abstract_name` inference, field-level schema editor, onboarding browse-by-abstract_name).
+
+### 2026-08-15 — coverage sweep (partial-small-a)
+
+- Converted the 6 remaining unchecked behaviour checkboxes to plain PRD-gap bullets (all already documented in Known Gaps): configurable sample count (200 vs 50/100), enum detection, rare-field flagging, `abstract_name` inference, field-level schema editor draft, and the partial SDLC onboarding path blocked on `abstract_name`. No code change. Status: partial (100/106 — all remaining unchecked items are documented gaps).
 
 
 ### 2026-07-08 — Cross-cutting QA (improve-architecture index 276)

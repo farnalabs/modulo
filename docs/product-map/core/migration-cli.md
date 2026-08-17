@@ -83,10 +83,7 @@ Two implementations exist: `modulo-migrate` (click-based, JSONL format with auth
 - [x] Structural validation runs before hash verification — corrupt input reports the shape problem, not a hash mismatch
 - [x] Multiple structural problems accumulated into one error message (all reported, not fail-fast on the first)
 - [x] Unknown top-level bundle keys ignored (not treated as tables)
-- [ ] Large orgs >500 rows: migrate.py loads all in memory (OOM risk); migrate_org.py paginates safely
-- [ ] Slow DB: no timeout on DB operations (both CLIs)
 - [x] Interrupted export: partial output file left on disk (both CLIs) — fixed for migrate.py with try/finally cleanup in _async_export_org
-- [ ] Hash collision during import (both CLIs)
 
 ### Resilience (QA pass 2026-07-05)
 
@@ -106,6 +103,9 @@ Two implementations exist: `modulo-migrate` (click-based, JSONL format with auth
 - No integration tests for full export→verify→import cycle
 - No concurrency tests (parallel export/import, partial failure during import)
 - No tests for orgs with 500+ records (pagination boundary for migrate_org.py) — unit-level pagination boundary now covered (2026-08-13)
+- migrate.py loads all rows in memory (`session.execute(query)).scalars().all()`) — OOM risk on very large orgs; migrate_org.py paginates safely (2026-08-15 verified)
+- No timeout on DB operations in either CLI — a slow/unresponsive DB blocks indefinitely
+- SHA-256 hash collision during import is not handled — theoretical (cryptographically infeasible) and both CLIs would treat a collided bundle as valid
 
 ## QA History
 
@@ -134,3 +134,7 @@ Two implementations exist: `modulo-migrate` (click-based, JSONL format with auth
 - Added TODO comments for known limitations (OOM on large orgs in migrate.py, no DB timeout) matching unchecked edge cases in product map.
 
 **Status:** partial (8 known gaps remain — 1 partially resolved by new tests)
+
+### 2026-08-15 — coverage sweep (partial-small-a)
+
+- Verified the 3 unchecked edge-case behaviours are genuine gaps and moved them into Known Gaps as plain bullets: (1) `migrate.py` loads all rows via `.scalars().all()` (`cli/migrate.py:162`) — OOM risk on orgs >500 rows while `migrate_org.py` paginates safely; (2) neither CLI imposes a DB-operation timeout; (3) SHA-256 hash collision on import is theoretical and unhandled. None are PRD-mandated for the MVP. Status: partial (all remaining unchecked items are documented gaps).
