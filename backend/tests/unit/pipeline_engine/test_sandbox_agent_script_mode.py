@@ -21,7 +21,11 @@ from pydantic import ValidationError
 
 from modulo.api.routes.pipelines import PipelineGraphNode
 from modulo.core.graph_validator import GraphValidator, ValidationResult
-from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError, make_sandbox_agent_fn
+from modulo.core.pipeline_engine.node_runner import (
+    ScriptFailedError,
+    ScriptInvalidOutputError,
+    make_sandbox_agent_fn,
+)
 from modulo.core.pipeline_engine.sandbox_mode import _validate_sandbox_mode_config
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
@@ -383,9 +387,14 @@ async def test_script_mode_does_not_elevate_llm_envelope_fields():
     assert art["output_json"]["summary"] == "llm-ish summary"  # raw, untouched
 
 
-async def test_script_mode_non_zero_exit_with_parseable_output_proceeds():
-    """A non-zero exit with parseable output.json PROCEEDS (status failed) — it
-    does NOT raise. This preserves the existing failure contract (Phase 1)."""
+async def test_script_mode_non_zero_exit_raises_terminal():
+    """A non-zero exit in script mode is a POST-CLAIM fault — it RAISES the
+    terminal (never-retryable) ``ScriptFailedError``, it does NOT proceed.
+
+    FAR-296 Phase 2 stage-split: once the script process started (the fencing
+    lease is claimed), a non-zero exit can never be retried — re-dispatching
+    could double-execute the side-effecting script.
+    """
     node_def = _script_node_def()
     cmd_result = MagicMock()
     cmd_result.exit_code = 3
@@ -402,20 +411,20 @@ async def test_script_mode_non_zero_exit_with_parseable_output_proceeds():
     sandbox.kill = AsyncMock()
 
     fn = make_sandbox_agent_fn(node_def)
-    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
-        result = await fn(_run_state())
-
-    out = result["output"]
-    art = result["artifacts"][0]["output"]
-    assert out["status"] == "failed"
-    assert art["exit_code"] == 3
-    assert art["output_json"] == {"partial": True}
-    assert out["summary"] == "script mode: exit_code=3"
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(ScriptFailedError, match="code 3"),
+    ):
+        await fn(_run_state())
 
 
-async def test_script_mode_missing_output_json_raises_retryable():
-    """Missing/unparseable output.json raises the EXISTING retryable
-    SandboxNodeFailedError (Phase 1 keeps the current failure contract)."""
+async def test_script_mode_missing_output_json_raises_terminal():
+    """Missing/unparseable output.json in script mode raises the TERMINAL
+    ``ScriptInvalidOutputError`` (never retryable).
+
+    FAR-296 Phase 2 stage-split: the script process started (lease claimed) but
+    produced no parseable output.json — a POST-CLAIM fault, never retried.
+    """
     node_def = _script_node_def()
     cmd_result = MagicMock(exit_code=0, stdout="", stderr="")
     handle = MagicMock()
@@ -430,7 +439,7 @@ async def test_script_mode_missing_output_json_raises_retryable():
     fn = make_sandbox_agent_fn(node_def)
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        pytest.raises(SandboxNodeFailedError),
+        pytest.raises(ScriptInvalidOutputError),
     ):
         await fn(_run_state())
 
