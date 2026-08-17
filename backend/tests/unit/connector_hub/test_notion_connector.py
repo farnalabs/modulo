@@ -240,6 +240,47 @@ async def test_query_unsupported_resource(connector):
 
 
 # ---------------------------------------------------------------------------
+# query — corrupt payload resilience
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_query_databases_non_list_results_no_crash(connector):
+    """A corrupt body placing a non-list in ``results`` must fall back to an empty page."""
+    respx.post(f"{_BASE}/search").mock(return_value=httpx.Response(200, json={"results": "corrupt"}))
+    result = await connector.query(ConnectorQuery(resource="databases"))
+    assert result.records == []
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_databases_non_dict_body_no_crash(connector):
+    """A corrupt/hostile non-dict body must degrade to an empty page."""
+    respx.post(f"{_BASE}/search").mock(return_value=httpx.Response(200, json=["not-a-dict"]))
+    result = await connector.query(ConnectorQuery(resource="databases"))
+    assert result.records == []
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_pages_non_list_results_no_crash(connector):
+    """A corrupt ``results`` field on a database query must degrade gracefully."""
+    respx.post(f"{_BASE}/databases/db1/query").mock(return_value=httpx.Response(200, json={"results": "corrupt"}))
+    result = await connector.query(ConnectorQuery(resource="pages", filters={"database_id": "db1"}))
+    assert result.records == []
+    assert result.total == 0
+
+
+@respx.mock
+async def test_health_check_non_dict_body_no_crash(connector):
+    """A corrupt non-dict /users body must not crash the health check."""
+    respx.get(f"{_BASE}/users").mock(return_value=httpx.Response(200, json=["not-a-dict"]))
+    result = await connector.health_check()
+    assert result.ok is True
+    assert "0 users" in result.detail
+
+
+# ---------------------------------------------------------------------------
 # write — create page
 # ---------------------------------------------------------------------------
 

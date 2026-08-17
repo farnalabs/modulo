@@ -9,8 +9,9 @@ SonarQube (``components``/``analyses``/``issues``/``qualitygates``/
 ``metrics``/``plugins``/``hotspots``), PagerDuty
 (``incidents``/``services``/``teams``/``users``/``escalation_policies``/
 ``schedules``/``oncalls``), Confluence (``results``), CodeClimate (``data``),
-Jenkins (``builds``/``jobs``/``computer``), and Dropbox Paper
-(``doc_ids``/``entries``) connectors each guard their list parsing against
+Jenkins (``builds``/``jobs``/``computer``), Dropbox Paper
+(``doc_ids``/``entries``), npm (``objects``), and Notion (``results``)
+connectors each guard their list parsing against
 corrupt or hostile response bodies. A corrupt or hostile response may return
 a non-dict body (list, string, number, ...) or a non-list page field — either
 crashes the connector with ``AttributeError`` on the bare
