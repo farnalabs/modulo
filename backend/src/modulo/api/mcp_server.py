@@ -735,6 +735,120 @@ def _extract_bearer_token(request: Request) -> tuple[str | None, Response | None
     return token, None
 
 
+async def _authenticate_api_key(
+    request: Request,
+    token: str,
+) -> tuple[bool, Response | None]:
+    """Authenticate an API-key bearer token (``mk_`` prefix).
+
+    Sets the ``_ctx_*`` contextvars and ``request.scope["auth_principal"]`` on
+    success. Returns ``(True, None)`` when the key authenticated (the caller
+    should proceed to ``call_next``) or ``(False, error_response)`` on failure.
+    """
+    try:
+        # org_api_keys has RLS enabled (migration 0005, _STRICT_RLS) and
+        # the key's org is unknown until the record is read — a plain
+        # lookup in an empty org context would be filtered out by RLS
+        # and reject every valid key. On Postgres the runtime app role
+        # is RLS-subject (a non-owner DML-granted role), so the org is
+        # resolved through a SECURITY DEFINER function owned by the
+        # migration role rather than SET row_security TO OFF (which
+        # only bypasses RLS for owners and raises for a regular role).
+        # On generic backends there is no RLS, so a plain prefix scan
+        # works. Then re-validate inside the org context before
+        # trusting the key.
+        from sqlalchemy import select, text
+
+        from modulo.auth.api_key import _MK_PREFIX, _PREFIX_LEN
+        from modulo.db.models.api_key import OrgApiKey
+        from modulo.db.rls import _ensure_active_transaction
+
+        prefix = token[len(_MK_PREFIX) :][:_PREFIX_LEN]
+        factory = _get_session_factory()
+        async with factory() as s, s.begin():
+            dialect = await _ensure_active_transaction(s)
+            if dialect == "postgresql":
+                org_id = (
+                    await s.execute(
+                        text("SELECT public.lookup_api_key_org(:prefix)"),
+                        {"prefix": prefix},
+                    )
+                ).scalar_one_or_none()
+            else:
+                key_record = (
+                    await s.execute(
+                        select(OrgApiKey).where(
+                            OrgApiKey.lookup_prefix == prefix,
+                            OrgApiKey.revoked_at.is_(None),
+                        )
+                    )
+                ).scalar_one_or_none()
+                org_id = key_record.organisation_id if key_record is not None else None
+        if org_id is None:
+            raise ApiKeyInvalidError()
+
+        # Now re-validate within the correct RLS context.
+        async with _session(org_id) as s:
+            key = await validate_api_key(s, token, org_id=org_id)
+            # ADR 017 DECISION 4 — live role-cap on EVERY MCP call. The
+            # stored key.role is the minted role; the effective role is
+            # min(minted, live). A demoted operator's key degrades to
+            # the live role on the next call (never persisted — the ORM
+            # flushes last_used_at, so mutating key.role here would
+            # permanently store the demotion). An owner removed from
+            # the org (no live membership) makes the key die (401).
+            live_role = await resolve_role_from_membership(
+                s,
+                str(key.account_id),
+                str(key.organisation_id),
+            )
+            clamped = _clamp_role(key.role, live_role)
+            if not clamped:
+                _record_api_key_role_cap(
+                    minted_role=key.role,
+                    effective_role="",
+                    org_id=key.organisation_id,
+                    degraded=False,
+                    key_id=key.id,
+                )
+                raise ApiKeyInvalidError()
+            if clamped != key.role:
+                _record_api_key_role_cap(
+                    minted_role=key.role,
+                    effective_role=clamped,
+                    org_id=key.organisation_id,
+                    degraded=True,
+                    key_id=key.id,
+                )
+        org_id = key.organisation_id
+        _ctx_org_id.set(org_id)
+        _ctx_role.set(clamped)
+        _ctx_key_id.set(key.id)
+        _ctx_team_id.set(key.team_id)
+        _ctx_user_id.set(key.account_id)
+        _ctx_auth_token.set(token)
+        _ctx_auth_type.set("api_key")
+        request.scope["auth_principal"] = {
+            "type": "api_key",
+            "org_id": str(org_id),
+            "prefix": token[3:11],
+        }
+    except ApiKeyInvalidError:
+        return False, Response(
+            '{"error":"unauthorized","detail":"Invalid or revoked API key"}',
+            status_code=401,
+            media_type=_CT_APPLICATION_JSON,
+        )
+    except (SQLAlchemyError, OperationalError, TimeoutError):
+        _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
+        return False, Response(
+            _JSON_AUTH_DB_UNAVAILABLE,
+            status_code=503,
+            media_type=_CT_APPLICATION_JSON,
+        )
+    return True, None
+
+
 async def _dispatch_unauth_paths(
     request: Request,
     call_next: Callable[[Request], Awaitable[Response]],
@@ -779,110 +893,12 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
 
         # Try API key first (backwards compatible).
         if token.startswith("mk_"):
-            try:
-                # org_api_keys has RLS enabled (migration 0005, _STRICT_RLS) and
-                # the key's org is unknown until the record is read — a plain
-                # lookup in an empty org context would be filtered out by RLS
-                # and reject every valid key. On Postgres the runtime app role
-                # is RLS-subject (a non-owner DML-granted role), so the org is
-                # resolved through a SECURITY DEFINER function owned by the
-                # migration role rather than SET row_security TO OFF (which
-                # only bypasses RLS for owners and raises for a regular role).
-                # On generic backends there is no RLS, so a plain prefix scan
-                # works. Then re-validate inside the org context before
-                # trusting the key.
-                from sqlalchemy import select, text
-
-                from modulo.auth.api_key import _MK_PREFIX, _PREFIX_LEN
-                from modulo.db.models.api_key import OrgApiKey
-                from modulo.db.rls import _ensure_active_transaction
-
-                prefix = token[len(_MK_PREFIX) :][:_PREFIX_LEN]
-                factory = _get_session_factory()
-                async with factory() as s, s.begin():
-                    dialect = await _ensure_active_transaction(s)
-                    if dialect == "postgresql":
-                        org_id = (
-                            await s.execute(
-                                text("SELECT public.lookup_api_key_org(:prefix)"),
-                                {"prefix": prefix},
-                            )
-                        ).scalar_one_or_none()
-                    else:
-                        key_record = (
-                            await s.execute(
-                                select(OrgApiKey).where(
-                                    OrgApiKey.lookup_prefix == prefix,
-                                    OrgApiKey.revoked_at.is_(None),
-                                )
-                            )
-                        ).scalar_one_or_none()
-                        org_id = key_record.organisation_id if key_record is not None else None
-                if org_id is None:
-                    raise ApiKeyInvalidError()
-
-                # Now re-validate within the correct RLS context.
-                async with _session(org_id) as s:
-                    key = await validate_api_key(s, token, org_id=org_id)
-                    # ADR 017 DECISION 4 — live role-cap on EVERY MCP call. The
-                    # stored key.role is the minted role; the effective role is
-                    # min(minted, live). A demoted operator's key degrades to
-                    # the live role on the next call (never persisted — the ORM
-                    # flushes last_used_at, so mutating key.role here would
-                    # permanently store the demotion). An owner removed from
-                    # the org (no live membership) makes the key die (401).
-                    live_role = await resolve_role_from_membership(
-                        s,
-                        str(key.account_id),
-                        str(key.organisation_id),
-                    )
-                    clamped = _clamp_role(key.role, live_role)
-                    if not clamped:
-                        _record_api_key_role_cap(
-                            minted_role=key.role,
-                            effective_role="",
-                            org_id=key.organisation_id,
-                            degraded=False,
-                            key_id=key.id,
-                        )
-                        raise ApiKeyInvalidError()
-                    if clamped != key.role:
-                        _record_api_key_role_cap(
-                            minted_role=key.role,
-                            effective_role=clamped,
-                            org_id=key.organisation_id,
-                            degraded=True,
-                            key_id=key.id,
-                        )
-                org_id = key.organisation_id
-                _ctx_org_id.set(org_id)
-                _ctx_role.set(clamped)
-                _ctx_key_id.set(key.id)
-                _ctx_team_id.set(key.team_id)
-                _ctx_user_id.set(key.account_id)
-                _ctx_auth_token.set(token)
-                _ctx_auth_type.set("api_key")
-                request.scope["auth_principal"] = {
-                    "type": "api_key",
-                    "org_id": str(org_id),
-                    "prefix": token[3:11],
-                }
-            except ApiKeyInvalidError:
-                return Response(
-                    '{"error":"unauthorized","detail":"Invalid or revoked API key"}',
-                    status_code=401,
-                    media_type=_CT_APPLICATION_JSON,
-                )
-            except (SQLAlchemyError, OperationalError, TimeoutError):
-                _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
-                return Response(
-                    _JSON_AUTH_DB_UNAVAILABLE,
-                    status_code=503,
-                    media_type=_CT_APPLICATION_JSON,
-                )
-            await _set_authz_enforce(org_id)
-            resp3: Response = await call_next(request)
-            return resp3
+            handled, api_err = await _authenticate_api_key(request, token)
+            if api_err is not None:
+                return api_err
+            if handled:
+                await _set_authz_enforce(_ctx_org_id.get())
+                return await call_next(request)
 
         # Try OAuth access token (JWT).
         settings = get_settings()
