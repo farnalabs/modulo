@@ -180,7 +180,7 @@ class JenkinsConnector(ConnectorBase):
             )
             r.raise_for_status()
             data = r.json()
-            builds = _safe_records(data, "builds")
+            builds: list[dict[str, Any]] = _safe_records(data, "builds")
             runs = [self._parse_build(b) for b in builds]
             if status:
                 runs = [r for r in runs if r.status == status]

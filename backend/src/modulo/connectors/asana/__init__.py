@@ -89,8 +89,8 @@ class AsanaConnector(ConnectorBase):
                     r = await client.get(f"/projects/{project_id}")
                     r.raise_for_status()
                     body = r.json()
-                    record = body.get("data", {})
-                    return ConnectorResult(records=[record])
+                    record = body.get("data", {}) if isinstance(body, dict) else {}
+                    return ConnectorResult(records=[record] if record else [])
 
                 case "tasks":
                     params = {}
@@ -115,8 +115,8 @@ class AsanaConnector(ConnectorBase):
                     r = await client.get(f"/tasks/{task_id}")
                     r.raise_for_status()
                     body = r.json()
-                    record = body.get("data", {})
-                    return ConnectorResult(records=[record])
+                    record = body.get("data", {}) if isinstance(body, dict) else {}
+                    return ConnectorResult(records=[record] if record else [])
 
                 case "sections":
                     project_id = q.filters.get("project_id")

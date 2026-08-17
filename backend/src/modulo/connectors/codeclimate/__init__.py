@@ -95,7 +95,7 @@ class CodeClimateConnector(ConnectorBase):
         resp = await c.get(f"/repos/{repo_id}")
         resp.raise_for_status()
         body = resp.json()
-        record: dict[str, Any] = body.get("data", {})
+        record: dict[str, Any] = body.get("data", {}) if isinstance(body, dict) else {}
         return ConnectorResult(records=[record] if record else [])
 
     async def _list_snapshots(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -121,7 +121,7 @@ class CodeClimateConnector(ConnectorBase):
         resp = await c.get(f"/repos/{repo_id}/snapshots/{snapshot_id}")
         resp.raise_for_status()
         body = resp.json()
-        record: dict[str, Any] = body.get("data", {})
+        record: dict[str, Any] = body.get("data", {}) if isinstance(body, dict) else {}
         return ConnectorResult(records=[record] if record else [])
 
     async def _list_test_reports(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -147,7 +147,7 @@ class CodeClimateConnector(ConnectorBase):
         resp = await c.get(f"/repos/{repo_id}/test_reports/{report_id}")
         resp.raise_for_status()
         body = resp.json()
-        record: dict[str, Any] = body.get("data", {})
+        record: dict[str, Any] = body.get("data", {}) if isinstance(body, dict) else {}
         return ConnectorResult(records=[record] if record else [])
 
     async def _create_test_report(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
