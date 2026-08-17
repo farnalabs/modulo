@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import jinja2
+
 _SANDBOX_MODES = frozenset({"llm", "script"})
 
 
@@ -83,3 +85,40 @@ def _validate_sandbox_mode_config(node_def: dict[str, Any]) -> tuple[str, str, d
             "(or 'agent_commands') — a sandbox agent cannot run without an explicit command"
         )
     return mode, agent_command, {"agent_prompt": str(agent_prompt)}
+
+
+def validate_sandbox_agent_command_jinja(node_def: dict[str, Any]) -> str | None:
+    """Validate that an llm-mode sandbox_agent's ``agent_command`` is Jinja-renderable.
+
+    FAR-226: catch a broken ``agent_command`` template at save time instead of
+    letting it surface as an opaque instant-fail for every run of the pipeline.
+
+    Returns an error message when the command has invalid Jinja syntax
+    (``TemplateSyntaxError``), otherwise ``None``. Only llm mode is checked —
+    script mode runs ``script_command`` VERBATIM with no Jinja render. The
+    scalar ``agent_command`` and the joined ``agent_commands`` list are both
+    validated (the same way node_runner resolves the command).
+
+    Uses the same ``SandboxedEnvironment`` as node_runner so save-time and
+    run-time rendering agree. Undefined variables are lenient (render to empty
+    under the sandbox's default ``Undefined``), so missing ``{{ input.* }}``
+    references are NOT flagged here — only genuinely broken template syntax,
+    which the runtime would otherwise only discover (and fall back verbatim on)
+    at run time.
+    """
+    node_id = node_def.get("id")
+    if node_def.get("mode", "llm") != "llm":
+        return None
+    command = node_def.get("agent_command")
+    if not command or not str(command).strip():
+        agent_commands = node_def.get("agent_commands")
+        if not agent_commands:
+            return None
+        command = node_def.get("commands_concatenation_string", " && ").join(str(c) for c in agent_commands)
+    from jinja2.sandbox import SandboxedEnvironment
+
+    try:
+        SandboxedEnvironment().from_string(str(command))
+    except jinja2.TemplateSyntaxError as exc:
+        return f"sandbox_agent node '{node_id}' agent_command is not valid Jinja2: {exc}"
+    return None

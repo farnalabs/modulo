@@ -1963,7 +1963,10 @@ def _validate_sandbox_nodes(nodes: list[dict[str, Any]]) -> dict[str, Any] | Non
     (no LangGraph) to keep the API layer import-linter-clean. Returns None if
     all sandbox_agent nodes validate, otherwise the error dict.
     """
-    from modulo.core.pipeline_engine.sandbox_mode import _validate_sandbox_mode_config
+    from modulo.core.pipeline_engine.sandbox_mode import (
+        _validate_sandbox_mode_config,
+        validate_sandbox_agent_command_jinja,
+    )
 
     for node in nodes:
         if node.get("node_type") == "sandbox_agent":
@@ -1971,6 +1974,9 @@ def _validate_sandbox_nodes(nodes: list[dict[str, Any]]) -> dict[str, Any] | Non
                 _validate_sandbox_mode_config(node)
             except ValueError as exc:
                 return {"error": "validation_failed", "field": "nodes", "detail": str(exc)}
+            jinja_err = validate_sandbox_agent_command_jinja(node)
+            if jinja_err:
+                return {"error": "validation_failed", "field": "nodes", "detail": jinja_err}
     return None
 
 
