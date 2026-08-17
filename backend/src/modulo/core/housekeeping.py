@@ -489,6 +489,7 @@ async def _scan_stale_api_keys(session: AsyncSession, org_id: uuid.UUID) -> list
         .scalars()
         .all()
     )
+
     def _describe_key_usage(k: OrgApiKey) -> str:
         if k.last_used_at is None:
             return "never used"
