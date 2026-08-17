@@ -14,8 +14,9 @@ constraint with the FULL 21-value vocabulary. This file asserts:
   model (the single source of truth) — a value added to one side and not the
   other breaks the constraint/model contract,
 * the chain has a single linear head ``0110_schema_pipeline_runtime`` (the
-  FAR-213 ``0111_run_blocked_partial_summary`` and FAR-210
-  ``0112_feedback_correction_state`` migrations chain on top of it).
+  FAR-213 ``0111_run_blocked_partial_summary``, FAR-210
+  ``0112_feedback_correction_state``, and FAR-223
+  ``0113_guardrail_summary`` migrations chain on top of it).
 
 The old SQLite round-trip (which ran the migration's upgrade/downgrade against
 a mock ``op``) is obsolete: the reconciliation migration expresses the
