@@ -3126,6 +3126,25 @@ async def _validate_ongoing_trigger_update(
     return ongoing_scan_interval_changed, None
 
 
+def _validate_cron_update(
+    trigger: Any,
+    cron_expression: str | None,
+    cron_timezone: str | None,
+) -> tuple[datetime | None, dict[str, Any] | None]:
+    """Validate cron config; returns (next_fire_at, error)."""
+    next_fire_at = None
+    if cron_expression is not None or cron_timezone is not None:
+        expr = cron_expression if cron_expression is not None else trigger.cron_expression
+        if expr is None:
+            return None, {"error": "invalid_cron", "detail": "Cron expression is required"}
+        tz = cron_timezone if cron_timezone is not None else trigger.cron_timezone or "UTC"
+        error = validate_cron_expression(expr, tz)
+        if error:
+            return None, {"error": "invalid_cron", "detail": error}
+        next_fire_at = compute_next_fire(expr, timezone=tz)
+    return next_fire_at, None
+
+
 @mcp.tool(
     description="Update an existing trigger's configuration. "
     "Mirrors PUT /api/v1/triggers/{id}. Setting cron_expression or "
@@ -3169,16 +3188,9 @@ async def update_trigger(
             if ongoing_err:
                 return ongoing_err
 
-            next_fire_at = None
-            if cron_expression is not None or cron_timezone is not None:
-                expr = cron_expression if cron_expression is not None else trigger.cron_expression
-                if expr is None:
-                    return {"error": "invalid_cron", "detail": "Cron expression is required"}
-                tz = cron_timezone if cron_timezone is not None else trigger.cron_timezone or "UTC"
-                error = validate_cron_expression(expr, tz)
-                if error:
-                    return {"error": "invalid_cron", "detail": error}
-                next_fire_at = compute_next_fire(expr, timezone=tz)
+            next_fire_at, cron_err = _validate_cron_update(trigger, cron_expression, cron_timezone)
+            if cron_err:
+                return cron_err
 
             prev_max = trigger.max_concurrent_runs
             prev_active = trigger.active
