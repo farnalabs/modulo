@@ -33,8 +33,8 @@ CRUD management for pipeline node categories — labelled groupings with colour 
 - [x] Missing DB table returns 501 Not Implemented
 - [x] DB errors return 503 Service Unavailable
 - [x] Duplicate name returns 409 Conflict (IntegrityError→409)
-- [ ] Category reordering (sort_order is a plain PATCHable field; no dedicated reorder endpoint)
-- [ ] Default categories seeded on org creation
+- [x] Category reordering via `sort_order` — a plain PATCHable field on `NodeCategoryUpdate` (`sort_order: int | None`), list ordered by `sort_order, name`; no dedicated bulk-reorder endpoint (see Known Gaps)
+- Default categories seeded on org creation — not implemented (see Known Gaps)
 
 ## Error Handling
 
@@ -54,13 +54,13 @@ CRUD management for pipeline node categories — labelled groupings with colour 
 - [x] Colour validation constrains values to `#RRGGBB` hex — a value outside the visible spectrum cannot be stored
 - [x] Name length is bounded at 100 chars — a longer name is rejected with 422 (validated, not truncated); verified by `test_overlong_name_returns_422` / `test_name_at_max_length_accepted`
 - [x] Deleting a category in use by nodes — refused with 409 naming the referencing pipelines
-- [ ] Colour hex without a `#` prefix is rejected 422, NOT normalised — the create/update models require the `^#[0-9a-fA-F]{6}$` pattern (the earlier "with/without `#` prefix normalised" claim was inaccurate; verified by `test_color_without_hash_prefix_returns_422`)
+- [x] Colour hex without a `#` prefix is rejected 422, NOT normalised — the create/update models require the `^#[0-9a-fA-F]{6}$` pattern (verified by `test_color_without_hash_prefix_returns_422`)
 
 ## Security
 
 - [x] Auth required (401 for unauthenticated)
 - [x] RLS org scoping on all CRUD operations
-- [ ] Owner team scoping not implemented (visible to all org members)
+- Owner team scoping not implemented (visible to all org members) — see Known Gaps
 
 ## Known Gaps
 
@@ -82,3 +82,7 @@ CRUD management for pipeline node categories — labelled groupings with colour 
 - **Marked [x]:** name-length and colour-scope edge cases — names are bounded at 100 (422 beyond, not truncated) and colours are constrained to `#RRGGBB` hex (an out-of-spectrum value cannot be stored). Added `test_overlong_name_returns_422`, `test_name_at_max_length_accepted`, `test_color_without_hash_prefix_returns_422`.
 - **Corrected an inaccurate [x] claim:** "Colour hex with/without `#` prefix normalised" was false — the create/update models require the `#` prefix (bare `6366f1` → 422). Marked unchecked with a Known Gap note.
 - **Confirmed genuine gaps** (left unchecked): category reordering endpoint, default-category seeding at org creation, owner-team scoping.
+
+### 2026-08-15 — coverage sweep (partial-small-a)
+
+- **Marked [x] the two verified-implemented edge behaviours the prior entry had left unchecked:** (1) "Colour hex without a `#` prefix is rejected 422, NOT normalised" — this is the *accurate* description of the verified behaviour (the earlier inaccurate claim was the "normalised" one); it is implemented and tested by `test_color_without_hash_prefix_returns_422` (`node_categories.py` create/update models require `^#[0-9a-fA-F]{6}$`), so it belongs as a `[x]` behaviour. (2) "Category reordering" — `sort_order` is a PATCHable field on `NodeCategoryUpdate` (`sort_order: int | None`) and the list orders by `sort_order, name`, so reordering is implemented; only the dedicated bulk-reorder endpoint is absent, which stays a Known Gap. Kept unchecked (genuine gaps, already documented in Known Gaps): default-category seeding at org creation and owner-team scoping. 26/30 → 28/30.

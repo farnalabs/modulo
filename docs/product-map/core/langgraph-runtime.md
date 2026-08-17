@@ -63,7 +63,7 @@ LangGraph-based pipeline runtime — StateGraph compilation, execution, snapshot
 - [x] Node execution errors captured per-node in run state
 - [x] `CancelledError` propagation via `@cancellable_node` decorator
 - [x] `set_rls_org` called without `session.begin()` in `_do_db_cancellation_check` — relies on autobegin, will fail if disabled
-- [ ] No explicit `IntegrityError` or `SQLAlchemyError` routing in engine-level catch blocks
+- No explicit `IntegrityError` or `SQLAlchemyError` routing in engine-level catch blocks (see Known Gaps)
 
 ## Edge Cases
 
@@ -71,14 +71,26 @@ LangGraph-based pipeline runtime — StateGraph compilation, execution, snapshot
 - [x] Single-node pipeline — executes correctly
 - [x] Pipeline with all node types (agent, manual, sandbox_agent, router, trigger)
 - [x] LRU cache eviction on full cache — stale graphs gracefully recompiled
-- [ ] Concurrent checkpoint writes — no explicit isolation testing
-- [ ] State growth beyond memory limit — no enforced cap on `dict[str, Any]` state
+- Concurrent checkpoint writes — no explicit isolation testing (see Known Gaps)
+- State growth beyond memory limit — no enforced cap on `dict[str, Any]` state (see Known Gaps)
 
 ## Security
 
 - [x] RLS context set per-run — cross-org isolation enforced
 - [x] `run_context` write guard prevents non-context-setter agents from writing
-- [ ] No per-run credential isolation beyond ConnectorHub one-decrypt lifecycle
-- [ ] Checkpoint data may contain state from previous runs before LRU eviction
+- No per-run credential isolation beyond ConnectorHub one-decrypt lifecycle (see Known Gaps)
+- Checkpoint data may contain state from previous runs before LRU eviction (see Known Gaps)
 
 ## Known Gaps
+
+- Engine-level catch blocks route DB errors generically (no explicit `IntegrityError`/`SQLAlchemyError` distinction at the engine boundary)
+- No explicit isolation test for concurrent checkpoint writes
+- No enforced cap on `dict[str, Any]` state growth beyond the in-memory limit
+- Credential isolation relies on the ConnectorHub one-decrypt-per-run lifecycle; no additional per-run isolation layer
+- Checkpoint data may contain state from a previous run before the LRU cache evicts a stale graph
+
+## QA History
+
+### 2026-08-15 — coverage sweep (partial-small-a)
+
+- Verified the 5 unchecked items are genuine gaps (no engine-level exception routing, no concurrent-checkpoint isolation test, no state-size cap, no per-run credential isolation beyond ConnectorHub, checkpoint state from prior runs before LRU eviction) and documented them in a new Known Gaps section. No code change. Status: partial (21/26 — all remaining unchecked items are documented gaps).

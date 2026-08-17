@@ -402,6 +402,37 @@ def test_update_model_backend_null_fallback_clears(client: TestClient) -> None:
     assert resp.json()["fallback_backend_ids"] is None
 
 
+def test_update_model_backend_empty_list_removes_fallback(client_with_fallback_ids: TestClient) -> None:
+    """An empty fallback list on update removes the backend from rotation.
+
+    This is the "removing a fallback from update removes it from rotation"
+    behaviour: the PATCH route stringifies the (empty) list and writes it to the
+    JSON column, so the hub's rotation no longer considers any fallback for the
+    backend. The captured ``updates`` dict proves the write path receives the
+    cleared list.
+    """
+    captured: list[dict[str, object]] = []
+
+    async def fake_update(session: object, backend_id: object, updates: dict[str, object]) -> MagicMock:
+        captured.append(updates)
+        backend = _make_backend()
+        backend.fallback_backend_ids = updates.get("fallback_backend_ids")
+        return backend  # type: ignore[return-value]
+
+    with (
+        patch("modulo.api.routes.model_backends.update_model_backend", new=fake_update),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client_with_fallback_ids.patch(
+            f"/api/v1/model-backends/{_BACKEND_ID}",
+            json={"fallback_backend_ids": []},
+        )
+    assert resp.status_code == 200
+    assert captured == [{"fallback_backend_ids": []}]
+    assert not resp.json()["fallback_backend_ids"]
+
+
 def test_delete_model_backend_referenced_as_fallback_returns_409(client: TestClient) -> None:
     """Deleting a backend another backend references as a fallback is blocked."""
     referencing = _make_backend()

@@ -90,7 +90,7 @@ SHA-256 cryptographic chaining of audit events per organisation, providing tampe
 ### Resilience
 
 - [x] Concurrent appends serialized by `SELECT ... FOR UPDATE` on chain head — prevents forks under Postgres
-- [ ] Non-Postgres backends (MariaDB, SQLite) — `with_for_update()` is a no-op, concurrent appends could create chain forks (gap detected on verify)
+- Non-Postgres backends (MariaDB, SQLite) — `with_for_update()` is a no-op, concurrent appends could create chain forks (platform limitation: chain-head locking is Postgres-only; MariaDB/SQLite are dev/deprecated backends — see Known Gaps)
 - [x] append_audit_event retries on IntegrityError — up to 3 attempts with `0.1s × attempt` backoff, handles concurrent first-event race
 - [x] All read operations (export, list, batch, verify) are independent queries — a DB failure in one does not cascade
 - [x] Cursor decode failure falls back to first page — caller can retry with fresh cursor
@@ -107,8 +107,12 @@ SHA-256 cryptographic chaining of audit events per organisation, providing tampe
 - **2026-07-05**: Cross-cutting QA (feat-core-audit-crypto-chain). Verified all 40 behaviours against code. Found 1 inaccurate claim: "Detail message includes expected vs actual previous_hash" — code does not pass `detail` to `_make_verify_result`. Added detailed Error Handling (9 items), Resilience (5 items), and Edge Cases (6 new items) sections. Created website docs stub at `Website/modulo-website/src/docs/audit/audit-crypto-chain.md`.
 
 ## Known Gaps
+- Non-Postgres backends (MariaDB, SQLite): `with_for_update()` is a no-op, so concurrent appends could create chain forks. Production runs on Postgres (Supabase); MariaDB is deprecated and SQLite is dev-only, so this is a documented platform limitation rather than a supported-deployment bug.
 - verify_chain limited to 10,000 events by default — large orgs may need batched or incremental verification
 - No event-level retention policy — chain grows unbounded
 - No alerting when verify_chain detects tampering — caller must poll or integrate manually
 - V2 cryptographic chaining is documented as V2 in PRD but implementation exists alongside V1 audit trail
 - Audit viewer UI is team-gated (V1) — chain export is team; recording is free-tier
+
+## QA History (2026-08-15 coverage sweep)
+- Confirmed the single unchecked behaviour ("Non-Postgres backends — concurrent appends could fork the chain") is a genuine platform limitation, not a fixable code gap: chain-head serialization relies on Postgres `SELECT ... FOR UPDATE`, which is a no-op on MariaDB/SQLite, but production runs on Postgres, MariaDB is deprecated (2026-07-11), and SQLite is dev-only. Documented in Known Gaps. Status: partial (51/52).

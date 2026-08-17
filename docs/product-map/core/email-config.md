@@ -37,8 +37,6 @@ Organisation-level SMTP email configuration for sending transactional emails. Se
 - [x] SMTP password length limit — `smtp_password` max 256 chars enforced at the API (422 on exceed)
 - [x] Test-send recipient validated — malformed addresses (no `@`, display names, URLs, header-injection CR/LF, multi-recipient) rejected with 422 before any SMTP attempt
 - [x] Test-send rate limited per org — 3 test emails per 60-minute window; exceeding returns 429 with `Retry-After`; budgets are per-org isolated
-- [ ] Email templates configuration
-- [ ] Per-organisation email branding
 
 ## Error Handling
 
@@ -63,7 +61,6 @@ Organisation-level SMTP email configuration for sending transactional emails. Se
 - [x] Oversized SMTP password (>256 chars) rejected with 422 before any DB write
 - [x] Test-send recipient with header-injection characters (CR/LF, `Bcc:`) rejected with 422
 - [x] Test-send rate limit budget is per-org — exhausting one org's budget does not affect another org's test-send
-- [ ] Concurrent PUT of email settings — last-write-wins on `settings_json`
 
 ## Security
 
@@ -71,13 +68,20 @@ Organisation-level SMTP email configuration for sending transactional emails. Se
 - [x] SMTP password stored in settings_json — masked in GET responses
 - [x] SMTP credentials redacted from SMTP error messages before reaching logs or clients
 - [x] Test-send relay abuse bounded — per-org rate limiting (3/60min) plus recipient validation prevent arbitrary-recipient relay enumeration (limiter is in-memory/per-process: with N uvicorn workers an org can send up to 3×N per window; a Redis-backed limiter would be a stronger bound — see `core/rate_limiter.py`)
-- [ ] No encryption for SMTP password at rest (stored in plain JSON column)
 
 ## Known Gaps
 
 - **Concurrent PUT is last-write-wins** — no optimistic locking on `settings_json` for email settings.
 - **SMTP password at rest** — stored in the plain `settings_json` JSON column; no encryption.
+- **Email templates configuration** — no template system exists; emails use hardcoded HTML in `core/email_service.py` / `core/reports/*`.
+- **Per-organisation email branding** — no branding/from-name/logo configuration per org; a single default sender is used.
 - ~~**Test-send relay abuse** — the endpoint sends mail to an arbitrary recipient address; no rate limiting or recipient allowlisting.~~ **RESOLVED 2026-08-14**: the test-send endpoint now rejects malformed recipients (header-injection CR/LF, display names, URLs, multi-recipient, no-`@`) with 422 before any SMTP attempt, and enforces a per-org test-send budget (`EmailSendLimiter` in `core/email_service.py`: 3 sends per 60-minute fixed window, per-org `asyncio.Lock`, injectable clock, fail-open on limiter errors) returning 429 with `Retry-After` when exhausted. 8 new `test_email_service.py` limiter/validation tests + 4 new `test_admin_email.py` route tests + 4 new BDD scenarios in `email-settings.feature`.
+
+## QA History
+
+### 2026-08-15 — coverage sweep (partial-small-a)
+
+- Verified the 4 unchecked behaviours are genuine gaps (all confirmed against `admin_email.py` / `core/email_service.py`): email templates configuration and per-organisation branding are not implemented (emails are hardcoded HTML, single default sender); concurrent PUT of email settings is last-write-wins on `settings_json` (no optimistic locking); SMTP password is stored in plain `settings_json` JSON (masked on GET but not encrypted at rest). All four moved to Known Gaps as plain bullets. None are PRD-mandated for the current scope. Status: partial (39/43 — all remaining unchecked items are documented gaps).
 
 ## QA History
 
