@@ -468,7 +468,7 @@ jobs:
           exit 0
 
   # Break-glass deploy gate = acceptance (b) of the break-glass admin recovery
-  # plan §3: automated staging verification = the boot-time allow-list assertion
+  # plan sec. 3: automated staging verification = the boot-time allow-list assertion
   # + the connectivity smoke that FAILS boot when ENABLED AND
   # boot-failure-mode=fail. Runs the breakglass_gate-tagged regression suite
   # (test_break_glass_gate.py) against testcontainers Postgres with the
