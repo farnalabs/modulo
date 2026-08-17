@@ -27908,6 +27908,7 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 pipeline_id?: string | null;
+                eval_type?: string | null;
                 _fresh?: boolean;
             };
             header?: never;

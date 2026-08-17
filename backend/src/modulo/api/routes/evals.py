@@ -261,6 +261,7 @@ async def list_eval_definitions(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     pipeline_id: uuid.UUID | None = None,
+    eval_type: str | None = Query(None, pattern=r"^(llm_judge|regex|json_schema|custom_function|guardrail)$"),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_EVAL_LIST),
 ) -> EvalDefinitionListResponse:
@@ -270,6 +271,8 @@ async def list_eval_definitions(
     conditions = [EvalDefinition.organisation_id == principal.organisation_id]
     if pipeline_id:
         conditions.append(EvalDefinition.pipeline_id == pipeline_id)
+    if eval_type:
+        conditions.append(EvalDefinition.eval_type == eval_type)
 
     try:
         async with session.begin():
