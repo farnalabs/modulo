@@ -146,6 +146,57 @@ PINNED_AWAITING_IMPLEMENTATION: dict[str, frozenset[str]] = {
             "Import handles duplicate pipeline names with suffix",
         }
     ),
+    "tests/bdd/features/ui/eval_dashboard.feature": frozenset(
+        {
+            "Compare two runs side-by-side",
+            "Empty state when no evals exist",
+            "Filter eval runs by pass/fail status",
+            "View eval results for a completed run",
+        }
+    ),
+    "tests/bdd/features/ui/org_settings.feature": frozenset(
+        {
+            "Invite a new member",
+            "Non-admin cannot access settings",
+            "Revoke an API key",
+            "Update organisation name",
+            "View organisation settings page",
+        }
+    ),
+    "tests/bdd/features/ui/pipeline_builder.feature": frozenset(
+        {
+            "Add an agent node to the canvas",
+            "Configure an agent's prompt",
+            "Connect two nodes with an edge",
+            "Delete a node from the canvas",
+            "Load pipeline builder page",
+        }
+    ),
+    "tests/bdd/features/ui/real_time_updates.feature": frozenset(
+        {
+            "HITL approval notification appears",
+            "Status updates arrive via WebSocket",
+            "WebSocket reconnects after disconnect",
+        }
+    ),
+    "tests/bdd/features/ui/run_detail.feature": frozenset(
+        {
+            "Expand a node to view its output",
+            "Live status updates via WebSocket",
+            "Prompt reveal shows dialog with system and user messages",
+            "Sensitive values are masked in run output",
+            "Sensitive values are masked in the prompt reveal response",
+            "View run logs",
+            "View run status and details",
+        }
+    ),
+    "tests/bdd/features/ui/theme_switching.feature": frozenset(
+        {
+            "Default theme is standard",
+            "Switch to agent theme",
+            "Theme preference persists across reload",
+        }
+    ),
 }
 
 
