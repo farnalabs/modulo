@@ -420,8 +420,8 @@ class PipelineGraphNode(BaseModel):
     timeout_seconds: int | None = Field(
         default=None,
         ge=60,
-        le=3600,
-        description="Per-node timeout override (60-3600s). Overrides pipeline node_timeout_seconds.",
+        le=604800,
+        description="Per-node timeout override (60-604800s). Overrides pipeline node_timeout_seconds.",
     )
     output_schema_json: dict[str, Any] | None = Field(
         default=None,

@@ -13,7 +13,7 @@ Caught at HTTP request deserialisation – blocks the API call with a 422 respon
 | `node_type` validation | Error | `node_type` must be one of: `agent`, `manual`, `composite`, `sandbox_agent` |
 | `agent_command` | Error | Sandbox agent nodes require a non-empty `agent_command` |
 | `template_id` | Error | Sandbox agent nodes require a `template_id` (e.g. `"opencode"`) |
-| `timeout_seconds` | Error | Per-node timeout must be between 60 and 3600 seconds if set |
+| `timeout_seconds` | Error | Per-node timeout must be between 60 and 604800 seconds if set |
 | `env_vars` reserved keys | Error | Sandbox agent `env_vars` keys must not start with `MODULO_` or `OPENCODE_API_KEY` |
 | `context_files` paths | Error | Sandbox agent `context_files` source paths must be absolute (start with `/`) |
 
@@ -45,7 +45,7 @@ Runs on-save (via the REST API's `PATCH /{pipeline_id}/graph` endpoint) and pre-
 | `GRAPH_NO_EDGES` | Warning | Graph has nodes but no edges defined |
 | `SANDBOX_MISSING_COMMAND` | Error | Sandbox agent node has empty `agent_command` |
 | `SANDBOX_MISSING_TEMPLATE` | Warning | Sandbox agent node has no `template_id` |
-| `SANDBOX_TIMEOUT_BOUNDS` | Warning | Sandbox agent `timeout_seconds` outside recommended 60-3600s range |
+| `SANDBOX_TIMEOUT_BOUNDS` | Warning | Sandbox agent `timeout_seconds` outside recommended 60-604800s range |
 | `SANDBOX_TIMEOUT_INVALID` | Warning | Sandbox agent `timeout_seconds` is not a valid integer |
 | `SANDBOX_CONTEXT_PATH_RELATIVE` | Warning | Sandbox agent `context_files` source path is not absolute (should start with `/`) |
 | `SANDBOX_RESERVED_ENV_VAR` | Warning | Sandbox agent `env_var` uses a reserved system prefix |
