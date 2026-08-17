@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from tests.bdd.conftest import _active_client
 
 scenarios("tier_catalog.feature")
 
@@ -59,10 +60,10 @@ def _configure_tiers_failure(request, exc) -> None:
 
 
 @when("I request GET /api/v1/admin/tiers")
-def _bdd_get_tiers(request, client: TestClient) -> None:
+def _bdd_get_tiers(request) -> None:
     tiers_mock = getattr(request.node, _TIERS_MOCK_ATTR, AsyncMock(return_value=_STANDARD_TIERS))
     with patch(_TIERS_PATCH_TARGET, tiers_mock):
-        request.node._resp = client.get("/api/v1/admin/tiers")
+        request.node._resp = _active_client(request).get("/api/v1/admin/tiers")
 
 
 @when("I request GET /api/v1/admin/tiers without authentication")
