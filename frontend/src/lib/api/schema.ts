@@ -15369,6 +15369,10 @@ export interface components {
             team_memberships_truncated: boolean;
             /** Org Role */
             org_role: string;
+            /** Preferences */
+            preferences?: {
+                [key: string]: unknown;
+            };
             /**
              * Is System Admin
              * @default false

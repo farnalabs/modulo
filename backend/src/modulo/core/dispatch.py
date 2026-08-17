@@ -168,7 +168,11 @@ async def _org_capacity_deferred(
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning("dispatch_run: org run-concurrency check failed for run %s (admitted)", run_id)
+        _log.warning(
+            "dispatch_run: org run-concurrency check failed for run %s (admitted)",
+            run_id,
+            exc_info=True,
+        )
         return False
     if active < limit:
         return False
