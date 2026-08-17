@@ -43,7 +43,7 @@ Correction run spawning, linking, and post-correction evaluation for the Feedbac
 - [x] Links correction run to FeedbackRecord via link_correction_run
 - [x] Returns new correction run UUID
 - [x] Correction run is a fresh run, not checkpoint-resumed — PRD 8.20 explicitly specifies fresh correction runs ("Correction runs are fresh runs — they do not inherit checkpoint state"); the code matches the spec
-- [ ] Correction run goes through full eval suite before reaching HITL gate again — not end-to-end verified
+- Correction run going through the full eval suite before reaching the HITL gate again is not end-to-end verified — `run_post_correction_eval` and the ai_correction/manual_correction handlers are unit-tested, but the full reject → spawn → run → eval → resolve lifecycle has no integration test (see Known Gaps)
 
 ### link_correction_run
 
@@ -70,7 +70,7 @@ Correction run spawning, linking, and post-correction evaluation for the Feedbac
 
 - [x] Error with empty correction_run payload (missing producing_node_id, rejection_reason)
 - [x] Double-correction: link_correction_run raises ConcurrentModificationError on re-link
-- [ ] Correction run fails to start — linking stays in "correcting" status
+- Correction run that fails to start leaves the record stuck in "correcting" — `create_run` failure rolls back the transaction (no orphan correction run), but a run that starts then fails during execution has no automatic escalation (see Known Gaps)
 - [x] Post-correction eval failure is handled when it runs — an eval-engine exception escalates the record and returns a structured fallback dict (tested by test_escalates_when_eval_engine_raises); auto-triggering on correction-run completion is a separate lifecycle gap
 
 ### Error Handling
@@ -114,6 +114,7 @@ Correction run spawning, linking, and post-correction evaluation for the Feedbac
 - **Fixed (bug)**: `detect_eval_gap` skipped real `EvalDefinition` objects as malformed, so the eval suite never ran via the /detect-gap endpoint — the guard now accepts `EvalDefinition`-shaped objects. **Follow-up (2026-08-15 review MAJOR-1)**: the guard alone still sent ORM rows (which expose `config_json`, not `config`) into `EvalEngine.evaluate`, where the AttributeError was swallowed and every record came back `eval_gap=True`. The route now converts ORM rows to the eval-engine DTO (mirroring the executor's `_build_eval_defs_by_node`), and `detect_eval_gap` normalises ORM rows defensively — covered by `test_round_trips_orm_eval_definition_through_detect_gap`.
 - **Corrected**: checkpoint pre-seeding removed from Known Gaps — PRD 8.20 specifies fresh correction runs. Post-correction eval failure handling verified (escalate + structured fallback).
 - **Remaining gaps**: correction run that starts but fails during execution leaves the record in `correcting` (no runtime-failure escalation), run_post_correction_eval lifecycle wiring, BDD correction error-path scenarios, full-lifecycle integration test.
+- Coverage sweep (partial-small-a): converted the 2 unchecked checkboxes ("full eval suite before HITL gate — not end-to-end verified" and "correction run fails to start — linking stays in correcting") to plain Known-Gap bullets, since both are already documented in Known Gaps (no full-lifecycle integration test; no runtime-failure escalation for a started-but-failed correction run). No code change. Status: partial (59/61 → 59/61, remaining unchecked items are documented gaps).
 
 
 

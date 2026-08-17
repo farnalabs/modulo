@@ -21,12 +21,12 @@ import threading
 import time
 import traceback as _traceback
 import uuid
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from datetime import date as _date
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 from urllib.parse import quote, urlencode
 
 from jwt import InvalidTokenError as JWTError
@@ -1701,6 +1701,31 @@ async def update_pipeline_graph(
         return _tool_error("Failed to update pipeline graph")
 
 
+def _apply_node_connector_binding(
+    pipeline: Any,
+    nid: uuid.UUID,
+    node_id: str,
+    connector_type: str,
+    connector_instance_id: str,
+) -> dict[str, Any] | None:
+    """Bind the connector onto the matching node. Returns an error dict, or None."""
+    nodes = list(pipeline.graph_nodes_json) if pipeline.graph_nodes_json else []
+    target = None
+    for node in nodes:
+        if uuid.UUID(node["id"]) == nid:
+            target = node
+            break
+    if target is None:
+        return {"error": "node_not_found", "detail": f"Node {node_id} not found in pipeline graph"}
+
+    target["connector_binding"] = {
+        "type": connector_type,
+        "instance_id": connector_instance_id,
+    }
+    pipeline.graph_nodes_json = nodes
+    return None
+
+
 @mcp.tool(
     description="Bind a connector instance to a pipeline node. "
     "Updates the node's connector_binding in the pipeline graph. "
@@ -1763,20 +1788,9 @@ async def bind_connector_to_node(
                     ),
                 }
 
-            nodes = list(pipeline.graph_nodes_json) if pipeline.graph_nodes_json else []
-            target = None
-            for node in nodes:
-                if uuid.UUID(node["id"]) == nid:
-                    target = node
-                    break
-            if target is None:
-                return {"error": "node_not_found", "detail": f"Node {node_id} not found in pipeline graph"}
-
-            target["connector_binding"] = {
-                "type": connector_type,
-                "instance_id": connector_instance_id,
-            }
-            pipeline.graph_nodes_json = nodes
+            bind_error = _apply_node_connector_binding(pipeline, nid, node_id, connector_type, connector_instance_id)
+            if bind_error is not None:
+                return bind_error
             await s.flush()
 
         return {
@@ -1961,6 +1975,25 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
         return _tool_error("Failed to get run status")
 
 
+def _resolve_run_node_output(outputs: dict[str, Any], telemetry: dict[str, Any], node_id: str) -> dict[str, Any] | None:
+    """Resolve the node output dict, falling back to telemetry status/summary."""
+    from modulo.core.node_output_split import node_return, node_telemetry
+
+    node_output = node_return(outputs, telemetry, node_id)
+    if node_output is None:
+        node_meta = node_telemetry(telemetry, outputs, node_id)
+        if isinstance(node_meta, dict):
+            node_output = {key: node_meta[key] for key in ("status", "summary") if key in node_meta}
+    return cast("dict[str, Any] | None", node_output)
+
+
+def _detect_masked_fields(masked: Any) -> list[str]:
+    """Keys whose masked value contains the bullet mask character."""
+    if not isinstance(masked, dict):
+        return []
+    return [k for k, v in masked.items() if isinstance(v, str) and "\u2022" in v]
+
+
 @mcp.tool(
     description=(
         "Get a specific node's output from a completed pipeline run. "
@@ -1975,7 +2008,6 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         check_tool_scope(_ctx_role_val(), "get_run_output")
         from modulo.api.routes.runs import _mask_output_value
-        from modulo.core.node_output_split import node_return, node_telemetry
 
         org_id = _ctx_org_id_val()
         try:
@@ -1993,19 +2025,11 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
         telemetry = run.node_telemetry_json
         if not isinstance(telemetry, dict):
             telemetry = {}
-        node_output = node_return(outputs, telemetry, node_id)
-        if node_output is None:
-            node_meta = node_telemetry(telemetry, outputs, node_id)
-            if isinstance(node_meta, dict):
-                node_output = {key: node_meta[key] for key in ("status", "summary") if key in node_meta}
+        node_output = _resolve_run_node_output(outputs, telemetry, node_id)
         if node_output is None:
             return {"error": "node_output_not_found", "run_id": run_id, "node_id": node_id}
         masked = _mask_output_value(node_output)
-
-        # Detect masked fields by scanning for the bullet mask character.
-        masked_fields: list[str] = []
-        if isinstance(masked, dict):
-            masked_fields = [k for k, v in masked.items() if isinstance(v, str) and "\u2022" in v]
+        masked_fields = _detect_masked_fields(masked)
 
         return {
             "node_id": node_id,
@@ -2941,6 +2965,26 @@ async def create_trigger(
         return _tool_error("Failed to create trigger")
 
 
+def _trigger_detail_dict(trigger: Any, in_flight: int, streak_status: Any) -> dict[str, Any]:
+    """Serialize a trigger row to the MCP response shape."""
+    return {
+        "id": str(trigger.id),
+        "pipeline_id": str(trigger.pipeline_id),
+        "trigger_type": trigger.trigger_type,
+        "active": trigger.active,
+        "max_concurrent_runs": trigger.max_concurrent_runs,
+        "daily_spend_limit": float(trigger.daily_spend_limit) if trigger.daily_spend_limit is not None else None,
+        "config_json": trigger.config_json or {},
+        "cron_expression": trigger.cron_expression,
+        "cron_timezone": trigger.cron_timezone,
+        "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
+        "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
+        "input_template": (trigger.config_json or {}).get("input_template"),
+        "in_flight": in_flight,
+        "streak_status": streak_status,
+    }
+
+
 @mcp.tool(description="Get a single trigger by ID.")
 @_RETRY_DB
 async def get_trigger(trigger_id: str) -> dict[str, Any]:
@@ -2983,22 +3027,7 @@ async def get_trigger(trigger_id: str) -> dict[str, Any]:
         if trigger is None:
             return {"error": "not_found", "detail": _MSG_TRIGGER_NOT_FOUND}
 
-        return {
-            "id": str(trigger.id),
-            "pipeline_id": str(trigger.pipeline_id),
-            "trigger_type": trigger.trigger_type,
-            "active": trigger.active,
-            "max_concurrent_runs": trigger.max_concurrent_runs,
-            "daily_spend_limit": float(trigger.daily_spend_limit) if trigger.daily_spend_limit is not None else None,
-            "config_json": trigger.config_json or {},
-            "cron_expression": trigger.cron_expression,
-            "cron_timezone": trigger.cron_timezone,
-            "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
-            "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
-            "input_template": (trigger.config_json or {}).get("input_template"),
-            "in_flight": in_flight,
-            "streak_status": streak_status,
-        }
+        return _trigger_detail_dict(trigger, in_flight, streak_status)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
@@ -3007,6 +3036,181 @@ async def get_trigger(trigger_id: str) -> dict[str, Any]:
     except Exception:
         _log.exception("get_trigger failed")
         return _tool_error("Failed to get trigger")
+
+
+def _validate_trigger_update_inputs(
+    trigger_id: str,
+    max_concurrent_runs: int | None,
+    daily_spend_limit: float | None,
+) -> tuple[uuid.UUID | None, dict[str, Any] | None]:
+    """Parse the trigger UUID and validate the numeric update inputs."""
+    try:
+        tid = uuid.UUID(trigger_id)
+    except ValueError:
+        return None, {"error": "invalid_id", "field": "trigger_id", "detail": f"Invalid UUID format: {trigger_id}"}
+    if max_concurrent_runs is not None and max_concurrent_runs < 1:
+        return None, {"error": "validation", "field": "max_concurrent_runs", "detail": "must be >= 1"}
+    if daily_spend_limit is not None and daily_spend_limit < 0:
+        return None, {"error": "validation", "field": "daily_spend_limit", "detail": "must be >= 0"}
+    return tid, None
+
+
+_TEAM_SCOPE_ERROR: object = object()
+
+
+async def _load_trigger_for_update(s: AsyncSession, org_id: uuid.UUID, tid: uuid.UUID) -> Any | None:
+    """Load the trigger row for update; None if not found, _TEAM_SCOPE_ERROR if team-scope mismatch."""
+    from sqlalchemy import select
+
+    from modulo.db.models.trigger import Trigger
+
+    q = select(Trigger).where(
+        Trigger.id == tid,
+        Trigger.organisation_id == org_id,
+        Trigger.deleted_at.is_(None),
+    )
+    trigger = (await s.execute(q)).scalar_one_or_none()
+    if trigger is None:
+        return None
+    if _team_scoped_key_mismatch(await _pipeline_owner_team_id(s, trigger.pipeline_id)):
+        return _TEAM_SCOPE_ERROR
+    return trigger
+
+
+async def _validate_ongoing_trigger_update(
+    s: AsyncSession,
+    trigger: Any,
+    max_concurrent_runs: int | None,
+    daily_spend_limit: float | None,
+    config_json: dict[str, Any] | None,
+    active: bool | None,
+    clear_daily_spend_limit: bool,
+) -> tuple[bool, dict[str, Any] | None]:
+    """FAR-158 ongoing guards (identical to REST PUT); returns (scan_interval_changed, error)."""
+    from fastapi import HTTPException
+
+    from modulo.core.trigger_validation import validate_ongoing_config
+    from modulo.db.models.pipeline import Pipeline
+
+    ongoing_scan_interval_changed = False
+    if trigger.trigger_type == "ongoing":
+        if clear_daily_spend_limit:
+            return False, {
+                "error": "validation",
+                "detail": "ongoing triggers require daily_spend_limit; clearing it is not allowed",
+            }
+        ongoing_fields_changing = any(x is not None for x in [max_concurrent_runs, config_json, active]) or (
+            daily_spend_limit is not None
+        )
+        if ongoing_fields_changing:
+            pipeline = await s.get(Pipeline, trigger.pipeline_id)
+            pipeline_cap = pipeline.max_concurrent_runs if pipeline is not None else 0
+            try:
+                validate_ongoing_config(
+                    trigger.trigger_type,
+                    max_concurrent_runs=(
+                        max_concurrent_runs if max_concurrent_runs is not None else trigger.max_concurrent_runs
+                    ),
+                    daily_spend_limit=(Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else None)
+                    if daily_spend_limit is not None
+                    else trigger.daily_spend_limit,
+                    config_json=(config_json if config_json is not None else trigger.config_json),
+                    pipeline_max_concurrent_runs=pipeline_cap,
+                )
+            except HTTPException as exc:
+                return False, {"error": "validation", "detail": str(exc.detail)}
+        if config_json is not None:
+            old_scan = int((trigger.config_json or {}).get("scan_interval_seconds") or 60)
+            new_scan = int(config_json.get("scan_interval_seconds") or 60)
+            ongoing_scan_interval_changed = new_scan != old_scan
+    return ongoing_scan_interval_changed, None
+
+
+def _validate_cron_update(
+    trigger: Any,
+    cron_expression: str | None,
+    cron_timezone: str | None,
+) -> tuple[datetime | None, dict[str, Any] | None]:
+    """Validate cron config; returns (next_fire_at, error)."""
+    next_fire_at = None
+    if cron_expression is not None or cron_timezone is not None:
+        expr = cron_expression if cron_expression is not None else trigger.cron_expression
+        if expr is None:
+            return None, {"error": "invalid_cron", "detail": "Cron expression is required"}
+        tz = cron_timezone if cron_timezone is not None else trigger.cron_timezone or "UTC"
+        error = validate_cron_expression(expr, tz)
+        if error:
+            return None, {"error": "invalid_cron", "detail": error}
+        next_fire_at = compute_next_fire(expr, timezone=tz)
+    return next_fire_at, None
+
+
+async def _apply_trigger_field_updates(
+    s: AsyncSession,
+    trigger: Any,
+    active: bool | None,
+    max_concurrent_runs: int | None,
+    daily_spend_limit: float | None,
+    clear_daily_spend_limit: bool,
+    config_json: dict[str, Any] | None,
+    cron_expression: str | None,
+    cron_timezone: str | None,
+    next_fire_at: datetime | None,
+    prev_active: bool | None,
+) -> None:
+    """Apply the field updates to the trigger row in place."""
+    if active is not None:
+        trigger.active = active
+        # FAR-190: re-anchor the no-delivery streak epoch on any
+        # active=True transition (no un-epoch'd re-enable path).
+        if trigger.active and not prev_active:
+            await anchor_trigger_streak_epoch(s, trigger_id=trigger.id)
+    if max_concurrent_runs is not None:
+        trigger.max_concurrent_runs = max_concurrent_runs
+    if clear_daily_spend_limit:
+        trigger.daily_spend_limit = None
+    elif daily_spend_limit is not None:
+        trigger.daily_spend_limit = Decimal(str(daily_spend_limit))
+    if config_json is not None:
+        # MERGE into the existing blob — never wholesale replace.
+        current_cfg = trigger.config_json or {}
+        merged_cfg = dict(current_cfg)
+        for k, v in config_json.items():
+            if isinstance(v, str) and v == SENSITIVE_VALUE_MASK:
+                # A masked placeholder must never clobber the stored secret
+                # (read-modify-write round-trip guard). Keep the existing value.
+                continue
+            if v is None:
+                # Explicit null clears the key; a missing key leaves it intact.
+                merged_cfg.pop(k, None)
+            else:
+                merged_cfg[k] = v
+        trigger.config_json = merged_cfg
+    if cron_expression is not None:
+        trigger.cron_expression = cron_expression
+    if cron_timezone is not None:
+        trigger.cron_timezone = cron_timezone
+    if next_fire_at is not None:
+        trigger.next_fire_at = next_fire_at
+
+
+def _recompute_ongoing_next_fire(
+    trigger: Any,
+    max_concurrent_runs: int | None,
+    active: bool | None,
+    prev_max: int | None,
+    prev_active: bool | None,
+    ongoing_scan_interval_changed: bool,
+) -> None:
+    # Ongoing triggers recompute next_fire_at when the pool / cadence /
+    # active actually changes so the new config takes effect promptly.
+    if trigger.trigger_type == "ongoing":
+        from datetime import UTC
+
+        target_changed = max_concurrent_runs is not None and max_concurrent_runs != prev_max
+        activated = active is not None and trigger.active and not prev_active
+        if target_changed or ongoing_scan_interval_changed or activated:
+            trigger.next_fire_at = datetime.now(UTC)
 
 
 @mcp.tool(
@@ -3031,131 +3235,50 @@ async def update_trigger(
         check_tool_scope(_ctx_role_val(), "update_trigger")
 
         org_id = _ctx_org_id_val()
-        try:
-            tid = uuid.UUID(trigger_id)
-        except ValueError:
-            return {"error": "invalid_id", "field": "trigger_id", "detail": f"Invalid UUID format: {trigger_id}"}
-
-        if max_concurrent_runs is not None and max_concurrent_runs < 1:
-            return {"error": "validation", "field": "max_concurrent_runs", "detail": "must be >= 1"}
-        if daily_spend_limit is not None and daily_spend_limit < 0:
-            return {"error": "validation", "field": "daily_spend_limit", "detail": "must be >= 0"}
-
-        from sqlalchemy import select
-
-        from modulo.core.trigger_validation import validate_ongoing_config
-        from modulo.db.models.pipeline import Pipeline
-        from modulo.db.models.trigger import Trigger
+        tid, input_err = _validate_trigger_update_inputs(trigger_id, max_concurrent_runs, daily_spend_limit)
+        if input_err:
+            return input_err
+        assert tid is not None
 
         async with _session(org_id) as s:
-            q = select(Trigger).where(
-                Trigger.id == tid,
-                Trigger.organisation_id == org_id,
-                Trigger.deleted_at.is_(None),
-            )
-            trigger = (await s.execute(q)).scalar_one_or_none()
+            trigger = await _load_trigger_for_update(s, org_id, tid)
+            if trigger is _TEAM_SCOPE_ERROR:
+                return _team_scope_error("pipeline", str(tid))
             if trigger is None:
                 return {"error": "not_found", "detail": _MSG_TRIGGER_NOT_FOUND}
-            if _team_scoped_key_mismatch(await _pipeline_owner_team_id(s, trigger.pipeline_id)):
-                return _team_scope_error("pipeline", str(trigger.pipeline_id))
 
             if (cron_expression is not None or cron_timezone is not None) and trigger.trigger_type != "cron":
                 return {"error": "validation", "detail": "Only cron triggers can have cron configuration"}
 
-            # FAR-158 ongoing guards (identical to REST PUT).
-            ongoing_scan_interval_changed = False
-            if trigger.trigger_type == "ongoing":
-                from fastapi import HTTPException
+            ongoing_scan_interval_changed, ongoing_err = await _validate_ongoing_trigger_update(
+                s, trigger, max_concurrent_runs, daily_spend_limit, config_json, active, clear_daily_spend_limit
+            )
+            if ongoing_err:
+                return ongoing_err
 
-                if clear_daily_spend_limit:
-                    return {
-                        "error": "validation",
-                        "detail": "ongoing triggers require daily_spend_limit; clearing it is not allowed",
-                    }
-                ongoing_fields_changing = any(x is not None for x in [max_concurrent_runs, config_json, active]) or (
-                    daily_spend_limit is not None
-                )
-                if ongoing_fields_changing:
-                    pipeline = await s.get(Pipeline, trigger.pipeline_id)
-                    pipeline_cap = pipeline.max_concurrent_runs if pipeline is not None else 0
-                    try:
-                        validate_ongoing_config(
-                            trigger.trigger_type,
-                            max_concurrent_runs=(
-                                max_concurrent_runs if max_concurrent_runs is not None else trigger.max_concurrent_runs
-                            ),
-                            daily_spend_limit=(
-                                Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else None
-                            )
-                            if daily_spend_limit is not None
-                            else trigger.daily_spend_limit,
-                            config_json=(config_json if config_json is not None else trigger.config_json),
-                            pipeline_max_concurrent_runs=pipeline_cap,
-                        )
-                    except HTTPException as exc:
-                        return {"error": "validation", "detail": str(exc.detail)}
-                if config_json is not None:
-                    old_scan = int((trigger.config_json or {}).get("scan_interval_seconds") or 60)
-                    new_scan = int(config_json.get("scan_interval_seconds") or 60)
-                    ongoing_scan_interval_changed = new_scan != old_scan
-
-            next_fire_at = None
-            if cron_expression is not None or cron_timezone is not None:
-                expr = cron_expression if cron_expression is not None else trigger.cron_expression
-                if expr is None:
-                    return {"error": "invalid_cron", "detail": "Cron expression is required"}
-                tz = cron_timezone if cron_timezone is not None else trigger.cron_timezone or "UTC"
-                error = validate_cron_expression(expr, tz)
-                if error:
-                    return {"error": "invalid_cron", "detail": error}
-                next_fire_at = compute_next_fire(expr, timezone=tz)
+            next_fire_at, cron_err = _validate_cron_update(trigger, cron_expression, cron_timezone)
+            if cron_err:
+                return cron_err
 
             prev_max = trigger.max_concurrent_runs
             prev_active = trigger.active
+            await _apply_trigger_field_updates(
+                s,
+                trigger,
+                active,
+                max_concurrent_runs,
+                daily_spend_limit,
+                clear_daily_spend_limit,
+                config_json,
+                cron_expression,
+                cron_timezone,
+                next_fire_at,
+                prev_active,
+            )
 
-            if active is not None:
-                trigger.active = active
-                # FAR-190: re-anchor the no-delivery streak epoch on any
-                # active=True transition (no un-epoch'd re-enable path).
-                if trigger.active and not prev_active:
-                    await anchor_trigger_streak_epoch(s, trigger_id=trigger.id)
-            if max_concurrent_runs is not None:
-                trigger.max_concurrent_runs = max_concurrent_runs
-            if clear_daily_spend_limit:
-                trigger.daily_spend_limit = None
-            elif daily_spend_limit is not None:
-                trigger.daily_spend_limit = Decimal(str(daily_spend_limit))
-            if config_json is not None:
-                # MERGE into the existing blob — never wholesale replace.
-                current_cfg = trigger.config_json or {}
-                merged_cfg = dict(current_cfg)
-                for k, v in config_json.items():
-                    if isinstance(v, str) and v == SENSITIVE_VALUE_MASK:
-                        # A masked placeholder must never clobber the stored secret
-                        # (read-modify-write round-trip guard). Keep the existing value.
-                        continue
-                    if v is None:
-                        # Explicit null clears the key; a missing key leaves it intact.
-                        merged_cfg.pop(k, None)
-                    else:
-                        merged_cfg[k] = v
-                trigger.config_json = merged_cfg
-            if cron_expression is not None:
-                trigger.cron_expression = cron_expression
-            if cron_timezone is not None:
-                trigger.cron_timezone = cron_timezone
-            if next_fire_at is not None:
-                trigger.next_fire_at = next_fire_at
-
-            # Ongoing triggers recompute next_fire_at when the pool / cadence /
-            # active actually changes so the new config takes effect promptly.
-            if trigger.trigger_type == "ongoing":
-                from datetime import UTC
-
-                target_changed = max_concurrent_runs is not None and max_concurrent_runs != prev_max
-                activated = active is not None and trigger.active and not prev_active
-                if target_changed or ongoing_scan_interval_changed or activated:
-                    trigger.next_fire_at = datetime.now(UTC)
+            _recompute_ongoing_next_fire(
+                trigger, max_concurrent_runs, active, prev_max, prev_active, ongoing_scan_interval_changed
+            )
             await s.flush()
             from modulo.core.cron_helpers import _count_ongoing_runs
 
@@ -3170,22 +3293,7 @@ async def update_trigger(
         if active is True and not prev_active:
             await clear_trigger_streak_after_reenable(trigger.id)
 
-        return {
-            "id": str(trigger.id),
-            "pipeline_id": str(trigger.pipeline_id),
-            "trigger_type": trigger.trigger_type,
-            "active": trigger.active,
-            "max_concurrent_runs": trigger.max_concurrent_runs,
-            "daily_spend_limit": float(trigger.daily_spend_limit) if trigger.daily_spend_limit is not None else None,
-            "config_json": trigger.config_json or {},
-            "cron_expression": trigger.cron_expression,
-            "cron_timezone": trigger.cron_timezone,
-            "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
-            "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
-            "input_template": (trigger.config_json or {}).get("input_template"),
-            "in_flight": in_flight,
-            "streak_status": updated_streak_status,
-        }
+        return _trigger_detail_dict(trigger, in_flight, updated_streak_status)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
@@ -3622,6 +3730,71 @@ async def _require_admin_for_team_key(org_id: uuid.UUID) -> None:
         raise MCPAuthorizationError("Only admin users can perform this action")
 
 
+def _validate_api_key_role_and_name(name: str, role: str) -> dict[str, Any] | None:
+    """Return a validation error dict for invalid role/name, or None."""
+    if role not in ("operator", "runner"):
+        return {
+            "error": "validation_failed",
+            "field": "role",
+            "detail": "role must be 'operator' or 'runner'. admin keys are prohibited.",
+        }
+    if not name.strip():
+        return {
+            "error": "validation_failed",
+            "field": "name",
+            "detail": "API key name must not be blank",
+        }
+    return None
+
+
+def _parse_api_key_expires(expires_at: str | None) -> tuple[datetime | None, dict[str, Any] | None]:
+    """Parse and validate the expiry. Returns (datetime, error_or_None)."""
+    if not expires_at:
+        return (None, None)
+    try:
+        parsed = _parse_api_key_expires_at(expires_at)
+    except ValueError:
+        return (
+            None,
+            {
+                "error": "validation_failed",
+                "field": "expires_at",
+                "detail": "expires_at must be a valid ISO-8601 datetime",
+            },
+        )
+    if parsed <= datetime.now(UTC):
+        return (
+            None,
+            {
+                "error": "validation_failed",
+                "field": "expires_at",
+                "detail": "expires_at must be in the future",
+            },
+        )
+    return (parsed, None)
+
+
+async def _parse_api_key_team_id(
+    team_id: str | None, org_id: uuid.UUID
+) -> tuple[uuid.UUID | None, dict[str, Any] | None]:
+    """Parse and validate the team_id. Returns (team_uuid, error_or_None)."""
+    if team_id is None:
+        return (None, None)
+    try:
+        team_uuid = uuid.UUID(team_id)
+    except ValueError:
+        return (
+            None,
+            {
+                "error": "invalid_id",
+                "field": "team_id",
+                "detail": f"Invalid UUID format: {team_id}",
+            },
+        )
+    await _require_admin_for_team_key(org_id)
+    return (team_uuid, None)
+
+
 @mcp.tool(
     description=(
         "Create a new organisation API key. Returns the full mk_... key value "
@@ -3645,48 +3818,19 @@ async def create_api_key(
         org_id = _ctx_org_id_val()
         account_id = _ctx_user_id_val()
 
-        if role not in ("operator", "runner"):
-            return {
-                "error": "validation_failed",
-                "field": "role",
-                "detail": "role must be 'operator' or 'runner'. admin keys are prohibited.",
-            }
+        validation_error = _validate_api_key_role_and_name(name, role)
+        if validation_error is not None:
+            return validation_error
+
         name = name.strip()
-        if not name:
-            return {
-                "error": "validation_failed",
-                "field": "name",
-                "detail": "API key name must not be blank",
-            }
 
-        parsed_expires_at: datetime | None = None
-        if expires_at:
-            try:
-                parsed_expires_at = _parse_api_key_expires_at(expires_at)
-            except ValueError:
-                return {
-                    "error": "validation_failed",
-                    "field": "expires_at",
-                    "detail": "expires_at must be a valid ISO-8601 datetime",
-                }
-            if parsed_expires_at <= datetime.now(UTC):
-                return {
-                    "error": "validation_failed",
-                    "field": "expires_at",
-                    "detail": "expires_at must be in the future",
-                }
+        parsed_expires_at, expires_error = _parse_api_key_expires(expires_at)
+        if expires_error is not None:
+            return expires_error
 
-        team_uuid: uuid.UUID | None = None
-        if team_id is not None:
-            try:
-                team_uuid = uuid.UUID(team_id)
-            except ValueError:
-                return {
-                    "error": "invalid_id",
-                    "field": "team_id",
-                    "detail": f"Invalid UUID format: {team_id}",
-                }
-            await _require_admin_for_team_key(org_id)
+        team_uuid, team_error = await _parse_api_key_team_id(team_id, org_id)
+        if team_error is not None:
+            return team_error
 
         async with _session(org_id) as s:
             await _deny_break_glass_mint(s, account_id)
@@ -4027,6 +4171,35 @@ async def get_integration_status() -> dict[str, Any]:
 _VALID_CONFIG_SECTIONS = {"remy", "plan", "rate_limits"}
 
 
+def _config_key_prefixes(section: str | None) -> list[str] | None:
+    """Key prefixes matching a config section, or None to match all sections."""
+    org_ctx = f"{_ctx_org_id_val()}"
+    if section == "remy":
+        return [f"remy_config:{org_ctx}", "remy_config"]
+    if section in {"plan", "rate_limits"}:
+        return ["feature_flags", "default_plan", "rate_limits"]
+    return None
+
+
+def _config_matches(cfg: Any, key_prefixes: list[str] | None) -> bool:
+    """True when *cfg* falls within *key_prefixes* and is not a sensitive key."""
+    if key_prefixes is not None and not any(cfg.key.startswith(p) for p in key_prefixes):
+        return False
+    return not _is_sensitive_key(cfg.key)
+
+
+def _config_table(filtered: list[Any]) -> str:
+    """Render config rows as a markdown table with long values truncated."""
+    lines = ["| Key | Value |", "|-----|-------|"]
+    for cfg in filtered:
+        val = cfg.value
+        val_str = json.dumps(val, default=str) if isinstance(val, dict) else str(val)
+        if len(val_str) > 200:
+            val_str = val_str[:200] + "..."
+        lines.append(f"| {cfg.key} | {val_str} |")
+    return "\n".join(lines)
+
+
 @mcp.tool(
     description=(
         "Get org-level configuration. Optionally filter to a specific section "
@@ -4048,33 +4221,14 @@ async def get_org_config(section: str | None = None) -> dict[str, Any]:
         async with _session(org_id) as s:
             configs = await list_config(s)
 
-        org_ctx = f"{org_id}"
-        key_prefixes: list[str] | None = None
-        if section == "remy":
-            key_prefixes = [f"remy_config:{org_ctx}", "remy_config"]
-        elif section in {"plan", "rate_limits"}:
-            key_prefixes = ["feature_flags", "default_plan", "rate_limits"]
-
-        filtered = [
-            cfg
-            for cfg in configs
-            if (key_prefixes is None or any(cfg.key.startswith(p) for p in key_prefixes))
-            and not _is_sensitive_key(cfg.key)
-        ]
+        key_prefixes = _config_key_prefixes(section)
+        filtered = [cfg for cfg in configs if _config_matches(cfg, key_prefixes)]
 
         if not filtered:
             section_label = section or "org"
             return {"results": f"No configuration found for section '{section_label}'.", "count": 0}
 
-        lines = ["| Key | Value |", "|-----|-------|"]
-        for cfg in filtered:
-            val = cfg.value
-            val_str = json.dumps(val, default=str) if isinstance(val, dict) else str(val)
-            if len(val_str) > 200:
-                val_str = val_str[:200] + "..."
-            lines.append(f"| {cfg.key} | {val_str} |")
-
-        return {"results": "\n".join(lines), "count": len(filtered)}
+        return {"results": _config_table(filtered), "count": len(filtered)}
     except ProgrammingError:
         _log.exception("get_org_config failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
@@ -4396,6 +4550,73 @@ async def list_housekeeping(limit: int = 100) -> dict[str, Any]:
         return _tool_error("Failed to list housekeeping candidates")
 
 
+def _group_housekeeping_items(items: list[dict[str, str]], errors: list[dict[str, str]]) -> dict[str, list[str]]:
+    """Group items by entity_type, collecting malformed items into *errors*."""
+    grouped: dict[str, list[str]] = {}
+    for item in items:
+        et = item.get("entity_type", "")
+        eid = item.get("id", "")
+        if not et or not eid:
+            errors.append({"error": "item missing entity_type or id", "item": str(item)})
+            continue
+        grouped.setdefault(et, []).append(eid)
+    return grouped
+
+
+async def _delete_housekeeping_entity(s: AsyncSession, model_cls: Any, eid: str, org_id: uuid.UUID) -> bool:
+    """Delete a single entity by id under a savepoint. Returns True if deleted."""
+    from sqlalchemy import select as _sa_select
+
+    stmt = _sa_select(model_cls).where(
+        model_cls.id == eid,
+        model_cls.organisation_id == org_id,
+    )
+    obj = (await s.execute(stmt)).scalar_one_or_none()
+    if obj is not None:
+        await s.delete(obj)
+        return True
+    return False
+
+
+async def _delete_housekeeping_group(
+    s: AsyncSession,
+    entity_type: str,
+    ids: list[str],
+    model_cls: Any,
+    org_id: uuid.UUID,
+    errors: list[dict[str, str]],
+) -> int:
+    """Delete each id in *ids* under a savepoint. Returns the number deleted."""
+    deleted_count = 0
+    for eid in ids:
+        try:
+            async with s.begin_nested():
+                if await _delete_housekeeping_entity(s, model_cls, eid, org_id):
+                    deleted_count += 1
+        except IntegrityError:
+            _log.warning("IntegrityError cleaning up %s %s", entity_type, eid)
+            errors.append({"id": eid, "entity_type": entity_type, "error": "Foreign key constraint violation"})
+    return deleted_count
+
+
+async def _delete_housekeeping_groups(
+    s: AsyncSession,
+    grouped: dict[str, list[str]],
+    hk_entity_map: Mapping[str, Any],
+    org_id: uuid.UUID,
+    errors: list[dict[str, str]],
+) -> int:
+    """Delete all grouped housekeeping items. Returns the total deleted count."""
+    deleted_count = 0
+    for entity_type, ids in grouped.items():
+        model_cls = hk_entity_map.get(entity_type)
+        if model_cls is None:
+            errors.append({"entity_type": entity_type, "error": f"Unknown entity type: {entity_type}"})
+            continue
+        deleted_count += await _delete_housekeeping_group(s, entity_type, ids, model_cls, org_id, errors)
+    return deleted_count
+
+
 @mcp.tool(
     description="Delete housekeeping cleanup candidates. "
     "Accepts a list of items with id and entity_type. "
@@ -4412,43 +4633,12 @@ async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
         from modulo.core.housekeeping import ENTITY_MODEL_MAP as HK_ENTITY_MAP
 
         org_id = _ctx_org_id_val()
-        deleted_count = 0
         errors: list[dict[str, str]] = []
 
-        grouped: dict[str, list[str]] = {}
-        for item in items:
-            et = item.get("entity_type", "")
-            eid = item.get("id", "")
-            if not et or not eid:
-                errors.append({"error": "item missing entity_type or id", "item": str(item)})
-                continue
-            grouped.setdefault(et, []).append(eid)
+        grouped = _group_housekeeping_items(items, errors)
 
         async with _session(org_id) as s:
-            for entity_type, ids in grouped.items():
-                model_cls = HK_ENTITY_MAP.get(entity_type)
-                if model_cls is None:
-                    errors.append({"entity_type": entity_type, "error": f"Unknown entity type: {entity_type}"})
-                    continue
-
-                for eid in ids:
-                    try:
-                        async with s.begin_nested():
-                            from sqlalchemy import select as _sa_select
-
-                            stmt = _sa_select(model_cls).where(  # type: ignore[var-annotated]
-                                model_cls.id == eid,  # type: ignore[attr-defined]
-                                model_cls.organisation_id == org_id,  # type: ignore[attr-defined]
-                            )
-                            obj = (await s.execute(stmt)).scalar_one_or_none()
-                            if obj is not None:
-                                await s.delete(obj)
-                                deleted_count += 1
-                    except IntegrityError:
-                        _log.warning("IntegrityError cleaning up %s %s", entity_type, eid)
-                        errors.append(
-                            {"id": eid, "entity_type": entity_type, "error": "Foreign key constraint violation"}
-                        )
+            deleted_count = await _delete_housekeeping_groups(s, grouped, HK_ENTITY_MAP, org_id, errors)
 
         return {"deleted_count": deleted_count, "errors": errors}
     except MCPAuthorizationError as exc:
@@ -4479,6 +4669,24 @@ async def resource_pipelines() -> str:
     return f"Pipelines ({result.total} total):\n" + "\n".join(lines)
 
 
+def _format_run_line(r: Any, child_rollups: dict[Any, tuple[Any, int]]) -> str:
+    """Render a single run row as a text line for MCP resources."""
+    child_cost, child_count = child_rollups.get(r.id, (_MCP_COST_ROLLUP_ZERO, 0))
+    own_cost = Decimal(str(r.total_cost_usd)) if r.total_cost_usd is not None else _MCP_COST_ROLLUP_ZERO
+    aggregate_cost = _quantize_mcp_cost_rollup(own_cost + child_cost)
+    line = (
+        f"- Run {r.id} | status={r.status} | trigger={r.trigger_type} | "
+        f"created={r.created_at.isoformat()} | "
+        f"tokens={r.total_tokens or 0} | cost=${r.total_cost_usd or 0} | "
+        f"child_count={child_count} | child_cost=${child_cost} | aggregate_cost=${aggregate_cost}"
+    )
+    if r.cost_breakdown is not None:
+        breakdown = _sanitize_cost_breakdown(r.cost_breakdown)
+        if breakdown:
+            line += " | breakdown={" + ", ".join(_format_breakdown_line(e) for e in breakdown) + "}"
+    return line
+
+
 @mcp.resource("modulo://pipelines/{pipeline_id}/runs")
 async def resource_pipeline_runs(pipeline_id: str) -> str:
     if not await validate_current_auth():
@@ -4507,22 +4715,7 @@ async def resource_pipeline_runs(pipeline_id: str) -> str:
     if not result.items:
         return f"Pipeline '{pipeline.name}' has no runs."
 
-    lines = []
-    for r in result.items:
-        child_cost, child_count = child_rollups.get(r.id, (_MCP_COST_ROLLUP_ZERO, 0))
-        own_cost = Decimal(str(r.total_cost_usd)) if r.total_cost_usd is not None else _MCP_COST_ROLLUP_ZERO
-        aggregate_cost = _quantize_mcp_cost_rollup(own_cost + child_cost)
-        line = (
-            f"- Run {r.id} | status={r.status} | trigger={r.trigger_type} | "
-            f"created={r.created_at.isoformat()} | "
-            f"tokens={r.total_tokens or 0} | cost=${r.total_cost_usd or 0} | "
-            f"child_count={child_count} | child_cost=${child_cost} | aggregate_cost=${aggregate_cost}"
-        )
-        if r.cost_breakdown is not None:
-            breakdown = _sanitize_cost_breakdown(r.cost_breakdown)
-            if breakdown:
-                line += " | breakdown={" + ", ".join(_format_breakdown_line(e) for e in breakdown) + "}"
-        lines.append(line)
+    lines = [_format_run_line(r, child_rollups) for r in result.items]
     return f"Runs for pipeline {pipeline.name} ({result.total} total):\n" + "\n".join(lines)
 
 
@@ -4602,12 +4795,46 @@ async def resource_pipeline_snapshots(pipeline_id: str) -> str:
     return f"Snapshots for pipeline {pipeline_id} ({len(snapshots)}):\n" + "\n".join(lines)
 
 
+def _render_snapshot_node_line(n: dict[str, Any]) -> str:
+    """Render a single node summary line for MCP resource output."""
+    nid = n.get("id", "?")
+    ntype = n.get("node_type", "?")
+    agent_id = n.get("agent_id", "")
+    agent_cmd = n.get("agent_command", "(required)")
+    prompt_preview = (n.get("prompt_template", "") or "")[:80].replace("\n", " ")
+    line = f"  - {nid} (type={ntype}, agent={agent_id}, command={agent_cmd})\n"
+    if prompt_preview:
+        line += f"    prompt: {prompt_preview}...\n"
+    return line
+
+
+def _render_snapshot_node_details(nodes: list[dict[str, Any]]) -> str:
+    """Render the full node JSON plus prompt/command previews."""
+    result = ""
+    for n in nodes:
+        safe = {k: v for k, v in n.items() if k not in ("agent_prompt", "agent_command")}
+        result += json.dumps(safe, indent=2, default=str)[:2000] + "\n"
+        ap = n.get("agent_prompt")
+        if ap is None:
+            ap = ""
+        if ap:
+            result += f"    agent_prompt: {ap[:200].replace(chr(10), ' ')}...\n"
+        ac = n.get("agent_command", "") or ""
+        if ac:
+            result += f"    agent_command: {ac[:200].replace(chr(10), ' ')}...\n"
+        cf = n.get("context_files", {}) or {}
+        for cfp, cfc in cf.items():
+            result += f"    context_file {cfp}: {len(str(cfc))} bytes\n"
+        tid = n.get("template_id", "")
+        if tid:
+            result += f"    template_id: {tid}\n"
+    return result
+
+
 @mcp.resource("modulo://pipelines/{pipeline_id}/snapshots/{snapshot_id}")
 async def resource_pipeline_snapshot_detail(pipeline_id: str, snapshot_id: str) -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
-    import json
-
     from modulo.db.crud.pipeline_snapshot_versioning import get_snapshot_detail
 
     org_id = _ctx_org_id_val()
@@ -4629,36 +4856,12 @@ async def resource_pipeline_snapshot_detail(pipeline_id: str, snapshot_id: str) 
     edges = snap.graph_json.get("edges", [])
     result = f"Snapshot {snapshot_id} (v{snap.snapshot_version}) for pipeline {pipeline_id}\n"
     result += f"Nodes ({len(nodes)}):\n"
-    for n in nodes:
-        nid = n.get("id", "?")
-        ntype = n.get("node_type", "?")
-        agent_id = n.get("agent_id", "")
-        agent_cmd = n.get("agent_command", "(required)")
-        prompt_preview = (n.get("prompt_template", "") or "")[:80].replace("\n", " ")
-        result += f"  - {nid} (type={ntype}, agent={agent_id}, command={agent_cmd})\n"
-        if prompt_preview:
-            result += f"    prompt: {prompt_preview}...\n"
+    result += "".join(_render_snapshot_node_line(n) for n in nodes)
     result += f"Edges ({len(edges)}):\n"
     for e in edges:
         result += f"  - {e.get('id', '?')}: {e.get('source', '?')} -> {e.get('target', '?')} ({e.get('type', '?')})\n"
     result += "  Full node JSON:\n"
-    for n in nodes:
-        safe = {k: v for k, v in n.items() if k not in ("agent_prompt", "agent_command")}
-        result += json.dumps(safe, indent=2, default=str)[:2000] + "\n"
-        ap = n.get("agent_prompt")
-        if ap is None:
-            ap = ""
-        if ap:
-            result += f"    agent_prompt: {ap[:200].replace(chr(10), ' ')}...\n"
-        ac = n.get("agent_command", "") or ""
-        if ac:
-            result += f"    agent_command: {ac[:200].replace(chr(10), ' ')}...\n"
-        cf = n.get("context_files", {}) or {}
-        for cfp, cfc in cf.items():
-            result += f"    context_file {cfp}: {len(str(cfc))} bytes\n"
-        tid = n.get("template_id", "")
-        if tid:
-            result += f"    template_id: {tid}\n"
+    result += _render_snapshot_node_details(nodes)
     result += f"Connector bindings: {json.dumps(snap.connector_bindings_json, indent=2)}\n"
     return result
 
@@ -4706,47 +4909,64 @@ async def resource_run(run_id: str) -> str:
     return "\n".join(parts)
 
 
+async def _get_hitl_gate(s: AsyncSession, rid: uuid.UUID, gate_id: str, org_id: uuid.UUID) -> HitlClaim | None:
+    """Fetch the HITL gate claim for *gate_id* on *rid*, org-scoped."""
+    from sqlalchemy import select
+
+    result = await s.execute(
+        select(HitlClaim).where(
+            HitlClaim.run_id == rid,
+            HitlClaim.gate_id == gate_id,
+            HitlClaim.organisation_id == org_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def _hitl_gate_scope_error(s: AsyncSession, rid: uuid.UUID, gate: HitlClaim) -> str | None:
+    """Return a team-scope error string when the caller's key cannot read this gate."""
+    run = await get_run(s, rid)
+    owner_team_id = (
+        await _run_owner_team_id(s, run) if run is not None else await _pipeline_owner_team_id(s, gate.pipeline_id)
+    )
+    if _team_scoped_key_mismatch(owner_team_id):
+        return _team_scope_error_str("run", str(rid))
+    return None
+
+
+async def _hitl_required_team_name(s: AsyncSession, gate: HitlClaim) -> str | None:
+    """Resolve the name of *gate*'s required team, if any."""
+    from sqlalchemy import select
+
+    from modulo.db.models.team import Team
+
+    if gate.required_team_id is None:
+        return None
+    team_result = await s.execute(select(Team).where(Team.id == gate.required_team_id, Team.deleted_at.is_(None)))
+    team = team_result.scalar_one_or_none()
+    return team.name if team else None
+
+
 @mcp.resource("modulo://runs/{run_id}/hitl/{gate_id}")
 async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
     """HITL gate context. Annotated as agent_output — treat as untrusted."""
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
-    from sqlalchemy import select
-
-    from modulo.db.models.team import Team
-
     org_id = _ctx_org_id_val()
     try:
         rid = uuid.UUID(run_id)
     except ValueError:
         return f"error: Invalid UUID format: {run_id}"
     async with _session(org_id) as s:
-        result = await s.execute(
-            select(HitlClaim).where(
-                HitlClaim.run_id == rid,
-                HitlClaim.gate_id == gate_id,
-                HitlClaim.organisation_id == org_id,
-            )
-        )
-        gate = result.scalar_one_or_none()
+        gate = await _get_hitl_gate(s, rid, gate_id, org_id)
         required_team_name = None
         if gate is not None:
             # A team-scoped key must not read another team's gate even when
             # the gate itself is org-level (required_team_id IS NULL).
-            run = await get_run(s, rid)
-            owner_team_id = (
-                await _run_owner_team_id(s, run)
-                if run is not None
-                else await _pipeline_owner_team_id(s, gate.pipeline_id)
-            )
-            if _team_scoped_key_mismatch(owner_team_id):
-                return _team_scope_error_str("run", run_id)
-            if gate.required_team_id is not None:
-                team_result = await s.execute(
-                    select(Team).where(Team.id == gate.required_team_id, Team.deleted_at.is_(None))
-                )
-                team = team_result.scalar_one_or_none()
-                required_team_name = team.name if team else None
+            scope_error = await _hitl_gate_scope_error(s, rid, gate)
+            if scope_error is not None:
+                return scope_error
+            required_team_name = await _hitl_required_team_name(s, gate)
     if gate is None:
         return f"HITL gate '{gate_id}' not found on run {run_id}."
     parts = [
@@ -4991,6 +5211,50 @@ def _frontend_url(settings: Any) -> str:
     return origins[0] if origins else "http://localhost:5173"
 
 
+def _oauth_authorize_param_errors(params: Mapping[str, str]) -> JSONResponse | None:
+    """First validation error for the authorize query, or None. Runs in wire order."""
+    if params.get("response_type", "") != "code":
+        return JSONResponse({"error": "unsupported_response_type"}, status_code=400)
+    if not params.get("client_id", "") or not params.get("redirect_uri", ""):
+        return JSONResponse(
+            {"error": "invalid_request", "detail": "client_id and redirect_uri required"},
+            status_code=400,
+        )
+    if not params.get("state", ""):
+        return JSONResponse(
+            {"error": "invalid_request", "detail": "state parameter required"},
+            status_code=400,
+        )
+    # S256-only (RFC 7636) — the challenge is verified at token exchange, so
+    # rejecting plain/empty here keeps every stored challenge verifiable.
+    code_challenge_method = params.get("code_challenge_method", "")
+    try:
+        from modulo.auth.oauth import InvalidGrantError, validate_pkce_method
+
+        validate_pkce_method(code_challenge_method)
+    except InvalidGrantError as exc:
+        return JSONResponse(
+            {"error": "invalid_request", "detail": str(exc)},
+            status_code=400,
+        )
+    if not params.get("code_challenge", "") or not params.get("code_challenge", "").strip():
+        return JSONResponse(
+            {"error": "invalid_request", "detail": "code_challenge parameter required"},
+            status_code=400,
+        )
+    return None
+
+
+def _oauth_authorize_settings_error(settings: Any) -> JSONResponse | None:
+    """Return an error response when the public URL is unconfigured."""
+    if not settings.modulo_public_url or settings.modulo_public_url == "http://localhost:8000":
+        return JSONResponse(
+            {"error": "server_error", "detail": "MODULO_PUBLIC_URL must be configured"},
+            status_code=500,
+        )
+    return None
+
+
 async def _oauth_authorize(request: Request) -> JSONResponse | RedirectResponse:
     """GET /mcp/oauth/authorize — thin 302 to the SPA consent route.
 
@@ -5004,58 +5268,27 @@ async def _oauth_authorize(request: Request) -> JSONResponse | RedirectResponse:
     the authenticated consent approve endpoint (ADR 017 DECISION 1).
     """
     params = request.query_params
-    response_type = params.get("response_type", "")
-    if response_type != "code":
-        return JSONResponse({"error": "unsupported_response_type"}, status_code=400)
+    param_error = _oauth_authorize_param_errors(params)
+    if param_error is not None:
+        return param_error
+
+    settings = get_settings()
+    settings_error = _oauth_authorize_settings_error(settings)
+    if settings_error is not None:
+        return settings_error
 
     client_id = params.get("client_id", "")
     redirect_uri = params.get("redirect_uri", "")
     scope = params.get("scope", "")
     state = params.get("state", "")
     code_challenge = params.get("code_challenge", "")
-    code_challenge_method = params.get("code_challenge_method", "")
-
-    if not client_id or not redirect_uri:
-        return JSONResponse(
-            {"error": "invalid_request", "detail": "client_id and redirect_uri required"},
-            status_code=400,
-        )
-    if not state:
-        return JSONResponse(
-            {"error": "invalid_request", "detail": "state parameter required"},
-            status_code=400,
-        )
 
     from modulo.auth.oauth import (
-        InvalidGrantError,
         create_consent_state,
         get_oauth_client_by_client_id,
         normalize_scopes,
         validate_client_scopes,
-        validate_pkce_method,
     )
-
-    # S256-only (RFC 7636) — the challenge is verified at token exchange, so
-    # rejecting plain/empty here keeps every stored challenge verifiable.
-    try:
-        validate_pkce_method(code_challenge_method)
-    except InvalidGrantError as exc:
-        return JSONResponse(
-            {"error": "invalid_request", "detail": str(exc)},
-            status_code=400,
-        )
-    if not code_challenge or not code_challenge.strip():
-        return JSONResponse(
-            {"error": "invalid_request", "detail": "code_challenge parameter required"},
-            status_code=400,
-        )
-
-    settings = get_settings()
-    if not settings.modulo_public_url or settings.modulo_public_url == "http://localhost:8000":
-        return JSONResponse(
-            {"error": "server_error", "detail": "MODULO_PUBLIC_URL must be configured"},
-            status_code=500,
-        )
 
     try:
         session_factory = _get_session_factory()

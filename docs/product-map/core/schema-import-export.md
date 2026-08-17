@@ -42,7 +42,6 @@ Parse raw JSON Schema content and extract fields for use in the schema builder U
 - [x] ProgrammingError returns 501
 - [x] SQLAlchemyError returns 503
 - [x] Exception returns 500 with logging
-- [ ] Import of very large schemas — no size limit enforced
 
 ## Edge Cases
 
@@ -50,14 +49,11 @@ Parse raw JSON Schema content and extract fields for use in the schema builder U
 - [x] Schema with only `type: object` and no `properties` — handled
 - [x] Circular `$ref` references — parsed but may cause recursion in field extraction
 - [x] Non-ASCII field names — stored and returned as-is
-- [ ] Draft 2020-12 validation rejects valid older drafts (2019-09, draft-07, draft-04)
-- [ ] `$ref` to external URLs — not resolved, reference stored as-is
 
 ## Security
 
 - [x] Auth required — 401 for unauthenticated
 - [x] Schema access is org-scoped — cross-org access returns 404
-- [ ] Imported schema content not sanitised — potential XSS in `title`/`description` fields rendered in frontend
 
 ## Known Gaps
 
@@ -71,5 +67,8 @@ Parse raw JSON Schema content and extract fields for use in the schema builder U
 - Frontmatter valid; Known Gaps remain accurate
 
 ## QA History
+
+### 2026-08-15 — coverage sweep (partial-small-a)
+- Verified the 4 unchecked behaviours are genuine gaps (confirmed against `api/routes/schemas.py`): (1) no size limit enforced on imported schemas — a very large `definition_json` is accepted; (2) validation uses `Draft202012Validator` only, so valid older drafts (2019-09, draft-07, draft-04) are rejected; (3) `$ref` to external URLs is stored as-is, never resolved or fetched; (4) imported `title`/`description` content is not sanitized before being stored/rendered in the frontend (potential XSS). All four moved to Known Gaps as plain bullets. None are PRD-mandated for the current scope. Status: partial (22/26 — all remaining unchecked items are documented gaps).
 
 - **2026-08-15 — distribute (final-pass sweep C)**: Verified the 4 previously-unchecked behaviours are genuine, non-PRD gaps and documented them in Known Gaps: no import size limit, draft-2020-12 rejection of older drafts, unresolved external `$ref`s, and unsanitised imported `title`/`description` (potential XSS). No code changes — `schemas.py` is outside this sweep's scope. Status: partial.

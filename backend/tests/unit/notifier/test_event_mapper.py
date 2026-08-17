@@ -92,6 +92,7 @@ _EXPECTED_MAPPING = {
     "feedback_pending": ("info", "user", "feedback.pending", "user_only", False, 336),
     "guardrail_enforcement_gap": ("error", "admin", "guardrails.enforcement_gap", "org_admin", True, 168),
     "guardrail_kill_switch": ("warning", "admin", "guardrails.kill_switch", "org_admin", True, 168),
+    "guardrail_unexpected_skip": ("error", "admin", "guardrails.unexpected_skip", "org_admin", True, 168),
 }
 
 
@@ -258,6 +259,20 @@ async def test_guardrail_kill_switch_templates_resolved(mapper: NotificationEven
         "observe-only (shadow mode). Guardrails are computed and logged but never block or redact."
     )
     assert kwargs["action_url"] is None
+
+
+async def test_guardrail_unexpected_skip_templates_resolved(mapper: NotificationEventMapper) -> None:
+    """An unexpected skip pages the operator straight to the run."""
+    run_id = str(uuid.uuid4())
+    payload = {"guardrail": "evaded", "reason": "cap_evaded", "run_id": run_id}
+    _, mock_create = await _call(mapper, "guardrail_unexpected_skip", payload=payload)
+    kwargs = mock_create.await_args.kwargs
+    assert kwargs["title"] == "Guardrail skipped unexpectedly — evaded"
+    assert kwargs["body"] == (
+        'Guardrail "evaded" was skipped for an unexpected reason (cap_evaded) — not explained by '
+        "a soft-deleted pinned guardrail. See the run for details."
+    )
+    assert kwargs["action_url"] == f"/runs/{run_id}"
 
 
 # ---------------------------------------------------------------------------

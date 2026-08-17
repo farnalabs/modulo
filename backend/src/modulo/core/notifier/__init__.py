@@ -49,6 +49,7 @@ __all__ = [
     "EVENT_FEEDBACK_PENDING",
     "EVENT_GUARDRAIL_ENFORCEMENT_GAP",
     "EVENT_GUARDRAIL_KILL_SWITCH",
+    "EVENT_GUARDRAIL_UNEXPECTED_SKIP",
     "EVENT_HITL_AWAITING",
     "EVENT_HITL_OVERDUE",
     "EVENT_RUN_FAILED",
@@ -118,6 +119,10 @@ EVENT_GUARDRAIL_ENFORCEMENT_GAP = "guardrail_enforcement_gap"
 # guardrails downgraded to observe (shadow-only). Alert on enable so the
 # downgrade is never silent.
 EVENT_GUARDRAIL_KILL_SWITCH = "guardrail_kill_switch"
+# FAR-223 item 11 — a guardrail was skipped for a reason NOT explained by
+# soft-deleted snapshot-pin state (an unexpected skip): the control silently
+# stopped evaluating and the operator must be paged.
+EVENT_GUARDRAIL_UNEXPECTED_SKIP = "guardrail_unexpected_skip"
 
 
 @dataclass

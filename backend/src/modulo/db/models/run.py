@@ -207,6 +207,13 @@ class Run(OrgScoped):
     # per-attempt compensation outcomes. Generic JSON for SQLite/MariaDB
     # parity (the run_classification precedent).
     blocked_partial_summary: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    # FAR-223 item 11 guardrail_summary telemetry (migration 0113) — a
+    # point-in-time snapshot of the guardrail interception written at
+    # create_run when guardrails ran; NULL otherwise. Shape:
+    # {bound, evaluated, passed, violated, observed, errored, redacted,
+    # skipped, expected_skips, unexpected_skips}. Generic JSON for
+    # SQLite/MariaDB parity (the run_classification precedent).
+    guardrail_summary_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     # Journey / work-item tracking (FAR-142, migration 0083) — additive,
     # nullable, never backfilled. ``work_item_id`` is the chain anchor written
     # ONCE at create (floor id or adopted from the parent run) and NEVER

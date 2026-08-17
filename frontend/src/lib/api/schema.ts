@@ -13061,6 +13061,10 @@ export interface components {
             blocked_partial_summary?: {
                 [key: string]: unknown;
             } | null;
+            /** Guardrail Summary */
+            guardrail_summary?: {
+                [key: string]: number;
+            } | null;
         };
         /** RunSummary */
         RunSummary: {

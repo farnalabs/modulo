@@ -56,23 +56,36 @@ In-app notification panel, SSE streaming, dashboard panel, dismiss/review-later 
 - [x] Notification CRUD routes catch `Exception` → 500 with logging
 - [x] Missing notification ID returns 404
 - [x] SSE connection errors handled gracefully — client reconnects
-- [ ] All BDD steps are stubs — no runtime error path verification exists
+- All BDD steps are stubs — no runtime error path verification exists (see Known Gaps)
 
 ## Edge Cases
 
 - [x] Empty notification list returns empty response
 - [x] Dismissing already-dismissed notification is idempotent
 - [x] Dismiss all with no notifications is no-op
-- [ ] SSE connection with no new notifications — no heartbeat mechanism
-- [ ] Notification preferences return 501 — not implemented
-- [x] `expires_at` exposed in response — verified 2026-08-15: `in_app_notifications.py:111` sets `expires_at=n.expires_at.isoformat() if n.expires_at else None` in the notification response schema (no dedicated unit assertion yet)
+- SSE connection with no new notifications — no heartbeat mechanism (see Known Gaps)
+- Notification preferences return 501 — not implemented (see Known Gaps)
+- [x] `expires_at` exposed in the response — `NotificationResponse.expires_at` is set from `n.expires_at.isoformat()` in the list endpoint (`in_app_notifications.py:111`)
 
 ## Security
 
 - [x] Auth required for all notification endpoints
 - [x] Notifications are user-scoped — users only see their own notifications
 - [x] Admin delivery log requires operator role
-- [ ] No rate limiting on SSE connections
+- No rate limiting on SSE connections (see Known Gaps)
+
+## Known Gaps
+
+- Notification preferences (`GET`/`PUT /api/v1/notifications/preferences`) return 501 "Notification preferences are not yet implemented." — the response/update schemas exist but the feature is not wired.
+- SSE connections have no heartbeat mechanism — a connection with no new notifications receives no keep-alive, so intermediaries may time it out.
+- No rate limiting on SSE connections — a client can hold many connections unthrottled.
+- BDD step definitions in `tests/bdd/steps/test_in_app_notifications.py` are all stubs (docstring: "All steps are stubs — they accept and ignore all arguments") — the 4 `in_app_notifications/` feature files have no runtime verification (unit tests in `test_notifications_endpoint.py` are the real coverage).
+
+## QA History
+
+### 2026-08-15 — coverage sweep (partial-small-a)
+
+- **Marked `expires_at` [x]** — the checkbox was stale; `NotificationResponse` carries `expires_at` (`in_app_notifications.py:62,111`), so it IS exposed in the list response. **Confirmed the other unchecked items are genuine gaps and documented them in a new Known Gaps section**: preferences endpoints return 501, SSE has no heartbeat, no SSE rate limiting, and the BDD steps are all stubs (verified — `test_in_app_notifications.py` step bodies are `pass`). Status: partial (21/26 → 22/26).
 
 ## Known Gaps
 

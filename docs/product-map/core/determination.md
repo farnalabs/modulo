@@ -41,22 +41,22 @@ The determination endpoint scans a team's connected tools (GitHub, GitLab, Jira,
 - [x] Both routes catch `HTTPException` → re-raise
 - [x] Both routes catch `Exception` → 500 with `logger.exception`
 - [x] `ConnectorDecryptError` during hub initialisation → 502 Bad Gateway
-- [ ] No connector-specific error handling — connector failures (rate limits, auth expiry) propagate as 500
-- [ ] No rate limiting on expensive scan/draft endpoints
+- No connector-specific error handling — connector failures (rate limits, auth expiry) propagate as 500 (see Known Gaps)
+- No rate limiting on expensive scan/draft endpoints (see Known Gaps)
 
 ## Edge Cases
 
 - [x] No connectors configured returns empty scan results (not error)
 - [x] Connector returns empty data (no repos, no issues) handled gracefully
-- [ ] Large org with many repos/issues — no pagination or streaming for connector data
-- [ ] Connector auth expired mid-scan — partial results with error not handled
+- Large org with many repos/issues — no pagination or streaming for connector data (see Known Gaps)
+- Connector auth expired mid-scan — partial results with error not handled (see Known Gaps)
 
 ## Security
 
 - [x] Both routes require authentication (401 for unauthenticated)
 - [x] Both routes require operator role (403 for non-admin) — `require_permission("determination.scan")`, operator baseline (ADR 017), resolves `get_current_tenant_user`
-- [ ] No rate limiting on expensive scan/draft endpoints
-- [ ] No input size validation on pipeline draft payload
+- No rate limiting on expensive scan/draft endpoints (see Known Gaps)
+- No input size validation on pipeline draft payload (see Known Gaps)
 
 ## Known Gaps
 
@@ -77,3 +77,7 @@ The determination endpoint scans a team's connected tools (GitHub, GitLab, Jira,
 4. **Stale Known Gap removed** — the "Dead code `_load_and_scan()` helper" gap: the function no longer exists in `determination.py` (both routes call `run_scan` directly). Marked resolved.
 
 Verification: 15/15 `test_determination_endpoint.py`, 78/78 determination + auth permission tests, full `tests/unit/api/` (route introspection EXEMPT change verified), ruff check + format clean, mypy --strict clean. Status: partial (connector error mapping, large-org pagination, rate limiting, payload size validation remain).
+
+### 2026-08-15 — coverage sweep (partial-small-a)
+
+- Converted the 6 unchecked behaviour checkboxes to Known Gap bullets (all already documented): no connector-specific error mapping (rate limits/auth expiry surface as 500), no rate limiting on scan/draft endpoints, unbounded large-org scans (no pagination/streaming), no mid-scan auth-expiry handling, and no input size validation on the pipeline draft payload. No code change. Status: partial (18/24 — all remaining unchecked items are documented gaps).

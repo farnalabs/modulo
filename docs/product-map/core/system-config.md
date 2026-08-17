@@ -32,8 +32,8 @@ Deployment-wide key-value configuration management via the `SystemConfig` table.
 - [x] Integrity errors return 409 Conflict
 - [x] SQLAlchemyError returns 503 Service Unavailable
 - [x] Concurrent PUT of same key is safe — `set_config` reads the existing row with `SELECT ... FOR UPDATE`, so concurrent writes serialize and last-write-wins is the defined upsert semantics (no torn writes); verified by `test_set_config_locks_existing_row`
-- [ ] Access controls beyond system-admin gate
-- [ ] Config value schema validation
+- Access controls beyond system-admin gate (see Known Gaps)
+- Config value schema validation (see Known Gaps)
 
 ## Error Handling
 
@@ -42,21 +42,21 @@ Deployment-wide key-value configuration management via the `SystemConfig` table.
 - [x] SQLAlchemyError returns 503 Service Unavailable
 - [x] Delete nonexistent key returns 404
 - [x] Catch-all Exception→500 with logger.exception
-- [ ] Config value size limit not enforced — unbounded JSON values could cause DB issues
+- Config value size limit not enforced — unbounded JSON values could cause DB issues (see Known Gaps)
 
 ## Edge Cases
 
 - [x] Empty config key returns 422
 - [x] GET after DELETE returns 404
-- [ ] Config key with special characters (dots, spaces) — stored as-is, no sanitisation
-- [ ] JSON config values with circular references — stored as serialised string only
+- Config key with special characters (dots, spaces) — stored as-is, no sanitisation (see Known Gaps)
+- JSON config values with circular references — stored as serialised string only (see Known Gaps)
 
 ## Security
 
 - [x] System admin role required for all operations
 - [x] Config values are org-independent (deployment-wide scope)
 - [x] Sensitive config values are masked in the list response — `admin_list_config` masks string values whose key matches the shared `is_sensitive_key` patterns (token/secret/api_key/password/key/credential/...), consistent with runtime-config; verified by `TestSensitiveKeyValueIsMasked` / `TestNonStringSensitiveValueNotMasked`
-- [ ] No audit logging for config changes
+- No audit logging for config changes (see Known Gaps)
 
 ## Known Gaps
 
@@ -79,3 +79,7 @@ Deployment-wide key-value configuration management via the `SystemConfig` table.
 - **Implemented (sensitive-value masking):** `admin_list_config` now masks string values whose key matches the shared `is_sensitive_key` patterns (token/secret/api_key/password/passwd/key/credential/database_url/encryption/signing/private), matching the runtime-config endpoint's behaviour — PRD §6.2 "never exposes secrets". Non-string values are returned verbatim. 2 new tests (`test_sensitive_key_value_is_masked`, `test_non_string_sensitive_value_not_masked`) + the existing `test_returns_entries` updated to use a non-sensitive key.
 - **Marked [x]:** Concurrent-PUT safety. `set_config` locks the existing row (`SELECT ... FOR UPDATE`) before upserting, so concurrent writes to the same key serialize and last-write-wins is the defined semantics; verified by the new `test_set_config_locks_existing_row` in `test_system_config.py`.
 - **Confirmed genuine gaps** (left unchecked): beyond-system-admin access controls, config value schema validation, size limits, key sanitisation, circular-reference handling, and audit logging.
+
+### 2026-08-15 — coverage sweep (partial-small-a)
+
+- Converted the 6 remaining unchecked behaviour checkboxes to Known Gap bullets (all already documented): access controls beyond the system-admin gate, config value schema validation, unbounded value size limits, verbatim (unsanitised) special-character keys, circular-reference values failing at the driver boundary, and no audit logging for config changes. No code change. Status: partial (19/25 — all remaining unchecked items are documented gaps).
