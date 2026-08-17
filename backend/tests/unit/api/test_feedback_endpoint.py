@@ -756,6 +756,45 @@ class TestReviewFeedback:
             )
         assert resp.status_code == 404
 
+    def test_create_correction_run_returns_404_when_original_run_missing(self, client: TestClient) -> None:
+        """A missing original run is a specific, narrowed 404 — not the broad base-class catch."""
+        from modulo.core.feedback_manager import FeedbackRecordRunNotFoundError
+
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("modulo.api.routes.feedback.FeedbackManager.spawn_correction_run") as mock_spawn,
+        ):
+            mock_get.return_value = _make_mock_record(feedback_status="pending")
+            mock_spawn.side_effect = FeedbackRecordRunNotFoundError("Original run ... not found")
+
+            resp = client.post(
+                f"/api/v1/feedback/inbox/{_RECORD_ID}/review",
+                json={"action": "create_correction_run"},
+            )
+
+        assert resp.status_code == 404
+        assert "not found" in resp.json()["detail"]
+
+    def test_create_correction_run_validation_error_is_not_collapsed_to_404(self, client: TestClient) -> None:
+        """A non-404 FeedbackManager subclass (ValidationError) must not be masked as 404."""
+        from modulo.core.feedback_manager import ValidationError
+
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("modulo.api.routes.feedback.FeedbackManager.spawn_correction_run") as mock_spawn,
+        ):
+            mock_get.return_value = _make_mock_record(feedback_status="pending")
+            mock_spawn.side_effect = ValidationError("bad handler type")
+
+            resp = client.post(
+                f"/api/v1/feedback/inbox/{_RECORD_ID}/review",
+                json={"action": "create_correction_run"},
+            )
+
+        assert resp.status_code == 500
+
 
 class TestListEvalProposals:
     def test_returns_proposals(self, client: TestClient) -> None:
