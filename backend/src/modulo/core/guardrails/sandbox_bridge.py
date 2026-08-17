@@ -139,14 +139,26 @@ class BridgeClient:
         """Evaluate a tool call BEFORE it executes.
 
         Returns ``(allowed, masked_args, action)``. ``allowed`` is False when
-        the Modulo side blocks the call (the caller must refuse execution).
+        the Modulo side REFUSES the call (the caller must not execute it).
         ``masked_args`` carries the post-redaction args when ``action`` is
         ``redact``. Fail-open: any bridge failure returns ``(True, None, ...)``.
+
+        A block is refused only when the Modulo decision carries
+        ``blocked: True`` (a ``before`` block with ``block_on_guardrail``).
+        When the server returns ``action="block"`` with ``blocked: False`` —
+        the ``block_on_guardrail: false`` downgrade, or any ``after``-direction
+        block routed through here — the block is RECORD-ONLY: the call
+        proceeds (ADR 003 amendment: interception is preventive, not
+        compensating, and ``block_on_guardrail: false`` downgrades block actions
+        to record-only inside the loop).
         """
         decision = self.notify(tool_name, args, "before")
         action = str(decision.get("action") or "pass")
         if action == "block":
-            return False, None, "block"
+            if decision.get("blocked"):
+                return False, None, "block"
+            # blocked=False -> server downgraded the block; proceed, do not refuse.
+            return True, None, "block"
         if action == "redact":
             masked = decision.get("masked_args")
             if isinstance(masked, dict):
@@ -272,7 +284,11 @@ def main(argv: list[str] | None = None) -> int:
             result_summary = str(event.get("result_summary") or "")
             decision = client.notify(tool_name, args_dict, direction, result_summary)
             _out(json.dumps(decision))
-            return 0 if decision.get("action") != "block" else 3
+            # Refuse only on an actual refusal (action=block AND blocked=true);
+            # a block_on_guardrail:false downgrade (action=block, blocked=false)
+            # is record-only and must NOT exit non-zero.
+            blocked = bool(decision.get("blocked"))
+            return 0 if decision.get("action") != "block" or not blocked else 3
         _err("error: --notify requires a JSON object")
         return 2
     parser.print_help()

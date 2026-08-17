@@ -590,6 +590,71 @@ def test_notify_cli_exit_code_3_on_block(monkeypatch, capsys):
     )
 
 
+def test_notify_cli_downgraded_block_exit_0(monkeypatch, capsys):
+    """A ``block_on_guardrail: false`` downgrade (action=block, blocked=false)
+    must NOT make the ``--notify`` CLI exit non-zero — the block is record-only."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    monkeypatch.setattr(
+        sb.BridgeClient,
+        "notify",
+        lambda self, tool, args, direction, result_summary="": {"action": "block", "blocked": False},
+    )
+    assert sb.main(["--notify", '{"tool_name": "git push", "args": {}, "direction": "before"}', "--endpoint", "x"]) == 0
+
+
+def test_decide_before_honours_blocked_flag(monkeypatch):
+    """``decide_before`` must refuse ONLY on an actual refusal (action=block AND
+    blocked=true). A downgraded block (action=block, blocked=false) — the
+    ``block_on_guardrail: false`` case — must be allowed (record-only)."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    # blocked=true -> refuse.
+    monkeypatch.setattr(
+        sb.BridgeClient,
+        "notify",
+        lambda self, tool, args, direction, result_summary="": {"action": "block", "blocked": True},
+    )
+    client = sb.BridgeClient("http://127.0.0.1:9", timeout=0.5)
+    allowed, _masked, action = client.decide_before("git push", {"url": "x"})
+    assert allowed is False
+    assert action == "block"
+
+    # blocked=false (block_on_guardrail: false downgrade) -> allowed, record-only.
+    monkeypatch.setattr(
+        sb.BridgeClient,
+        "notify",
+        lambda self, tool, args, direction, result_summary="": {"action": "block", "blocked": False},
+    )
+    allowed, _masked, action = client.decide_before("git push", {"url": "x"})
+    assert allowed is True
+    assert action == "block"
+
+
+def test_wrap_command_downgraded_block_does_not_kill(monkeypatch, capsys):
+    """A ``block_on_guardrail: false`` downgrade (action=block, blocked=false)
+    must NOT kill the wrapped child — the call proceeds (record-only)."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    event_line = b'MODULO_BRIDGE_EVENT: {"tool_name": "git push", "args": {"url": "x"}, "direction": "before"}'
+    proc = _FakeProc([event_line], wait_code=0)
+    monkeypatch.setattr(sb.subprocess, "Popen", lambda *a, **k: proc)
+    # The Modulo side downgrades the block (blocked=false) for this before-call.
+    monkeypatch.setattr(
+        sb.BridgeClient,
+        "notify",
+        lambda self, tool, args, direction, result_summary="": {"action": "block", "blocked": False},
+    )
+
+    client = sb.BridgeClient("http://127.0.0.1:9", timeout=0.5)
+    code = sb._wrap_command(["git", "push"], client)
+
+    assert code == 0
+    assert proc.killed is False
+    out = capsys.readouterr().out
+    assert "MODULO_BRIDGE_BLOCKED" not in out
+
+
 def test_load_config_resolves_patterns(tmp_path):
     """``_load_config`` resolves intercepted_tool_patterns from the config file
     and falls back to defaults when the field is absent/malformed."""
