@@ -101,12 +101,16 @@ or more accurate probe (such as `openai_compatible_health_check`, which GETs
 time.
 
 ```python
+from langchain_core.messages import HumanMessage
+
+from modulo.model_backends.base import HealthResult
+
 async def health_check(self) -> HealthResult:
     try:
-        await self._provider.simple_ping()
+        await self.invoke([HumanMessage(content="ping")], max_tokens=1)
         return HealthResult(ok=True, detail="")
-    except Exception as e:
-        return HealthResult(ok=False, detail=str(e))
+    except Exception as exc:  # noqa: BLE001
+        return HealthResult(ok=False, detail=str(exc))
 ```
 
 ## Configuration
