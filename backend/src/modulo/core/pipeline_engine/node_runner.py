@@ -2957,9 +2957,13 @@ def make_sandbox_agent_fn(
                         # FAR-296 Phase 2 stage-split (2): the script PROCESS
                         # started (lease claimed) and its output failed schema
                         # validation — post-claim, TERMINAL (never retryable).
-                        # ``script.schema_failed`` canonicalizes to the
-                        # non-retryable ``contract.schema`` class.
-                        raise OutputSchemaValidationError(
+                        # Raise a ScriptModeError subclass (not the shared
+                        # OutputSchemaValidationError) so the fault surfaces
+                        # under the never-retryable ``script.invalid_output``
+                        # code and is excluded from ``failure`` retries. The
+                        # generic ``schema_validation_failure`` code is SHARED
+                        # with LLM-mode/manual paths and must stay retryable.
+                        raise ScriptInvalidOutputError(
                             f"Script-mode output failed schema validation for node '{node_id}'"
                         ) from None
                     elapsed = time.monotonic() - start_time
