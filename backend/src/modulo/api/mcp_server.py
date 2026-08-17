@@ -718,6 +718,25 @@ async def validate_current_auth() -> bool:
         return False
 
 
+async def _dispatch_unauth_paths(
+    request: Request,
+    call_next: Callable[[Request], Awaitable[Response]],
+) -> Response | None:
+    """Return the response when the path is served unauthenticated, else None.
+
+    These endpoints manage their own auth (health checks, and the OAuth protocol
+    endpoints which authenticate via client_id + client_secret).
+    """
+    clean = request.url.path.rstrip("/")
+    if clean in ("/mcp/healthz", "/healthz"):
+        resp: Response = await call_next(request)
+        return resp
+    if clean in ("/mcp/oauth/authorize", "/mcp/oauth/token", "/mcp/oauth/refresh"):
+        resp2: Response = await call_next(request)
+        return resp2
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Auth middleware
 # ---------------------------------------------------------------------------
@@ -732,17 +751,9 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
-        # Allow unauthenticated access to the health check endpoint.
-        clean = request.url.path.rstrip("/")
-        if clean in ("/mcp/healthz", "/healthz"):
-            resp: Response = await call_next(request)
-            return resp
-
-        # Allow unauthenticated access to the OAuth protocol endpoints.
-        # These endpoints manage their own auth via client_id + client_secret.
-        if clean in ("/mcp/oauth/authorize", "/mcp/oauth/token", "/mcp/oauth/refresh"):
-            resp2: Response = await call_next(request)
-            return resp2
+        unauth = await _dispatch_unauth_paths(request, call_next)
+        if unauth is not None:
+            return unauth
 
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
