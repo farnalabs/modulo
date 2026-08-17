@@ -126,7 +126,7 @@ def saml_enabled(entity_id: str, ctx: dict[str, Any]) -> None:
 # ── License gating ────────────────────────────────────────────────────────
 
 
-@given("I do not have a team license")
+@given("I do not have a Team license")
 def no_team_license(ctx: dict[str, Any]) -> None:
     ctx["license_key"] = ""
 
@@ -190,6 +190,13 @@ def acs_valid_response(request: Any, ctx: dict[str, Any], client: Any) -> None:
 
     with (
         patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch,
+        patch(
+            "modulo.auth.sso.ModuloSamlAuth.process_response",
+            return_value={
+                "name_id": email,
+                "attributes": {"email": [email], "displayName": [name]},
+            },
+        ),
         patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
         patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
     ):
@@ -258,6 +265,13 @@ def acs_with_groups(groups: str, request: Any, ctx: dict[str, Any], client: Any)
 
     with (
         patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch,
+        patch(
+            "modulo.auth.sso.ModuloSamlAuth.process_response",
+            return_value={
+                "name_id": email,
+                "attributes": {"email": [email], "displayName": [name], "groups": group_list},
+            },
+        ),
         patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
         patch("modulo.auth.sso._lookup_provider_by_entity_id", new_callable=AsyncMock) as mock_lookup,
         patch("modulo.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,

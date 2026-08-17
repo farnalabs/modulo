@@ -13,14 +13,14 @@ Feature: API Rate Limiting
     When I send 1 more POST request to /api/v1/runs within the same window
     Then the response status is 429
     And the response has a "Retry-After" header
-    And the response body contains "rate_limit_exceeded"
+    And the response body contains "Rate limit exceeded"
 
   Scenario: GET requests to /api/v1/runs are not rate limited
     When I send 100 GET requests to /api/v1/runs
     Then all responses have status 200
 
   Scenario: Webhook trigger is rate limited at 100 requests per minute per trigger
-    When I send 100 POST requests to /api/v1/webhooks/dummy-trigger within 60 seconds
+    When I send 100 POST requests to /api/v1/triggers/dummy-trigger within 60 seconds
     Then the response status is 200
     When I send 1 more POST request within the same window
     Then the response status is 429
