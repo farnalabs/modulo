@@ -45,6 +45,7 @@ from modulo.core.audit_logger import append_audit_event
 from modulo.core.cost_controller.finalize import derive_node_type_map, finalize_cost
 from modulo.core.eval_engine import (
     EvalBlockedError,
+    EvalEngine,
     EvalSuiteBlockedError,
     SuiteEvalResult,
     evaluate_suite,
@@ -1042,6 +1043,79 @@ class PipelineExecutor:
                 )
         return eval_defs_by_node
 
+    async def _run_post_node_evals(
+        self,
+        node_id: str,
+        envelope: dict[str, Any],
+        eval_definitions_by_node: dict[str, list[EvalDefDTO]],
+        run_id: uuid.UUID,
+        org_id: uuid.UUID | None,
+    ) -> None:
+        """FAR-305: run node-scoped evals for a completed node (standalone path).
+
+        This is the non-HITL counterpart to ``make_hitl_gate_fn``'s
+        eval-before-interrupt: it evaluates each of the node's eval definitions
+        against the node's *inner* output dict (``envelope["output"]`` — the
+        agent's actual ``output.json`` content, matching what the HITL gate
+        evaluates against state) and persists the results to the ``eval_results``
+        table so post-run suite-level threshold checks can read them.
+
+        If a ``block`` eval fails, ``EvalBlockedError`` propagates to
+        ``_stream_graph``'s existing handler, transitioning the run to
+        ``eval_failed`` with ``error_code="eval_blocked"``.
+        """
+        eval_defs = eval_definitions_by_node.get(node_id)
+        if not eval_defs:
+            return
+        # The captured ``output`` is the envelope ``{"artifacts": [...],
+        # "output": {...}}``. Validate the INNER output dict (what the agent
+        # produced), falling back to the whole envelope if it isn't a dict.
+        inner_output = envelope.get("output")
+        if not isinstance(inner_output, dict):
+            inner_output = envelope
+
+        engine = EvalEngine()
+        results: dict[str, EngineEvalResult] = {}
+        for eval_def in eval_defs:
+            eval_result = engine.evaluate(inner_output, eval_def, run_id=run_id)
+            results[eval_def.name] = eval_result
+            _log.info(
+                "post_node_eval.result",
+                extra={
+                    "node_id": node_id,
+                    "eval_name": eval_def.name,
+                    "eval_id": str(eval_def.id),
+                    "passed": eval_result.passed,
+                    "score": eval_result.score,
+                    "detail": eval_result.detail,
+                },
+            )
+
+        # Persist eval results to the eval_results table so post-run
+        # suite-level threshold checks can read them.
+        if self._session_factory is not None and org_id is not None:
+            try:
+                async with self._session_factory() as session, session.begin():
+                    await set_rls_org(session, org_id)
+                    for eval_def in eval_defs:
+                        eval_result = results[eval_def.name]
+                        node_uuid: uuid.UUID | None = uuid.UUID(eval_def.node_id) if eval_def.node_id else None
+                        session.add(
+                            EvalResult(
+                                organisation_id=org_id,
+                                run_id=run_id,
+                                node_id=node_uuid,
+                                eval_id=eval_def.id,
+                                passed=eval_result.passed,
+                                score=eval_result.score,
+                                detail=eval_result.detail,
+                            )
+                        )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception("post_node_eval.persist_failed", extra={"node_id": node_id})
+
     async def _init_model_backend_hub(self, org_id: uuid.UUID) -> ModelBackendHub | None:
         """Load active model backends for the org and initialise ModelBackendHub.
 
@@ -1419,7 +1493,7 @@ class PipelineExecutor:
 
             # Load eval definitions while session is active.
             eval_rows = await self._load_eval_defs_for_pipeline(session, run.pipeline_id)
-            self._build_eval_defs_by_node(eval_rows, org_id, run.pipeline_id)
+            eval_defs_by_node = self._build_eval_defs_by_node(eval_rows, org_id, run.pipeline_id)
 
         pipeline_id = run.pipeline_id
         snapshot_id = run.snapshot_id
@@ -1515,6 +1589,7 @@ class PipelineExecutor:
                     completed_node_outputs=completed_node_outputs,
                     guard=guard,
                     node_token_budgets=node_token_budgets,
+                    eval_definitions_by_node=eval_defs_by_node,
                 )
         except RuntimeError as exc:
             if "checkpointer" in str(exc):
@@ -1878,6 +1953,7 @@ class PipelineExecutor:
                         completed_node_outputs=completed_node_outputs,
                         guard=guard,
                         node_token_budgets=node_token_budgets,
+                        eval_definitions_by_node=eval_defs_by_node,
                     )
             else:
                 final_status, error_code, error_detail, node_token_usage = await self._stream_graph(
@@ -1892,6 +1968,7 @@ class PipelineExecutor:
                     completed_node_outputs=completed_node_outputs,
                     guard=guard,
                     node_token_budgets=node_token_budgets,
+                    eval_definitions_by_node=eval_defs_by_node,
                 )
         except asyncio.CancelledError:
             raise
@@ -2485,6 +2562,7 @@ class PipelineExecutor:
         completed_node_outputs: dict[str, Any] | None = None,
         guard: RunawayGuard | None = None,
         node_token_budgets: dict[str, int] | None = None,
+        eval_definitions_by_node: dict[str, list[EvalDefDTO]] | None = None,
     ) -> tuple[str, str | None, str | None, dict[str, Any] | None]:
         """Stream graph execution, mapping events to broker publishes.
 
@@ -2600,6 +2678,26 @@ class PipelineExecutor:
                                         stamped["otel_trace_id"] = run_trace_id
                                     output = stamped
                                 completed_node_outputs[name] = output
+                                # FAR-305: standalone post-node eval path — run any
+                                # node-scoped evals for this node against its inner
+                                # output dict. This is independent of HITL gates:
+                                # a plain node (no gate) now gets its node-scoped
+                                # evals evaluated too. If a ``block`` eval fails,
+                                # ``EvalBlockedError`` propagates and the existing
+                                # ``except EvalBlockedError`` below transitions the
+                                # run to ``eval_failed`` with ``error_code="eval_blocked"``.
+                                # NOTE: if this node ALSO feeds a HITL gate with
+                                # eval-before-interrupt, the evals run twice (once
+                                # here post-node, once in the gate) — acceptable for
+                                # now, the gate's eval is a separate node.
+                                if eval_definitions_by_node:
+                                    await self._run_post_node_evals(
+                                        name,
+                                        output,
+                                        eval_definitions_by_node,
+                                        run_id,
+                                        org_id,
+                                    )
                                 stall_reason = _node_output_stall_reason(output)
                                 if stall_reason:
                                     stalled_node_reason = stall_reason

@@ -31,6 +31,8 @@ status: covered
 
 Conditional HITL gating and eval-before-interrupt for pipeline nodes. A HITL gate can be made conditional via a JMESPath `condition` expression on the gate config. Additionally, node-scoped eval definitions are evaluated after the condition check but before the interrupt — block-level eval failures raise `EvalBlockedError`, preventing the interrupt entirely. Post-run, eval suites with `pass_threshold` are checked and can transition the run to `eval_failed`.
 
+**Standalone post-node evals (FAR-305):** node-scoped evals also run as a standalone post-node step in `executor.py` (`_run_post_node_evals`), not only within HITL gates (eval-before-interrupt). After a node completes, its eval definitions are evaluated against the node's inner output dict and results are persisted to the `eval_results` table, so plain nodes (no gate) get their node-scoped evals evaluated too. A `block` failure propagates `EvalBlockedError` → `eval_failed` (`error_code="eval_blocked"`). A node that also feeds a HITL gate with eval-before-interrupt runs its evals twice (once post-node, once in the gate).
+
 ## Behaviours
 
 ### Happy Path

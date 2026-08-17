@@ -34,6 +34,8 @@ status: partial
 
 Eval definitions describe automated quality checks that run as a post-node step within the LangGraph StateGraph (8.17). Each definition specifies an eval type, config, pass threshold, and failure behaviour.
 
+**Standalone post-node eval path (FAR-305):** node-scoped eval definitions (with a `node_id`) run as a standalone post-node step in `executor.py` (`_run_post_node_evals`) for every completed node, independent of HITL gates — previously they only fired within eval-before-interrupt gates. Results are evaluated against the node's inner output dict and persisted to the `eval_results` table; a `block` failure transitions the run to `eval_failed`. Covered by `backend/tests/unit/pipeline_engine/test_post_node_evals.py`.
+
 ## Behaviours
 
 ### Eval Definition CRUD
