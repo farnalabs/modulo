@@ -1217,6 +1217,62 @@ class PipelineExecutor:
             hub = None
         return hub
 
+    async def _compensate_blocked_run_best_effort(
+        self,
+        *,
+        org_id: uuid.UUID,
+        run_id: uuid.UUID,
+        executed_nodes: dict[str, Any],
+    ) -> None:
+        """Run-termination compensation for a guardrail-blocked mid-run terminalization (FAR-291).
+
+        A run whose earlier nodes performed connector side effects (pushed a PR,
+        flipped a Linear status) before a later node's output was
+        guardrail-blocked must have those side effects compensated. Invoked from
+        ``_finalize_run_after_stream`` AFTER the terminal status write
+        (``finalize_cost``), so both the ``execute()`` and ``resume()`` paths
+        share this single wiring point.
+
+        Uses its OWN fresh session (``set_rls_org`` inside ``session.begin``)
+        and a FRESH connector hub for the compensation window — it never touches
+        the claim_token-fenced ``finalize_cost`` transaction, and the hub
+        teardown cannot interfere with the run's own hub lifecycle. Best-effort
+        + failure-isolated (guard-the-guard): every raise is logged here and
+        never propagates into terminalization.
+        """
+        hub: Any | None = None
+        try:
+            hub = await self._init_connector_hub(org_id)
+            # The compensation + summary write commit INSIDE this session
+            # transaction (so the blocked_partial summary is durable) BEFORE
+            # the hub is torn down. If teardown failed inside the transaction
+            # block it would roll the summary back with it — guard-the-guard:
+            # teardown must never lose an already-committed compensation.
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                run = await get_run(session, run_id)
+                if run is None:
+                    _log.warning("guardrails.compensation.run_not_found run=%s", run_id)
+                    return
+                from modulo.core.guardrails.compensation import compensate_blocked_run
+
+                await compensate_blocked_run(
+                    session,
+                    run,
+                    guardrail_block=run.error_detail or "",
+                    connector_hub=hub,
+                    executed_nodes=executed_nodes,
+                    blocking_eval_name="",
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("guardrails.compensation.error run=%s", run_id)
+        finally:
+            if hub is not None:
+                await _teardown_hub(hub)
+            set_connector_hub(None)
+
     def _check_db_cancellation(
         self,
         org_id: uuid.UUID,
@@ -1710,6 +1766,20 @@ class PipelineExecutor:
                     raise
                 except Exception:
                     _log.exception("work_intact.write_failed", extra={"run_id": str(run_id)})
+
+        # FAR-291: run-termination compensation for a guardrail-blocked
+        # MID-RUN terminalization. The terminal status write (finalize_cost
+        # above) has already landed; a run whose earlier nodes pushed a PR /
+        # flipped a Linear status before a later node's output was
+        # guardrail-blocked now gets those side effects compensated. Best-effort
+        # + failure-isolated (guard-the-guard): a compensation failure never
+        # crashes terminalization. Uses its own fresh session + hub.
+        if final_status == "eval_failed" and error_code == "eval_blocked":
+            await self._compensate_blocked_run_best_effort(
+                org_id=org_id,
+                run_id=run_id,
+                executed_nodes=completed_node_outputs,
+            )
 
         # Fetch the final run in a fresh session — finalize_cost's ledger block
         # may have aborted the transaction in the whole-tx-abort reduced-escape
