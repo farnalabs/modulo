@@ -3293,22 +3293,7 @@ async def update_trigger(
         if active is True and not prev_active:
             await clear_trigger_streak_after_reenable(trigger.id)
 
-        return {
-            "id": str(trigger.id),
-            "pipeline_id": str(trigger.pipeline_id),
-            "trigger_type": trigger.trigger_type,
-            "active": trigger.active,
-            "max_concurrent_runs": trigger.max_concurrent_runs,
-            "daily_spend_limit": float(trigger.daily_spend_limit) if trigger.daily_spend_limit is not None else None,
-            "config_json": trigger.config_json or {},
-            "cron_expression": trigger.cron_expression,
-            "cron_timezone": trigger.cron_timezone,
-            "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
-            "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
-            "input_template": (trigger.config_json or {}).get("input_template"),
-            "in_flight": in_flight,
-            "streak_status": updated_streak_status,
-        }
+        return _trigger_detail_dict(trigger, in_flight, updated_streak_status)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
