@@ -109,7 +109,7 @@ describe('SchemaInferenceView', () => {
     expect(api.POST).toHaveBeenCalledWith('/api/v1/schemas/infer', {
       body: {
         connector_instance_id: 'conn-1',
-        sample_query: { resource: 'issues', filters: {}, limit: 10, query: undefined },
+        sample_query: { resource: 'issues', filters: {}, limit: 200, query: undefined },
       },
     })
     expect(wrapper.text()).toContain('Inferred from GitHub')

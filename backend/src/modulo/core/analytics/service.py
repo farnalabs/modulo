@@ -77,6 +77,13 @@ __all__ = [
 # ``analytics_query_statement_timeout_ms`` when configured.
 _DEFAULT_STATEMENT_TIMEOUT_MS = 5000
 
+# Repeated SQL fragments and typed error messages (S1192). Constants are pure
+# aliases — the SQL text and error strings are part of the surface contract.
+_SQL_SET_STATEMENT_TIMEOUT = "SELECT set_config('statement_timeout', :ms, true)"
+_SQL_SET_TIMEZONE_UTC = "SELECT set_config('timezone', 'UTC', true)"
+_ERR_DATABASE_UNAVAILABLE = "Database temporarily unavailable."
+_ERR_RATE_LIMIT_EXCEEDED = "Rate limit exceeded"
+
 # Max date range accepted by the bucketed query (matches the old route guard).
 _MAX_QUERY_RANGE_DAYS = 365
 
@@ -272,7 +279,7 @@ async def _facts_freshness(
                             settings, "analytics_query_statement_timeout_ms", _DEFAULT_STATEMENT_TIMEOUT_MS
                         )
                         await session.execute(
-                            text("SELECT set_config('statement_timeout', :ms, true)"),
+                            text(_SQL_SET_STATEMENT_TIMEOUT),
                             {"ms": str(int(timeout_ms))},
                         )
                     newest_terminal_day = (
@@ -331,9 +338,9 @@ async def _execute_with_guards(
                         timeout_ms = getattr(
                             settings, "analytics_query_statement_timeout_ms", _DEFAULT_STATEMENT_TIMEOUT_MS
                         )
-                        await session.execute(text("SELECT set_config('timezone', 'UTC', true)"))
+                        await session.execute(text(_SQL_SET_TIMEZONE_UTC))
                         await session.execute(
-                            text("SELECT set_config('statement_timeout', :ms, true)"),
+                            text(_SQL_SET_STATEMENT_TIMEOUT),
                             {"ms": str(int(timeout_ms))},
                         )
                     result = await session.execute(stmt, params)
@@ -350,15 +357,15 @@ async def _execute_with_guards(
                     _log.warning("analytics.query.timeout", extra={"org_id": str(org_id)})
                     raise AnalyticsQueryTimeoutError("query exceeded timeout — reduce the date range") from None
                 _log.exception("analytics.query.db_error", extra={"org_id": str(org_id)})
-                raise AnalyticsDatabaseError("Database temporarily unavailable.") from None
+                raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
             except SQLAlchemyError:
                 _log.exception("analytics.query.db_error", extra={"org_id": str(org_id)})
-                raise AnalyticsDatabaseError("Database temporarily unavailable.") from None
+                raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
     except (AnalyticsError, asyncio.CancelledError):
         raise
     except Exception:
         _log.exception("analytics.query.unexpected_error", extra={"org_id": str(org_id)})
-        raise AnalyticsDatabaseError("Database temporarily unavailable.") from None
+        raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
 
 
 async def run_analytics_query(
@@ -377,7 +384,7 @@ async def run_analytics_query(
     ``AnalyticsError`` subclasses for rate-limit / validation / DB failures.
     """
     if _rate_limited(str(org_id)):
-        raise AnalyticsRateLimitedError("Rate limit exceeded")
+        raise AnalyticsRateLimitedError(_ERR_RATE_LIMIT_EXCEEDED)
 
     effective_from, effective_to = _normalise_bounds(params.date_from, params.date_to)
     effective_group_by = (
@@ -505,7 +512,7 @@ async def run_concurrency_query(
     avg_active, max_queued, avg_queued, pool_reference}``.
     """
     if _rate_limited(str(org_id)):
-        raise AnalyticsRateLimitedError("Rate limit exceeded")
+        raise AnalyticsRateLimitedError(_ERR_RATE_LIMIT_EXCEEDED)
 
     effective_from, effective_to = _normalise_bounds(params.date_from, params.date_to)
     effective_group_by = (
@@ -681,7 +688,7 @@ async def export_facts(
     is accepted for surface parity but ignored — export has no bucketing.
     """
     if _rate_limited(str(org_id)):
-        raise AnalyticsRateLimitedError("Rate limit exceeded")
+        raise AnalyticsRateLimitedError(_ERR_RATE_LIMIT_EXCEEDED)
 
     effective_from, effective_to = _normalise_bounds(params.date_from, params.date_to)
     conditions, bind = _export_filters(
@@ -714,9 +721,9 @@ async def export_facts(
                         timeout_ms = getattr(
                             settings, "analytics_query_statement_timeout_ms", _DEFAULT_STATEMENT_TIMEOUT_MS
                         )
-                        await session.execute(text("SELECT set_config('timezone', 'UTC', true)"))
+                        await session.execute(text(_SQL_SET_TIMEZONE_UTC))
                         await session.execute(
-                            text("SELECT set_config('statement_timeout', :ms, true)"),
+                            text(_SQL_SET_STATEMENT_TIMEOUT),
                             {"ms": str(int(timeout_ms))},
                         )
                     total = int((await session.execute(count_stmt, bind)).scalar_one())
@@ -734,15 +741,15 @@ async def export_facts(
                     _log.warning("analytics.export.timeout", extra={"org_id": str(org_id)})
                     raise AnalyticsQueryTimeoutError("query exceeded timeout — reduce the date range") from None
                 _log.exception("analytics.export.db_error", extra={"org_id": str(org_id)})
-                raise AnalyticsDatabaseError("Database temporarily unavailable.") from None
+                raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
             except SQLAlchemyError:
                 _log.exception("analytics.export.db_error", extra={"org_id": str(org_id)})
-                raise AnalyticsDatabaseError("Database temporarily unavailable.") from None
+                raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
     except (AnalyticsError, asyncio.CancelledError):
         raise
     except Exception:
         _log.exception("analytics.export.unexpected_error", extra={"org_id": str(org_id)})
-        raise AnalyticsDatabaseError("Database temporarily unavailable.") from None
+        raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
 
     return {
         "items": [_serialize_fact_row(r) for r in rows],

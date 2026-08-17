@@ -32,6 +32,7 @@ from modulo.core.schema_registry import (
     create_migration,
     flag_rare_fields,
 )
+from modulo.core.schema_registry.inference import SUPPORTED_INFERENCE_TYPES
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.connector_instance import get_connector_instance
 from modulo.db.crud.model_backend import list_model_backends
@@ -783,7 +784,7 @@ async def list_schema_fields_endpoint(
 class SchemaSampleQuery(BaseModel):
     resource: str = Field(min_length=1)
     filters: dict[str, Any] = Field(default_factory=dict)
-    limit: int = Field(default=10, ge=1, le=100)
+    limit: int = Field(default=200, ge=1, le=200)
 
 
 class SchemaInferRequest(BaseModel):
@@ -823,18 +824,12 @@ async def infer_schema_endpoint(
                     detail="Connector instance not found",
                 )
 
-            # Connector-types currently supported for schema inference
-            supported_inference_types = frozenset(
-                {
-                    "github",
-                    "gitlab",
-                    "jira",
-                    "linear",
-                    "slack",
-                    "notion",
-                    "confluence",
-                }
-            )
+            # Connector-types currently supported for schema inference. Single
+            # source of truth lives in `schema_registry/inference.py` and is
+            # derived from the `ConnectorType` enum + the connector-type-aware
+            # field-extraction categories (PRD §8.16), so this list can't drift
+            # from the category map or the enum.
+            supported_inference_types = SUPPORTED_INFERENCE_TYPES
             if ci.connector_type_id not in supported_inference_types:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -947,7 +942,7 @@ async def infer_schema_endpoint(
                 detail="Selected model backend is unavailable.",
             ) from None
 
-        service = SchemaInferenceService(backend)
+        service = SchemaInferenceService(backend, connector_type=ci.connector_type_id)
         try:
             definition_json = await service.infer(records)
         except SchemaInferenceError as exc:

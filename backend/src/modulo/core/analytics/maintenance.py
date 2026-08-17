@@ -66,6 +66,9 @@ __all__ = [
 # ``analytics_facts_retention_months`` when set; 13 months keeps one full year
 # of YoY-capable history plus a margin month).
 _FACTS_RETENTION_MONTHS = 13
+
+# Session timezone pin applied before each session-scoped query (S1192).
+_SQL_SET_TIMEZONE_UTC = "SELECT set_config('timezone', 'UTC', true)"
 # Hard cap on backfill day-batches per invocation — the remainder re-enqueues
 # (idempotent anti-join makes the loop naturally resumable).
 _BACKFILL_MAX_BATCHES = 30
@@ -411,7 +414,7 @@ async def backfill_batches(session: Any, *, max_batches: int = _BACKFILL_MAX_BAT
             break
         day = today - timedelta(days=offset)
         async with session.begin():
-            await session.execute(sa.text("SELECT set_config('timezone', 'UTC', true)"))
+            await session.execute(sa.text(_SQL_SET_TIMEZONE_UTC))
             rows += await backfill_facts(session, day)
             await backfill_ledger(session, day)
         batches += 1
@@ -562,10 +565,10 @@ async def run_maintenance(factory: Any) -> dict[str, Any]:
     try:
         stats.update(await backfill_batches(session))
         async with session.begin():
-            await session.execute(sa.text("SELECT set_config('timezone', 'UTC', true)"))
+            await session.execute(sa.text(_SQL_SET_TIMEZONE_UTC))
             stats.update(await reconcile_facts(session))
         async with session.begin():
-            await session.execute(sa.text("SELECT set_config('timezone', 'UTC', true)"))
+            await session.execute(sa.text(_SQL_SET_TIMEZONE_UTC))
             stats.update(await retention_facts(session))
     except asyncio.CancelledError:
         raise

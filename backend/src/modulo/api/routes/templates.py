@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
@@ -118,7 +119,7 @@ async def list_templates_endpoint(
         ) from exc
     except Exception as e:
         logger.exception(_CODE_TEMPLATES_LIST_TEMPLATES_ENDPOINT)
-        raise HTTPException(status_code=500, detail="Internal server error") from e
+        raise HTTPException(status_code=500, detail=MSG_INTERNAL_SERVER_ERROR) from e
 
 
 @router.post(
@@ -246,4 +247,4 @@ async def create_pipeline_from_template_endpoint(
         ) from exc
     except Exception as e:
         logger.exception(_CODE_TEMPLATES_CREATE_PIPELINE_TEMPLATE)
-        raise HTTPException(status_code=500, detail="Internal server error") from e
+        raise HTTPException(status_code=500, detail=MSG_INTERNAL_SERVER_ERROR) from e

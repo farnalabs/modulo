@@ -43,6 +43,9 @@ logger = logging.getLogger(__name__)
 BUNDLE_FORMAT_VERSION = "1"
 MANIFEST_FILENAME = "bundle.json"
 DEFAULT_SCHEMA_VERSION = "1.0"
+
+# Suffix appended to imported names that collide with existing entities.
+_IMPORTED_SUFFIX = "(imported)"
 DEFAULT_NODE_TIMEOUT = 300
 _MAX_NAME_RETRIES = 5
 VALID_EDGE_TYPES: frozenset[str] = frozenset({"normal", "reject", "conditional"})
@@ -711,7 +714,7 @@ def suggest_import_name(
     existing_names: set[str],
     proposed_name: str,
     *,
-    suffix: str = "(imported)",
+    suffix: str = _IMPORTED_SUFFIX,
     max_length: int = 255,
 ) -> str:
     """Suggest a non-colliding name by appending a suffix.

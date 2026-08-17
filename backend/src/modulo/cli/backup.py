@@ -27,6 +27,15 @@ from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
 
+# Repeated error message and backup-artifact filenames (S1192). Constants are
+# pure aliases — the exported file names are part of the on-disk backup layout.
+_ERR_PSYCOPG_UNAVAILABLE = "psycopg library is not available"
+_DB_SQL_FILE = "database.sql"
+_BLOBS_JSON_FILE = "checkpoint_blobs.json"
+_CHECKPOINTS_JSON_FILE = "checkpoints.json"
+_WRITES_JSON_FILE = "checkpoint_writes.json"
+_CREDS_JSON_FILE = "credentials_references.json"
+
 
 # ── URL helpers ──────────────────────────────────────────────────────────────
 
@@ -177,7 +186,7 @@ def _run_psql(raw_url: str, input_path: Path, timeout: int = 600) -> None:
 
 def _export_checkpoint_blobs_sync(raw_url: str) -> list[dict[str, Any]]:
     if psycopg is None:
-        raise RuntimeError("psycopg library is not available")
+        raise RuntimeError(_ERR_PSYCOPG_UNAVAILABLE)
     with psycopg.connect(raw_url, row_factory=dict_row, connect_timeout=10) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT * FROM checkpoint_blobs ORDER BY organisation_id, thread_id, checkpoint_ns, channel, version"
@@ -187,7 +196,7 @@ def _export_checkpoint_blobs_sync(raw_url: str) -> list[dict[str, Any]]:
 
 def _export_checkpoints_sync(raw_url: str) -> list[dict[str, Any]]:
     if psycopg is None:
-        raise RuntimeError("psycopg library is not available")
+        raise RuntimeError(_ERR_PSYCOPG_UNAVAILABLE)
     with psycopg.connect(raw_url, row_factory=dict_row, connect_timeout=10) as conn, conn.cursor() as cur:
         cur.execute("SELECT * FROM checkpoints ORDER BY organisation_id, thread_id, checkpoint_ns, checkpoint_id")
         return [_serialise_export_row(row) for row in cur]
@@ -195,7 +204,7 @@ def _export_checkpoints_sync(raw_url: str) -> list[dict[str, Any]]:
 
 def _export_checkpoint_writes_sync(raw_url: str) -> list[dict[str, Any]]:
     if psycopg is None:
-        raise RuntimeError("psycopg library is not available")
+        raise RuntimeError(_ERR_PSYCOPG_UNAVAILABLE)
     with psycopg.connect(raw_url, row_factory=dict_row, connect_timeout=10) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT * FROM checkpoint_writes "
@@ -209,7 +218,7 @@ _CREDENTIALS_TABLES: list[str] = ["connector_instances", "model_backends"]
 
 def _export_credentials_references_sync(raw_url: str) -> dict[str, list[dict[str, Any]]]:
     if psycopg is None:
-        raise RuntimeError("psycopg library is not available")
+        raise RuntimeError(_ERR_PSYCOPG_UNAVAILABLE)
     result: dict[str, list[dict[str, Any]]] = {}
     with psycopg.connect(raw_url, row_factory=dict_row, connect_timeout=10) as conn:
         for table in _CREDENTIALS_TABLES:
@@ -231,7 +240,7 @@ def _export_credentials_references_sync(raw_url: str) -> dict[str, list[dict[str
 
 def _restore_checkpoint_blobs_sync(raw_url: str, blobs: list[dict[str, Any]]) -> int:
     if psycopg is None:
-        raise RuntimeError("psycopg library is not available")
+        raise RuntimeError(_ERR_PSYCOPG_UNAVAILABLE)
     with psycopg.connect(raw_url, connect_timeout=10) as conn:
         with conn.cursor() as cur:
             cur.execute("TRUNCATE TABLE checkpoint_blobs CASCADE")
@@ -261,7 +270,7 @@ def _restore_checkpoint_blobs_sync(raw_url: str, blobs: list[dict[str, Any]]) ->
 
 def _restore_checkpoints_sync(raw_url: str, checkpoints: list[dict[str, Any]]) -> int:
     if psycopg is None:
-        raise RuntimeError("psycopg library is not available")
+        raise RuntimeError(_ERR_PSYCOPG_UNAVAILABLE)
     with psycopg.connect(raw_url, connect_timeout=10) as conn:
         with conn.cursor() as cur:
             cur.execute("TRUNCATE TABLE checkpoints CASCADE")
@@ -288,7 +297,7 @@ def _restore_checkpoints_sync(raw_url: str, checkpoints: list[dict[str, Any]]) -
 
 def _restore_checkpoint_writes_sync(raw_url: str, writes: list[dict[str, Any]]) -> int:
     if psycopg is None:
-        raise RuntimeError("psycopg library is not available")
+        raise RuntimeError(_ERR_PSYCOPG_UNAVAILABLE)
     with psycopg.connect(raw_url, connect_timeout=10) as conn:
         with conn.cursor() as cur:
             cur.execute("TRUNCATE TABLE checkpoint_writes CASCADE")
@@ -326,7 +335,7 @@ def _re_encrypt_credentials_sync(
     new_fernet_key: str,
 ) -> dict[str, int]:
     if psycopg is None:
-        raise RuntimeError("psycopg library is not available")
+        raise RuntimeError(_ERR_PSYCOPG_UNAVAILABLE)
     old_fernet = Fernet(old_fernet_key.encode())
     new_fernet = Fernet(new_fernet_key.encode())
     counts: dict[str, int] = {}
@@ -403,16 +412,16 @@ def _preview_restore(
     """
     click.echo("DRY RUN — no changes will be made.")
 
-    db_sql = backup_dir / "database.sql"
+    db_sql = backup_dir / _DB_SQL_FILE
     if db_sql.exists():
         click.echo(f"  WOULD restore database schema and data via psql from {db_sql.name}")
     else:
         click.echo("  No database.sql found — WOULD skip full DB restore")
 
     for json_name, label in (
-        ("checkpoint_blobs.json", "checkpoint blob records"),
-        ("checkpoints.json", "checkpoint records"),
-        ("checkpoint_writes.json", "checkpoint write records"),
+        (_BLOBS_JSON_FILE, "checkpoint blob records"),
+        (_CHECKPOINTS_JSON_FILE, "checkpoint records"),
+        (_WRITES_JSON_FILE, "checkpoint write records"),
     ):
         json_path = backup_dir / json_name
         if json_path.exists():
@@ -421,7 +430,7 @@ def _preview_restore(
         else:
             click.echo(f"  No {json_name} found — WOULD skip")
 
-    creds_json = backup_dir / "credentials_references.json"
+    creds_json = backup_dir / _CREDS_JSON_FILE
     if creds_json.exists():
         creds: dict[str, list[dict[str, Any]]] = json.loads(creds_json.read_text(encoding="utf-8"))
         current_key_hash = _fernet_key_hash(settings.fernet_key)
@@ -498,32 +507,32 @@ def backup(db_url: str | None, output_dir: Path | None) -> None:
         click.echo(f"Backup directory: {backup_dir}")
 
         click.echo("Running pg_dump...")
-        _run_pg_dump(raw_url, backup_dir / "database.sql")
-        file_checksums["database.sql"] = _file_checksum(backup_dir / "database.sql")
+        _run_pg_dump(raw_url, backup_dir / _DB_SQL_FILE)
+        file_checksums[_DB_SQL_FILE] = _file_checksum(backup_dir / _DB_SQL_FILE)
         click.echo("  database.sql written")
 
         click.echo("Exporting checkpoint_blobs...")
         blobs = _export_checkpoint_blobs_sync(raw_url)
-        _write_json(backup_dir / "checkpoint_blobs.json", blobs)
-        file_checksums["checkpoint_blobs.json"] = _file_checksum(backup_dir / "checkpoint_blobs.json")
+        _write_json(backup_dir / _BLOBS_JSON_FILE, blobs)
+        file_checksums[_BLOBS_JSON_FILE] = _file_checksum(backup_dir / _BLOBS_JSON_FILE)
         click.echo(f"  {len(blobs)} checkpoint blob records exported")
 
         click.echo("Exporting checkpoints...")
         checkpoints = _export_checkpoints_sync(raw_url)
-        _write_json(backup_dir / "checkpoints.json", checkpoints)
-        file_checksums["checkpoints.json"] = _file_checksum(backup_dir / "checkpoints.json")
+        _write_json(backup_dir / _CHECKPOINTS_JSON_FILE, checkpoints)
+        file_checksums[_CHECKPOINTS_JSON_FILE] = _file_checksum(backup_dir / _CHECKPOINTS_JSON_FILE)
         click.echo(f"  {len(checkpoints)} checkpoint records exported")
 
         click.echo("Exporting checkpoint_writes...")
         cwrites = _export_checkpoint_writes_sync(raw_url)
-        _write_json(backup_dir / "checkpoint_writes.json", cwrites)
-        file_checksums["checkpoint_writes.json"] = _file_checksum(backup_dir / "checkpoint_writes.json")
+        _write_json(backup_dir / _WRITES_JSON_FILE, cwrites)
+        file_checksums[_WRITES_JSON_FILE] = _file_checksum(backup_dir / _WRITES_JSON_FILE)
         click.echo(f"  {len(cwrites)} checkpoint write records exported")
 
         click.echo("Exporting credentials references...")
         creds = _export_credentials_references_sync(raw_url)
-        _write_json(backup_dir / "credentials_references.json", creds)
-        file_checksums["credentials_references.json"] = _file_checksum(backup_dir / "credentials_references.json")
+        _write_json(backup_dir / _CREDS_JSON_FILE, creds)
+        file_checksums[_CREDS_JSON_FILE] = _file_checksum(backup_dir / _CREDS_JSON_FILE)
         total_creds = sum(len(v) for v in creds.values())
         click.echo(f"  {total_creds} credential records referenced")
 
@@ -610,10 +619,10 @@ def restore(backup_dir: Path, db_url: str | None, yes: bool, previous_fernet_key
             click.echo("  All file checksums verified")
 
         for json_name in (
-            "checkpoint_blobs.json",
-            "checkpoints.json",
-            "checkpoint_writes.json",
-            "credentials_references.json",
+            _BLOBS_JSON_FILE,
+            _CHECKPOINTS_JSON_FILE,
+            _WRITES_JSON_FILE,
+            _CREDS_JSON_FILE,
         ):
             json_path = backup_dir / json_name
             if json_path.exists():
@@ -626,7 +635,7 @@ def restore(backup_dir: Path, db_url: str | None, yes: bool, previous_fernet_key
             _preview_restore(backup_dir, manifest, settings, previous_fernet_key)
             return
 
-        db_sql = backup_dir / "database.sql"
+        db_sql = backup_dir / _DB_SQL_FILE
         if db_sql.exists():
             click.echo("Restoring database schema and data via psql...")
             _run_psql(raw_url, db_sql)
@@ -634,7 +643,7 @@ def restore(backup_dir: Path, db_url: str | None, yes: bool, previous_fernet_key
         else:
             click.echo("  No database.sql found — skipping full DB restore")
 
-        blobs_json = backup_dir / "checkpoint_blobs.json"
+        blobs_json = backup_dir / _BLOBS_JSON_FILE
         if blobs_json.exists():
             click.echo("Restoring checkpoint_blobs from JSON export...")
             blobs: list[dict[str, Any]] = json.loads(blobs_json.read_text(encoding="utf-8"))
@@ -643,7 +652,7 @@ def restore(backup_dir: Path, db_url: str | None, yes: bool, previous_fernet_key
         else:
             click.echo("  No checkpoint_blobs.json found — skipping")
 
-        checkpoints_json = backup_dir / "checkpoints.json"
+        checkpoints_json = backup_dir / _CHECKPOINTS_JSON_FILE
         if checkpoints_json.exists():
             click.echo("Restoring checkpoints from JSON export...")
             checkpoints_data: list[dict[str, Any]] = json.loads(checkpoints_json.read_text(encoding="utf-8"))
@@ -652,7 +661,7 @@ def restore(backup_dir: Path, db_url: str | None, yes: bool, previous_fernet_key
         else:
             click.echo("  No checkpoints.json found — skipping")
 
-        cwrites_json = backup_dir / "checkpoint_writes.json"
+        cwrites_json = backup_dir / _WRITES_JSON_FILE
         if cwrites_json.exists():
             click.echo("Restoring checkpoint_writes from JSON export...")
             cwrites_data: list[dict[str, Any]] = json.loads(cwrites_json.read_text(encoding="utf-8"))
@@ -661,7 +670,7 @@ def restore(backup_dir: Path, db_url: str | None, yes: bool, previous_fernet_key
         else:
             click.echo("  No checkpoint_writes.json found — skipping")
 
-        creds_json = backup_dir / "credentials_references.json"
+        creds_json = backup_dir / _CREDS_JSON_FILE
         current_key_hash = _fernet_key_hash(settings.fernet_key)
         backup_key_hash = manifest.get("fernet_key_hash", "")
 

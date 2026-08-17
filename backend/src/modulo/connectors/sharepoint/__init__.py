@@ -16,6 +16,9 @@ from modulo.connectors.base import (
     HealthResult,
 )
 
+# Pagination query parameter name shared across list endpoints (S1192).
+_SKIP_TOKEN = "$skiptoken"
+
 
 class SharePointConnector(ConnectorBase):
     """Read/write SharePoint sites, lists, and files via Microsoft Graph API.
@@ -52,7 +55,7 @@ class SharePointConnector(ConnectorBase):
         if isinstance(body, dict):
             next_link = body.get("@odata.nextLink", "")
             if isinstance(next_link, str) and next_link:
-                skiptoken = parse_qs(urlparse(next_link).query).get("$skiptoken", [""])[0]
+                skiptoken = parse_qs(urlparse(next_link).query).get(_SKIP_TOKEN, [""])[0]
                 next_cursor = _safe_cursor(skiptoken)
         return records[: limit or len(records)], next_cursor, len(records)
 
@@ -108,7 +111,7 @@ class SharePointConnector(ConnectorBase):
                     if q.limit:
                         params["$top"] = q.limit
                     if q.cursor:
-                        params["$skiptoken"] = q.cursor
+                        params[_SKIP_TOKEN] = q.cursor
                     r = await client.get("/sites", params=params)
                     r.raise_for_status()
                     records, next_cursor, total = self._page(r.json(), q.limit)
@@ -122,7 +125,7 @@ class SharePointConnector(ConnectorBase):
                     if q.limit:
                         params["$top"] = q.limit
                     if q.cursor:
-                        params["$skiptoken"] = q.cursor
+                        params[_SKIP_TOKEN] = q.cursor
                     r = await client.get(f"/sites/{site_id}/lists", params=params)
                     r.raise_for_status()
                     records, next_cursor, total = self._page(r.json(), q.limit)
@@ -137,7 +140,7 @@ class SharePointConnector(ConnectorBase):
                     if q.limit:
                         params["$top"] = q.limit
                     if q.cursor:
-                        params["$skiptoken"] = q.cursor
+                        params[_SKIP_TOKEN] = q.cursor
                     r = await client.get(f"/sites/{site_id}/lists/{list_id}/items", params=params)
                     r.raise_for_status()
                     records, next_cursor, total = self._page(r.json(), q.limit)
@@ -157,7 +160,7 @@ class SharePointConnector(ConnectorBase):
                     if q.limit:
                         params["$top"] = q.limit
                     if q.cursor:
-                        params["$skiptoken"] = q.cursor
+                        params[_SKIP_TOKEN] = q.cursor
                     r = await client.get(url, params=params)
                     r.raise_for_status()
                     records, next_cursor, total = self._page(r.json(), q.limit)

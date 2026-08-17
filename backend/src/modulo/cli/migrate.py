@@ -36,6 +36,9 @@ from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
 
+# Label used when reporting a malformed --org-id argument to _parse_uuid.
+_ORG_ID_ARG_LABEL = "organisation ID"
+
 ConflictStrategy = Literal["skip", "overwrite", "merge"]
 _EXPORT_TABLES = (
     "accounts",
@@ -446,7 +449,7 @@ def _parse_uuid(raw: str, label: str = "UUID") -> uuid.UUID:
 @click.pass_context
 def export_org(ctx: click.Context, org_id: str, output: Path, pipelines_only: bool, users_only: bool) -> None:
     """Export all organisation data as a JSONL bundle."""
-    asyncio.run(_async_export_org(ctx, _parse_uuid(org_id, "organisation ID"), output, pipelines_only, users_only))
+    asyncio.run(_async_export_org(ctx, _parse_uuid(org_id, _ORG_ID_ARG_LABEL), output, pipelines_only, users_only))
 
 
 async def _async_export_org(
@@ -510,7 +513,7 @@ def import_org(
     users_only: bool,
 ) -> None:
     """Import organisation data from a JSONL bundle with conflict resolution."""
-    parsed_org_id = _parse_uuid(org_id, "organisation ID")
+    parsed_org_id = _parse_uuid(org_id, _ORG_ID_ARG_LABEL)
     asyncio.run(_async_import_org(ctx, parsed_org_id, input_path, on_conflict, pipelines_only, users_only))
 
 
@@ -572,7 +575,7 @@ async def _async_import_org(
 @click.pass_context
 def verify_export(ctx: click.Context, org_id: str, input_path: Path) -> None:
     """Verify export integrity by re-computing hashes."""
-    asyncio.run(_async_verify_export(ctx, _parse_uuid(org_id, "organisation ID"), input_path))
+    asyncio.run(_async_verify_export(ctx, _parse_uuid(org_id, _ORG_ID_ARG_LABEL), input_path))
 
 
 async def _async_verify_export(ctx: click.Context, org_id: uuid.UUID, input_path: Path) -> None:

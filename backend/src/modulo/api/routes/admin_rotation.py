@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import (
     get_db_session,
@@ -159,7 +160,7 @@ async def rotate_key(
         raise HTTPException(status_code=503, detail="Database not available. Run migrations.") from exc
     except Exception as e:
         _log.exception(_CODE_ADMIN_ROTATION_ROTATE_KEY)
-        raise HTTPException(status_code=500, detail="Internal server error") from e
+        raise HTTPException(status_code=500, detail=MSG_INTERNAL_SERVER_ERROR) from e
 
 
 @router.get("/status", response_model=RotationStatusResponse)
@@ -192,7 +193,7 @@ async def rotation_status(
         raise HTTPException(status_code=503, detail="Database not available. Run migrations.") from exc
     except Exception as e:
         _log.exception(_CODE_ADMIN_ROTATION_ROTATION_STATUS)
-        raise HTTPException(status_code=500, detail="Internal server error") from e
+        raise HTTPException(status_code=500, detail=MSG_INTERNAL_SERVER_ERROR) from e
 
 
 # ── Background task ────────────────────────────────────────────────────────

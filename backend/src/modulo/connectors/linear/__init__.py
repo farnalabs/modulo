@@ -10,6 +10,10 @@ import httpx
 from modulo.connectors._retry_headers import parse_retry_after as _parse_retry_after
 from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
 from modulo.connectors.base import (
+    CompensationContext,
+    CompensationOperation,
+    CompensationOutcome,
+    CompensationResult,
     ConnectorBase,
     ConnectorPayload,
     ConnectorQuery,
@@ -707,6 +711,67 @@ class LinearConnector(ConnectorBase):
             return HealthResult(ok=False, detail=str(exc)[:200])
         except Exception as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
+
+    async def compensate(
+        self,
+        operation: CompensationOperation,
+        *,
+        context: CompensationContext,
+        error: str,
+    ) -> CompensationResult:
+        """Compensate a performed Linear write (FAR-213).
+
+        Supports the ``issue_assign`` resource (revert the assignment by
+        unassigning) and the ``issue`` create resource (archive the created
+        issue). Any other resource returns ``not_supported``. Best-effort: a
+        GraphQL failure returns ``failed`` with a summary detail, never raises.
+        """
+        if operation.resource == "issue_assign":
+            issue_id = operation.data.get("id")
+            if not issue_id:
+                return CompensationResult(
+                    outcome=CompensationOutcome.NOT_SUPPORTED,
+                    detail="cannot compensate issue_assign without an 'id' in the write payload",
+                )
+            try:
+                await self._update_issue(str(issue_id), {"assigneeId": None})
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                return CompensationResult(
+                    outcome=CompensationOutcome.FAILED,
+                    detail=f"unassign failed: {type(exc).__name__}",
+                )
+            return CompensationResult(
+                outcome=CompensationOutcome.COMPENSATED,
+                detail=f"unassigned Linear issue {issue_id}",
+                resource_id=str(issue_id),
+            )
+        if operation.resource == "issue":
+            issue_id = operation.output.get("id")
+            if not issue_id:
+                return CompensationResult(
+                    outcome=CompensationOutcome.NOT_SUPPORTED,
+                    detail="cannot compensate an issue create without an 'id' in the created issue output",
+                )
+            try:
+                await self._graphql(_ARCHIVE_ISSUE_MUTATION, {"id": issue_id, "trash": False})
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                return CompensationResult(
+                    outcome=CompensationOutcome.FAILED,
+                    detail=f"archive failed: {type(exc).__name__}",
+                )
+            return CompensationResult(
+                outcome=CompensationOutcome.COMPENSATED,
+                detail=f"archived Linear issue {issue_id}",
+                resource_id=str(issue_id),
+            )
+        return CompensationResult(
+            outcome=CompensationOutcome.NOT_SUPPORTED,
+            detail=f"no inverse for Linear write resource {operation.resource!r}",
+        )
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         match q.resource:

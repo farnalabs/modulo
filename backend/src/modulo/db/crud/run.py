@@ -46,6 +46,9 @@ ERROR_CODE_CAPACITY_TIMEOUT = "capacity_timeout"
 # failures. The stale-run sweep exempts runs carrying these markers.
 CAPACITY_MARKERS = frozenset({ERROR_CODE_ORG_CAPACITY_LIMITED, ERROR_CODE_PIPELINE_CAPACITY})
 
+# Day-key format used for run-usage bucketing and the --older-than parser.
+_DAY_FORMAT = "%Y-%m-%d"
+
 # The canonical whitelist of run statuses (subset of the ``ck_runs_status``
 # CHECK constraint). ``transition_run`` and ``update_run_status`` refuse any
 # status outside this set (a typo would otherwise silently violate the CHECK
@@ -422,6 +425,7 @@ async def create_run(
     guardrail_results: list[Any] = []
     guardrail_blocked = False
     guardrail_block_message = ""
+    guardrail_blocking_eval_name = ""
     guardrail_observed_by_eval: dict[uuid.UUID, bool] = {}
     from modulo.core.eval_engine import EvalEngine
     from modulo.core.guardrails import (
@@ -577,6 +581,9 @@ async def create_run(
                     guardrail_blocked = outcome.blocked
                     guardrail_block_message = outcome.block_message
                     skipped_guardrails = outcome.skipped
+                    # FAR-213: the blocking eval name feeds the blocked_partial
+                    # summary written at terminalization below.
+                    guardrail_blocking_eval_name = outcome.blocking_eval_name
                 # Item 7 — guardrail latency metric: the interception runs
                 # BEFORE the first node starts, so its wall-clock is accounted
                 # separately (a structured log line) and never silently eats
@@ -697,6 +704,31 @@ async def create_run(
     # NEVER abort create_run — a lost create-stamp is recoverable at finalise
     # via the deterministic canonical id.
     await _hydrate_journeys(session, org_id, canonical_refs)
+
+    # Run-termination compensation (FAR-213) — runs AFTER the terminal status
+    # write (the run was flushed above) as best-effort + failure-isolated: it
+    # writes the blocked_partial summary and, when a connector hub is supplied,
+    # compensates executed nodes' external side effects. It must NEVER block or
+    # delay the terminal write and never propagate — guard-the-guard: any
+    # compensation raise is logged + audited here. At the ingestion edge no
+    # nodes have executed (connector_hub is always None here), so only the
+    # summary + summary audit are written; the mid-run terminalization paths
+    # call compensate_blocked_run directly with the executed node outputs and a
+    # connector hub.
+    if guardrail_blocked:
+        from modulo.core.guardrails.compensation import compensate_blocked_run
+
+        try:
+            await compensate_blocked_run(
+                session,
+                run,
+                guardrail_block=guardrail_block_message,
+                blocking_eval_name=guardrail_blocking_eval_name,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("guardrails.compensation.error run=%s", run_id)
     return run
 
 
@@ -1531,7 +1563,7 @@ async def _get_run_stats_python(
     dur_by_day: dict[str, list[int]] = defaultdict(list)
 
     for r in runs:
-        day = r.created_at.strftime("%Y-%m-%d")
+        day = r.created_at.strftime(_DAY_FORMAT)
         by_day[day]["count"] += 1
         if r.status == "complete":
             by_day[day]["success"] += 1
@@ -1539,7 +1571,7 @@ async def _get_run_stats_python(
             by_day[day]["failed"] += 1
 
     for r in completed_runs:
-        day = r.created_at.strftime("%Y-%m-%d")
+        day = r.created_at.strftime(_DAY_FORMAT)
         if r.completed_at is None or r.started_at is None:
             continue
         ms = int((r.completed_at - r.started_at).total_seconds() * 1000)
@@ -1702,7 +1734,7 @@ async def get_run_heatmap(
 
     by_day: dict[str, int] = defaultdict(int)
     for r in runs:
-        by_day[r.created_at.strftime("%Y-%m-%d")] += 1
+        by_day[r.created_at.strftime(_DAY_FORMAT)] += 1
 
     return [{"date": d, "count": c} for d, c in sorted(by_day.items())]
 
@@ -1756,7 +1788,7 @@ async def purge_runs(
     Returns dict with ``deleted_run_count``.
     """
     try:
-        cutoff = datetime.strptime(older_than, "%Y-%m-%d").replace(tzinfo=UTC)
+        cutoff = datetime.strptime(older_than, _DAY_FORMAT).replace(tzinfo=UTC)
     except ValueError as exc:
         raise ValueError(f"Invalid date format: '{older_than}'. Expected YYYY-MM-DD.") from exc
     deleted_total = 0

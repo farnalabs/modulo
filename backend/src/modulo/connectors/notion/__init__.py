@@ -17,6 +17,9 @@ from modulo.connectors.base import (
 _NOTION_API = "https://api.notion.com/v1"
 _NOTION_VERSION = "2022-06-28"
 
+# Type alias used in ``cast`` for response payloads (S1192).
+type _DICT_STR_ANY = dict[str, Any]
+
 
 class NotionConnector(ConnectorBase):
     """Read/write Notion databases, pages, blocks, and users via the REST API v1.
@@ -197,7 +200,7 @@ class NotionConnector(ConnectorBase):
                 case "database":
                     r = await client.post("/databases", json=payload.data)
                     r.raise_for_status()
-                    return cast("dict[str, Any]", r.json())
+                    return cast(_DICT_STR_ANY, r.json())
 
                 case "block_append":
                     block_id = payload.data.get("block_id")
@@ -209,7 +212,7 @@ class NotionConnector(ConnectorBase):
                         json={"children": children},
                     )
                     r.raise_for_status()
-                    return cast("dict[str, Any]", r.json())
+                    return cast(_DICT_STR_ANY, r.json())
 
                 case "page_update":
                     page_id = payload.data.get("id")
@@ -221,7 +224,7 @@ class NotionConnector(ConnectorBase):
                         json={"properties": properties},
                     )
                     r.raise_for_status()
-                    return cast("dict[str, Any]", r.json())
+                    return cast(_DICT_STR_ANY, r.json())
 
                 case _:
                     raise ValueError(f"Unsupported Notion write resource: {payload.resource!r}")
