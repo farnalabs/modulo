@@ -5918,38 +5918,20 @@ async def _oauth_token(request: Request) -> JSONResponse:
         )
 
 
-async def _oauth_refresh(request: Request) -> JSONResponse:
-    """POST /mcp/oauth/refresh — exchange refresh token for new access token.
+def _extract_oauth_refresh_credentials(
+    request: Request, params: dict[str, str]
+) -> tuple[dict[str, str], JSONResponse | None]:
+    """Extract and validate the client credentials for a refresh-token grant.
 
-    Form-urlencoded per RFC 6749 with JSON compat, mirroring ``_oauth_token``.
-    Re-verifies the client secret (body or Basic auth) and the consenting
-    account's LIVE org role against the token's scopes — if the account was
-    demoted (or removed) since the token was issued, the refresh is DENIED
-    (ADR 017 demote-then-refresh). The refresh token is rotated: a new pair is
-    issued with an incremented sequence, invalidating the old refresh token.
+    Validates ``grant_type`` is ``refresh_token`` and reads
+    ``refresh_token``/``client_id``/``client_secret`` from the body, falling
+    back to an HTTP Basic Authorization header for the client secret/ID
+    (RFC 6749 §2.3.1). Returns ``(creds, error)`` — exactly one is non-None on
+    error.
     """
-    content_type = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
-    if content_type == "application/x-www-form-urlencoded":
-        form = await request.form()
-        params: dict[str, str] = {k: (str(v) if v is not None else "") for k, v in form.items()}
-    elif content_type == _CT_APPLICATION_JSON:
-        try:
-            body = await request.json()
-        except json.JSONDecodeError:
-            return JSONResponse(
-                {"error": "invalid_request", "detail": "Request body must be JSON"},
-                status_code=400,
-            )
-        params = {k: str(v) if v is not None else "" for k, v in body.items()}
-    else:
-        return JSONResponse(
-            {"error": "invalid_request", "detail": "Content-Type must be application/x-www-form-urlencoded"},
-            status_code=400,
-        )
-
     grant_type = params.get("grant_type", "")
     if grant_type != "refresh_token":
-        return JSONResponse(
+        return {}, JSONResponse(
             {"error": "unsupported_grant_type"},
             status_code=400,
         )
@@ -5970,74 +5952,128 @@ async def _oauth_refresh(request: Request) -> JSONResponse:
             if not client_id:
                 client_id = basic_id
         except Exception:
-            return JSONResponse(
+            return {}, JSONResponse(
                 {"error": "invalid_request", "detail": "Malformed Basic Authorization header"},
                 status_code=400,
             )
 
     if not refresh_token_value or not client_id or not client_secret:
-        return JSONResponse(
+        return {}, JSONResponse(
             {"error": "invalid_request", "detail": "refresh_token, client_id and client_secret are required"},
             status_code=400,
         )
 
+    return (
+        {
+            "grant_type": grant_type,
+            "refresh_token": refresh_token_value,
+            "client_id": client_id,
+            "client_secret": client_secret,
+        },
+        None,
+    )
+
+
+async def _exchange_refresh_token(
+    creds: dict[str, str], settings: Any
+) -> tuple[dict[str, Any] | None, JSONResponse | None]:
+    """Rotate a refresh token into a new access/refresh token pair.
+
+    Validates the client secret, sets RLS org context, decodes the refresh
+    token, re-verifies the consenting account's LIVE role still covers the
+    token's scopes (ADR 017), then issues a new pair with an incremented
+    sequence — invalidating the old refresh token. Returns
+    ``(response_dict, error)``; OAuth/DB exceptions propagate to the caller.
+    """
+    from modulo.auth.oauth import (
+        create_oauth_access_token,
+        create_oauth_refresh_token,
+        decode_oauth_refresh_token,
+        validate_client_secret,
+        verify_live_role_covers_scopes,
+    )
+
+    session_factory = _get_session_factory()
+    async with session_factory() as s, s.begin():
+        client = await validate_client_secret(s, creds["client_id"], creds["client_secret"])
+        await set_rls_org(s, client.organisation_id)
+
+        claims = decode_oauth_refresh_token(creds["refresh_token"], settings.secret_key)
+
+        # ADR 017: the consenting account's LIVE role must still cover the
+        # scopes — a demoted/removed account is denied a fresh token.
+        await verify_live_role_covers_scopes(
+            s,
+            account_id=claims.account_id,
+            org_id=claims.organisation_id,
+            scopes=claims.scopes,
+        )
+
+        new_sequence = claims.token_sequence + 1
+        new_access_token = create_oauth_access_token(
+            claims.client_id,
+            settings.secret_key,
+            organisation_id=str(claims.organisation_id),
+            account_id=str(claims.account_id),
+            scopes=claims.scopes,
+            token_family=claims.token_family,
+            token_sequence=new_sequence,
+        )
+        new_refresh_token = create_oauth_refresh_token(
+            claims.client_id,
+            settings.secret_key,
+            organisation_id=str(claims.organisation_id),
+            account_id=str(claims.account_id),
+            scopes=claims.scopes,
+            token_family=claims.token_family,
+            token_sequence=new_sequence,
+        )
+
+    return (
+        {
+            "access_token": new_access_token,
+            "refresh_token": new_refresh_token,
+            "token_type": "Bearer",  # nosec B105 - RFC 6750 token_type label, not a credential
+            "expires_in": 3600,
+            "scope": " ".join(claims.scopes),
+        },
+        None,
+    )
+
+
+async def _oauth_refresh(request: Request) -> JSONResponse:
+    """POST /mcp/oauth/refresh — exchange refresh token for new access token.
+
+    Form-urlencoded per RFC 6749 with JSON compat, mirroring ``_oauth_token``.
+    Re-verifies the client secret (body or Basic auth) and the consenting
+    account's LIVE org role against the token's scopes — if the account was
+    demoted (or removed) since the token was issued, the refresh is DENIED
+    (ADR 017 demote-then-refresh). The refresh token is rotated: a new pair is
+    issued with an incremented sequence, invalidating the old refresh token.
+    """
+    params, parse_err = await _parse_oauth_form(request)
+    if parse_err:
+        return parse_err
+    assert params is not None
+
+    creds, cred_err = _extract_oauth_refresh_credentials(request, params)
+    if cred_err:
+        return cred_err
+
+    client_id = creds["client_id"]
+
+    from modulo.auth.oauth import (
+        InvalidClientError,
+        InvalidGrantError,
+    )
+
     settings = get_settings()
     try:
-        from modulo.auth.oauth import (
-            InvalidClientError,
-            InvalidGrantError,
-            create_oauth_access_token,
-            create_oauth_refresh_token,
-            decode_oauth_refresh_token,
-            validate_client_secret,
-            verify_live_role_covers_scopes,
-        )
-
-        session_factory = _get_session_factory()
-        async with session_factory() as s, s.begin():
-            client = await validate_client_secret(s, client_id, client_secret)
-            await set_rls_org(s, client.organisation_id)
-
-            claims = decode_oauth_refresh_token(refresh_token_value, settings.secret_key)
-
-            # ADR 017: the consenting account's LIVE role must still cover the
-            # scopes — a demoted/removed account is denied a fresh token.
-            await verify_live_role_covers_scopes(
-                s,
-                account_id=claims.account_id,
-                org_id=claims.organisation_id,
-                scopes=claims.scopes,
-            )
-
-            new_sequence = claims.token_sequence + 1
-            new_access_token = create_oauth_access_token(
-                claims.client_id,
-                settings.secret_key,
-                organisation_id=str(claims.organisation_id),
-                account_id=str(claims.account_id),
-                scopes=claims.scopes,
-                token_family=claims.token_family,
-                token_sequence=new_sequence,
-            )
-            new_refresh_token = create_oauth_refresh_token(
-                claims.client_id,
-                settings.secret_key,
-                organisation_id=str(claims.organisation_id),
-                account_id=str(claims.account_id),
-                scopes=claims.scopes,
-                token_family=claims.token_family,
-                token_sequence=new_sequence,
-            )
-
-        return JSONResponse(
-            {
-                "access_token": new_access_token,
-                "refresh_token": new_refresh_token,
-                "token_type": "Bearer",  # nosec B105 - RFC 6750 token_type label, not a credential
-                "expires_in": 3600,
-                "scope": " ".join(claims.scopes),
-            }
-        )
+        token_resp, token_err = await _exchange_refresh_token(creds, settings)
+        if token_err:
+            return token_err
+        assert token_resp is not None
+        return JSONResponse(token_resp)
     except (InvalidGrantError, InvalidClientError):
         return JSONResponse(
             {"error": "invalid_grant", "detail": "Refresh token exchange failed"},
