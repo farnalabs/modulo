@@ -121,6 +121,17 @@ Reverting an agent node back to a manual node, using a pipeline snapshot to rest
 
 ## QA History
 
+### 2026-08-15 — dist/partial-core3 (no behaviour changes to this entry)
+
+This session added schema-versioning and runtime-provider structured-error tests
+(see schema-union-types.md and runtime-provider-core.md) — none touch the
+revert-to-manual endpoint. No behaviours in this entry were flipped this session.
+Genuine gaps remain unchecked: BDD scenarios for revert-to-manual (node_types.feature /
+manual_node.feature use mocked PATCH /graph steps, not the real POST endpoint), snapshot
+interactions (revert does not create a new snapshot, no undo-by-rollback, no diff), and
+concurrency/performance edge cases.
+
+
 ### 2026-07-10 — Cross-cutting QA (index 302)
 
 **Fixes applied:**

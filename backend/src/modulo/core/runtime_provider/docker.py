@@ -112,6 +112,9 @@ class DockerRuntimeProvider(RuntimeProvider):
             await asyncio.wait_for(container.start(), timeout=self._start_timeout)
         except asyncio.CancelledError:
             raise
+        except (ConnectionError, OSError) as exc:
+            _log.exception("Failed to reach Docker daemon for workspace %s", ref)
+            raise RuntimeError(f"Unable to reach the Docker daemon (is it running?): {exc}") from exc
         except Exception:
             _log.exception("Failed to create container for workspace %s", ref)
             raise
