@@ -364,7 +364,7 @@ class TestVerifyTimestamp:
 @pytest.mark.parametrize(
     ("secret", "body", "sig_maker", "expected"),
     [
-        ("my-secret", b"payload", lambda b, s: (_sha256_sig(b, s, timestamp=int(time.time())), int(time.time())), True),
+        ("my-secret", b"payload", lambda b, s: (_sha256_sig(b, s, timestamp := int(time.time())), timestamp), True),
         ("my-secret", b"payload", lambda b, s: (_sha256_sig(b, s), None), True),
         ("secret", b"payload", lambda b, s: ("sha256=wrong", int(time.time())), False),
         ("secret", b"payload", lambda b, s: (None, int(time.time())), False),
