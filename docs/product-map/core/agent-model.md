@@ -176,8 +176,8 @@ Two categories exist:
 - [x] ProgrammingError on any endpoint returns 501 with consistent message
 - [x] SQLAlchemyError on any endpoint returns 503 with consistent message
 - [x] IntegrityError (FK not found) on create returns 422 with descriptive message
-- [ ] Duplicate prompt version label on apply is accepted (no uniqueness check)
-- [ ] Schema version FK changability — input/output schemas are fixed after create (no PATCH support)
+- [x] Duplicate prompt version label on apply is accepted (no uniqueness check) — `add_prompt_version` stores `version_label or f"v{len(history)+1}"` with no uniqueness constraint on `version` within `prompt_version_history`
+- [x] Schema version FK changability — input/output schemas are fixed after create (no PATCH support): `AgentUpdate` (`agents.py:98-113`) does not expose `input_schema_id`/`output_schema_id`, so they cannot be changed after create
 
 ## Error Handling — Exception→500 guards
 
@@ -202,9 +202,17 @@ Two categories exist:
 - [x] LLM timeout in optimize_prompt — `asyncio.wait_for` with `_LLM_TIMEOUT=60.0` in prompt_optimizer/__init__.py:220-223
 - [x] Retry on LLM call failure in optimize_prompt — 3 retries with exponential backoff + jitter in prompt_optimizer/__init__.py:213-251
 - [x] OptimizationFailedError raised after retries exhausted — caught in agents.py:499-503 returning structured 500 with descriptive message
-- [ ] No connection pooling error handling — DB connection pool exhaustion returns 5xx
+- No connection pooling error handling — DB connection pool exhaustion returns 5xx (see Known Gaps)
+
+## Known Gaps
+
+- **No connection-pooling error handling** — when the DB connection pool is exhausted, the underlying pool `TimeoutError` propagates as a generic 5xx rather than a typed, rate-limited 429/503-with-retry; there is no dedicated 503 path or backoff for pool exhaustion. Not PRD-mandated; a hardening item. (Referenced in QA history as "1 resilience gap remains — connection pooling".)
+- No `SQLAlchemyError`→503 distinction from pool exhaustion — all DB failures share the same 503 handler; a pool-exhaustion timeout is indistinguishable from other transient failures in the response.
+- No audit event for `agent_prompt_changed` (PRD §8.12) — prompt apply/rollback does not dispatch an audit event recording old/new version (see `core/audit-trail.md` event catalog).
 
 ## QA History
+
+- **2026-08-15 — distribute (final-pass sweep C)**: Verified two previously-unchecked Edge Case items and marked `[x]`: (1) duplicate prompt-version labels on apply — `add_prompt_version` in `db/crud/agent.py` appends to `prompt_version_history` with no uniqueness check on `version_label`, so duplicate labels are accepted; (2) schema FK changability re-verified against the merged code — `AgentUpdate` (`agents.py:98-113`) does NOT expose `input_schema_id`/`output_schema_id`, so input/output schemas ARE fixed after create (no PATCH support); the earlier branch-side claim that schemas were re-assignable via PATCH was found inaccurate and reverted. Confirmed the sole remaining unchecked item (connection-pooling error handling) is a genuine, non-PRD hardening gap and documented it in the Known Gaps section.
 
 - **2026-07-02 — improve-architecture index 46**: Added `ProgrammingError` catches to 5
   unprotected endpoints (create, list, get, update, delete) — all now return 501 Not
@@ -243,3 +251,7 @@ Two categories exist:
   resilience gaps + 2 edge case gaps, minus 2 resolved).
 - **2026-07-10 — improve-architecture index 303**: Cross-cutting QA. Fixed CRITICAL — added `except Exception → 500` with `except HTTPException: raise` guard and `_log.exception` to 11 route handlers in agents.py (list, create, get, update-read, update-write, apply, list_versions, get_version, rollback, diff, delete) — previously only `optimize_prompt` had the generic exception guard. Python-level errors (TypeError, KeyError, ValueError from `model_validate`, dict access) would propagate as opaque 500 to CatchAllMiddleware on all other routes. Fixed MAJOR — corrected 3 stale resilience checkboxes in product map: `_LLM_TIMEOUT=60.0`, `_MAX_RETRIES=3` with exponential backoff + jitter, and `OptimizationFailedError` catch all verified as implemented in `prompt_optimizer/__init__.py`. Added Error Handling — Exception→500 guards section (12 checkboxes). Status: partial (7 known gaps unchanged + 1 resilience gap remains — connection pooling).
 - **2026-07-12 — improve-architecture round 3**: Fixed MAJOR — `optimize_prompt`'s generic `except Exception: raise HTTPException(500)` handler was missing `_log.exception(...)` (product map claimed `[x]`, code didn't have it). All 11 other endpoints in the file had this; `optimize_prompt` was the only endpoint swallowing the exception context silently. Added `_log.exception(...)` before the 500 raise. Status: partial (known gaps unchanged).
+
+### 2026-08-15 — coverage sweep (partial-small-a)
+
+- **Verified + marked [x] two edge-case behaviours that were unchecked despite being implemented and testable in code:** (1) duplicate prompt version labels on apply — `add_prompt_version` (`db/crud/agent.py`) stores `version_label or f"v{len(history)+1}"` with no uniqueness constraint on `version` inside the JSON `prompt_version_history`, so duplicate labels are accepted by design; consistent with `core/prompt-optimization.md` "Apply with duplicate version label creates entry with same label as existing". (2) schema immutability — `AgentUpdate` (`agents.py:98-113`) does not carry `input_schema_id`/`output_schema_id`, so input/output schemas are fixed after create (no PATCH support), matching the checkbox. Added a `## Known Gaps` section (new) documenting the genuine connection-pooling-exhaustion gap (pool `TimeoutError` → generic 5xx, no dedicated 503/backoff) and the missing PRD §8.12 `agent_prompt_changed` audit event. Status: partial (97/100 → 99/100).

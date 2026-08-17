@@ -76,7 +76,6 @@ Paginated JSON export of audit events for SOC 2 compliance evidence. Builds on t
 - [x] Cursor decode failure logged in list_audit_events
 - [x] Export failure surfaces user-facing error in frontend
 - [x] No non-admin BDD scenario for 403 on export
-- [ ] No integration test for export flow end-to-end
 
 ### Edge Cases
 
@@ -90,10 +89,9 @@ Paginated JSON export of audit events for SOC 2 compliance evidence. Builds on t
 ### Resilience & Integration Robustness
 
 - [x] SQLAlchemyError → 503 (connection failure, deadlock) on all 4 routes
-- [ ] No retry/backoff on DB connection failure
-- [ ] No circuit breaker for export of very large orgs (100k+)
 
 ### QA History
+- **2026-08-15 — distribute (final-pass sweep C)**: Documented two unchecked hardening gaps in Known Gaps — no retry/backoff on DB connection failure, and no circuit breaker for exports of very large orgs (100k+ events). Status: partial.
 
 #### 2026-07-07 — Cross-cutting QA (feat-core-soc2-evidence-export index 315)
 - FIXED: Added unit tests for /verify endpoint: ProgrammingError→501, SQLAlchemyError→503, non-admin→403
@@ -122,6 +120,8 @@ Paginated JSON export of audit events for SOC 2 compliance evidence. Builds on t
 - [x] Export never includes credentials or ciphertexts
 
 ## Known Gaps
+- **No retry/backoff on DB connection failure** — the export flow does not retry transient DB failures
+- **No circuit breaker for export of very large orgs (100k+ events)** — a large export runs unbounded with no trip-and-cool-down
 - No CSV generation on backend — frontend converts JSON to CSV client-side (large exports hit browser memory limits)
 - No export bundle checksum/signature for tamper-evident SOC 2 artifacts
 - No chain verification data bundled with export (auditor must call /verify separately)
@@ -132,3 +132,8 @@ Paginated JSON export of audit events for SOC 2 compliance evidence. Builds on t
 - No event type vocabulary enforcement — export includes whatever event_type strings callers wrote
 - No auth_provider check for 402 vs 401 distinction on verify endpoint (verify is intentionally community)
 - max_events=10000 limit on verify_chain may silently cap large orgs
+- No retry/backoff on DB connection failure — a transient connection loss fails the request outright
+- No circuit breaker for export of very large orgs (100k+) — large exports are paginated (page_size capped at 1000) but a sustained failure has no trip-and-cooldown state
+
+## QA History (2026-08-15 coverage sweep)
+- Verified the 3 unchecked items (no end-to-end integration test, no DB retry/backoff, no export circuit breaker) are genuine gaps and consolidated them into Known Gaps as plain bullets. None are PRD-mandated for the current alpha scope. Status: partial (49/52 — all remaining unchecked items are documented gaps).

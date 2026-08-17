@@ -7,18 +7,16 @@ from uuid import uuid4
 
 import pytest
 from langgraph.errors import GraphInterrupt
-from langgraph.types import Interrupt
 
 from modulo.core.eval_engine import EvalBlockedError, EvalDefinition, EvalType
 from modulo.core.pipeline_engine.node_runner import _evaluate_eval_condition, make_hitl_gate_fn, make_manual_node_fn
 
 
 @pytest.fixture(autouse=True)
-def _interrupt_without_graph_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
-    def raise_interrupt(value: Any) -> None:
-        raise GraphInterrupt((Interrupt(value=value),))
+def _interrupt_without_graph_runtime_autouse(_interrupt_without_graph_runtime: None) -> None:
+    """Apply the shared Interrupt()-shim fixture to every test in this module."""
 
-    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner.interrupt", raise_interrupt)
+    assert _interrupt_without_graph_runtime is None
 
 
 # ---------------------------------------------------------------------------

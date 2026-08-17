@@ -1,9 +1,13 @@
 """Validate Modulo pipeline configuration patterns.
 
 Checks for known bug patterns in sandbox_agent pipeline configs:
-1. Empty ``agent_prompt`` that would cause opencode to hang
+1. Empty ``agent_prompt`` that would cause opencode to hang (llm mode)
 2. ``timeout_seconds`` defaulting to 600 (too short for complex tasks)
 3. ``template_id`` not in the known-good set {opencode, modulo-opencode}
+4. FAR-296 mode config: ``mode="script"`` requires a non-empty
+   ``script_command``, and agent_command/agent_commands and script_command are
+   mutually exclusive (mirrors the shared mode-aware validator used by the
+   node runner, Pydantic model, and GraphValidator).
 """
 
 from __future__ import annotations
@@ -96,14 +100,39 @@ def _scan_pipeline_config_files() -> None:
             _check_node_config(path, obj)
 
 
+def _check_sandbox_mode(node: dict, path: Path, prefix: str) -> None:
+    """FAR-296 mode-scoped checks: llm vs script command exclusivity.
+
+    Mirrors the rules of the shared ``_validate_sandbox_mode_config`` helper in
+    node_runner.py (this script is standalone and cannot import backend code).
+    llm mode (default) keeps the existing agent_prompt check; script mode
+    requires a non-empty ``script_command``; the two command families are
+    mutually exclusive.
+    """
+    mode = node.get("mode", "llm")
+    has_agent_command = bool(node.get("agent_command") or node.get("agent_commands"))
+    has_script_command = bool(node.get("script_command"))
+    if has_agent_command and has_script_command:
+        _fail(
+            f"{path}: sandbox_agent node {prefix} sets BOTH agent_command/agent_commands "
+            "and script_command — the two modes are mutually exclusive"
+        )
+    if mode == "script":
+        if not has_script_command:
+            _fail(f"{path}: script mode sandbox_agent node {prefix} requires a non-empty 'script_command'")
+        return
+    ap = node.get("agent_prompt", "")
+    if not ap:
+        _fail(f"{path}: agent_prompt is empty in sandbox_agent node {prefix} — opencode will hang")
+
+
 def _check_node_config(path: Path, obj: dict, prefix: str = "") -> None:
     """Recursively inspect a pipeline dict for sandbox_agent node config issues."""
     node_type = obj.get("node_type") or obj.get("type") or ""
     if "sandbox_agent" in node_type or "sandbox" in node_type:
-        # Check agent_prompt is not empty
-        ap = obj.get("agent_prompt", "")
-        if not ap:
-            _fail(f"{path}: agent_prompt is empty in sandbox_agent node {prefix} — opencode will hang")
+        # Check mode-scoped config (FAR-296): script_command required in script
+        # mode, commands mutually exclusive, agent_prompt required in llm mode.
+        _check_sandbox_mode(obj, path, prefix)
 
         # Check template_id is one of the known-good sandbox templates
         tid = obj.get("template_id", "")

@@ -11920,10 +11920,18 @@ export interface components {
             } | null;
             /** Template Id */
             template_id?: string | null;
+            /**
+             * Mode
+             * @default llm
+             * @enum {string}
+             */
+            mode: "llm" | "script";
             /** Agent Command */
             agent_command?: string | null;
             /** Agent Prompt */
             agent_prompt?: string | null;
+            /** Script Command */
+            script_command?: string | null;
             /** Delivery Sentinel */
             delivery_sentinel?: string | null;
             /** Env Vars */
@@ -13060,6 +13068,10 @@ export interface components {
             /** Blocked Partial Summary */
             blocked_partial_summary?: {
                 [key: string]: unknown;
+            } | null;
+            /** Guardrail Summary */
+            guardrail_summary?: {
+                [key: string]: number;
             } | null;
         };
         /** RunSummary */
@@ -15357,6 +15369,10 @@ export interface components {
             team_memberships_truncated: boolean;
             /** Org Role */
             org_role: string;
+            /** Preferences */
+            preferences?: {
+                [key: string]: unknown;
+            };
             /**
              * Is System Admin
              * @default false

@@ -30,8 +30,6 @@ export const options = {
   },
 };
 
-let authToken = null;
-
 export function setup() {
   const loginRes = http.post(`${BASE_URL}/auth/login`, JSON.stringify({
     email: 'admin@modulo.test',

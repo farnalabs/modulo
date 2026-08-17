@@ -20,6 +20,7 @@ For each event, the notifier:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import hmac
 import json
@@ -49,6 +50,7 @@ __all__ = [
     "EVENT_FEEDBACK_PENDING",
     "EVENT_GUARDRAIL_ENFORCEMENT_GAP",
     "EVENT_GUARDRAIL_KILL_SWITCH",
+    "EVENT_GUARDRAIL_UNEXPECTED_SKIP",
     "EVENT_HITL_AWAITING",
     "EVENT_HITL_OVERDUE",
     "EVENT_RUN_FAILED",
@@ -60,9 +62,27 @@ __all__ = [
     "RETRY_DELAYS",
     "DispatchResult",
     "Notifier",
+    "endpoint_events_to_list",
 ]
 
 _log = logging.getLogger(__name__)
+
+
+def endpoint_events_to_list(raw_events: object) -> list[str]:
+    """Normalise ``NotificationEndpoint.events`` (a list or JSON string) to a list of strings.
+
+    Persisted values may be a JSON-encoded string or a native list; this single
+    helper keeps the API read paths (notifications/admin_notifications) in sync.
+    """
+    if isinstance(raw_events, list) and not any(not isinstance(event, str) for event in raw_events):
+        return raw_events
+    if isinstance(raw_events, str):
+        with contextlib.suppress(json.JSONDecodeError, TypeError):
+            parsed = json.loads(raw_events)
+            if isinstance(parsed, list) and not any(not isinstance(event, str) for event in parsed):
+                return parsed
+    return []
+
 
 # Lazy OTel counter — records the fail-closed owner-read drop so a DB blip that
 # suppresses ALL webhook dispatch for an event is observable (review #657 obs 1).
@@ -118,6 +138,10 @@ EVENT_GUARDRAIL_ENFORCEMENT_GAP = "guardrail_enforcement_gap"
 # guardrails downgraded to observe (shadow-only). Alert on enable so the
 # downgrade is never silent.
 EVENT_GUARDRAIL_KILL_SWITCH = "guardrail_kill_switch"
+# FAR-223 item 11 — a guardrail was skipped for a reason NOT explained by
+# soft-deleted snapshot-pin state (an unexpected skip): the control silently
+# stopped evaluating and the operator must be paged.
+EVENT_GUARDRAIL_UNEXPECTED_SKIP = "guardrail_unexpected_skip"
 
 
 @dataclass

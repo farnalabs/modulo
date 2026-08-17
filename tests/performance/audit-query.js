@@ -51,7 +51,6 @@ export function setup() {
   };
 
   // Seed 50 audit events by creating and updating pipelines
-  const seededIds = [];
   for (let i = 0; i < 50; i++) {
     const pipelineRes = http.post(`${BASE_URL}/pipelines`, JSON.stringify({
       name: `seed-pipeline-${randomString(6)}`,
@@ -62,7 +61,6 @@ export function setup() {
 
     if (pipelineRes.status === 201) {
       const pipelineId = JSON.parse(pipelineRes.body).id;
-      seededIds.push(pipelineId);
 
       // Patch to generate an audit event for autonomy level change
       http.patch(`${BASE_URL}/pipelines/${pipelineId}`, JSON.stringify({

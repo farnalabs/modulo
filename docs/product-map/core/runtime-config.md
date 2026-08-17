@@ -76,9 +76,9 @@ environment-variable values, and hot-reloadable vs static settings.
 
 ## Known Gaps
 
-- [ ] No website docs page exists for runtime configuration (needs Website repo worktree)
-- [ ] No degraded-mode fallback — RuntimeConfigStore is process-global with no persistence layer
-- [ ] Route handler has no DB error handling (in-memory store, so no 501/503 paths exist)
+- No website docs page exists for runtime configuration (needs Website repo worktree)
+- No degraded-mode fallback — RuntimeConfigStore is process-global with no persistence layer (verified: `core/runtime_config/store.py` holds key config in a module-level dict; nothing is written to disk/DB, so a restart loses runtime overrides)
+- Route handler has no DB error handling (in-memory store, so no 501/503 paths exist)
 
 ## QA History
 
@@ -96,3 +96,7 @@ environment-variable values, and hot-reloadable vs static settings.
 - Added `test_runtime_config_routes.py` to `unit-tests` frontmatter
 
 **Status:** partial (3 known gaps remain)
+
+### 2026-08-15 — coverage sweep (partial-small-a)
+
+- Confirmed the 3 Known Gaps are genuine (all verified against `core/runtime_config/store.py` + `admin_runtime_config.py`): (1) no website docs page; (2) store is process-global with no persistence layer — module-level dict, nothing persisted to disk/DB; (3) no DB error handling because the store is in-memory (no 501/503 paths exist by design). None are PRD-mandated for the current MVP. Converted the 3 unchecked gap checkboxes to plain Known Gap bullets (gaps belong in Known Gaps, not the behaviour checklist). Status: partial (36/39 — all remaining unchecked items are documented gaps).

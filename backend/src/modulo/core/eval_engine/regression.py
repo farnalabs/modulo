@@ -109,6 +109,7 @@ async def detect_regressions(
             JOIN runs r ON r.id = er.run_id
             WHERE er.organisation_id = :org_id
               AND ed.organisation_id = :org_id
+              AND ed.eval_type != 'guardrail'
               AND er.evaluated_at >= :baseline_start
               AND (:pipeline_id IS NULL OR r.pipeline_id = :pipeline_id)
             GROUP BY er.eval_id

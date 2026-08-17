@@ -113,7 +113,7 @@ class ConfluenceConnector(ConnectorBase):
                     params["limit"] = q.filters.get("limit", q.limit)
                     r = await client.get("/wiki/api/v2/pages", params=params)
                     r.raise_for_status()
-                    body = r.json()
+                    body: dict[str, Any] = r.json()
                     results: list[dict[str, Any]] = _safe_records(body, "results")
                     return ConnectorResult(records=results)
 

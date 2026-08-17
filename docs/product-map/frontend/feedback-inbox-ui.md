@@ -121,10 +121,12 @@ correction trigger, and resolution.
 
 ## QA History
 
+### 2026-08-15 — Coverage completion (FAR-231/FAR-233 distribute batch)
+- Re-verified the 6 unchecked items are genuine gaps: pagination controls (API supports page/page_size, UI loads all records), draft eval editor UI (EvalProposalsQueueView exists but "Publish" does not create an eval definition), status-staleness handling (concurrent resolution → 409), producing_agent filter (API schema includes agent_id, UI does not expose it), ai_correction_with_human_review accept/reject UI (PRD §8.20 requires it). No new [x] items this pass; all 52 checked behaviours spot-re-verified against FeedbackInboxView.vue and the unit tests.
+
 ### 2026-08-15 — Coverage-completion (FAR-233)
 - **Verified**: the eval proposals queue is no longer "API-only" — EvalProposalsQueueView.vue exists at /evals/proposals with Publish/Dismiss actions. The draft-eval-editor gap remains.
 - **Remaining gaps**: pagination controls, status-staleness handling, producing_agent filter, ai_correction_with_human_review accept/reject UI, draft eval editor.
-
 
 
 ### 2026-07-04 — Cross-cutting QA (index 130)

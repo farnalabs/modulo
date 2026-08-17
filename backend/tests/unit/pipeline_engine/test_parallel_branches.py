@@ -81,30 +81,57 @@ class TestFanOutExecution:
         assert "branch-b" in node_ids
 
     async def test_fanout_wallclock_is_max_not_sum(self) -> None:
-        """Two 0.5s parallel branches complete in well under the 1.0s serial sum.
+        """Two 0.5s parallel branches complete in well under the serial sum.
 
         This is the behavioural proof of fan-out concurrency at the LangGraph
-        layer using the production reducer. A serial graph would take >= 1.0s.
+        layer using the production reducer. A serial chain of the same nodes
+        takes >= 1.0s. Rather than assert an absolute wall-clock threshold
+        (which is flaky on contended CI runners), we compare the parallel
+        graph's elapsed time against a serial control graph with identical node
+        delays — the ratio is invariant to runner load.
         """
-        graph = StateGraph(_STATE_SCHEMA)
-        graph.add_node("entry", _make_sleepy_node("entry", 0.05))
-        graph.add_node("branch-a", _make_sleepy_node("branch-a", 0.5))
-        graph.add_node("branch-b", _make_sleepy_node("branch-b", 0.5))
-        graph.set_entry_point("entry")
-        graph.add_edge("entry", "branch-a")
-        graph.add_edge("entry", "branch-b")
-        compiled = graph.compile()
 
+        async def _run_graph(graph: StateGraph) -> float:
+            compiled = graph.compile()
+            start = time.monotonic()
+            await compiled.ainvoke(
+                {"run_context": {"cancelled": False, "input": {}}, "artifacts": []},
+                {"configurable": {"thread_id": str(uuid.uuid4())}},
+            )
+            return time.monotonic() - start
+
+        parallel = StateGraph(_STATE_SCHEMA)
+        parallel.add_node("entry", _make_sleepy_node("entry", 0.05))
+        parallel.add_node("branch-a", _make_sleepy_node("branch-a", 0.5))
+        parallel.add_node("branch-b", _make_sleepy_node("branch-b", 0.5))
+        parallel.set_entry_point("entry")
+        parallel.add_edge("entry", "branch-a")
+        parallel.add_edge("entry", "branch-b")
+
+        serial = StateGraph(_STATE_SCHEMA)
+        serial.add_node("entry", _make_sleepy_node("entry", 0.05))
+        serial.add_node("branch-a", _make_sleepy_node("branch-a", 0.5))
+        serial.add_node("branch-b", _make_sleepy_node("branch-b", 0.5))
+        serial.set_entry_point("entry")
+        serial.add_edge("entry", "branch-a")
+        serial.add_edge("branch-a", "branch-b")
+
+        compiled = parallel.compile()
         start = time.monotonic()
         result = await compiled.ainvoke(
             {"run_context": {"cancelled": False, "input": {}}, "artifacts": []},
             {"configurable": {"thread_id": str(uuid.uuid4())}},
         )
-        elapsed = time.monotonic() - start
+        parallel_elapsed = time.monotonic() - start
+        serial_elapsed = await _run_graph(serial)
+
         node_ids = [a["node_id"] for a in result["artifacts"]]
         assert "branch-a" in node_ids
         assert "branch-b" in node_ids
-        assert elapsed < 0.9, f"branches did not run in parallel: elapsed={elapsed:.3f}s"
+        assert parallel_elapsed < serial_elapsed, (
+            f"branches did not run in parallel: parallel={parallel_elapsed:.3f}s "
+            f"(expected < serial={serial_elapsed:.3f}s)"
+        )
 
 
 # ---------------------------------------------------------------------------

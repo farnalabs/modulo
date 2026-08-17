@@ -62,7 +62,7 @@ status: partial
 
 - [ ] Pipeline with no nodes produces snapshot with empty node list
 - [ ] Pipeline with no edges produces snapshot with empty edge list
-- [ ] Snapshot list for pipeline with no snapshots returns empty items and total=0
+- [x] Snapshot list for pipeline with no snapshots returns empty items and total=0
 - [x] Diff of two identical snapshots returns empty changes in all six categories
 - [x] Snapshot diff handles node_type field appearing or changing between versions
 - [x] Nodes without node_type field (old-format snapshots) default to 'agent' during compilation (UNTESTED at API level)
@@ -111,5 +111,6 @@ status: partial
 
 ## QA History
 
+- 2026-08-15: Final verification pass (sweep D). Marked [ ]→[x]: "Snapshot list for pipeline with no snapshots returns empty items and total=0" — verified implemented + tested by `TestListSnapshots.test_list_snapshots_empty_returns_empty` (backend/tests/unit/pipelines/test_snapshot_crud.py). Remaining unchecked items verified as genuine gaps: "Pipeline with no nodes/edges produces snapshot with empty node/edge list" (no dedicated unit test — the creation path handles empty graphs naturally via `graph_nodes_json or []` but lacks explicit coverage); "FOR UPDATE lock serialises concurrent snapshot creation", "Rollback acquires FOR UPDATE lock", "Snapshot version allocation is atomic within the transaction" (FOR UPDATE is used at pipeline_snapshot_versioning.py:170 and `test_rollback_to_snapshot_invokes_lock_acquired_callback` exercises the lock callback, but no test asserts concurrent serialisation or atomic version allocation). All documented in Known Gaps. Status: partial (6 known gaps remain).
 - 2026-07-06: Cross-cutting QA (index 231): Fixed CRITICAL — added SQLAlchemyError→503 catches to all 6 snapshot route handlers (list, detail, tag, rollback, delete, diff) with _log.warning calls. Corrected 7 product map behaviours [ ]→[x] across Auth & Permissions (401, RLS scoping, cross-org 404) and Error Handling (ProgrammingError→501, auth 401/403, 422 validation, cross-org 404, SQLAlchemyError→503). Added 12 tests (test_snapshot_programming_error.py) covering ProgrammingError→501 + SQLAlchemyError→503 for all 6 endpoints. 6 known gaps remain. Status: partial.
 - 2026-07-02: Cross-cutting QA (index 60): Marked 40 behaviours [ ]→[x] across Happy Path, Request Validation, Auth, State & Lifecycle, Edge Cases, Concurrency, Error Handling, and Backward Compatibility sections. Added 10 unit tests for rollback, delete, tag, detail, and empty-list edge cases (test_snapshot_crud.py). 30/30 unit tests pass. Status: partial (6 known gaps remain + 3 untested edge cases).

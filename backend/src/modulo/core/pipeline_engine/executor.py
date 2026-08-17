@@ -2282,6 +2282,7 @@ class PipelineExecutor:
             EvalDefinition.pipeline_id == pipeline_id,
             EvalDefinition.suite_id.isnot(None),
             EvalDefinition.pass_threshold.isnot(None),
+            EvalDefinition.eval_type != "guardrail",
         )
         result = await session.execute(stmt)
         suite_defs = result.scalars().all()

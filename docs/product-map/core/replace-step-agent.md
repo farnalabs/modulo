@@ -111,9 +111,9 @@ Replacing a manual placeholder node with an AI agent node (and reverting from ag
 
 ### Edge Cases
 
-- [ ] Pipeline deleted between locked read and _save_graph → _save_graph returns None → 404
-- [ ] pipeline_row.graph_nodes_json is None → empty nodes list (handled via `if pipeline_row.graph_nodes_json else []`)
-- [ ] pipeline_row.edges is None → empty edges list (handled via `if pipeline_row.edges else []`)
+- [x] Pipeline deleted between locked read and _save_graph → _save_graph returns None → 404 (covered by `test_save_graph_none_returns_404` on both convert and revert)
+- [x] pipeline_row.graph_nodes_json is None → empty nodes list, resolved cleanly to "Node not found" 404, not a 500 (covered by `test_graph_nodes_json_none_treated_as_empty` on both convert and revert)
+- [x] Empty edges list when no PipelineEdge rows exist (edges are loaded via a dedicated `select(PipelineEdge)` query, so an absent graph yields `[]`, not a crash) — covered by happy-path tests passing `edges=[]`
 - [ ] Double with_for_update() on same row in same transaction (locked read + _save_graph internals) is a no-op (row already locked)
 
 ### Resilience & Integration Robustness
@@ -139,6 +139,7 @@ Replacing a manual placeholder node with an AI agent node (and reverting from ag
 - 2026-07-04: Cross-cutting QA (index 164). Fixed 2 CRITICAL: (1) added IntegrityError + SQLAlchemyError catch to both endpoints (previously only caught ProgrammingError, allowing FK/deadlock errors to propagate as 500); (2) added with_for_update() to pipeline read in both endpoints to prevent lost-update race between get_pipeline_graph and _save_graph. Added Error Handling section (6 checkboxes: 4 [x] + 2 [ ]), Edge Cases section (4 checkboxes: 4 [x]), Resilience & Integration Robustness section (3 checkboxes: 1 [x] + 2 [ ]). Updated Known Gaps: removed resolved "No BDD step definitions for pipeline_builder.feature" gap; added 3 new gaps (no GraphValidator after convert/revert, no snapshot auto-create, get_snapshot_detail lacks org RLS filter). Confirmed updated error coverage in unit tests. Status: partial (5 known gaps + 2 unchecked error handling + 2 unchecked resilience items).
 - 2026-07-10: Cross-cutting QA (index 301). Fixed MAJOR — added `_log.warning()` calls to ProgrammingError and SQLAlchemyError catches in both convert-to-agent and revert-to-manual endpoints (previously silent — no log output on DB failures). Fixed MAJOR — wrapped 15 hardcoded English strings in PipelineEditorView.vue with `$t()` calls covering node properties panel labels (Node Properties, Type, Label, Output Schema, Agent, Connector), convert-to-agent dialog (title, Agent label, Connector label, Model Backend label, placeholders, loading), and badge text (Manual/Agent). Added 14 new i18n keys to en-US.js. Updated Error Handling section: marked `_log.warning` on ProgrammingError `[ ]→[x]` for both endpoints. Added Frontend i18n section (15 checkboxes: 15 [x]). Status: partial (5 known gaps unchanged).
 - 2026-08-07: Fixed known gap — get_snapshot_detail now accepts explicit organisation_id/pipeline_id scoping (defense-in-depth on top of RLS) and all three callers (GET snapshot endpoint, revert-to-manual endpoint, MCP snapshot resource) pass their tenant context. Added 3 unit tests for the scoping behaviour.
+- 2026-08-17: improve-tests — added 4 edge-case unit tests to test_pipeline_node_conversion.py (25 total): (1) `graph_nodes_json is None` → clean "Node not found" 404, not 500, for both convert and revert; (2) `_save_graph` returns None (pipeline deleted between locked read and save) → 404 for both convert and revert. Mutation-checked: removing the `if pipeline_row.graph_nodes_json else []` guard or the `if saved is None: 404` guard flips these to 500, confirming the tests exercise the intended defensive paths. Flipped the corresponding Edge Cases checkboxes [ ]→[x].
 
 ## Known Gaps
 - Agent picker does not implement the PRD-specified library/org tab split or schema compatibility warning badge

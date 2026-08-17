@@ -6,8 +6,6 @@ Secrets are Fernet-encrypted at rest and never exposed in responses.
 
 from __future__ import annotations
 
-import contextlib
-import json
 import logging
 import uuid
 
@@ -21,6 +19,7 @@ from modulo.api.constants import MSG_DB_OPERATION_FAILED, MSG_UNEXPECTED_ERROR_N
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.notifier import endpoint_events_to_list
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
@@ -402,15 +401,7 @@ async def restore_endpoint(
 
 
 def _ep_to_response(ep: NotificationEndpoint) -> NotificationEndpointResponse:
-    raw_events: object = ep.events
-    events: list[str] = []
-    if isinstance(raw_events, list) and not any(not isinstance(event, str) for event in raw_events):
-        events = raw_events
-    if isinstance(raw_events, str):
-        with contextlib.suppress(json.JSONDecodeError, TypeError):
-            parsed = json.loads(raw_events)
-            if isinstance(parsed, list) and not any(not isinstance(event, str) for event in parsed):
-                events = parsed
+    events = endpoint_events_to_list(ep.events)
     return NotificationEndpointResponse(
         id=ep.id,
         url=ep.url,

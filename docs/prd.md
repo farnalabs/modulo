@@ -1724,7 +1724,16 @@ The boundary philosophy: the agent definition is the driver's manual; boundary c
 
 What guardrails do NOT cover (known failure classes, follow-on work): free-text PII embedded in otherwise-valid field values, content-based detection (semantic, not structural), and output-side effects (already specified in the §8.17 output-side gates above). The interior of a Modulo-hosted agent loop (a long-running `sandbox_agent`'s intermediate tool calls) IS now covered PREVENTIVELY by the agent-loop interior interception bridge (FAR-211, below); compensation of already-performed side effects remains the separate run-termination compensation work (FAR-213).
 
-Planned (not shipped): guardrail_summary telemetry on run detail, canary guardrails, and the guardrail management UI.
+Planned (not shipped): canary guardrails, and the guardrail management UI.
+
+#### Guardrail summary telemetry on run detail (shipped — FAR-223 PR B)
+
+The per-run `guardrail_summary` telemetry is **shipped** (FAR-223 PR B):
+
+- **`guardrail_summary` on run detail** — `GET /api/v1/runs/{run_id}` returns a `guardrail_summary` object (NULL when no guardrails were bound or on pre-migration runs) with buckets: `bound` (guardrail rows bound at run start, INCLUDING skipped pins), `evaluated`, `passed`, `violated`, `observed`, `errored`, `redacted`, `skipped`, `expected_skips`, `unexpected_skips`. The invariant `evaluated + errored + skipped == bound` holds by construction — `errored` absorbs every bound guardrail that produced no clean detection (mechanism errors, pre-pass blocks). `passed`/`violated` follow GUARDRAIL detection semantics (a regex guardrail's `passed=True` means the pattern MATCHED = a violation), not the raw `passed` column. The summary is a point-in-time snapshot persisted on `runs.guardrail_summary_json` at run creation.
+- **Unexpected-skip alert** — a skip NOT explained by a soft-deleted pinned guardrail (reason outside `soft_deleted`) pages `guardrail_unexpected_skip` (Notification Log + Error Forwarders), best-effort fail-open.
+- **Per-pattern fired-signature regression** — each clean detection emits a structured log `guardrails.fired_signature` with `{guardrail, pattern_hash, fired}`, keying how often each guardrail pattern fires per run/org over time.
+- **`eval_results` consumer filter contract** — guardrail results are stored in `eval_results` alongside normal eval results. EVERY consumer must either explicitly include or exclude them; all normal-eval surfaces (run evals reader, dashboard, admin eval dashboard, OKR, regression, executor suite check, quality report, prompt optimizer) EXCLUDE guardrail rows, since a regex guardrail's `passed=True` (matched) would corrupt a normal pass rate.
 
 #### Guardrail T1 remainder (shipped — FAR-223 PR A)
 
