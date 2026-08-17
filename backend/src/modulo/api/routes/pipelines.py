@@ -428,6 +428,33 @@ class PipelineGraphNode(BaseModel):
         description="Inline JSON Schema defining the node's output shape.",
     )
     description: str | None = Field(default=None, max_length=2000)
+    # FAR-306: opt-in stall detectors for sandbox_agent nodes. The heartbeat
+    # (connection liveness) is enabled by default; the log-growth / stdout-delta
+    # / filesystem detectors are OFF unless configured.
+    stall_timeout_seconds: int | None = Field(
+        default=None,
+        ge=60,
+        le=604800,
+        description="Stall window (seconds) before the idle watchdog treats the agent as stalled.",
+    )
+    enable_heartbeat: bool = Field(
+        default=True,
+        description="Enable the connection-liveness (heartbeat) stall channel.",
+    )
+    watch_log_path: str | None = Field(
+        default=None,
+        description="Log-growth detector: a path inside the sandbox whose growth counts as activity.",
+    )
+    stdout_percentage_delta: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="stdout-delta detector: fraction of new stdout that must differ to count as activity.",
+    )
+    watch_globs: list[str] = Field(
+        default_factory=list,
+        description="Filesystem detector: globs of sandbox paths whose change counts as activity.",
+    )
 
     @model_validator(mode="after")
     def validate_node_type(self) -> PipelineGraphNode:

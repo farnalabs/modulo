@@ -451,6 +451,40 @@ def test_pipeline_graph_node_delivery_sentinel_round_trip() -> None:
     assert legacy.delivery_sentinel is None
 
 
+def test_pipeline_graph_node_stall_detector_round_trip() -> None:
+    """FAR-306: PipelineGraphNode carries the opt-in stall-detector fields and
+    defaults them safely for legacy nodes."""
+    node = PipelineGraphNode.model_validate(
+        {
+            **_sandbox_node_json(),
+            "stall_timeout_seconds": 600,
+            "enable_heartbeat": False,
+            "watch_log_path": "/home/user/agent.log",
+            "stdout_percentage_delta": 0.2,
+            "watch_globs": ["*.log", "/home/user/out/*"],
+        }
+    )
+    assert node.stall_timeout_seconds == 600
+    assert node.enable_heartbeat is False
+    assert node.watch_log_path == "/home/user/agent.log"
+    assert node.stdout_percentage_delta == pytest.approx(0.2)
+    assert node.watch_globs == ["*.log", "/home/user/out/*"]
+
+    legacy = PipelineGraphNode.model_validate(_sandbox_node_json())
+    assert legacy.enable_heartbeat is True
+    assert legacy.watch_log_path is None
+    assert legacy.stdout_percentage_delta is None
+    assert not legacy.watch_globs
+    assert legacy.stall_timeout_seconds is None
+
+
+def test_pipeline_graph_node_stall_detector_bounds() -> None:
+    """FAR-306: stdout_percentage_delta is bounded to [0, 1] by Pydantic.
+    Pydantic v2 ValidationError is a ValueError subclass."""
+    with pytest.raises(ValueError):
+        PipelineGraphNode.model_validate({**_sandbox_node_json(), "stdout_percentage_delta": 1.5})
+
+
 def test_replace_pipeline_graph_round_trips_delivery_sentinel(client: TestClient) -> None:
     """FAR-228 contract round-trip: a sandbox node sent with delivery_sentinel
     is echoed back on the graph-update response (mocked CRUD)."""
