@@ -3374,6 +3374,69 @@ def _build_trigger_record(
     return trigger, None
 
 
+async def _create_trigger_impl(
+    pipeline_id: str,
+    trigger_type: str,
+    active: bool,
+    cron_expression: str | None,
+    config_json: dict[str, Any] | None,
+    max_concurrent_runs: int,
+    daily_spend_limit: float | None,
+) -> dict[str, Any]:
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    check_tool_scope(_ctx_role_val(), "create_trigger")
+
+    org_id = _ctx_org_id_val()
+    account_id = _ctx_user_id_val()
+    pid, input_err = _validate_trigger_create_inputs(pipeline_id, max_concurrent_runs, daily_spend_limit)
+    if input_err:
+        return input_err
+    assert pid is not None
+
+    async with _session(org_id) as s:
+        owner_team_id = await _pipeline_owner_team_id(s, pid)
+        if _team_scoped_key_mismatch(owner_team_id):
+            return _team_scope_error("pipeline", pipeline_id)
+        next_fire_at, ongoing_err = await _validate_ongoing_trigger_create(
+            s, pid, trigger_type, max_concurrent_runs, daily_spend_limit, config_json
+        )
+        if ongoing_err:
+            return ongoing_err
+        trigger, build_err = _build_trigger_record(
+            org_id,
+            pid,
+            trigger_type,
+            active,
+            max_concurrent_runs,
+            daily_spend_limit,
+            config_json,
+            account_id,
+            next_fire_at,
+            cron_expression,
+        )
+        if build_err:
+            return build_err
+        s.add(trigger)
+        await s.flush()
+        # FAR-251 — surface the created trigger's streak_status exactly as
+        # the REST create serializer does (computed inside the RLS
+        # transaction; for a fresh ongoing trigger this reads the anchored
+        # streak=0 / state=ok baseline).
+        created_streak_status = await _streak_status_for(s, trigger)
+
+    return {
+        "id": str(trigger.id),
+        "pipeline_id": str(trigger.pipeline_id),
+        "trigger_type": trigger.trigger_type,
+        "active": trigger.active,
+        "max_concurrent_runs": trigger.max_concurrent_runs,
+        "daily_spend_limit": float(trigger.daily_spend_limit) if trigger.daily_spend_limit is not None else None,
+        "cron_expression": trigger.cron_expression,
+        "streak_status": created_streak_status,
+    }
+
+
 @mcp.tool(description="Create a new trigger for a pipeline.")
 @_RETRY_DB
 async def create_trigger(
@@ -3386,58 +3449,15 @@ async def create_trigger(
     daily_spend_limit: float | None = None,
 ) -> dict[str, Any]:
     try:
-        if not await validate_current_auth():
-            return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "create_trigger")
-
-        org_id = _ctx_org_id_val()
-        account_id = _ctx_user_id_val()
-        pid, input_err = _validate_trigger_create_inputs(pipeline_id, max_concurrent_runs, daily_spend_limit)
-        if input_err:
-            return input_err
-        assert pid is not None
-
-        async with _session(org_id) as s:
-            owner_team_id = await _pipeline_owner_team_id(s, pid)
-            if _team_scoped_key_mismatch(owner_team_id):
-                return _team_scope_error("pipeline", pipeline_id)
-            next_fire_at, ongoing_err = await _validate_ongoing_trigger_create(
-                s, pid, trigger_type, max_concurrent_runs, daily_spend_limit, config_json
-            )
-            if ongoing_err:
-                return ongoing_err
-            trigger, build_err = _build_trigger_record(
-                org_id,
-                pid,
-                trigger_type,
-                active,
-                max_concurrent_runs,
-                daily_spend_limit,
-                config_json,
-                account_id,
-                next_fire_at,
-                cron_expression,
-            )
-            if build_err:
-                return build_err
-            s.add(trigger)
-            await s.flush()
-            # FAR-251 — surface the created trigger's streak_status exactly as
-            # the REST create serializer does (computed inside the RLS
-            # transaction; for a fresh ongoing trigger this reads the anchored
-            # streak=0 / state=ok baseline).
-            created_streak_status = await _streak_status_for(s, trigger)
-
-        return {
-            "id": str(trigger.id),
-            "pipeline_id": str(trigger.pipeline_id),
-            "trigger_type": trigger.trigger_type,
-            "active": trigger.active,
-            "max_concurrent_runs": trigger.max_concurrent_runs,
-            "daily_spend_limit": float(trigger.daily_spend_limit) if trigger.daily_spend_limit is not None else None,
-            "cron_expression": trigger.cron_expression,
-            "streak_status": created_streak_status,
-        }
+        return await _create_trigger_impl(
+            pipeline_id,
+            trigger_type,
+            active,
+            cron_expression,
+            config_json,
+            max_concurrent_runs,
+            daily_spend_limit,
+        )
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
