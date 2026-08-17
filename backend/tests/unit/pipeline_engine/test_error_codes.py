@@ -364,12 +364,3 @@ def test_script_codes_are_known_and_expand():
     assert "contract.schema" in expand_code_variants("script.schema_failed")
     assert "contract.no_output" in expand_code_variants("script.no_output")
     assert "script.failed" in expand_code_variants("ScriptFailedError")
-
-
-def test_script_egress_unavailable_is_known_and_expands():
-    """``script.egress_unavailable`` (FAR-296 Phase 3) is a known, non-retryable code."""
-    known = known_error_codes()
-    assert "script.egress_unavailable" in known
-    assert ERROR_CODE_REGISTRY["script.egress_unavailable"].error_class == "script"
-    assert ERROR_CODE_REGISTRY["script.egress_unavailable"].retryable is False
-    assert "script.egress_unavailable" in expand_code_variants("script.egress_unavailable")

@@ -109,15 +109,6 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity="critical",
         guidance="Script-mode sandbox session was lost after the script process started (post-claim, terminal).",
     ),
-    "script.egress_unavailable": ErrorCodeSpec(
-        error_class="script",
-        retryable=False,
-        alert_severity="critical",
-        guidance=(
-            "Script-mode sandbox could not enforce egress policy (capability absent "
-            "or probe failed); no script started."
-        ),
-    ),
     # --- harness (machinery) codes ---------------------------------------
     # ``harness.unknown`` is the fallback for unmapped legacy codes — any code
     # that has no alias and no registry entry resolves here so presentation

@@ -504,14 +504,10 @@ def _check_sandbox_output_schema(node: dict[str, Any], nid: str, result: Validat
         )
 
 
-_SANDBOX_EGRESS_POLICIES = frozenset({"default", "deny_all"})
-_SANDBOX_RESOURCE_LIMIT_KEYS = frozenset(
-    {"cpu_count", "memory_mb", "disk_mb", "max_processes", "max_fds", "max_sockets"}
-)
-
-
 def _check_sandbox_egress(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
     """Sandbox check 9: egress_policy must be None / "default" / "deny_all" (FAR-296)."""
+    from modulo.core.pipeline_engine.sandbox_mode import _SANDBOX_EGRESS_POLICIES
+
     egress_policy = node.get("egress_policy")
     if egress_policy is None:
         return
@@ -540,6 +536,8 @@ def _check_sandbox_resource_limits(node: dict[str, Any], nid: str, result: Valid
             node_id=nid,
         )
         return
+    from modulo.core.pipeline_engine.sandbox_mode import _SANDBOX_RESOURCE_LIMIT_KEYS
+
     unknown = set(resource_limits) - _SANDBOX_RESOURCE_LIMIT_KEYS
     if unknown:
         result.error(
