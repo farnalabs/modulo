@@ -28,6 +28,7 @@ from redis.asyncio import Redis
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from modulo.api.constants import MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import _get_engine
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -140,7 +141,7 @@ async def run_websocket(
         return
     except Exception:
         _log.exception("run_ws.db_check_failed")
-        await ws.send_json({"error": "internal_error", "detail": "An unexpected error occurred."})
+        await ws.send_json({"error": "internal_error", "detail": MSG_UNEXPECTED_ERROR})
         await ws.close(code=1011)
         return
 

@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
@@ -187,7 +188,7 @@ async def run_determination(
         raise
     except Exception:
         logger.exception("Unexpected error in run_determination")
-        raise HTTPException(status_code=500, detail="Internal server error") from None
+        raise HTTPException(status_code=500, detail=MSG_INTERNAL_SERVER_ERROR) from None
 
 
 @router.post("/draft", response_model=DraftResponse)
@@ -292,4 +293,4 @@ async def create_determination_draft(
         raise
     except Exception:
         logger.exception("Unexpected error in create_determination_draft")
-        raise HTTPException(status_code=500, detail="Internal server error") from None
+        raise HTTPException(status_code=500, detail=MSG_INTERNAL_SERVER_ERROR) from None
