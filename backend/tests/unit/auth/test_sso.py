@@ -824,6 +824,63 @@ class TestSamlProcessResponse:
             )
             mock_tok.assert_awaited_once()
 
+    def test_destination_mismatch_rejected(self) -> None:
+        from modulo.auth.sso import _validate_saml_response_destination
+
+        xml = self.SAML_RESPONSE_XML.replace(
+            "<samlp:Response",
+            '<samlp:Response Destination="https://evil.example.com/acs"',
+        )
+        encoded = base64.b64encode(xml.encode()).decode()
+
+        with pytest.raises(ValueError, match="Destination does not match"):
+            _validate_saml_response_destination(encoded, "https://app.example.com/api/v1/auth/saml/acs")
+
+    def test_destination_match_accepted(self) -> None:
+        from modulo.auth.sso import _validate_saml_response_destination
+
+        acs = "https://app.example.com/api/v1/auth/saml/acs"
+        xml = self.SAML_RESPONSE_XML.replace(
+            "<samlp:Response",
+            f'<samlp:Response Destination="{acs}"',
+        )
+        encoded = base64.b64encode(xml.encode()).decode()
+
+        _validate_saml_response_destination(encoded, acs)
+
+    def test_destination_absent_accepted(self) -> None:
+        from modulo.auth.sso import _validate_saml_response_destination
+
+        encoded = base64.b64encode(self.SAML_RESPONSE_XML.encode()).decode()
+        _validate_saml_response_destination(encoded, "https://app.example.com/api/v1/auth/saml/acs")
+
+    def test_destination_garbled_response_skipped(self) -> None:
+        from modulo.auth.sso import _validate_saml_response_destination
+
+        _validate_saml_response_destination("!!not-base64!!", "https://app.example.com/acs")
+
+    async def test_saml_process_response_rejects_destination_mismatch(self) -> None:
+        from modulo.auth.sso import saml_process_response
+
+        settings = _override(
+            modulo_license_key="lic-123",
+            modulo_saml_enabled=True,
+            modulo_saml_idp_metadata_xml=self.SAMPLE_IDP_METADATA,
+            modulo_public_url="https://app.example.com",
+        )
+        session = AsyncMock(spec=AsyncSession)
+
+        xml = self.SAML_RESPONSE_XML.replace(
+            "<samlp:Response",
+            '<samlp:Response Destination="https://evil.example.com/acs"',
+        )
+        encoded = base64.b64encode(xml.encode()).decode()
+
+        with patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch:
+            mock_fetch.return_value = self.SAMPLE_IDP_METADATA
+            with pytest.raises(ValueError, match="Destination does not match"):
+                await saml_process_response(encoded, settings, session)
+
 
 class TestSamlFetchIdpMetadata:
     async def test_uses_inline_xml(self) -> None:
