@@ -6,7 +6,8 @@ code:
   - backend/src/modulo/api/routes/health.py
 unit-tests:
   - backend/tests/unit/api/test_health.py
-bdd: []
+bdd:
+  - backend/tests/bdd/features/operations/health_checks.feature
 depends-on: []
 status: covered
 ---
@@ -31,7 +32,7 @@ Liveness and readiness endpoints for deployment health monitoring. Liveness (`/h
 ## Known Gaps
 
 - **No PRD section reference.** PRD section 10.5 is "Opt-In Telemetry" — not related to health checks. The health endpoints are an internal infrastructure concern spanning deployment, monitoring, and operations docs (PRD §§5–6). No single PRD section covers liveness/readiness.
-- **No BDD feature files.** Health endpoints use FastAPI `TestClient` unit tests (`backend/tests/unit/api/test_health.py`) with patched check functions. No pytest-bdd scenarios exist.
+- [x] **RESOLVED (2026-08-17) — No BDD feature files**: Added `backend/tests/bdd/features/operations/health_checks.feature` with step definitions in `backend/tests/bdd/steps/test_health_checks.py`. Covers liveness (`/healthz`), readiness aggregation (ok/degraded/unavailable), per-check status exposure, and the FAR-199 dispatcher_reconcile two-tier gating (unavailable→503, degraded stays advisory) using the same patched-`_check_*` technique as the FastAPI unit tests.
 - [x] **RESOLVED (2026-08-15) — Integration with deployment orchestrator**: Verified. `fly.toml` wires `GET /healthz/ready` as an `[[http_service.checks]]` probe consumed by Fly.io's bluegreen deployment strategy (any `unavailable` check → 503 → no cutover, per the health.py aggregation). The deployment metadata endpoint (`/api/v1/deployment`) remains a separate read-only surface; no orchestrator push channel is needed for the Fly integration.
 
 ## QA History
