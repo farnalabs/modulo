@@ -61,3 +61,32 @@ Feature: Guardrail Detection Engine
     And the registered capability "github:write" is confirmed absent
     When conformance state is derived
     Then the conformance state is "absent"
+
+  # --- Acceptance residual (FAR-223 item 13) through the real create_run seam ---
+
+  Scenario: A block guardrail fires at run creation and the run never dispatches a node
+    Given a pipeline with a bound block guardrail "no-secrets" detecting "SECRET_[A-Z0-9]{8}" on field "body"
+    When a run is created with payload {"body": "leak SECRET_ABC12345"}
+    Then the run is terminal eval_failed with error_code eval_blocked
+    And no node executed (no output, no telemetry, no claim)
+
+  Scenario: The kill-switch downgrades a block guardrail to observe (shadow-only)
+    Given a pipeline with a bound block guardrail "no-secrets" detecting "SECRET_[A-Z0-9]{8}" on field "body"
+    And the organisation kill-switch is ON
+    When a run is created with payload {"body": "leak SECRET_ABC12345"}
+    Then the run is created pending and NOT blocked
+    And the run records an observe-mode violation
+
+  Scenario: A guardrail-blocked run is remediated via the override and re-runs clean
+    Given a pipeline with a bound block guardrail "no-secrets" detecting "SECRET_[A-Z0-9]{8}" on field "body"
+    When a run is created with payload {"body": "leak SECRET_ABC12345"}
+    And the operator overrides the blocked run with a clean payload {"body": "clean text"}
+    Then the run is flipped to pending with is_replay True
+    And only one run row exists for the override cycle
+
+  Scenario: The override re-block loop refuses a still-violating input and keeps the run terminal
+    Given a pipeline with a bound block guardrail "no-secrets" detecting "SECRET_[A-Z0-9]{8}" on field "body"
+    When a run is created with payload {"body": "leak SECRET_ABC12345"}
+    And the operator overrides the blocked run with a still-violating payload {"body": "still SECRET_XYZ99999"}
+    Then the override is rejected
+    And the run is terminal eval_failed with error_code eval_blocked
