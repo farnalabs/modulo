@@ -362,7 +362,7 @@ async def _seed_pipeline_snapshot_run(
                 "schema_pins_json, prompt_pins_json, model_backend_pins_json, "
                 "run_context_defaults, config_json) "
                 "VALUES (:id, :pid, :oid, 1, '{}'::json, '[]'::json, "
-                "'[]'::json, '[]'::json, :mb_pins::json, '{}'::json, '{}'::json)",
+                "'[]'::json, '[]'::json, CAST(:mb_pins AS json), '{}'::json, '{}'::json)",
             ),
             {
                 "id": str(snapshot_id),
