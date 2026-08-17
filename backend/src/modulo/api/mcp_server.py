@@ -2287,6 +2287,40 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
         return _tool_error("Failed to list pending HITL gates")
 
 
+_TEAM_SCOPE_ERROR = object()
+
+
+def _parse_hitl_action(
+    run_id: str,
+    action: str,
+    claim_token: str | None,
+    output: dict[str, Any] | None,
+) -> tuple[uuid.UUID | None, dict[str, Any] | None]:
+    """Parse and validate the HITL action request.
+
+    Returns ``(rid, None)`` on success, or ``(None, error_dict)`` on the first
+    validation failure.
+    """
+    try:
+        rid = uuid.UUID(run_id)
+    except ValueError:
+        return None, {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
+
+    if action not in ("claim", "approve", "reject", "deliver_manual"):
+        return None, {"error": "invalid_action", "detail": "action must be claim, approve, reject, or deliver_manual"}
+
+    if action == "approve" and claim_token is None:
+        return None, {"error": "claim_token_required", "detail": "approve requires claim_token"}
+    if action == "reject" and claim_token is None:
+        return None, {"error": "claim_token_required", "detail": "reject requires claim_token"}
+    if action == "deliver_manual" and claim_token is None:
+        return None, {"error": "claim_token_required", "detail": "deliver_manual requires claim_token"}
+    if action == "deliver_manual" and output is None:
+        return None, {"error": "output_required", "detail": "deliver_manual requires output dict"}
+
+    return rid, None
+
+
 @mcp.tool(
     description=(
         "Unified HITL gate action: claim, approve, reject, or deliver_manual. "
@@ -2312,28 +2346,17 @@ async def review_hitl(
 
     org_id = _ctx_org_id_val()
     key_id = _ctx_key_id.get(uuid.UUID("00000000-0000-0000-0000-000000000002"))
-    try:
-        rid = uuid.UUID(run_id)
-    except ValueError:
-        return {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
     mgr = HITLManager()
 
-    if action not in ("claim", "approve", "reject", "deliver_manual"):
-        return {"error": "invalid_action", "detail": "action must be claim, approve, reject, or deliver_manual"}
+    rid, parse_err = _parse_hitl_action(run_id, action, claim_token, output)
+    if parse_err:
+        return parse_err
+    assert rid is not None
 
     try:
         check_tool_scope(_ctx_role_val(), "review_hitl", action=action)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
-
-    if action == "approve" and claim_token is None:
-        return {"error": "claim_token_required", "detail": "approve requires claim_token"}
-    if action == "reject" and claim_token is None:
-        return {"error": "claim_token_required", "detail": "reject requires claim_token"}
-    if action == "deliver_manual" and claim_token is None:
-        return {"error": "claim_token_required", "detail": "deliver_manual requires claim_token"}
-    if action == "deliver_manual" and output is None:
-        return {"error": "output_required", "detail": "deliver_manual requires output dict"}
 
     try:
         async with _session(org_id) as s:
