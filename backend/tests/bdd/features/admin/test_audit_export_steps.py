@@ -14,27 +14,22 @@ def _bdd_auth_admin() -> None:
 
 
 @given("I am authenticated as a non-admin user")
-def _bdd_auth_non_admin(request) -> None:
-    """Flag scenario for a non-admin (viewer) client."""
-    request.node._non_admin = True
+def _bdd_auth_non_admin(request, viewer_client) -> None:
+    """Stash the viewer client for _active_client."""
+    request.node._client = viewer_client
 
 
 @given("I am not authenticated")
-def _bdd_not_authenticated(request) -> None:
-    """Flag scenario for unauth client."""
-    request.node._unauth = True
+def _bdd_not_authenticated(request, unauth_client) -> None:
+    """Stash the unauth client for _active_client."""
+    request.node._client = unauth_client
 
 
 @when("I request GET /api/v1/admin/audit/export")
-def _bdd_get_export(client: TestClient, unauth_client: TestClient, viewer_client: TestClient, request) -> None:
-    if getattr(request.node, "_unauth", False):
-        resp = unauth_client.get("/api/v1/admin/audit/export")
-        request.node._resp = resp
-        return
-    if getattr(request.node, "_non_admin", False):
-        resp = viewer_client.get("/api/v1/admin/audit/export")
-        request.node._resp = resp
-        return
+def _bdd_get_export(request) -> None:
+    from tests.bdd.conftest import _active_client
+
+    active = _active_client(request)
     with (
         patch("modulo.api.routes.audit.export_chain") as mock_export,
         patch("modulo.api.routes.audit.set_rls_org"),
@@ -45,7 +40,7 @@ def _bdd_get_export(client: TestClient, unauth_client: TestClient, viewer_client
             "page": 1,
             "page_size": 100,
         }
-        resp = client.get("/api/v1/admin/audit/export")
+        resp = active.get("/api/v1/admin/audit/export")
         request.node._resp = resp
         request.node._mock_export = mock_export
 
