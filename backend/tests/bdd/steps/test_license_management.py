@@ -24,6 +24,10 @@ _TEST_KP = generate_keypair()
 _TEST_PRIV = _TEST_KP["private_key"]
 _TEST_PUB = _TEST_KP["public_key"]
 
+# Set the test public key up front so the @given steps (which call parse_and_verify
+# before any client/When step invokes _setup_client) can verify signed Team license keys.
+set_public_key(_TEST_PUB)
+
 
 def _sign_license_payload(payload: dict, private_key: str = _TEST_PRIV) -> str:
     sig_hex = sign_primitive(payload, private_key)
