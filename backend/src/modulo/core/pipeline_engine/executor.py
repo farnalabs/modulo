@@ -294,14 +294,22 @@ def _timeout_event_matches(event_set: set[Any], code: str, mapped: str) -> bool:
 # retried — re-dispatching could double-execute a side-effecting script. These
 # MUST be excluded from EVERY retry path (run-level ``_retry_after_policy`` AND
 # node-level A-series fenced reset).
+#
+# This set holds ONLY the script-mode CANONICAL codes. The shared contract codes
+# ``contract.schema`` / ``contract.no_output`` (canonicalized from the raw
+# ``script.schema_failed`` / ``script.no_output`` spellings) are DELIBERATELY NOT
+# listed here: they are also produced by NON-script paths (LLM-mode agent output
+# schema validation, manual-node resume, any node's output rejection), and
+# ``_failure_event_matches`` applies this set unconditionally — blacklisting the
+# shared targets would silently disable ``failure``-policy retries for ALL node
+# types. Script-mode coverage is preserved via the raw spellings in
+# ``_NEVER_RETRYABLE_SCRIPT_RAW`` below.
 _NEVER_RETRYABLE_SCRIPT_CODES: frozenset[str] = frozenset(
     {
         "script.failed",
         "script.invalid_output",
         "script.side_effect_unknown",
         "script.session_lost",
-        "contract.schema",  # script.schema_failed canonicalizes here
-        "contract.no_output",  # script.no_output canonicalizes here
     }
 )
 _NEVER_RETRYABLE_SCRIPT_RAW: frozenset[str] = frozenset(
@@ -309,7 +317,6 @@ _NEVER_RETRYABLE_SCRIPT_RAW: frozenset[str] = frozenset(
         "ScriptFailedError",
         "ScriptInvalidOutputError",
         "ScriptSideEffectUnknownError",
-        "ScriptSessionLostError",
         "script.schema_failed",
         "script.no_output",
     }

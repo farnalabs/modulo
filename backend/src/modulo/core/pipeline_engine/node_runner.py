@@ -2301,7 +2301,7 @@ def make_sandbox_agent_fn(
 
             async with session_factory() as session, session.begin():
                 await set_rls_org(session, org_uuid)
-                await session.execute(
+                result = await session.execute(
                     _sql_text(
                         "UPDATE runs SET sandbox_dispatch_state=:marker "
                         "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running'"
@@ -2313,6 +2313,14 @@ def make_sandbox_agent_fn(
                         "marker": json.dumps({"state": "script_executing", "attempt_key": attempt_key or ""}),
                     },
                 )
+                if result.rowcount == 0:
+                    # The UPDATE was fenced on claim_token + status but matched
+                    # zero rows — the claim was superseded (token rotated by a
+                    # successor) or the run is no longer running. The lease was
+                    # NEVER acquired, so a subsequent fault must NOT be treated as
+                    # post-claim/terminal. Fail as a RETRYABLE SupersededNodeError
+                    # so the caller never marks the lease claimed.
+                    raise SupersededNodeError("script lease denied — run superseded or not running")
 
         async def _clear_dispatch_marker() -> None:
             """Fenced marker clear — only when the claim token still matches.
@@ -2697,6 +2705,12 @@ def make_sandbox_agent_fn(
                     },
                 )
                 cmd_result = None
+            except SupersededNodeError:
+                # A superseded script lease (rowcount 0 in _store_script_lease)
+                # must propagate as a RETRYABLE SupersededNodeError — never be
+                # swallowed into a post-claim script failure. Raising here lets
+                # the outer handler re-raise it to the executor's retry path.
+                raise
             except Exception as _cee:
                 _log.exception(
                     "sandbox_agent.command_failed",

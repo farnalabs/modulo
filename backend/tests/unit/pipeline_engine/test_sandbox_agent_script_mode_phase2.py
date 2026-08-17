@@ -28,6 +28,7 @@ from modulo.core.pipeline_engine.executor import (
 )
 from modulo.core.pipeline_engine.node_runner import (
     ScriptSideEffectUnknownError,
+    SupersededNodeError,
     make_sandbox_agent_fn,
 )
 
@@ -143,6 +144,42 @@ class _FakeSession:
         return MagicMock(fetchone=MagicMock(return_value=(1,)))
 
 
+class _FakeSessionZeroRowcount:
+    """Fake session whose UPDATEs match ZERO rows (rowcount == 0).
+
+    Models the supersede race: the fenced lease UPDATE (claim_token + status)
+    matches no rows because a successor rotated the claim token. The dispatch
+    marker SELECT/UPDATE still return a truthy ``fetchone()`` so the marker
+    acquisition path succeeds, but ``rowcount == 0`` must make
+    ``_store_script_lease`` raise SupersededNodeError.
+    """
+
+    def __init__(self) -> None:
+        self.executions: list[tuple[str, dict]] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+    def begin(self) -> _Begin:
+        return _Begin()
+
+    def in_transaction(self) -> bool:
+        return True
+
+    def get_bind(self) -> _FakeBind:
+        return _FakeBind()
+
+    async def execute(self, statement: Any, params: dict | None = None) -> Any:
+        sql = str(statement)
+        self.executions.append((sql, params or {}))
+        result = MagicMock(fetchone=MagicMock(return_value=(1,)))
+        result.rowcount = 0
+        return result
+
+
 class _FakeSessionFactory:
     def __init__(self, session: _FakeSession):
         self.session = session
@@ -186,6 +223,31 @@ async def test_script_mode_stores_fencing_lease_before_process_start():
         await fn(state)
 
     assert _any_script_executing_marker(session)
+
+
+async def test_script_mode_lease_denied_on_zero_rowcount_raises_superseded():
+    """A zero-rowcount lease UPDATE (superseded / not running) raises
+    SupersededNodeError instead of marking the lease claimed.
+
+    If ``_store_script_lease`` did not check rowcount, the caller would still set
+    ``_script_lease_claimed = True`` and a subsequent fault would be classified as
+    TERMINAL (never retryable) even though the lease was never acquired. The
+    supersede race must fail as a RETRYABLE SupersededNodeError.
+    """
+    session = _FakeSessionZeroRowcount()
+    factory = _FakeSessionFactory(session)
+
+    node_def = _script_node_def()
+    state = _run_state()
+    state["_claim_lease"] = "claim-token-1"
+    sandbox = _script_sandbox_mock()
+    fn = make_sandbox_agent_fn(node_def, session_factory=factory)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SupersededNodeError),
+    ):
+        await fn(state)
 
 
 async def test_llm_mode_takes_no_fencing_lease():
@@ -254,11 +316,24 @@ def test_failure_event_matches_excludes_script_never_retryable_codes():
         ("ScriptFailedError", "script.failed"),
         ("ScriptInvalidOutputError", "script.invalid_output"),
         ("ScriptSideEffectUnknownError", "script.side_effect_unknown"),
-        ("ScriptSessionLostError", "script.session_lost"),
         ("script.schema_failed", "contract.schema"),
         ("script.no_output", "contract.no_output"),
     ]:
         assert _failure_event_matches({"failure"}, "failed", code, mapped, None) is False, (code, mapped)
+
+
+def test_failure_event_matches_still_retries_llm_mode_schema_validation():
+    """A non-script schema-validation failure (canonical contract.schema) must
+    STILL retry on a ``failure`` event.
+
+    ``contract.schema`` is a SHARED canonical code produced by LLM-mode agent
+    output schema validation (and manual-node resume / any node's output
+    rejection), not just script mode. It must NOT be in
+    ``_NEVER_RETRYABLE_SCRIPT_CODES`` — otherwise every LLM-mode schema failure
+    would silently lose ``failure``-policy retries. Script mode stays covered by
+    the raw ``script.schema_failed`` spelling in ``_NEVER_RETRYABLE_SCRIPT_RAW``.
+    """
+    assert _failure_event_matches({"failure"}, "failed", "schema_validation_failure", "contract.schema", None) is True
 
 
 def test_failure_event_matches_still_retries_llm_mode_and_preclaim():

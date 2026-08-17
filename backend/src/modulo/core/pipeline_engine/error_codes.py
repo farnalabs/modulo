@@ -365,7 +365,6 @@ LEGACY_ALIASES: dict[str, str] = {
     "ScriptFailedError": "script.failed",
     "ScriptInvalidOutputError": "script.invalid_output",
     "ScriptSideEffectUnknownError": "script.side_effect_unknown",
-    "ScriptSessionLostError": "script.session_lost",
     # Harness machinery (§3.2). ``TypeError``/``OperationalError`` are the
     # raw exception class names that executor's generic catch publishes.
     "OperationalError": "harness.db.connection_lost",

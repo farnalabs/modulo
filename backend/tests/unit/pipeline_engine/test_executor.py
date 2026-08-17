@@ -2446,7 +2446,6 @@ def test_retry_after_policy_never_retries_script_mode_terminal_codes():
         "ScriptFailedError",
         "ScriptInvalidOutputError",
         "ScriptSideEffectUnknownError",
-        "ScriptSessionLostError",
         "script.schema_failed",
         "script.no_output",
     ):

@@ -346,12 +346,10 @@ def test_script_exception_class_names_map_to_script_codes():
     assert map_legacy_code("ScriptFailedError") == "script.failed"
     assert map_legacy_code("ScriptInvalidOutputError") == "script.invalid_output"
     assert map_legacy_code("ScriptSideEffectUnknownError") == "script.side_effect_unknown"
-    assert map_legacy_code("ScriptSessionLostError") == "script.session_lost"
     for name in (
         "ScriptFailedError",
         "ScriptInvalidOutputError",
         "ScriptSideEffectUnknownError",
-        "ScriptSessionLostError",
     ):
         assert is_retryable(name) is False, name
 
