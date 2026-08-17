@@ -1020,6 +1020,63 @@ async def _dispatch_unauth_paths(
     return None
 
 
+async def _finalize_oauth_principal(
+    request: Request,
+    token: str,
+    claims: Any,
+    settings: Any,
+    call_next: Callable[[Request], Awaitable[Response]],
+) -> Response:
+    """Resolve the OAuth principal role, set request context, and continue.
+
+    Fail-closed: a DB read failure or missing/deactivated membership denies
+    the request (ADR 017 — the scope grant is clamped to the account's live
+    org role so a demoted operator loses scope on the next call).
+    """
+    # Resolve role from scopes (highest scope wins) — the scope grant is then
+    # CLAMPED to the account's LIVE org role so a demoted operator loses scope
+    # on the very next call. Fail-closed: a DB read failure or
+    # missing/deactivated membership denies.
+    scope_role = scopes_required_role(claims.scopes)
+    try:
+        async with _session(claims.organisation_id) as s:
+            live_role = await resolve_role_from_membership(
+                s,
+                str(claims.account_id),
+                str(claims.organisation_id),
+            )
+    except (SQLAlchemyError, OperationalError, TimeoutError):
+        _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
+        return Response(
+            _JSON_AUTH_DB_UNAVAILABLE,
+            status_code=503,
+            media_type=_CT_APPLICATION_JSON,
+        )
+    if live_role is None:
+        return Response(
+            _JSON_FORBIDDEN_ORG_MEMBERSHIP,
+            status_code=403,
+            media_type=_CT_APPLICATION_JSON,
+        )
+    role = clamp_oauth_role(scope_role, live_role)
+
+    _ctx_org_id.set(claims.organisation_id)
+    _ctx_role.set(role)
+    _ctx_key_id.set(uuid.UUID(int=0))  # sentinel for OAuth clients
+    _ctx_user_id.set(claims.account_id)
+    _ctx_auth_token.set(token)
+    _ctx_auth_type.set("oauth")
+    _ctx_team_id.set(None)  # user tokens carry no team boundary
+    request.scope["auth_principal"] = {
+        "type": "user",
+        "org_id": str(claims.organisation_id),
+        "user_id": str(claims.account_id),
+    }
+
+    await _set_authz_enforce(claims.organisation_id)
+    return await call_next(request)
+
+
 # ---------------------------------------------------------------------------
 # Auth middleware
 # ---------------------------------------------------------------------------
@@ -1066,48 +1123,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
         if family_err is not None:
             return family_err
 
-        # Resolve role from scopes (highest scope wins) — ADR 017: the scope
-        # grant is then CLAMPED to the account's LIVE org role so a demoted
-        # operator loses scope on the very next call. Fail-closed: a DB read
-        # failure or missing/deactivated membership denies.
-        scope_role = scopes_required_role(claims.scopes)
-        try:
-            async with _session(claims.organisation_id) as s:
-                live_role = await resolve_role_from_membership(
-                    s,
-                    str(claims.account_id),
-                    str(claims.organisation_id),
-                )
-        except (SQLAlchemyError, OperationalError, TimeoutError):
-            _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
-            return Response(
-                _JSON_AUTH_DB_UNAVAILABLE,
-                status_code=503,
-                media_type=_CT_APPLICATION_JSON,
-            )
-        if live_role is None:
-            return Response(
-                _JSON_FORBIDDEN_ORG_MEMBERSHIP,
-                status_code=403,
-                media_type=_CT_APPLICATION_JSON,
-            )
-        role = clamp_oauth_role(scope_role, live_role)
-
-        _ctx_org_id.set(claims.organisation_id)
-        _ctx_role.set(role)
-        _ctx_key_id.set(uuid.UUID(int=0))  # sentinel for OAuth clients
-        _ctx_user_id.set(claims.account_id)
-        _ctx_auth_token.set(token)
-        _ctx_auth_type.set("oauth")
-        _ctx_team_id.set(None)  # user tokens carry no team boundary
-        request.scope["auth_principal"] = {
-            "type": "user",
-            "org_id": str(claims.organisation_id),
-            "user_id": str(claims.account_id),
-        }
-
-        await _set_authz_enforce(claims.organisation_id)
-        return await call_next(request)
+        return await _finalize_oauth_principal(request, token, claims, settings, call_next)
 
 
 # ---------------------------------------------------------------------------
@@ -1485,6 +1501,59 @@ def _parse_analytics_concurrency_params(
     return params, None
 
 
+async def _query_analytics_impl(
+    dimension: str | None,
+    group_by: str,
+    auto_granularity: bool,
+    trigger_type: str | None,
+    status: str | None,
+    pipeline_id: list[str] | None,
+    error_code: str | None,
+    folder_id: str | None,
+    date_from: str | None,
+    date_to: str | None,
+    limit: int,
+) -> dict[str, Any]:
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    check_tool_scope(_ctx_role_val(), "query_analytics")
+
+    org_id = _ctx_org_id_val()
+    settings = get_settings()
+
+    feat_err = await _require_analytics_feature(org_id, settings)
+    if feat_err:
+        return feat_err
+
+    params, p_err = _parse_analytics_params(
+        dimension,
+        group_by,
+        auto_granularity,
+        trigger_type,
+        status,
+        pipeline_id,
+        folder_id,
+        error_code,
+        date_from,
+        date_to,
+        limit,
+    )
+    if p_err:
+        return p_err
+    assert params is not None
+
+    result = await run_analytics_query(
+        org_id=org_id,
+        params=params,
+        factory=_get_session_factory(),
+        settings=settings,
+        account_id=_ctx_user_id_val(),
+        org_role=_ctx_role_val() or "",
+    )
+    result["deep_link"] = _analytics_deep_link(result, params)
+    return result
+
+
 @mcp.tool(
     name="query_analytics",
     description=(
@@ -1513,44 +1582,19 @@ async def query_analytics(
     limit: int = 1000,
 ) -> dict[str, Any]:
     try:
-        if not await validate_current_auth():
-            return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "query_analytics")
-
-        org_id = _ctx_org_id_val()
-        settings = get_settings()
-
-        feat_err = await _require_analytics_feature(org_id, settings)
-        if feat_err:
-            return feat_err
-
-        params, p_err = _parse_analytics_params(
+        return await _query_analytics_impl(
             dimension,
             group_by,
             auto_granularity,
             trigger_type,
             status,
             pipeline_id,
-            folder_id,
             error_code,
+            folder_id,
             date_from,
             date_to,
             limit,
         )
-        if p_err:
-            return p_err
-        assert params is not None
-
-        result = await run_analytics_query(
-            org_id=org_id,
-            params=params,
-            factory=_get_session_factory(),
-            settings=settings,
-            account_id=_ctx_user_id_val(),
-            org_role=_ctx_role_val() or "",
-        )
-        result["deep_link"] = _analytics_deep_link(result, params)
-        return result
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except AnalyticsRateLimitedError:
@@ -1569,6 +1613,53 @@ async def query_analytics(
     except Exception:
         _log.exception("query_analytics failed")
         return _tool_error("Failed to query analytics")
+
+
+async def _query_analytics_concurrency_impl(
+    group_by: str,
+    auto_granularity: bool,
+    trigger_type: str | None,
+    status: str | None,
+    pipeline_id: list[str] | None,
+    folder_id: str | None,
+    date_from: str | None,
+    date_to: str | None,
+    limit: int,
+) -> dict[str, Any]:
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    check_tool_scope(_ctx_role_val(), "query_analytics_concurrency")
+
+    org_id = _ctx_org_id_val()
+    settings = get_settings()
+
+    feat_err = await _require_analytics_feature(org_id, settings)
+    if feat_err:
+        return feat_err
+
+    params, p_err = _parse_analytics_concurrency_params(
+        group_by,
+        auto_granularity,
+        trigger_type,
+        status,
+        pipeline_id,
+        folder_id,
+        date_from,
+        date_to,
+        limit,
+    )
+    if p_err:
+        return p_err
+    assert params is not None
+
+    return await run_concurrency_query(
+        org_id=org_id,
+        params=params,
+        factory=_get_session_factory(),
+        settings=settings,
+        account_id=_ctx_user_id_val(),
+        org_role=_ctx_role_val() or "",
+    )
 
 
 @mcp.tool(
@@ -1598,18 +1689,7 @@ async def query_analytics_concurrency(
     limit: int = 1000,
 ) -> dict[str, Any]:
     try:
-        if not await validate_current_auth():
-            return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "query_analytics_concurrency")
-
-        org_id = _ctx_org_id_val()
-        settings = get_settings()
-
-        feat_err = await _require_analytics_feature(org_id, settings)
-        if feat_err:
-            return feat_err
-
-        params, p_err = _parse_analytics_concurrency_params(
+        return await _query_analytics_concurrency_impl(
             group_by,
             auto_granularity,
             trigger_type,
@@ -1619,18 +1699,6 @@ async def query_analytics_concurrency(
             date_from,
             date_to,
             limit,
-        )
-        if p_err:
-            return p_err
-        assert params is not None
-
-        return await run_concurrency_query(
-            org_id=org_id,
-            params=params,
-            factory=_get_session_factory(),
-            settings=settings,
-            account_id=_ctx_user_id_val(),
-            org_role=_ctx_role_val() or "",
         )
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
@@ -1753,6 +1821,116 @@ async def _append_mcp_hitl_denial_audit(
         _log.exception("mcp.hitl_denial_audit_failed", extra={"org_id": str(org_id)})
 
 
+async def _update_pipeline_graph_impl(
+    pipeline_id: str,
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    check_tool_scope(_ctx_role_val(), "update_pipeline_graph")
+    from modulo.core.team_visibility import (
+        CONNECTOR_TEAM_MISMATCH,
+        connector_team_mismatch_detail,
+        extract_connector_bindings,
+        find_connector_team_mismatches,
+    )
+    from modulo.db.crud.pipeline import replace_pipeline_graph
+
+    org_id = _ctx_org_id_val()
+    try:
+        pid = uuid.UUID(pipeline_id)
+    except ValueError:
+        return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
+
+    # ADR 017 service-layer backstop + hitl-gate-removal-guard-plan.md v19:
+    # the MCP surface is structurally excluded from gate weakening. The
+    # guarded function hardcodes is_privileged=False when
+    # caller_type=="mcp" (no DB query); the literal below is enforced by a
+    # .semgrep/ rule (mcp call site must pass the literal, not a variable).
+    from modulo.api.routes.pipelines import PipelineGraphUpdate, _is_privileged
+
+    is_privileged = _is_privileged(_ctx_role_val())
+
+    # Validate graph structure using Pydantic models (same as REST endpoint)
+    from pydantic import ValidationError as _PydanticValidationError
+
+    try:
+        PipelineGraphUpdate.model_validate({"nodes": nodes, "edges": edges})
+    except _PydanticValidationError as exc:
+        return {
+            "error": "validation_failed",
+            "detail": f"Graph validation failed: {exc.errors(include_url=False)}",
+        }
+
+    # FAR-296 mode-aware sandbox_agent gate — the SAME shared helper the
+    # Pydantic model, node runner, and GraphValidator use, applied to the
+    # raw node dicts so this gate agrees with save-time and run-time
+    # validation even if the Pydantic surface is bypassed.
+    sandbox_err = _validate_sandbox_nodes(nodes)
+    if sandbox_err:
+        return sandbox_err
+
+    try:
+        async with _session(org_id) as s:
+            from modulo.db.crud.pipeline import get_pipeline
+
+            pipeline = await get_pipeline(s, pid)
+            if pipeline is None:
+                return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+            if _team_scoped_key_mismatch(pipeline.owner_team_id):
+                return _team_scope_error("pipeline", pipeline_id)
+            mismatches = await find_connector_team_mismatches(
+                s,
+                org_id=org_id,
+                pipeline_owner_team_id=pipeline.owner_team_id,
+                connector_bindings=extract_connector_bindings(nodes),
+            )
+            if mismatches:
+                return {
+                    "error": CONNECTOR_TEAM_MISMATCH,
+                    "detail": connector_team_mismatch_detail(mismatches),
+                }
+            result = await replace_pipeline_graph(
+                s,
+                pipeline_id=pid,
+                org_id=org_id,
+                nodes=nodes,
+                edges=edges,
+                is_privileged=is_privileged,
+                caller_type="mcp",
+            )
+            if result is None:
+                return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+            updated_nodes, updated_edges = result
+    except HitlGateWeakeningDenied as exc:
+        await _append_mcp_hitl_denial_audit(org_id, pid, exc)
+        return {
+            "error": "hitl_gate_removal_denied",
+            "detail": str(exc),
+            "reason_code": exc.reason_code,
+            "affected_edges": [
+                {"source_node_id": k[0], "target_node_id": k[1], "edge_type": k[2]} for k in exc.correlation_keys
+            ],
+        }
+
+    return {
+        "pipeline_id": pipeline_id,
+        "nodes": updated_nodes,
+        "edges": [
+            {
+                "id": str(e.id),
+                "source_node_id": str(e.source_node_id),
+                "target_node_id": str(e.target_node_id),
+                "edge_type": e.edge_type,
+            }
+            for e in updated_edges
+        ],
+        "node_count": len(updated_nodes),
+        "edge_count": len(updated_edges),
+    }
+
+
 @mcp.tool(
     description="Set or replace the graph (nodes + edges) of an existing pipeline. "
     "Pass nodes as a list of dicts with id, node_type, agent_id, position (x, y), "
@@ -1766,109 +1944,7 @@ async def update_pipeline_graph(
     edges: list[dict[str, Any]],
 ) -> dict[str, Any]:
     try:
-        if not await validate_current_auth():
-            return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "update_pipeline_graph")
-        from modulo.core.team_visibility import (
-            CONNECTOR_TEAM_MISMATCH,
-            connector_team_mismatch_detail,
-            extract_connector_bindings,
-            find_connector_team_mismatches,
-        )
-        from modulo.db.crud.pipeline import replace_pipeline_graph
-
-        org_id = _ctx_org_id_val()
-        try:
-            pid = uuid.UUID(pipeline_id)
-        except ValueError:
-            return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
-
-        # ADR 017 service-layer backstop + hitl-gate-removal-guard-plan.md v19:
-        # the MCP surface is structurally excluded from gate weakening. The
-        # guarded function hardcodes is_privileged=False when
-        # caller_type=="mcp" (no DB query); the literal below is enforced by a
-        # .semgrep/ rule (mcp call site must pass the literal, not a variable).
-        from modulo.api.routes.pipelines import PipelineGraphUpdate, _is_privileged
-
-        is_privileged = _is_privileged(_ctx_role_val())
-
-        # Validate graph structure using Pydantic models (same as REST endpoint)
-        from pydantic import ValidationError as _PydanticValidationError
-
-        try:
-            PipelineGraphUpdate.model_validate({"nodes": nodes, "edges": edges})
-        except _PydanticValidationError as exc:
-            return {
-                "error": "validation_failed",
-                "detail": f"Graph validation failed: {exc.errors(include_url=False)}",
-            }
-
-        # FAR-296 mode-aware sandbox_agent gate — the SAME shared helper the
-        # Pydantic model, node runner, and GraphValidator use, applied to the
-        # raw node dicts so this gate agrees with save-time and run-time
-        # validation even if the Pydantic surface is bypassed.
-        sandbox_err = _validate_sandbox_nodes(nodes)
-        if sandbox_err:
-            return sandbox_err
-
-        try:
-            async with _session(org_id) as s:
-                from modulo.db.crud.pipeline import get_pipeline
-
-                pipeline = await get_pipeline(s, pid)
-                if pipeline is None:
-                    return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
-                if _team_scoped_key_mismatch(pipeline.owner_team_id):
-                    return _team_scope_error("pipeline", pipeline_id)
-                mismatches = await find_connector_team_mismatches(
-                    s,
-                    org_id=org_id,
-                    pipeline_owner_team_id=pipeline.owner_team_id,
-                    connector_bindings=extract_connector_bindings(nodes),
-                )
-                if mismatches:
-                    return {
-                        "error": CONNECTOR_TEAM_MISMATCH,
-                        "detail": connector_team_mismatch_detail(mismatches),
-                    }
-                result = await replace_pipeline_graph(
-                    s,
-                    pipeline_id=pid,
-                    org_id=org_id,
-                    nodes=nodes,
-                    edges=edges,
-                    is_privileged=is_privileged,
-                    caller_type="mcp",
-                )
-                if result is None:
-                    return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
-                updated_nodes, updated_edges = result
-        except HitlGateWeakeningDenied as exc:
-            await _append_mcp_hitl_denial_audit(org_id, pid, exc)
-            return {
-                "error": "hitl_gate_removal_denied",
-                "detail": str(exc),
-                "reason_code": exc.reason_code,
-                "affected_edges": [
-                    {"source_node_id": k[0], "target_node_id": k[1], "edge_type": k[2]} for k in exc.correlation_keys
-                ],
-            }
-
-        return {
-            "pipeline_id": pipeline_id,
-            "nodes": updated_nodes,
-            "edges": [
-                {
-                    "id": str(e.id),
-                    "source_node_id": str(e.source_node_id),
-                    "target_node_id": str(e.target_node_id),
-                    "edge_type": e.edge_type,
-                }
-                for e in updated_edges
-            ],
-            "node_count": len(updated_nodes),
-            "edge_count": len(updated_edges),
-        }
+        return await _update_pipeline_graph_impl(pipeline_id, nodes, edges)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
@@ -2058,6 +2134,41 @@ async def _create_manual_run(
     return run.id, run.langgraph_thread_id, None
 
 
+async def _trigger_pipeline_impl(
+    pipeline_id: str,
+    input_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    check_tool_scope(_ctx_role_val(), "trigger_pipeline")
+    if not await _trigger_pipeline_rate_allowed():
+        _log.warning(
+            "ratelimit.trigger_pipeline_exceeded",
+            extra={"client_key": _trigger_pipeline_client_key()},
+        )
+        return {"error": "rate_limited", "detail": "Rate limit exceeded for trigger_pipeline (60/min)"}
+    org_id = _ctx_org_id_val()
+    pid, id_err = _trigger_pipeline_validate_id(pipeline_id)
+    if id_err:
+        return id_err
+    assert pid is not None
+    payload = input_payload or {}
+
+    async with _session(org_id) as s:
+        run_id, thread_id, run_err = await _create_manual_run(s, org_id, pid, pipeline_id, payload)
+    if run_err:
+        return run_err
+    assert run_id is not None
+
+    await dispatch_run(str(run_id), str(org_id), queue="runs")
+
+    return {
+        "run_id": str(run_id),
+        "status": "pending",
+        "langgraph_thread_id": thread_id,
+    }
+
+
 @mcp.tool(description="Fire a pipeline run and return immediately with run_id. Poll get_run_status to track progress.")
 @_RETRY_DB
 async def trigger_pipeline(
@@ -2065,35 +2176,7 @@ async def trigger_pipeline(
     input_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
-        if not await validate_current_auth():
-            return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "trigger_pipeline")
-        if not await _trigger_pipeline_rate_allowed():
-            _log.warning(
-                "ratelimit.trigger_pipeline_exceeded",
-                extra={"client_key": _trigger_pipeline_client_key()},
-            )
-            return {"error": "rate_limited", "detail": "Rate limit exceeded for trigger_pipeline (60/min)"}
-        org_id = _ctx_org_id_val()
-        pid, id_err = _trigger_pipeline_validate_id(pipeline_id)
-        if id_err:
-            return id_err
-        assert pid is not None
-        payload = input_payload or {}
-
-        async with _session(org_id) as s:
-            run_id, thread_id, run_err = await _create_manual_run(s, org_id, pid, pipeline_id, payload)
-        if run_err:
-            return run_err
-        assert run_id is not None
-
-        await dispatch_run(str(run_id), str(org_id), queue="runs")
-
-        return {
-            "run_id": str(run_id),
-            "status": "pending",
-            "langgraph_thread_id": thread_id,
-        }
+        return await _trigger_pipeline_impl(pipeline_id, input_payload)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except SnapshotLockNotAvailableError:
@@ -2200,27 +2283,31 @@ def _run_status_node(
     return node
 
 
+async def _get_run_status_impl(run_id: str, detail: bool) -> dict[str, Any]:
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    org_id = _ctx_org_id_val()
+    try:
+        rid = uuid.UUID(run_id)
+    except ValueError:
+        return {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
+    async with _session(org_id) as s:
+        run = await _load_run_for_status(s, org_id, rid, run_id)
+        if run is _TEAM_SCOPE_ERROR:
+            return _team_scope_error("run", run_id)
+        if run is None:
+            return {"error": "run_not_found", "run_id": run_id}
+    result = _run_status_base(run)
+    if detail:
+        result.update(_run_status_detail(run))
+    return result
+
+
 @mcp.tool(description="Get current run status. Pass detail=true for per-node breakdown.")
 @_RETRY_DB
 async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
     try:
-        if not await validate_current_auth():
-            return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        org_id = _ctx_org_id_val()
-        try:
-            rid = uuid.UUID(run_id)
-        except ValueError:
-            return {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
-        async with _session(org_id) as s:
-            run = await _load_run_for_status(s, org_id, rid, run_id)
-            if run is _TEAM_SCOPE_ERROR:
-                return _team_scope_error("run", run_id)
-            if run is None:
-                return {"error": "run_not_found", "run_id": run_id}
-        result = _run_status_base(run)
-        if detail:
-            result.update(_run_status_detail(run))
-        return result
+        return await _get_run_status_impl(run_id, detail)
     except ProgrammingError:
         _log.exception("get_run_status failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
@@ -2690,23 +2777,13 @@ def _hitl_error_response(exc: BaseException, run_id: str, gate_id: str) -> dict[
     return _tool_error("Failed to process HITL action")
 
 
-@mcp.tool(
-    description=(
-        "Unified HITL gate action: claim, approve, reject, or deliver_manual. "
-        "Step 1: call with action='claim' to get a claim_token. "
-        "Step 2: call with action='approve', 'reject', or 'deliver_manual' + your claim_token. "
-        "'deliver_manual' requires 'output' (a dict) to supply the output directly. "
-        "human_only gates return 403 on approve — only a browser-authenticated human can approve."
-    ),
-)
-@_RETRY_DB
-async def review_hitl(
+async def _review_hitl_impl(
     run_id: str,
     gate_id: str,
     action: str,
-    claim_token: str | None = None,
-    reason: str | None = None,
-    output: dict[str, Any] | None = None,
+    claim_token: str | None,
+    reason: str | None,
+    output: dict[str, Any] | None,
 ) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
@@ -2725,39 +2802,60 @@ async def review_hitl(
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
 
+    async with _session(org_id) as s:
+        run = await _load_hitl_run(s, org_id, rid, run_id, gate_id)
+        if run is _TEAM_SCOPE_ERROR:
+            return _team_scope_error("run", run_id)
+        if run is None:
+            return {"error": "gate_not_found", "run_id": run_id, "gate_id": gate_id}
+
+        if action == "approve":
+            human_only_err = await _check_human_only_gate(s, org_id, rid, gate_id)
+            if human_only_err:
+                return human_only_err
+
+        try:
+            return await _dispatch_hitl_action(
+                mgr, s, action, rid, gate_id, org_id, key_id, claim_token, output, reason
+            )
+        except GateNotFoundError as exc:
+            return _hitl_error_response(exc, run_id, gate_id)
+        except NotTeamMemberError as exc:
+            return _hitl_error_response(exc, run_id, gate_id)
+        except AlreadyClaimedError as exc:
+            return _hitl_error_response(exc, run_id, gate_id)
+        except ClaimTokenInvalidError as exc:
+            return _hitl_error_response(exc, run_id, gate_id)
+        except ClaimTokenExpiredError as exc:
+            return _hitl_error_response(exc, run_id, gate_id)
+        except GateAlreadyDecidedError as exc:
+            return _hitl_error_response(exc, run_id, gate_id)
+        except ProgrammingError as exc:
+            return _hitl_error_response(exc, run_id, gate_id)
+        except Exception as exc:
+            return _hitl_error_response(exc, run_id, gate_id)
+
+
+@mcp.tool(
+    description=(
+        "Unified HITL gate action: claim, approve, reject, or deliver_manual. "
+        "Step 1: call with action='claim' to get a claim_token. "
+        "Step 2: call with action='approve', 'reject', or 'deliver_manual' + your claim_token. "
+        "'deliver_manual' requires 'output' (a dict) to supply the output directly. "
+        "human_only gates return 403 on approve — only a browser-authenticated human can approve."
+    ),
+)
+@_RETRY_DB
+async def review_hitl(
+    run_id: str,
+    gate_id: str,
+    action: str,
+    claim_token: str | None = None,
+    reason: str | None = None,
+    output: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     try:
-        async with _session(org_id) as s:
-            run = await _load_hitl_run(s, org_id, rid, run_id, gate_id)
-            if run is _TEAM_SCOPE_ERROR:
-                return _team_scope_error("run", run_id)
-            if run is None:
-                return {"error": "gate_not_found", "run_id": run_id, "gate_id": gate_id}
-
-            if action == "approve":
-                human_only_err = await _check_human_only_gate(s, org_id, rid, gate_id)
-                if human_only_err:
-                    return human_only_err
-
-            try:
-                return await _dispatch_hitl_action(
-                    mgr, s, action, rid, gate_id, org_id, key_id, claim_token, output, reason
-                )
-            except GateNotFoundError as exc:
-                return _hitl_error_response(exc, run_id, gate_id)
-            except NotTeamMemberError as exc:
-                return _hitl_error_response(exc, run_id, gate_id)
-            except AlreadyClaimedError as exc:
-                return _hitl_error_response(exc, run_id, gate_id)
-            except ClaimTokenInvalidError as exc:
-                return _hitl_error_response(exc, run_id, gate_id)
-            except ClaimTokenExpiredError as exc:
-                return _hitl_error_response(exc, run_id, gate_id)
-            except GateAlreadyDecidedError as exc:
-                return _hitl_error_response(exc, run_id, gate_id)
-            except ProgrammingError as exc:
-                return _hitl_error_response(exc, run_id, gate_id)
-            except Exception as exc:
-                return _hitl_error_response(exc, run_id, gate_id)
+        return await _review_hitl_impl(run_id, gate_id, action, claim_token, reason, output)
     except OperationalError:
         raise
     except Exception:
@@ -3015,6 +3113,36 @@ def _trigger_event_payloads(items: list[Any]) -> list[dict[str, Any]]:
     ]
 
 
+async def _list_trigger_events_impl(
+    trigger_id: str | None,
+    pipeline_id: str | None,
+    cursor: str | None,
+    limit: int,
+) -> dict[str, Any]:
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    check_tool_scope(_ctx_role_val(), "list_trigger_events")
+    from sqlalchemy import func, select
+
+    org_id = _ctx_org_id_val()
+    lim = max(1, min(limit, 100))
+
+    async with _session(org_id) as s:
+        key_team_id = _ctx_team_id_val()
+        q, q_err = await _build_trigger_event_query(s, org_id, key_team_id, trigger_id, pipeline_id)
+        if q_err:
+            return q_err
+        total = int((await s.execute(select(func.count()).select_from(q.subquery()))).scalar_one_or_none() or 0)
+        items, next_cursor, has_more = await _paginate_trigger_events(s, q, cursor, lim)
+
+    return {
+        "data": _trigger_event_payloads(items),
+        "total": total,
+        "next_cursor": next_cursor,
+        "has_more": has_more,
+    }
+
+
 @mcp.tool(
     name="list_trigger_events",
     description=(
@@ -3031,28 +3159,7 @@ async def list_trigger_events(
     limit: int = 20,
 ) -> dict[str, Any]:
     try:
-        if not await validate_current_auth():
-            return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "list_trigger_events")
-        from sqlalchemy import func, select
-
-        org_id = _ctx_org_id_val()
-        lim = max(1, min(limit, 100))
-
-        async with _session(org_id) as s:
-            key_team_id = _ctx_team_id_val()
-            q, q_err = await _build_trigger_event_query(s, org_id, key_team_id, trigger_id, pipeline_id)
-            if q_err:
-                return q_err
-            total = (await s.execute(select(func.count()).select_from(q.subquery()))).scalar_one_or_none() or 0
-            items, next_cursor, has_more = await _paginate_trigger_events(s, q, cursor, lim)
-
-        return {
-            "data": _trigger_event_payloads(items),
-            "total": total,
-            "next_cursor": next_cursor,
-            "has_more": has_more,
-        }
+        return await _list_trigger_events_impl(trigger_id, pipeline_id, cursor, limit)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
@@ -3345,6 +3452,69 @@ def _build_trigger_record(
     return trigger, None
 
 
+async def _create_trigger_impl(
+    pipeline_id: str,
+    trigger_type: str,
+    active: bool,
+    cron_expression: str | None,
+    config_json: dict[str, Any] | None,
+    max_concurrent_runs: int,
+    daily_spend_limit: float | None,
+) -> dict[str, Any]:
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    check_tool_scope(_ctx_role_val(), "create_trigger")
+
+    org_id = _ctx_org_id_val()
+    account_id = _ctx_user_id_val()
+    pid, input_err = _validate_trigger_create_inputs(pipeline_id, max_concurrent_runs, daily_spend_limit)
+    if input_err:
+        return input_err
+    assert pid is not None
+
+    async with _session(org_id) as s:
+        owner_team_id = await _pipeline_owner_team_id(s, pid)
+        if _team_scoped_key_mismatch(owner_team_id):
+            return _team_scope_error("pipeline", pipeline_id)
+        next_fire_at, ongoing_err = await _validate_ongoing_trigger_create(
+            s, pid, trigger_type, max_concurrent_runs, daily_spend_limit, config_json
+        )
+        if ongoing_err:
+            return ongoing_err
+        trigger, build_err = _build_trigger_record(
+            org_id,
+            pid,
+            trigger_type,
+            active,
+            max_concurrent_runs,
+            daily_spend_limit,
+            config_json,
+            account_id,
+            next_fire_at,
+            cron_expression,
+        )
+        if build_err:
+            return build_err
+        s.add(trigger)
+        await s.flush()
+        # FAR-251 — surface the created trigger's streak_status exactly as
+        # the REST create serializer does (computed inside the RLS
+        # transaction; for a fresh ongoing trigger this reads the anchored
+        # streak=0 / state=ok baseline).
+        created_streak_status = await _streak_status_for(s, trigger)
+
+    return {
+        "id": str(trigger.id),
+        "pipeline_id": str(trigger.pipeline_id),
+        "trigger_type": trigger.trigger_type,
+        "active": trigger.active,
+        "max_concurrent_runs": trigger.max_concurrent_runs,
+        "daily_spend_limit": float(trigger.daily_spend_limit) if trigger.daily_spend_limit is not None else None,
+        "cron_expression": trigger.cron_expression,
+        "streak_status": created_streak_status,
+    }
+
+
 @mcp.tool(description="Create a new trigger for a pipeline.")
 @_RETRY_DB
 async def create_trigger(
@@ -3357,58 +3527,15 @@ async def create_trigger(
     daily_spend_limit: float | None = None,
 ) -> dict[str, Any]:
     try:
-        if not await validate_current_auth():
-            return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        check_tool_scope(_ctx_role_val(), "create_trigger")
-
-        org_id = _ctx_org_id_val()
-        account_id = _ctx_user_id_val()
-        pid, input_err = _validate_trigger_create_inputs(pipeline_id, max_concurrent_runs, daily_spend_limit)
-        if input_err:
-            return input_err
-        assert pid is not None
-
-        async with _session(org_id) as s:
-            owner_team_id = await _pipeline_owner_team_id(s, pid)
-            if _team_scoped_key_mismatch(owner_team_id):
-                return _team_scope_error("pipeline", pipeline_id)
-            next_fire_at, ongoing_err = await _validate_ongoing_trigger_create(
-                s, pid, trigger_type, max_concurrent_runs, daily_spend_limit, config_json
-            )
-            if ongoing_err:
-                return ongoing_err
-            trigger, build_err = _build_trigger_record(
-                org_id,
-                pid,
-                trigger_type,
-                active,
-                max_concurrent_runs,
-                daily_spend_limit,
-                config_json,
-                account_id,
-                next_fire_at,
-                cron_expression,
-            )
-            if build_err:
-                return build_err
-            s.add(trigger)
-            await s.flush()
-            # FAR-251 — surface the created trigger's streak_status exactly as
-            # the REST create serializer does (computed inside the RLS
-            # transaction; for a fresh ongoing trigger this reads the anchored
-            # streak=0 / state=ok baseline).
-            created_streak_status = await _streak_status_for(s, trigger)
-
-        return {
-            "id": str(trigger.id),
-            "pipeline_id": str(trigger.pipeline_id),
-            "trigger_type": trigger.trigger_type,
-            "active": trigger.active,
-            "max_concurrent_runs": trigger.max_concurrent_runs,
-            "daily_spend_limit": float(trigger.daily_spend_limit) if trigger.daily_spend_limit is not None else None,
-            "cron_expression": trigger.cron_expression,
-            "streak_status": created_streak_status,
-        }
+        return await _create_trigger_impl(
+            pipeline_id,
+            trigger_type,
+            active,
+            cron_expression,
+            config_json,
+            max_concurrent_runs,
+            daily_spend_limit,
+        )
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
@@ -6010,6 +6137,30 @@ async def _exchange_authorization_code(
     )
 
 
+async def _oauth_token_impl(request: Request) -> JSONResponse:
+    params, parse_err = await _parse_oauth_form(request)
+    if parse_err:
+        return parse_err
+    assert params is not None
+
+    creds, cred_err = _extract_oauth_client_credentials(request, params)
+    if cred_err:
+        return cred_err
+
+    settings = get_settings()
+    if not settings.modulo_public_url or settings.modulo_public_url == "http://localhost:8000":
+        return JSONResponse(
+            {"error": "server_error", "detail": "MODULO_PUBLIC_URL must be configured"},
+            status_code=500,
+        )
+
+    token_resp, token_err = await _exchange_authorization_code(creds, settings)
+    if token_err:
+        return token_err
+    assert token_resp is not None
+    return JSONResponse(token_resp)
+
+
 async def _oauth_token(request: Request) -> JSONResponse:
     """POST /mcp/oauth/token — exchange code for access token.
 
@@ -6021,35 +6172,13 @@ async def _oauth_token(request: Request) -> JSONResponse:
     consenting account's LIVE org role is re-verified against the granted
     scopes — a demoted account is denied a token (ADR 017).
     """
-    params, parse_err = await _parse_oauth_form(request)
-    if parse_err:
-        return parse_err
-    assert params is not None
-
-    creds, cred_err = _extract_oauth_client_credentials(request, params)
-    if cred_err:
-        return cred_err
-
-    client_id = creds["client_id"]
-
     from modulo.auth.oauth import (
         InvalidClientError,
         InvalidGrantError,
     )
 
-    settings = get_settings()
-    if not settings.modulo_public_url or settings.modulo_public_url == "http://localhost:8000":
-        return JSONResponse(
-            {"error": "server_error", "detail": "MODULO_PUBLIC_URL must be configured"},
-            status_code=500,
-        )
-
     try:
-        token_resp, token_err = await _exchange_authorization_code(creds, settings)
-        if token_err:
-            return token_err
-        assert token_resp is not None
-        return JSONResponse(token_resp)
+        return await _oauth_token_impl(request)
     except (InvalidGrantError, InvalidClientError):
         return JSONResponse(
             {"error": "invalid_grant", "detail": "Authorization code exchange failed"},
@@ -6061,25 +6190,19 @@ async def _oauth_token(request: Request) -> JSONResponse:
             status_code=e.status_code,
         )
     except ProgrammingError:
-        _log.warning(
-            "mcp_oauth.token.programming_error",
-            extra={"client_id": client_id},
-        )
+        _log.warning("mcp_oauth.token.programming_error")
         return JSONResponse(
             {"error": "server_error", "detail": _MSG_FEATURE_NOT_AVAILABLE_MIGRATE},
             status_code=501,
         )
     except SQLAlchemyError:
-        _log.warning(
-            "mcp_oauth.token.sqlalchemy_error",
-            extra={"client_id": client_id},
-        )
+        _log.warning("mcp_oauth.token.sqlalchemy_error")
         return JSONResponse(
             {"error": "temporarily_unavailable", "detail": _MSG_DB_ERROR_TRY_AGAIN},
             status_code=503,
         )
     except Exception:
-        _log.exception("mcp_oauth.token.unexpected_error", extra={"client_id": client_id})
+        _log.exception("mcp_oauth.token.unexpected_error")
         return JSONResponse(
             {"error": "server_error", "detail": _MSG_UNEXPECTED_ERROR},
             status_code=500,
@@ -6209,6 +6332,24 @@ async def _exchange_refresh_token(
     )
 
 
+async def _oauth_refresh_impl(request: Request) -> JSONResponse:
+    params, parse_err = await _parse_oauth_form(request)
+    if parse_err:
+        return parse_err
+    assert params is not None
+
+    creds, cred_err = _extract_oauth_refresh_credentials(request, params)
+    if cred_err:
+        return cred_err
+
+    settings = get_settings()
+    token_resp, token_err = await _exchange_refresh_token(creds, settings)
+    if token_err:
+        return token_err
+    assert token_resp is not None
+    return JSONResponse(token_resp)
+
+
 async def _oauth_refresh(request: Request) -> JSONResponse:
     """POST /mcp/oauth/refresh — exchange refresh token for new access token.
 
@@ -6219,29 +6360,13 @@ async def _oauth_refresh(request: Request) -> JSONResponse:
     (ADR 017 demote-then-refresh). The refresh token is rotated: a new pair is
     issued with an incremented sequence, invalidating the old refresh token.
     """
-    params, parse_err = await _parse_oauth_form(request)
-    if parse_err:
-        return parse_err
-    assert params is not None
-
-    creds, cred_err = _extract_oauth_refresh_credentials(request, params)
-    if cred_err:
-        return cred_err
-
-    client_id = creds["client_id"]
-
     from modulo.auth.oauth import (
         InvalidClientError,
         InvalidGrantError,
     )
 
-    settings = get_settings()
     try:
-        token_resp, token_err = await _exchange_refresh_token(creds, settings)
-        if token_err:
-            return token_err
-        assert token_resp is not None
-        return JSONResponse(token_resp)
+        return await _oauth_refresh_impl(request)
     except (InvalidGrantError, InvalidClientError):
         return JSONResponse(
             {"error": "invalid_grant", "detail": "Refresh token exchange failed"},
@@ -6258,13 +6383,13 @@ async def _oauth_refresh(request: Request) -> JSONResponse:
             status_code=e.status_code,
         )
     except ProgrammingError:
-        _log.warning("mcp_oauth.refresh.programming_error", extra={"client_id": client_id})
+        _log.warning("mcp_oauth.refresh.programming_error")
         return JSONResponse(
             {"error": "server_error", "detail": _MSG_FEATURE_NOT_AVAILABLE_MIGRATE},
             status_code=501,
         )
     except SQLAlchemyError:
-        _log.warning("mcp_oauth.refresh.sqlalchemy_error", extra={"client_id": client_id})
+        _log.warning("mcp_oauth.refresh.sqlalchemy_error")
         return JSONResponse(
             {"error": "temporarily_unavailable", "detail": _MSG_DB_ERROR_TRY_AGAIN},
             status_code=503,
