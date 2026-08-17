@@ -42,6 +42,7 @@ def health_ctx() -> dict[str, Any]:
     """Mutable context shared across health-check steps in this module."""
     return {}
 
+
 # ---------------------------------------------------------------------------
 # Steps declaring the state of each dependency check
 # ---------------------------------------------------------------------------
@@ -111,6 +112,7 @@ def get_liveness(client: Any, health_ctx: dict[str, Any], request: Any) -> None:
     request.node.response = resp
     health_ctx["response"] = resp
 
+
 # ---------------------------------------------------------------------------
 # Assertions
 # ---------------------------------------------------------------------------
@@ -147,6 +149,4 @@ def readiness_checks_ok(status: str, health_ctx: dict[str, Any]) -> None:
     checks = body.get("checks", {})
     for key in ("database", "redis", "checkpointer", "migrations", "saq_workers", "system_crons"):
         assert key in checks, f"Missing readiness check key: {key}"
-        assert checks[key]["status"] == status, (
-            f"Expected {key} check status {status!r}, got {checks[key]['status']!r}"
-        )
+        assert checks[key]["status"] == status, f"Expected {key} check status {status!r}, got {checks[key]['status']!r}"
