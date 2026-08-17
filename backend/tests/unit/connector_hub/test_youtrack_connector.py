@@ -188,7 +188,7 @@ async def test_query_issues_corrupt_body(connector):
         with respx.mock:
             respx.get(f"{_BASE}/issues").mock(return_value=response)
             result = await connector.query(ConnectorQuery(resource="issues"))
-        assert result.records == []
+        assert not result.records
         assert result.total == 0
 
 
@@ -205,7 +205,7 @@ async def test_query_projects_corrupt_body(connector):
     with respx.mock:
         respx.get(f"{_BASE}/admin/projects").mock(return_value=httpx.Response(200, json={"oops": "not a list"}))
         result = await connector.query(ConnectorQuery(resource="projects"))
-    assert result.records == []
+    assert not result.records
     assert result.total == 0
 
 
@@ -214,7 +214,7 @@ async def test_query_users_corrupt_body(connector):
         with respx.mock:
             respx.get(f"{_BASE}/users").mock(return_value=httpx.Response(200, json=bad))
             result = await connector.query(ConnectorQuery(resource="users"))
-        assert result.records == []
+        assert not result.records
         assert result.total == 0
 
 
