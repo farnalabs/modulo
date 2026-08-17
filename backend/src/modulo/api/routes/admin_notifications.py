@@ -32,6 +32,7 @@ from modulo.core.notifier import (
 )
 from modulo.db.models.notification_delivery import NotificationDeliveryLog
 from modulo.db.models.notification_endpoint import NotificationEndpoint
+from modulo.db.models.team import Team
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
@@ -76,6 +77,9 @@ class WebhookCreate(BaseModel):
     secret: str | None = Field(None)
     events: list[str] = Field(default_factory=list)
     description: str | None = Field(None, max_length=500)
+    team_id: uuid.UUID | None = Field(
+        None, description="Optional team scope; when set, only that team's events hit this endpoint"
+    )
 
     @field_validator("url")
     @classmethod
@@ -98,6 +102,9 @@ class WebhookUpdate(BaseModel):
     secret: str | None = None
     events: list[str] | None = None
     description: str | None = Field(None, max_length=500)
+    team_id: uuid.UUID | None = Field(
+        None, description="Optional team scope; when set, only that team's events hit this endpoint"
+    )
 
     @field_validator("url")
     @classmethod
@@ -124,6 +131,7 @@ class WebhookResponse(BaseModel):
     has_secret: bool
     is_active: bool
     consecutive_dead_letter_count: int
+    team_id: str | None = None
     disabled_at: str | None
     created_at: str
 
@@ -570,6 +578,8 @@ async def create_webhook(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            if req.team_id is not None:
+                await _validate_team_exists(session, principal.organisation_id, req.team_id)
             ep = NotificationEndpoint(
                 id=uuid.uuid4(),
                 organisation_id=principal.organisation_id,
@@ -578,6 +588,7 @@ async def create_webhook(
                 events=req.events,
                 description=req.description,
                 account_id=principal.account_id,
+                team_id=req.team_id,
             )
             session.add(ep)
             await session.flush()
@@ -672,6 +683,9 @@ async def update_webhook(
                 ep.events = req.events
             if req.description is not None:
                 ep.description = req.description
+            if req.team_id is not None:
+                await _validate_team_exists(session, principal.organisation_id, req.team_id)
+                ep.team_id = req.team_id
 
             await session.flush()
     except ProgrammingError:
@@ -1219,6 +1233,26 @@ async def retry_delivery(
 # ── Helper ─────────────────────────────────────────────────────────────
 
 
+async def _validate_team_exists(session: AsyncSession, org_id: uuid.UUID, team_id: uuid.UUID) -> None:
+    """Assert ``team_id`` references a non-deleted team in ``org_id`` (422 otherwise).
+
+    Runs inside the RLS-scoped transaction, so the org filter is enforced by the
+    RLS policy as well as the explicit ``organisation_id`` predicate.
+    """
+    result = await session.execute(
+        select(Team).where(
+            Team.id == team_id,
+            Team.organisation_id == org_id,
+            Team.deleted_at.is_(None),
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Unknown team id: {team_id}",
+        )
+
+
 def _ep_to_response(ep: NotificationEndpoint) -> WebhookResponse:
     raw_events: object = ep.events
     events: list[str] = []
@@ -1237,6 +1271,7 @@ def _ep_to_response(ep: NotificationEndpoint) -> WebhookResponse:
         has_secret=ep.secret_ciphertext is not None,
         is_active=not bool(ep.auto_disabled) if ep.auto_disabled is not None else True,
         consecutive_dead_letter_count=ep.consecutive_dead_letter_count or 0,
+        team_id=str(ep.team_id) if ep.team_id else None,
         disabled_at=ep.disabled_at.isoformat() if ep.disabled_at else None,
         created_at=ep.created_at.isoformat() if ep.created_at else "",
     )

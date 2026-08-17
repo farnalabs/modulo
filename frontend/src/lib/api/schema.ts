@@ -14901,6 +14901,11 @@ export interface components {
             events?: string[];
             /** Description */
             description?: string | null;
+            /**
+             * Team Id
+             * @description Optional team scope; when set, only that team's events are dispatched to this endpoint
+             */
+            team_id?: string | null;
         };
         /** WebhookResponse */
         WebhookResponse: {
@@ -14918,6 +14923,8 @@ export interface components {
             is_active: boolean;
             /** Consecutive Dead Letter Count */
             consecutive_dead_letter_count: number;
+            /** Team Id */
+            team_id?: string | null;
             /** Disabled At */
             disabled_at: string | null;
             /** Created At */
@@ -14933,6 +14940,11 @@ export interface components {
             events?: string[] | null;
             /** Description */
             description?: string | null;
+            /**
+             * Team Id
+             * @description Optional team scope; when set, only that team's events are dispatched to this endpoint
+             */
+            team_id?: string | null;
         };
         /** WsTokenResponse */
         WsTokenResponse: {
