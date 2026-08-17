@@ -2147,35 +2147,45 @@ def _run_status_detail(run: Run) -> dict[str, Any]:
     node_ids.update(telemetry_json.keys())
     nodes: list[dict[str, Any]] = []
     for nid in sorted(node_ids):
-        usage = token_usage.get(nid, {})
-        if not isinstance(usage, dict):
-            usage = {}
-        t_in = usage.get("input_tokens") or 0
-        t_out = usage.get("output_tokens") or 0
-        if nid in outputs_json:
-            status = "completed"
-        elif nid in telemetry_json:
-            tel_entry = telemetry_json[nid]
-            tel_status = tel_entry.get("status") if isinstance(tel_entry, dict) else None
-            status = "failed" if tel_status == "failed" else "processed"
-        else:
-            status = "processed"
-        node: dict[str, Any] = {
-            "node_id": nid,
-            "status": status,
-            "input_tokens": t_in,
-            "output_tokens": t_out,
-            "total_tokens": usage.get("total_tokens") or (t_in + t_out),
-            "cost_usd": usage.get("cost_usd", 0),
-            "has_output": nid in outputs_json or nid in telemetry_json,
-        }
-        if usage.get("model_cost_display_usd") is not None:
-            node["model_cost_display_usd"] = usage["model_cost_display_usd"]
-        nodes.append(node)
+        nodes.append(_run_status_node(nid, token_usage, outputs_json, telemetry_json))
     result: dict[str, Any] = {"nodes": nodes}
     if run.cost_breakdown is not None:
         result["cost_breakdown"] = _sanitize_cost_breakdown(run.cost_breakdown)
     return result
+
+
+def _run_status_node(
+    nid: str,
+    token_usage: dict[str, Any],
+    outputs_json: dict[str, Any],
+    telemetry_json: dict[str, Any],
+) -> dict[str, Any]:
+    """Aggregate a single node's usage/status into its run-status dict entry."""
+    usage = token_usage.get(nid, {})
+    if not isinstance(usage, dict):
+        usage = {}
+    t_in = usage.get("input_tokens") or 0
+    t_out = usage.get("output_tokens") or 0
+    if nid in outputs_json:
+        status = "completed"
+    elif nid in telemetry_json:
+        tel_entry = telemetry_json[nid]
+        tel_status = tel_entry.get("status") if isinstance(tel_entry, dict) else None
+        status = "failed" if tel_status == "failed" else "processed"
+    else:
+        status = "processed"
+    node: dict[str, Any] = {
+        "node_id": nid,
+        "status": status,
+        "input_tokens": t_in,
+        "output_tokens": t_out,
+        "total_tokens": usage.get("total_tokens") or (t_in + t_out),
+        "cost_usd": usage.get("cost_usd", 0),
+        "has_output": nid in outputs_json or nid in telemetry_json,
+    }
+    if usage.get("model_cost_display_usd") is not None:
+        node["model_cost_display_usd"] = usage["model_cost_display_usd"]
+    return node
 
 
 @mcp.tool(description="Get current run status. Pass detail=true for per-node breakdown.")
