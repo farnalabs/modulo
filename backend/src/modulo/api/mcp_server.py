@@ -2038,6 +2038,51 @@ def _run_status_base(run: Run) -> dict[str, Any]:
     return result
 
 
+def _run_status_detail(run: Run) -> dict[str, Any]:
+    from modulo.api.routes.runs import _clamp_node_token_usage_union
+
+    token_usage = _clamp_node_token_usage_union(run.node_token_usage or {})
+    outputs_json = run.outputs_json or {}
+    telemetry_json = run.node_telemetry_json
+    if not isinstance(telemetry_json, dict):
+        telemetry_json = {}
+    node_ids: set[str] = set()
+    node_ids.update(token_usage.keys())
+    node_ids.update(outputs_json.keys())
+    node_ids.update(telemetry_json.keys())
+    nodes: list[dict[str, Any]] = []
+    for nid in sorted(node_ids):
+        usage = token_usage.get(nid, {})
+        if not isinstance(usage, dict):
+            usage = {}
+        t_in = usage.get("input_tokens") or 0
+        t_out = usage.get("output_tokens") or 0
+        if nid in outputs_json:
+            status = "completed"
+        elif nid in telemetry_json:
+            tel_entry = telemetry_json[nid]
+            tel_status = tel_entry.get("status") if isinstance(tel_entry, dict) else None
+            status = "failed" if tel_status == "failed" else "processed"
+        else:
+            status = "processed"
+        node: dict[str, Any] = {
+            "node_id": nid,
+            "status": status,
+            "input_tokens": t_in,
+            "output_tokens": t_out,
+            "total_tokens": usage.get("total_tokens") or (t_in + t_out),
+            "cost_usd": usage.get("cost_usd", 0),
+            "has_output": nid in outputs_json or nid in telemetry_json,
+        }
+        if usage.get("model_cost_display_usd") is not None:
+            node["model_cost_display_usd"] = usage["model_cost_display_usd"]
+        nodes.append(node)
+    result: dict[str, Any] = {"nodes": nodes}
+    if run.cost_breakdown is not None:
+        result["cost_breakdown"] = _sanitize_cost_breakdown(run.cost_breakdown)
+    return result
+
+
 @mcp.tool(description="Get current run status. Pass detail=true for per-node breakdown.")
 @_RETRY_DB
 async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
@@ -2057,47 +2102,7 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
                 return {"error": "run_not_found", "run_id": run_id}
         result = _run_status_base(run)
         if detail:
-            from modulo.api.routes.runs import _clamp_node_token_usage_union
-
-            token_usage = _clamp_node_token_usage_union(run.node_token_usage or {})
-            outputs_json = run.outputs_json or {}
-            telemetry_json = run.node_telemetry_json
-            if not isinstance(telemetry_json, dict):
-                telemetry_json = {}
-            node_ids: set[str] = set()
-            node_ids.update(token_usage.keys())
-            node_ids.update(outputs_json.keys())
-            node_ids.update(telemetry_json.keys())
-            nodes: list[dict[str, Any]] = []
-            for nid in sorted(node_ids):
-                usage = token_usage.get(nid, {})
-                if not isinstance(usage, dict):
-                    usage = {}
-                t_in = usage.get("input_tokens") or 0
-                t_out = usage.get("output_tokens") or 0
-                if nid in outputs_json:
-                    status = "completed"
-                elif nid in telemetry_json:
-                    tel_entry = telemetry_json[nid]
-                    tel_status = tel_entry.get("status") if isinstance(tel_entry, dict) else None
-                    status = "failed" if tel_status == "failed" else "processed"
-                else:
-                    status = "processed"
-                node: dict[str, Any] = {
-                    "node_id": nid,
-                    "status": status,
-                    "input_tokens": t_in,
-                    "output_tokens": t_out,
-                    "total_tokens": usage.get("total_tokens") or (t_in + t_out),
-                    "cost_usd": usage.get("cost_usd", 0),
-                    "has_output": nid in outputs_json or nid in telemetry_json,
-                }
-                if usage.get("model_cost_display_usd") is not None:
-                    node["model_cost_display_usd"] = usage["model_cost_display_usd"]
-                nodes.append(node)
-            result["nodes"] = nodes
-            if run.cost_breakdown is not None:
-                result["cost_breakdown"] = _sanitize_cost_breakdown(run.cost_breakdown)
+            result.update(_run_status_detail(run))
         return result
     except ProgrammingError:
         _log.exception("get_run_status failed")
