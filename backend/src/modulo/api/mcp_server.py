@@ -2848,6 +2848,20 @@ async def _paginate_trigger_events(
     return items, next_cursor, has_more
 
 
+def _trigger_event_payloads(items: list[Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": str(e.id),
+            "trigger_id": str(e.trigger_id),
+            "trigger_type": e.trigger_type,
+            "validation_result": e.validation_result,
+            "created_at": e.created_at.isoformat() if e.created_at else None,
+            "run_id": str(e.run_id) if e.run_id else None,
+        }
+        for e in items
+    ]
+
+
 @mcp.tool(
     name="list_trigger_events",
     description=(
@@ -2881,17 +2895,7 @@ async def list_trigger_events(
             items, next_cursor, has_more = await _paginate_trigger_events(s, q, cursor, lim)
 
         return {
-            "data": [
-                {
-                    "id": str(e.id),
-                    "trigger_id": str(e.trigger_id),
-                    "trigger_type": e.trigger_type,
-                    "validation_result": e.validation_result,
-                    "created_at": e.created_at.isoformat() if e.created_at else None,
-                    "run_id": str(e.run_id) if e.run_id else None,
-                }
-                for e in items
-            ],
+            "data": _trigger_event_payloads(items),
             "total": total,
             "next_cursor": next_cursor,
             "has_more": has_more,
