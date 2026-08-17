@@ -45,8 +45,15 @@ def browser_context_args(browser_context_args):
 
 
 @pytest.fixture(scope="session")
-def base_url() -> str:
-    return "http://localhost:5173"
+def base_url(pytestconfig) -> str:
+    """Resolve the frontend base URL for Playwright UI tests.
+
+    Honors the ``--base-url`` pytest option (pytest-base-url) so CI can point
+    the UI cluster at the preview server (bdd.yml serves the frontend build on
+    http://localhost:4173 and passes ``--base-url``). Falls back to the local
+    Vite dev server port for a plain local run.
+    """
+    return pytestconfig.getoption("base_url") or "http://localhost:5173"
 
 
 # ---------------------------------------------------------------------------
@@ -105,8 +112,18 @@ def make_mock_pipeline(**kwargs: Any) -> MagicMock:
     p.lock_wait_timeout_seconds = kwargs.get("lock_wait_timeout_seconds", 300)
     p.node_timeout_seconds = kwargs.get("node_timeout_seconds", 300)
     p.run_context_defaults = kwargs.get("run_context_defaults", {})
+    p.default_autonomy_level = kwargs.get("default_autonomy_level")
+    p.max_duration_seconds = kwargs.get("max_duration_seconds")
+    p.stale_run_timeout_minutes = kwargs.get("stale_run_timeout_minutes", 30)
     p.rate_limit_config = kwargs.get("rate_limit_config")
-    p.created_by = uuid.uuid4()
+    p.retry_policy = kwargs.get("retry_policy", {})
+    p.snapshot_count = kwargs.get("snapshot_count", 0)
+    p.archived_at = kwargs.get("archived_at")
+    p.owner_team_id = kwargs.get("owner_team_id")
+    p.folder_id = kwargs.get("folder_id")
+    p.connector_rebind_required = kwargs.get("connector_rebind_required", False)
+    p.account_id = kwargs.get("account_id", USER_ID)
+    p.created_by = p.account_id
     p.created_at = kwargs.get("created_at", datetime.now(UTC))
     p.updated_at = kwargs.get("updated_at", datetime.now(UTC))
     return p
@@ -134,6 +151,12 @@ def make_mock_run(**kwargs: Any) -> MagicMock:
 def make_mock_snapshot(**kwargs: Any) -> MagicMock:
     s = MagicMock()
     s.id = kwargs.get("id", uuid.uuid4())
+    s.pipeline_id = kwargs.get("pipeline_id", uuid.uuid4())
+    s.snapshot_version = kwargs.get("snapshot_version", 1)
+    s.tag = kwargs.get("tag")
+    s.notes = kwargs.get("notes")
+    s.created_at = kwargs.get("created_at", datetime.now(UTC))
+    s.account_id = kwargs.get("account_id", USER_ID)
     s.graph_json = kwargs.get(
         "graph_json",
         {
@@ -141,6 +164,7 @@ def make_mock_snapshot(**kwargs: Any) -> MagicMock:
             "edges": [],
         },
     )
+    s.default_autonomy_level = kwargs.get("default_autonomy_level")
     s.run_context_defaults = kwargs.get("run_context_defaults", {})
     s.connector_bindings_json = kwargs.get("connector_bindings", [])
     s.schema_pins_json = kwargs.get("schema_pins", [])

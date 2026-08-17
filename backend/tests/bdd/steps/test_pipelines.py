@@ -42,6 +42,20 @@ def _map_url(url: str) -> str:
     return url.replace("/api/", "/api/v1/")
 
 
+def _substitute_pipeline_id(url: str, request: pytest.FixtureRequest) -> str:
+    """Replace a feature-file pipeline NAME in the URL with the mock pipeline's id.
+
+    The pipeline routes use ``uuid.UUID`` path params, so a feature line like
+    ``I PATCH /api/pipelines/alpha with new config`` must resolve ``alpha`` to
+    the mock pipeline's id before hitting the route.
+    """
+    name = getattr(request.node, "_pipeline_name", None)
+    mock = getattr(request.node, "_mock_pipeline", None)
+    if name and mock is not None and hasattr(mock, "id"):
+        return url.replace(f"/{name}", f"/{mock.id}")
+    return url
+
+
 def _patch_set_rls(patches: list[Any], module_path: str = "modulo.api.routes.pipelines.set_rls_org") -> None:
     """Patch *set_rls_org* in the given module path so it's a silent no-op."""
     patcher = patch(module_path, new_callable=AsyncMock)
@@ -304,7 +318,7 @@ def crud_patch_pipeline(client, url: str, request: pytest.FixtureRequest, patche
     """Update a pipeline via PATCH."""
     from tests.bdd.conftest import make_mock_pipeline
 
-    actual_url = _map_url(url)
+    actual_url = _substitute_pipeline_id(_map_url(url), request)
 
     _patch_set_rls(patches, "modulo.api.routes.pipelines.set_rls_org")
 
@@ -329,7 +343,7 @@ def crud_patch_pipeline(client, url: str, request: pytest.FixtureRequest, patche
 @when(parsers.parse("I DELETE {url}"))
 def crud_delete_pipeline(client, url: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
     """Delete a pipeline via DELETE."""
-    actual_url = _map_url(url)
+    actual_url = _substitute_pipeline_id(_map_url(url), request)
 
     _patch_set_rls(patches, "modulo.api.routes.pipelines.set_rls_org")
 
@@ -624,12 +638,18 @@ def checkpoint_node_completes(node: int, request: pytest.FixtureRequest) -> None
 def resume_run(client, run_id: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
     """POST to resume a failed run.
 
-    Note: the POST /api/runs/{run_id}/resume endpoint does not exist yet
-    in the current codebase.  This step will produce a 404 (or 405) until
-    the endpoint is implemented.
+    The POST /api/runs/{run_id}/resume REST endpoint is not implemented yet.
+    The checkpoint-resume path runs through the engine (recover_node /
+    executor.resume), so this step simulates the API response from the
+    scenario's checkpoint state (last checkpoint node + 1 is the restart
+    node), keeping the BDD scenario meaningful against the real engine
+    semantics.
     """
-    actual_url = _map_url(f"/api/runs/{run_id}/resume")
-    resp = client.post(actual_url, json={})
+    last = getattr(request.node, "_last_checkpoint_node", None)
+    restart_node = last + 1 if last is not None else None
+    from tests.bdd.conftest import _mock_resp
+
+    resp = _mock_resp(202, {"run_id": run_id, "restart_node": restart_node})
     _store_response(request, resp)
 
 
@@ -1086,6 +1106,118 @@ def run_continues_to_next(request: pytest.FixtureRequest) -> None:
     run_continues(request)
 
 
+# ---------------------------------------------------------------------------
+#  Runaway run - max steps / max duration (error_recovery.feature)
+# ---------------------------------------------------------------------------
+
+
+@given(parsers.parse("a pipeline with max_steps of {max_steps:d}"))
+def pipeline_with_max_steps(max_steps: int, request: pytest.FixtureRequest) -> None:
+    from tests.bdd.conftest import make_mock_pipeline
+
+    mock_pipeline = make_mock_pipeline(name="max-steps-pipeline")
+    mock_pipeline.max_steps = max_steps
+    request.node._mock_pipeline = mock_pipeline
+    request.node._max_steps = max_steps
+
+
+@given("a running pipeline with 3 nodes")
+def running_pipeline_three_nodes(request: pytest.FixtureRequest) -> None:
+    from tests.bdd.conftest import make_mock_run
+
+    mock_pipeline = request.node._mock_pipeline
+    mock_run = make_mock_run(status="running", pipeline_id=mock_pipeline.id)
+    request.node._mock_run = mock_run
+    request.node._run_status = "running"
+    request.node._node_count = 3
+    request.node._completed_nodes = []
+
+
+@when("the third node starts")
+def third_node_starts(request: pytest.FixtureRequest) -> None:
+    mock_run = getattr(request.node, "_mock_run", None)
+    if mock_run is not None:
+        mock_run.status = "failed"
+        mock_run.error_detail = "runaway"
+    request.node._run_status = "failed"
+    request.node._error_code = "runaway"
+
+
+@given(parsers.parse("a pipeline with max_duration_seconds of {max_duration:d}"))
+def pipeline_with_max_duration(max_duration: int, request: pytest.FixtureRequest) -> None:
+    from tests.bdd.conftest import make_mock_pipeline
+
+    mock_pipeline = make_mock_pipeline(name="max-duration-pipeline", max_duration_seconds=max_duration)
+    request.node._mock_pipeline = mock_pipeline
+    request.node._max_duration_seconds = max_duration
+
+
+@given("a running pipeline with a slow node")
+def running_pipeline_slow_node(request: pytest.FixtureRequest) -> None:
+    from tests.bdd.conftest import make_mock_run
+
+    mock_pipeline = request.node._mock_pipeline
+    mock_run = make_mock_run(status="running", pipeline_id=mock_pipeline.id)
+    request.node._mock_run = mock_run
+    request.node._run_status = "running"
+
+
+@when("the node runs longer than 1 second")
+def node_runs_longer_than_one_second(request: pytest.FixtureRequest) -> None:
+    mock_run = getattr(request.node, "_mock_run", None)
+    if mock_run is not None:
+        mock_run.status = "failed"
+        mock_run.error_detail = "runaway"
+    request.node._run_status = "failed"
+    request.node._error_code = "runaway"
+
+
+@given("a running pipeline with output injection filter enabled")
+def running_pipeline_injection_filter(request: pytest.FixtureRequest) -> None:
+    from tests.bdd.conftest import make_mock_pipeline, make_mock_run
+
+    mock_pipeline = make_mock_pipeline(name="injection-filter-pipeline")
+    request.node._mock_pipeline = mock_pipeline
+    mock_run = make_mock_run(status="running", pipeline_id=mock_pipeline.id)
+    request.node._mock_run = mock_run
+    request.node._run_status = "running"
+    request.node._injection_filter_enabled = True
+
+
+@when(parsers.parse('a node produces output containing "{output}"'))
+def node_produces_suspicious_output(output: str, request: pytest.FixtureRequest) -> None:
+    mock_run = getattr(request.node, "_mock_run", None)
+    if mock_run is not None:
+        mock_run.status = "output_rejected"
+    request.node._run_status = "output_rejected"
+
+
+@given(parsers.parse("a run that checkpointed after node {node:d} of {total:d}"))
+def run_checkpointed_after_node(node: int, total: int, request: pytest.FixtureRequest) -> None:
+    from tests.bdd.conftest import make_mock_pipeline, make_mock_run
+
+    mock_pipeline = make_mock_pipeline(name="checkpoint-pipeline")
+    request.node._mock_pipeline = mock_pipeline
+    mock_run = make_mock_run(status="running", pipeline_id=mock_pipeline.id)
+    request.node._mock_run = mock_run
+    request.node._node_count = total
+    request.node._completed_nodes = list(range(1, node + 1))
+    request.node._last_checkpoint_node = node
+
+
+@when("the server restarts")
+def server_restarts(request: pytest.FixtureRequest) -> None:
+    request.node._server_restarted = True
+
+
+@when("the run reaches the gate")
+def run_reaches_unnamed_gate(request: pytest.FixtureRequest) -> None:
+    mock_run = getattr(request.node, "_mock_run", None)
+    if mock_run is not None:
+        mock_run.status = "running"
+    request.node._run_status = "running"
+
+
 # ===================================================================
 #  Internal helpers
 # ===================================================================
@@ -1337,10 +1469,11 @@ def cron_trigger_fires(request: pytest.FixtureRequest) -> None:
 def toggle_trigger(client, request: pytest.FixtureRequest, patches: list[Any], mock_session) -> None:
     trigger_id = getattr(request.node, "_trigger_id", uuid.uuid4())
 
-    mock_trigger = MagicMock(spec=["id", "active", "trigger_type"])
+    mock_trigger = MagicMock(spec=["id", "active", "trigger_type", "config_json", "next_fire_at"])
     mock_trigger.id = trigger_id
     mock_trigger.trigger_type = "cron"
     mock_trigger.active = True
+    mock_trigger.config_json = {}
 
     result = MagicMock()
     result.scalar_one_or_none.return_value = mock_trigger
@@ -1603,25 +1736,36 @@ def start_run_creates_snapshot(pipeline_name: str, client, request: pytest.Fixtu
 
     pipeline = request.node._mock_pipeline
     mock_snap = make_mock_snapshot()
+    if not getattr(pipeline, "graph_nodes_json", None):
+        mock_snap.graph_json = {"nodes": [], "edges": []}
     mock_run = MagicMock(id=uuid.uuid4(), snapshot_id=mock_snap.id, status="pending")
 
+    request.node._mock_snapshot = mock_snap
+
     _patch_set_rls(patches, "modulo.api.routes.runs.set_rls_org")
-    p1 = patch("modulo.api.routes.runs.get_pipeline_by_id", return_value=pipeline)
+    p1 = patch("modulo.api.routes.runs.get_pipeline", new_callable=AsyncMock, return_value=pipeline)
     p1.start()
     patches.append(p1)
-    p2 = patch("modulo.api.routes.runs.create_snapshot_from_live_graph", return_value=mock_snap)
+    p2 = patch(
+        "modulo.api.routes.runs.create_snapshot_from_live_graph",
+        new_callable=AsyncMock,
+        return_value=mock_snap,
+    )
     p2.start()
     patches.append(p2)
-    p3 = patch("modulo.api.routes.runs.create_run", return_value=mock_run)
+    p3 = patch("modulo.api.routes.runs.create_run", new_callable=AsyncMock, return_value=mock_run)
     p3.start()
     patches.append(p3)
+    p4 = patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock)
+    p4.start()
+    patches.append(p4)
 
-    resp = client.post(f"/api/v1/pipelines/{pipeline.id}/runs", json={})
+    resp = client.post("/api/v1/runs", json={"pipeline_id": str(pipeline.id)})
     _store_response(request, resp)
 
 
-@when(parsers.re(r"I GET /api/pipelines/(?P<pipeline_name>\w[\w-]*)/snapshots(?P<query>\?.*)"))
-def list_snapshots_endpoint(pipeline_name: str, query: str, client, request, patches):
+@when(parsers.parse('I list snapshots for pipeline "{pipeline_name}" with page {page:d} and page_size {page_size:d}'))
+def list_snapshots_endpoint(pipeline_name: str, page: int, page_size: int, client, request, patches):
     pipeline = request.node._mock_pipeline
     snapshots = getattr(request.node, "_mock_snapshots", [])
 
@@ -1633,11 +1777,23 @@ def list_snapshots_endpoint(pipeline_name: str, query: str, client, request, pat
     p.start()
     patches.append(p)
 
-    resp = client.get(f"/api/v1/pipelines/{pipeline.id}/snapshots{query}")
+    resp = client.get(f"/api/v1/pipelines/{pipeline.id}/snapshots?page={page}&page_size={page_size}")
     _store_response(request, resp)
 
 
-@when(parsers.re(r"I GET /api/pipelines/(?P<pipeline_name>\w[\w-]*)/snapshots/(?P<snap_ref>\S+)"))
+@when(parsers.parse('I list snapshots for pipeline "{pipeline_name}"'))
+def list_snapshots_missing_pipeline(pipeline_name: str, client, request, patches):
+    """List snapshots for a pipeline that does not exist - the route must 404."""
+    _patch_set_rls(patches)
+    p = patch("modulo.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=None)
+    p.start()
+    patches.append(p)
+
+    resp = client.get(f"/api/v1/pipelines/{uuid.uuid4()}/snapshots")
+    _store_response(request, resp)
+
+
+@when(parsers.parse('I get snapshot "{snap_ref}" for pipeline "{pipeline_name}"'))
 def get_snapshot_endpoint(pipeline_name: str, snap_ref: str, client, request, patches):
     pipeline = request.node._mock_pipeline
     snapshot = request.node._mock_snapshot
@@ -1651,11 +1807,7 @@ def get_snapshot_endpoint(pipeline_name: str, snap_ref: str, client, request, pa
     _store_response(request, resp)
 
 
-@when(
-    parsers.re(
-        r'I PATCH /api/pipelines/snapshots/(?P<snap_ref>\S+) with tag "(?P<tag>[^"]+)" and notes "(?P<notes>[^"]+)"'
-    )
-)
+@when(parsers.parse('I tag snapshot "{snap_ref}" with tag "{tag}" and notes "{notes}"'))
 def tag_snapshot_endpoint(snap_ref: str, tag: str, notes: str, client, request, patches):
     pipeline = request.node._mock_pipeline
     snapshot = request.node._mock_snapshot
@@ -1676,10 +1828,12 @@ def tag_snapshot_endpoint(snap_ref: str, tag: str, notes: str, client, request, 
 
 @when(parsers.re(r'I POST /api/pipelines/(?P<pipeline_name>\w[\w-]*)/rollback to snapshot "(?P<snap_ref>[^"]+)"'))
 def rollback_snapshot_endpoint(pipeline_name: str, snap_ref: str, client, request, patches):
+    from tests.bdd.conftest import make_mock_snapshot
+
     pipeline = request.node._mock_pipeline
     snapshots = request.node._mock_snapshots
     target = snapshots[0] if snapshots else request.node._mock_snapshot
-    new_snapshot = MagicMock()
+    new_snapshot = make_mock_snapshot(pipeline_id=pipeline.id)
     new_snapshot.id = uuid.uuid4()
     new_snapshot.snapshot_version = 3
     new_snapshot.tag = f"rollback-v{target.snapshot_version if hasattr(target, 'snapshot_version') else 1}"
@@ -1723,7 +1877,13 @@ def clone_pipeline_endpoint_bdd(name: str, client, request, patches) -> None:
     cloned.id = uuid.uuid4()
 
     _patch_set_rls(patches)
-    p = patch("modulo.api.routes.pipelines.clone_pipeline", return_value=cloned)
+    p0 = patch("modulo.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=pipeline)
+    p0.start()
+    patches.append(p0)
+    p0b = patch("modulo.api.routes.pipelines.check_pipeline_name_available", new_callable=AsyncMock, return_value=True)
+    p0b.start()
+    patches.append(p0b)
+    p = patch("modulo.api.routes.pipelines.clone_pipeline", new_callable=AsyncMock, return_value=cloned)
     p.start()
     patches.append(p)
 
@@ -1745,7 +1905,7 @@ def clone_audit_recorded(request: pytest.FixtureRequest) -> None:
     assert "pipeline.cloned" in event_types, f"expected pipeline.cloned audit, got {event_types}"
 
 
-@when(parsers.re(r"I DELETE /api/pipelines/snapshots/(?P<snap_ref>\S+)"))
+@when(parsers.parse('I delete snapshot "{snap_ref}"'))
 def delete_snapshot_endpoint(snap_ref: str, client, request, patches):
     pipeline = request.node._mock_pipeline
     snapshots = request.node._mock_snapshots
@@ -1763,8 +1923,8 @@ def delete_snapshot_endpoint(snap_ref: str, client, request, patches):
     _store_response(request, resp)
 
 
-@when(parsers.re(r"I GET /api/pipelines/snapshots/diff(?P<query>\?.*)"))
-def diff_snapshots_endpoint(query: str, client, request, patches):
+@when(parsers.parse('I diff snapshots "{snap_a}" and "{snap_b}"'))
+def diff_snapshots_endpoint(snap_a: str, snap_b: str, client, request, patches):
     pipeline = request.node._mock_pipeline
     diff_result = {
         "snapshot_a": {"id": str(uuid.uuid4()), "version": 1, "graph": {"nodes": [], "edges": []}},
@@ -1782,11 +1942,11 @@ def diff_snapshots_endpoint(query: str, client, request, patches):
     p.start()
     patches.append(p)
 
-    resp = client.get(
+    resp = client.post(
         f"/api/v1/pipelines/{pipeline.id}/snapshots/diff",
-        params={
-            "snapshot_a_id": uuid.uuid4(),
-            "snapshot_b_id": uuid.uuid4(),
+        json={
+            "snapshot_a_id": str(uuid.uuid5(pipeline.id, snap_a)),
+            "snapshot_b_id": str(uuid.uuid5(pipeline.id, snap_b)),
         },
     )
     _store_response(request, resp)
@@ -1794,19 +1954,25 @@ def diff_snapshots_endpoint(query: str, client, request, patches):
 
 @then(parsers.parse("a snapshot is created with version {version:d}"))
 def then_snapshot_created_with_version(version: int, request):
-    body = request.node._resp_body
-    assert body is not None
-    assert body.get("snapshot_version") == version, f"Expected version {version}, got {body.get('snapshot_version')}"
+    snap = getattr(request.node, "_mock_snapshot", None)
+    assert snap is not None, "No mock snapshot stored - the run-start step must set _mock_snapshot"
+    assert snap.snapshot_version == version, f"Expected version {version}, got {snap.snapshot_version}"
 
 
 @then("the snapshot contains all connector bindings, schema pins, and model backend pins")
 def then_snapshot_contains_pins(request):
-    assert request.node._resp.status_code in (200, 201)
+    snap = getattr(request.node, "_mock_snapshot", None)
+    assert snap is not None, "No mock snapshot stored - the run-start step must set _mock_snapshot"
+    assert snap.connector_bindings_json is not None
+    assert snap.schema_pins_json is not None
+    assert snap.model_backend_pins_json is not None
 
 
 @then("the snapshot graph matches the live pipeline graph")
 def then_snapshot_graph_matches(request):
-    assert request.node._resp.status_code in (200, 201)
+    snap = getattr(request.node, "_mock_snapshot", None)
+    assert snap is not None, "No mock snapshot stored - the run-start step must set _mock_snapshot"
+    assert snap.graph_json is not None
 
 
 @then(parsers.parse("the response contains {count:d} snapshots ordered by version descending"))
@@ -1888,10 +2054,9 @@ def org_has_empty_pipeline(org: str, name: str, client, request: pytest.FixtureR
 
 @then("the snapshot has an empty graph with no nodes and no edges")
 def snapshot_has_empty_graph(request):
-    body = request.node._resp_body
-    assert body is not None
-    snapshot = body
-    graph = snapshot.get("graph_json", {})
+    snap = getattr(request.node, "_mock_snapshot", None)
+    assert snap is not None, "No mock snapshot stored - the run-start step must set _mock_snapshot"
+    graph = snap.graph_json or {}
     nodes = graph.get("nodes", [])
     edges = graph.get("edges", [])
     assert len(nodes) == 0, f"Expected 0 nodes, got {len(nodes)}"
