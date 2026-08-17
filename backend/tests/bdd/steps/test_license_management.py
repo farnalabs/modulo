@@ -100,6 +100,15 @@ def _setup_client(ctx: dict[str, Any]) -> None:
         fernet_key=_valid_32,
         modulo_admin_password="testpass",
         modulo_license_key="",
+        # No real Redis for hermetic BDD steps: the license route caches status
+        # under ``license:{org_id}`` (60s TTL) and reads it back before touching
+        # the DB / in-memory store. In the full BDD suite Redis IS up, so a GET
+        # from one scenario writes a shared cache entry that a later scenario
+        # reads back as stale (community / has_license=false), short-circuiting
+        # the in-process ``_current_license`` set by a @given step. An empty
+        # redis_url makes every cache read/write fail fast inside the route's
+        # ``except Exception``, keeping each scenario hermetic.
+        redis_url="",
     )
 
     _principal_kwargs = {
