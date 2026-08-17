@@ -600,11 +600,11 @@ async def _resolve_schema_by_definition(
             published[sv.schema_id] = sv
 
     for s in all_schemas:
-        sv = published.get(s.id)
-        if sv and sv.definition_json == definition:
+        candidate_sv = published.get(s.id)
+        if candidate_sv and candidate_sv.definition_json == definition:
             return {
                 "schema_id": str(s.id),
-                "version": sv.version,
+                "version": candidate_sv.version,
                 "warning": None,
             }
     return None

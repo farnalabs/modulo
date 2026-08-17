@@ -31,6 +31,7 @@ import os
 import threading
 import time
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -1468,6 +1469,7 @@ async def _ongoing_topup(
         if outcome is not None:
             outcome.update(snapshot_skip)
         return []
+    assert snapshot_id is not None
 
     to_create = effective_target - in_flight
     if to_create <= 0:
@@ -2080,7 +2082,7 @@ def _is_catchup_eligible(row: Any, advanced_this_tick: set[uuid.UUID], now: date
         return False  # last fire is fresh (normal state — never catch up)
     if age_seconds > min(CATCHUP_BOUND_SECONDS, cadence * 3):
         return False  # ancient stale — beyond the bounded catch-up window
-    return row.last_fired_at < row.next_fire_at - timedelta(seconds=cadence)
+    return bool(row.last_fired_at < row.next_fire_at - timedelta(seconds=cadence))
 
 
 def _missed_epoch_of(row: Any, now: datetime) -> int | None:
@@ -2450,7 +2452,7 @@ async def _process_due_cron_rows(
     now: datetime,
     org_id: uuid.UUID,
     org_paused: bool,
-    cron_rows: list[Any],
+    cron_rows: Sequence[Any],
     latest_snapshots: dict[uuid.UUID, uuid.UUID],
     advanced_this_tick: set[uuid.UUID],
     summary: dict[str, Any],
@@ -2536,7 +2538,7 @@ async def _process_due_polling_rows(
     now: datetime,
     org_id: uuid.UUID,
     org_paused: bool,
-    polling_rows: list[Any],
+    polling_rows: Sequence[Any],
     summary: dict[str, Any],
 ) -> None:
     """Advance + enqueue the due polling rows (one epoch each, atomic)."""
@@ -2642,7 +2644,7 @@ async def _process_due_report_rows(
     q: RedisQueue,
     now: datetime,
     org_id: uuid.UUID,
-    report_rows: list[Any],
+    report_rows: Sequence[Any],
     summary: dict[str, Any],
 ) -> None:
     """Advance + enqueue the due scheduled-report rows (one epoch each, atomic)."""
