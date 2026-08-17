@@ -863,7 +863,7 @@ class TestPublishEvalProposal:
             patch("modulo.api.routes.feedback.set_rls_user_context"),
             patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
             patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
-            patch("modulo.api.routes.feedback.append_audit_event", new=AsyncMock(return_value=MagicMock())),
+            patch("modulo.api.routes.feedback.append_audit_event_isolated", new=AsyncMock(return_value=MagicMock())),
         ):
             mock_get.return_value = mock_record
             mock_update.return_value = _make_mock_record(feedback_status="resolved")
@@ -904,7 +904,7 @@ class TestPublishEvalProposal:
             patch("modulo.api.routes.feedback.set_rls_user_context"),
             patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
             patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
-            patch("modulo.api.routes.feedback.append_audit_event", new=AsyncMock(return_value=MagicMock())),
+            patch("modulo.api.routes.feedback.append_audit_event_isolated", new=AsyncMock(return_value=MagicMock())),
         ):
             mock_get.return_value = mock_record
             mock_update.return_value = _make_mock_record(feedback_status="resolved")
@@ -931,7 +931,7 @@ class TestPublishEvalProposal:
             patch("modulo.api.routes.feedback.set_rls_user_context"),
             patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
             patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
-            patch("modulo.api.routes.feedback.append_audit_event", new=AsyncMock(return_value=MagicMock())),
+            patch("modulo.api.routes.feedback.append_audit_event_isolated", new=AsyncMock(return_value=MagicMock())),
         ):
             mock_get.return_value = mock_record
             mock_update.return_value = _make_mock_record(feedback_status="resolved")
@@ -980,7 +980,7 @@ class TestPublishEvalProposal:
             patch("modulo.api.routes.feedback.set_rls_user_context"),
             patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
             patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
-            patch("modulo.api.routes.feedback.append_audit_event", new=AsyncMock(return_value=MagicMock())),
+            patch("modulo.api.routes.feedback.append_audit_event_isolated", new=AsyncMock(return_value=MagicMock())),
         ):
             mock_get.return_value = mock_record
             mock_update.return_value = _make_mock_record(feedback_status="resolved")
@@ -1006,7 +1006,7 @@ class TestPublishEvalProposal:
             patch("modulo.api.routes.feedback.set_rls_user_context"),
             patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
             patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
-            patch("modulo.api.routes.feedback.append_audit_event", new=audit),
+            patch("modulo.api.routes.feedback.append_audit_event_isolated", new=audit),
         ):
             mock_get.return_value = mock_record
             mock_update.return_value = _make_mock_record(feedback_status="resolved")
@@ -1025,10 +1025,12 @@ class TestPublishEvalProposal:
         audit.assert_awaited_once()
         kwargs = audit.await_args.kwargs
         assert kwargs["event_type"] == "feedback.proposal_published"
+        assert kwargs["resource_type"] == "feedback_record"
         assert kwargs["resource_id"] == _RECORD_ID
-        assert kwargs["payload_json"]["pipeline_id"] == str(pipeline_id)
-        assert kwargs["payload_json"]["node_id"] == str(node_id)
-        assert kwargs["payload_json"]["eval_type"] == "regex"
+        assert kwargs["payload"]["pipeline_id"] == str(pipeline_id)
+        assert kwargs["payload"]["node_id"] == str(node_id)
+        assert kwargs["payload"]["eval_type"] == "regex"
+        assert kwargs["log_key"] == "feedback.audit_append_failed"
 
     def test_publish_requires_eval_gap_record(self, client: TestClient) -> None:
         mock_record = _make_mock_record(eval_gap=False, feedback_status="pending")
