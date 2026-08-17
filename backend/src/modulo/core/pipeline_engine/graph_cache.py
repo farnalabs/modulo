@@ -111,13 +111,13 @@ def _make_gate_kickback_router(
     """Build a router that kicks back to reject_target on HITL rejection.
 
     FAR-210 (reject→correction edge): a gate config MAY declare a
-    ``correction_target``, but the single-node correction node does not exist
-    in ``node_runner`` and no production code dispatches
-    ``FeedbackManager.run_single_node_correction`` from the graph path — so
-    routing a rejection to a ``correction_target`` would be dead routing state.
-    Until the seam is wired (tracked as a follow-up), a rejection always kicks
-    back to the plain reject target; T1's ``recover_node`` override stays the
-    break-glass path.
+    ``correction_target``. The router still kicks a rejection back to the plain
+    ``reject_target`` — the correction DISPATCH happens in the gate node itself
+    (``node_runner._hitl_gate``), which invokes
+    ``FeedbackManager.dispatch_reject_correction`` on a rejected gate that
+    declares a ``correction_target`` (the automated reject→correction path).
+    Routing a rejection to the ``correction_target`` here would be dead routing
+    state; T1's ``recover_node`` override stays the break-glass path.
     """
 
     def _router(state: dict[str, Any]) -> str:

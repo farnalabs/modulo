@@ -11,7 +11,7 @@ import json
 import logging
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import func, select, update
@@ -121,6 +121,130 @@ def _prior_states_for_retry(prior_states: list[dict[str, Any]]) -> list[dict[str
         entry.pop("input_violation_metric", None)
         stripped.append(entry)
     return stripped
+
+
+def _guardrail_correction_config(guardrail: Any) -> dict[str, Any] | None:
+    """Return a guardrail's embedded ``correction`` config block, or None."""
+    config = getattr(guardrail, "config", None)
+    if not isinstance(config, dict):
+        return None
+    correction = config.get("correction")
+    return correction if isinstance(correction, dict) else None
+
+
+async def _get_feedback_record_for_node(
+    session: AsyncSession,
+    org_id: UUID,
+    run_id: UUID,
+    node_id: str,
+) -> FeedbackRecord | None:
+    """Return the FeedbackRecord for (run, node), or None when absent."""
+    result = await session.execute(
+        select(FeedbackRecord).where(
+            FeedbackRecord.organisation_id == org_id,
+            FeedbackRecord.run_id == run_id,
+            FeedbackRecord.producing_node_id == node_id,
+        )
+    )
+    return result.scalars().first()
+
+
+async def dispatch_reject_correction(
+    *,
+    session_factory: Callable[..., Any],
+    org_id: UUID,
+    run_id: UUID,
+    node_id: str,
+    node_input: dict[str, Any],
+    rejection_reason: str,
+    gate_id: str,
+) -> dict[str, Any] | None:
+    """FAR-210 follow-up: dispatch the single-node correction on a HITL reject.
+
+    Invoked from the HITL reject path (``node_runner._hitl_gate``) when the gate
+    config declares a ``correction_target``. This is the AUTOMATED reject→
+    correction edge: instead of only kicking back to the plain ``reject_target``,
+    the blocked node's input is corrected through the RESTRICTED single-node
+    correction path (``FeedbackManager.run_single_node_correction``).
+
+    Best-effort and fully failure-isolated — it must NEVER crash the reject
+    path. Returns the correction outcome dict on success, or None when no
+    correction can be dispatched (no run, no correction-configured guardrail on
+    the node, no FeedbackRecord / resolvable account, no run-scoped backend hub,
+    or any resolution failure). All failures are logged and swallowed.
+    """
+    try:
+        async with session_factory() as session, session.begin():
+            from modulo.db.rls import set_rls_org
+
+            await set_rls_org(session, org_id)
+            run = await get_run(session, run_id)
+            if run is None:
+                return None
+            pipeline_id = run.pipeline_id
+            account_id = run.account_id
+
+            from modulo.core.guardrails.conformance import load_node_guardrails
+
+            guardrails = await load_node_guardrails(session, org_id=org_id, pipeline_id=pipeline_id, node_id=node_id)
+            guardrail: Any | None = None
+            correction_config: dict[str, Any] | None = None
+            for g in guardrails:
+                block = _guardrail_correction_config(g)
+                if block is not None:
+                    guardrail = g
+                    correction_config = block
+                    break
+            if guardrail is None or correction_config is None:
+                return None
+
+            from modulo.core.guardrails.correction import CorrectionDefinition
+
+            correction = CorrectionDefinition.from_eval_config({"correction": correction_config})
+
+            record = await _get_feedback_record_for_node(session, org_id, run_id, node_id)
+            if record is None:
+                if account_id is None:
+                    return None
+                record = FeedbackRecord(
+                    organisation_id=org_id,
+                    run_id=run_id,
+                    gate_id=gate_id,
+                    account_id=account_id,
+                    rejection_reason=rejection_reason,
+                    rejected_output=node_input,
+                    producing_node_id=node_id,
+                    feedback_status="correcting",
+                    feedback_handler_type="human",
+                )
+                session.add(record)
+                await session.flush()
+
+            from modulo.core.pipeline_engine.decorator import get_model_backend_hub
+
+            hub = get_model_backend_hub()
+            if hub is None:
+                return None
+            backend = await hub.get(UUID(str(correction.model_backend_id)))
+
+            mgr = FeedbackManager(session, org_id)
+            outcome = await mgr.run_single_node_correction(
+                record_id=record.id,
+                guardrail=guardrail,
+                correction=correction,
+                node_input=node_input,
+                backend=backend,
+                bound_guardrails=guardrails,
+            )
+            return cast(dict[str, Any], outcome)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception(
+            "feedback.reject_correction_dispatch_failed",
+            extra={"org_id": str(org_id), "run_id": str(run_id), "node_id": node_id},
+        )
+        return None
 
 
 class FeedbackManager:

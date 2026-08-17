@@ -335,7 +335,6 @@ Coverage minimums: `modulo.auth` 90%, `pipeline_engine` 85%, `db.rls` 95%, overa
 22. Run inspection UI — per-node IO, sensitive masking, "Copy as test fixture"
 23. Stage board — search, filter, `awaiting_human` quick filter
 24. Library browser — list, preview, copy-to-adapt
-25. Demo pipeline + first-run walkthrough — `MODULO_DEMO_MODE`
 
 ### Phase 6 — Alpha exit checklist
 All six criteria from PRD §10.3b must be met explicitly.
@@ -404,7 +403,7 @@ pnpm run dev
 - **Migration ID length**: Branch-based migrations have revision IDs >32 chars (e.g. `0005_library_community_visibility`). Alembic creates the `alembic_version` table with `VARCHAR(32)` by default, which causes `StringDataRightTruncationError`. Manually pre-create the table with `VARCHAR(255)` before running migrations.
 - **Migration 0014_fixture_contribution bug**: CHECK constraint on `contribution_status` is created before the column is added. The `add_column` call must precede the `create_check_constraint` call.
 - **Frontend router missing import**: `PluginsSettingsView` is used as a route component in `src/router/index.ts` but was missing from the top-level imports. Always verify named imports match the import list.
-- **Seed org/user (fixed)**: On startup, `main.py` now runs Alembic migrations, creates a default organisation if none exists, and seeds users from `MODULO_USERS`. Plaintext passwords in `MODULO_USERS` (e.g. `admin:admin`) are auto-hashed with bcrypt. Set `MODULO_DEMO_MODE=true` to also create a `demo:demo` read-only user.
+- **Seed org/user (fixed)**: On startup, `main.py` now runs Alembic migrations, creates a default organisation if none exists, and seeds users from `MODULO_USERS`. Plaintext passwords in `MODULO_USERS` (e.g. `admin:admin`) are auto-hashed with bcrypt.
 - **Backend Settings reads `.env`**: The `.env` file must be in `backend/`, not `Product/`. The `Settings` model uses `env_file=".env"` relative to the cwd.
 
 ### Pre-merge smoke test (MANDATORY)

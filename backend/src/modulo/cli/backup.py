@@ -12,7 +12,7 @@ import json
 import logging
 import random
 import shutil
-import subprocess
+import subprocess  # nosec B404 -- subprocess is used only to shell out to pg_dump/psql with a hardcoded argv list (never shell=True, never user-supplied commands); see _run_pg_dump/_run_psql
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -162,7 +162,9 @@ def _run_pg_dump(raw_url: str, output: Path, timeout: int = 300) -> None:
     ]
     try:
         with output.open("wb") as f:
-            result = subprocess.run(cmd, stdout=f, stderr=subprocess.PIPE, check=False, timeout=timeout)  # noqa: S603 — cmd is a hardcoded list, not user input
+            result = subprocess.run(  # nosec B603 -- cmd is a hardcoded argv list, never shell=True, never user input  # noqa: S603
+                cmd, stdout=f, stderr=subprocess.PIPE, check=False, timeout=timeout
+            )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"pg_dump timed out after {timeout}s") from exc
     if result.returncode != 0:
@@ -174,7 +176,9 @@ def _run_psql(raw_url: str, input_path: Path, timeout: int = 600) -> None:
     cmd = ["psql", "-q", "-v", "ON_ERROR_STOP=1", raw_url]
     try:
         with input_path.open("rb") as f:
-            result = subprocess.run(cmd, stdin=f, capture_output=True, check=False, timeout=timeout)  # noqa: S603 — cmd is a hardcoded list with trusted input
+            result = subprocess.run(  # nosec B603 -- cmd is a hardcoded argv list with trusted input, never shell=True  # noqa: S603
+                cmd, stdin=f, capture_output=True, check=False, timeout=timeout
+            )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"psql restore timed out after {timeout}s") from exc
     if result.returncode != 0:
@@ -494,10 +498,10 @@ def backup(db_url: str | None, output_dir: Path | None) -> None:
         user_specified = True
     else:
         user_specified = False
-        suffix = random.randint(1000, 9999)  # noqa: S311 — not crypto, just avoiding directory collision
+        suffix = random.randint(1000, 9999)  # nosec B311 -- not crypto, just avoiding a directory-name collision for the backup folder  # noqa: S311
         backup_dir = Path(f"./modulo-backup-{ts}-{suffix}")
         while backup_dir.exists():
-            suffix = random.randint(1000, 9999)  # noqa: S311
+            suffix = random.randint(1000, 9999)  # nosec B311 -- not crypto, just avoiding a directory-name collision  # noqa: S311
             backup_dir = Path(f"./modulo-backup-{ts}-{suffix}")
         backup_dir.mkdir(parents=True, exist_ok=False)
 

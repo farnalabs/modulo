@@ -410,11 +410,6 @@ $modelBackendDir = Join-Path (Join-Path (Join-Path $backendDir "src") "modulo") 
 $backendExists = Test-Path -LiteralPath $modelBackendDir
 LogCheckbox $backendExists "Model backend directory exists"
 
-# Seed data / demo pipeline
-$seedFile = Join-Path (Join-Path $productRoot "scripts") "seed.py"
-$seedOk = Test-Path -LiteralPath $seedFile
-LogCheckbox $seedOk "Seed data script exists ($seedFile)"
-
 # BDD feature files exist
 $bddTestDir = Join-Path $backendDir "tests"
 if (Test-Path -LiteralPath $bddTestDir) {
@@ -444,16 +439,11 @@ Log ""
 # --- Criterion #1: Demo pipeline walkable by 3 non-authors ---
 LogHeader "Criterion #1: Demo pipeline walkable by 3 non-authors"
 Log ""
-Log "  How to verify"
-Log "  - 1. Start Modulo with modulo_seed_demo_data=true (MODULO_DEMO_MODE is deprecated)"
-Log "  - 2. Load the demo pipeline (prd-to-requirements)"
-Log "  - 3. Walk through the full pipeline end-to-end"
-Log "  - 4. Repeat with 2 additional people who did NOT author the code"
-Log "  - Each walker should complete without assistance"
+Log "  [x] Criterion #1: Demo pipeline — REMOVED/DESCOPED (FAR-308)"
+Log "      +- The pre-loaded demo pipeline (prd-to-requirements) and the demo mode env var"
+Log "      +- were removed; this criterion is no longer an alpha requirement."
 Log ""
-Log "  Evidence protocol: one Linear comment on FAR-265 per walker, naming the"
-Log "  walker, the date, and the run ID or screen capture. evidence_link = the"
-Log "  comment URL or run URL."
+Log "      No longer required for alpha exit."
 Log ""
 
 # --- Criterion #3: Non-demo pipeline ---
