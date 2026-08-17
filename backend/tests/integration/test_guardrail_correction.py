@@ -346,7 +346,7 @@ class TestSingleNodeCorrectionPersistsResolved:
 
 
 class TestCorrectionRunRetryExclusion:
-    async def test_correction_run_excluded_from_retry_policy_redispatch(
+    def test_correction_run_excluded_from_retry_policy_redispatch(
         self,
         db_engine: AsyncEngine,
         test_org: uuid.UUID,
