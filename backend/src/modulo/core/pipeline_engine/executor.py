@@ -1733,6 +1733,12 @@ class PipelineExecutor:
 
         snapshot_id = run.snapshot_id
         thread_id = run.langgraph_thread_id
+        # FAR-210: correction runs are EXCLUDED from retry_policy re-dispatch.
+        # A single-node correction has a fixed bounded retry budget owned by the
+        # correction path itself; the pipeline retry policy must never
+        # re-dispatch a correction run (no chained corrections).
+        run_trigger_type = getattr(run, "trigger_type", "") or ""
+        is_correction_run = run_trigger_type == "correction"
 
         # Load eval definitions for conditional HITL gating (eval-before-interrupt).
         eval_defs_by_node: dict[str, list[EvalDefDTO]] = {}
@@ -2062,7 +2068,7 @@ class PipelineExecutor:
         # favour of ``runs.claim_token`` fencing (settings.py F3a note), so the
         # fenced pending-reset below IS the fence release.
         retry_budget = _retry_after_policy(pipeline_retry_policy, final_status, error_code, error_detail)
-        if retry_budget is not None:
+        if retry_budget is not None and not is_correction_run:
             node_attempt_count = 0
             current_claim_token: str | None = None
             async with self._session_factory() as session, session.begin():

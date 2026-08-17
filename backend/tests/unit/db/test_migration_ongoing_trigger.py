@@ -30,7 +30,7 @@ import pytest
 from alembic.script import ScriptDirectory
 
 _MIGRATION_0008 = "0110_schema_pipeline_runtime"
-_HEAD_MIGRATION = "0111_run_blocked_partial_summary"
+_HEAD_MIGRATION = "0112_feedback_correction_state"
 
 _VERSIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 

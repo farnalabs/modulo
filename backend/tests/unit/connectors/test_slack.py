@@ -153,6 +153,80 @@ async def test_query_channels_dict_cursor_not_emitted(connector):
 
 
 @respx.mock
+async def test_query_channels_non_list_page_no_crash(connector):
+    """A corrupt ``channels`` field must fall back to an empty page, not a bare string."""
+    respx.get("https://slack.com/api/conversations.list").mock(
+        return_value=httpx.Response(200, json={"ok": True, "channels": "not-a-list"}),
+    )
+    result = await connector.query(ConnectorQuery(resource="channels", limit=10))
+    assert not result.records
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_users_non_list_page_no_crash(connector):
+    """A corrupt ``members`` field must fall back to an empty page, not a bare string."""
+    respx.get("https://slack.com/api/users.list").mock(
+        return_value=httpx.Response(200, json={"ok": True, "members": "not-a-list"}),
+    )
+    result = await connector.query(ConnectorQuery(resource="users", limit=10))
+    assert not result.records
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_channel_members_non_list_page_no_crash(connector):
+    """A corrupt ``members`` field must fall back to an empty page, not a bare string."""
+    respx.get("https://slack.com/api/conversations.members").mock(
+        return_value=httpx.Response(200, json={"ok": True, "members": "not-a-list"}),
+    )
+    result = await connector.query(ConnectorQuery(resource="channel_members", filters={"channel": "C12345"}))
+    assert not result.records
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_thread_replies_non_list_page_no_crash(connector):
+    """A corrupt ``messages`` field must fall back to an empty page, not a bare string."""
+    respx.get("https://slack.com/api/conversations.replies").mock(
+        return_value=httpx.Response(
+            200,
+            json={"ok": True, "messages": "not-a-list"},
+        ),
+    )
+    result = await connector.query(
+        ConnectorQuery(
+            resource="thread_replies",
+            filters={"channel": "C12345", "thread_ts": "1.2"},
+        )
+    )
+    assert not result.records
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_scheduled_messages_non_list_page_no_crash(connector):
+    """A corrupt ``scheduled_messages`` field must fall back to an empty page, not a bare string."""
+    respx.get("https://slack.com/api/chat.scheduledMessages.list").mock(
+        return_value=httpx.Response(200, json={"ok": True, "scheduled_messages": "not-a-list"}),
+    )
+    result = await connector.query(ConnectorQuery(resource="scheduled_messages", limit=10))
+    assert not result.records
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_messages_non_list_page_no_crash(connector):
+    """A corrupt ``messages`` field must fall back to an empty page, not a bare string."""
+    respx.get("https://slack.com/api/conversations.history").mock(
+        return_value=httpx.Response(200, json={"ok": True, "messages": "not-a-list"}),
+    )
+    result = await connector.query(ConnectorQuery(resource="messages", filters={"channel": "C12345"}))
+    assert not result.records
+    assert result.next_cursor is None
+
+
+@respx.mock
 async def test_query_channels_api_error(connector):
     respx.get("https://slack.com/api/conversations.list").mock(
         return_value=httpx.Response(200, json={"ok": False, "error": "not_authed"}),

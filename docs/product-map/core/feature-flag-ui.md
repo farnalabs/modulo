@@ -137,7 +137,7 @@ Feature flag inspection dashboard at `/admin/feature-flags` listing all known fl
 - [x] FeatureGate component with modes: `show-disabled` (40% opacity) or full lock wall
 - [x] LockIcon component for gated features
 - [x] Tooltip references `/settings/license` — renders "Available on higher plan tier — <tier> — /settings/license" (exact PRD wording "Requires a Team license" requires a locale-key edit — see Known Gaps)
-- [x] Lock icon / gated-feature links target `/settings/license` (FeatureGate `pricingUrl` default; no callers override it to an external URL)
+- [x] Lock icon / gated-feature links target `/settings/license` (FeatureGate `pricingUrl` default; no callers override it to an external URL; the only `modulo.run/pricing` link is the intentional Upgrade CTA in `SettingsLicenseView.vue:36`)
 
 ### Frontend — License settings page (`SettingsLicenseView.vue`)
 
@@ -218,6 +218,12 @@ Feature flag inspection dashboard at `/admin/feature-flags` listing all known fl
 - [x] BDD feature files for feature flag inspection created
 - [x] Frontend tests for error/loading/empty states in AdminFeatureFlagsView added
 - [x] planStore unit tests exist at frontend/src/__tests__/planStore.spec.ts
+
+## QA History (2026-08-15 — distribute coverage sweep)
+
+### Findings
+- **Stale claim corrected — lock icon link:** `FeatureGate.vue` already defaults `pricingUrl` to `/settings/license` and no `<FeatureGate>` usage overrides it to the external pricing page (verified by grep across `frontend/src`). The only `modulo.run/pricing` reference is the intentional Upgrade CTA in `SettingsLicenseView.vue:36`. Marked the "Lock icon links to /settings/license" checkbox `[x]`.
+- **Tooltip text gap (genuine):** `FeatureGate.vue` tooltip still reads "Available on higher plan tier" rather than "Requires a Team license — see /settings/license". Fixing it requires editing the locale file (`frontend/src/locales/en-US.js`) and the `FeatureGate.spec.ts` assertion, which are outside this task's allowlist — left as a Known Gap.
 
 ## QA History (2026-08-15 — drive toward covered)
 

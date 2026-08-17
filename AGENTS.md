@@ -1513,3 +1513,16 @@ From the FAR-191 streak-status reader (a read-only `get_trigger_streak_status` t
 - **A raw `text()` fragment interpolated into an ORM `select` leaves its placeholders unbound unless you pass them explicitly.** `_STREAK_BOUNDARY_SQL` carries `:oid`/`:tid`; the ORM auto-binds its own `organisation_id_1`/`trigger_id_1` from column predicates but knows nothing about the fragment's params. The query raised `InvalidRequestError: A value is required for bind parameter 'oid'` on EVERY real execution — swallowed by the per-sub-read `except`, so `last_outcomes` degraded to `[]` silently. Substring-routed mock sessions and an integration test that asserted the empty case both passed for the wrong reason (a broken query returns the same empty result as a genuinely empty table). Fix: `session.execute(stmt, {"oid": str(org_id), "tid": str(trigger_id)})`, compile the statement to confirm the merged bind set fully resolves, and make the integration test seed the caller's OWN data and assert it SURFACES — never assert only the empty side of a query.
 
 - **A never-raises reader needs per-sub-read try/excepts, not one function-level try.** A single `try` around count + outcomes + reason means a failure in the LAST optional read discards the already-computed primary data (streak + outcomes vanish into the `unconfigured` base). Each independent read degrades independently: count failure -> base; outcomes failure -> keep streak, empty outcomes; reason failure -> keep state, null reason.
+
+
+### 13. Complexity refactors (S3776) routinely break mypy strict - run mypy on every extracted helper before pushing
+
+From the FAR-281 cognitive-complexity sweep (2026-08-16/17): extracting cohesive blocks into private helper functions to reduce SonarQube S3776 complexity repeatedly introduced mypy strict errors that CI caught after the fact:
+- Bare generic types in extracted helper signatures - `def _sanitize_mcp_mapping(value: dict) -> dict:` and `def _sanitize_mcp_sequence(value: list) -> list:` (missing `[str, Any]` / `[Any]` type args), and `def _mcp_run_item(r: Any, child_rollup: dict) -> dict[str, Any]:` (bare `dict`).
+- The Branch Fixer also contributed a concurrent mypy fix for the same class of error in graph_validator / workflow_import_export / cron_helpers.
+
+Rules:
+- When you extract a helper during a complexity refactor, the helper's signature is NEW code - it must satisfy mypy strict, not just the original function's annotations. Bare `dict`/`list`/`set`/`tuple` without type arguments are mypy strict errors (`[type-arg]`).
+- Run `uv run mypy <changed-file>` on EVERY file you touch in a complexity refactor BEFORE pushing - do not rely on CI to catch it. The refactor changes signatures and moves code, so type-check the whole file, not just the diff.
+- Prefer explicit type arguments on extracted helpers: `dict[str, Any]`, `list[Any]`, `set[str]`, `tuple[Any, int]`. If the helper's parameter type is genuinely heterogeneous, use `Any` explicitly rather than a bare generic.
+- This applies to ANY refactor that extracts helpers or changes signatures (complexity, DRY, dead-code removal), not just S3776.

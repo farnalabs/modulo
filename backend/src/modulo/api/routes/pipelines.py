@@ -512,6 +512,13 @@ class HitlGateConfig(BaseModel):
     label: str = Field(min_length=1, max_length=255)
     description: str = Field(max_length=2000)
     reject_target: uuid.UUID | None = None
+    correction_target: uuid.UUID | None = Field(
+        default=None,
+        description="Node ID routed to on HITL rejection for the FAR-210 single-node "
+        "correction path. Accepted and persisted through the graph contract; the "
+        "reject→correction dispatch seam is tracked as a follow-up (the graph "
+        "compiler currently kicks a rejection back to reject_target).",
+    )
     claim_expiry_minutes: int = Field(gt=0, le=1440)
     human_only: bool
     required_team_id: uuid.UUID | None = None
@@ -1018,6 +1025,11 @@ async def replace_pipeline_graph_endpoint(
                 )
                 for issue in validation.issues:
                     if issue.code == "GUARDRAIL_CAP_EXCEEDED":
+                        raise HTTPException(
+                            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                            detail=issue.message,
+                        )
+                    if issue.code == "REDACT_CORRECT_BLOCKED":
                         raise HTTPException(
                             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                             detail=issue.message,
