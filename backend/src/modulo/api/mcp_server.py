@@ -4037,6 +4037,35 @@ async def get_integration_status() -> dict[str, Any]:
 _VALID_CONFIG_SECTIONS = {"remy", "plan", "rate_limits"}
 
 
+def _config_key_prefixes(section: str | None) -> list[str] | None:
+    """Key prefixes matching a config section, or None to match all sections."""
+    org_ctx = f"{_ctx_org_id_val()}"
+    if section == "remy":
+        return [f"remy_config:{org_ctx}", "remy_config"]
+    if section in {"plan", "rate_limits"}:
+        return ["feature_flags", "default_plan", "rate_limits"]
+    return None
+
+
+def _config_matches(cfg: Any, key_prefixes: list[str] | None) -> bool:
+    """True when *cfg* falls within *key_prefixes* and is not a sensitive key."""
+    if key_prefixes is not None and not any(cfg.key.startswith(p) for p in key_prefixes):
+        return False
+    return not _is_sensitive_key(cfg.key)
+
+
+def _config_table(filtered: list[Any]) -> str:
+    """Render config rows as a markdown table with long values truncated."""
+    lines = ["| Key | Value |", "|-----|-------|"]
+    for cfg in filtered:
+        val = cfg.value
+        val_str = json.dumps(val, default=str) if isinstance(val, dict) else str(val)
+        if len(val_str) > 200:
+            val_str = val_str[:200] + "..."
+        lines.append(f"| {cfg.key} | {val_str} |")
+    return "\n".join(lines)
+
+
 @mcp.tool(
     description=(
         "Get org-level configuration. Optionally filter to a specific section "
@@ -4058,33 +4087,14 @@ async def get_org_config(section: str | None = None) -> dict[str, Any]:
         async with _session(org_id) as s:
             configs = await list_config(s)
 
-        org_ctx = f"{org_id}"
-        key_prefixes: list[str] | None = None
-        if section == "remy":
-            key_prefixes = [f"remy_config:{org_ctx}", "remy_config"]
-        elif section in {"plan", "rate_limits"}:
-            key_prefixes = ["feature_flags", "default_plan", "rate_limits"]
-
-        filtered = [
-            cfg
-            for cfg in configs
-            if (key_prefixes is None or any(cfg.key.startswith(p) for p in key_prefixes))
-            and not _is_sensitive_key(cfg.key)
-        ]
+        key_prefixes = _config_key_prefixes(section)
+        filtered = [cfg for cfg in configs if _config_matches(cfg, key_prefixes)]
 
         if not filtered:
             section_label = section or "org"
             return {"results": f"No configuration found for section '{section_label}'.", "count": 0}
 
-        lines = ["| Key | Value |", "|-----|-------|"]
-        for cfg in filtered:
-            val = cfg.value
-            val_str = json.dumps(val, default=str) if isinstance(val, dict) else str(val)
-            if len(val_str) > 200:
-                val_str = val_str[:200] + "..."
-            lines.append(f"| {cfg.key} | {val_str} |")
-
-        return {"results": "\n".join(lines), "count": len(filtered)}
+        return {"results": _config_table(filtered), "count": len(filtered)}
     except ProgrammingError:
         _log.exception("get_org_config failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
