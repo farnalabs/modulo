@@ -433,3 +433,175 @@ async def test_callback_server_returns_pass_for_unknown_path():
         assert isinstance(decision, dict)
     finally:
         await server.close()
+
+
+# ---------------------------------------------------------------------------
+# Bridge CLI / --wrap mode (MODULO_BRIDGE_EVENT / MODULO_BRIDGE_BLOCKED)
+# ---------------------------------------------------------------------------
+
+
+class _FakeProc:
+    """Fake subprocess whose stdout yields the given byte lines and records
+    whether it was killed. Reproduces the Popen(stdout=PIPE) contract used by
+    ``_wrap_command`` without requiring /bin/sh (Linux-only)."""
+
+    def __init__(self, lines: list[bytes], *, wait_code: int = 0) -> None:
+        self._lines = iter(lines)
+        self._wait_code = wait_code
+        self.killed = False
+        self.closed = False
+
+    @property
+    def stdout(self):
+        return self
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> bytes:
+        return next(self._lines)
+
+    def close(self) -> None:
+        self.closed = True
+
+    def kill(self) -> None:
+        self.killed = True
+
+    def wait(self) -> int:
+        return self._wait_code
+
+
+def test_wrap_command_block_kills_child_and_emits_marker(monkeypatch, capsys):
+    """A 'before' block decision from the Modulo side KILLS the wrapped child
+    and writes a MODULO_BRIDGE_BLOCKED marker + non-zero exit (3)."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    event_line = b'MODULO_BRIDGE_EVENT: {"tool_name": "git push", "args": {"url": "x"}, "direction": "before"}'
+    proc = _FakeProc([event_line], wait_code=0)
+    monkeypatch.setattr(sb.subprocess, "Popen", lambda *a, **k: proc)
+
+    # The Modulo side returns block for any intercepted before-call.
+    monkeypatch.setattr(
+        sb.BridgeClient,
+        "decide_before",
+        lambda self, tool, args: (False, None, "block"),
+    )
+
+    client = sb.BridgeClient("http://127.0.0.1:9", timeout=0.5)
+    code = sb._wrap_command(["git", "push"], client)
+
+    assert code == 3
+    assert proc.killed is True
+    out = capsys.readouterr().out
+    assert "MODULO_BRIDGE_BLOCKED:git push" in out
+
+
+def test_wrap_command_allowed_event_passes_through(monkeypatch, capsys):
+    """An allowed 'before' event (and any non-event stdout line) is echoed
+    through unchanged; the child is NOT killed."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    event_line = b'MODULO_BRIDGE_EVENT: {"tool_name": "git push", "args": {"url": "x"}, "direction": "before"}'
+    proc = _FakeProc([b"agent says hello", event_line], wait_code=0)
+    monkeypatch.setattr(sb.subprocess, "Popen", lambda *a, **k: proc)
+    monkeypatch.setattr(
+        sb.BridgeClient,
+        "decide_before",
+        lambda self, tool, args: (True, None, "pass"),
+    )
+
+    client = sb.BridgeClient("http://127.0.0.1:9", timeout=0.5)
+    code = sb._wrap_command(["git", "push"], client)
+
+    assert code == 0
+    assert proc.killed is False
+    out = capsys.readouterr().out
+    assert "agent says hello" in out
+    assert "MODULO_BRIDGE_BLOCKED" not in out
+
+
+def test_wrap_command_bridge_failure_is_fail_open(monkeypatch, capsys):
+    """A bridge failure (unreachable endpoint) during wrap NEVER blocks the
+    command — the child runs to completion (best-effort fail-open)."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    event_line = b'MODULO_BRIDGE_EVENT: {"tool_name": "git push", "args": {"url": "x"}, "direction": "before"}'
+    proc = _FakeProc([event_line], wait_code=0)
+    monkeypatch.setattr(sb.subprocess, "Popen", lambda *a, **k: proc)
+
+    # Unreachable endpoint -> BridgeClient.decide_before returns (True, None, ...)
+    # fail-open (the real client already fails open; this proves the wrap path
+    # does not kill the child when the bridge cannot be reached).
+    client = sb.BridgeClient("http://127.0.0.1:1", timeout=0.2)
+    code = sb._wrap_command(["git", "push"], client)
+
+    assert code == 0
+    assert proc.killed is False
+    out = capsys.readouterr().out
+    assert "MODULO_BRIDGE_BLOCKED" not in out
+
+
+def test_wrap_command_redact_emits_redacted_marker(monkeypatch, capsys):
+    """A redact decision emits a MODULO_BRIDGE_REDACTED line (masked args) and
+    the child is allowed to proceed."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    event_line = (
+        b'MODULO_BRIDGE_EVENT: {"tool_name": "git push", "args": {"url": '
+        b'"https://x-access-token:ghp_aaaaaaaaaaaaaaaaaaaaaaaa@github.com/a/b.git"}, '
+        b'"direction": "before"}'
+    )
+    proc = _FakeProc([event_line], wait_code=0)
+    monkeypatch.setattr(sb.subprocess, "Popen", lambda *a, **k: proc)
+    monkeypatch.setattr(
+        sb.BridgeClient,
+        "decide_before",
+        lambda self, tool, args: (True, {"url": "https://REDACTED"}, "redact"),
+    )
+
+    client = sb.BridgeClient("http://127.0.0.1:9", timeout=0.5)
+    code = sb._wrap_command(["git", "push"], client)
+
+    assert code == 0
+    assert proc.killed is False
+    out = capsys.readouterr().out
+    assert "MODULO_BRIDGE_REDACTED:" in out
+    assert "REDACTED" in out
+
+
+def test_notify_cli_exit_code_3_on_block(monkeypatch, capsys):
+    """The ``--notify`` CLI returns exit code 3 on a block decision, 0 on pass."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    monkeypatch.setattr(
+        sb.BridgeClient,
+        "notify",
+        lambda self, tool, args, direction, result_summary="": {"action": "block", "blocked": True},
+    )
+    assert sb.main(["--notify", '{"tool_name": "git push", "args": {}, "direction": "before"}', "--endpoint", "x"]) == 3
+
+    monkeypatch.setattr(
+        sb.BridgeClient,
+        "notify",
+        lambda self, tool, args, direction, result_summary="": {"action": "pass", "blocked": False},
+    )
+    assert (
+        sb.main(["--notify", '{"tool_name": "git status", "args": {}, "direction": "before"}', "--endpoint", "x"]) == 0
+    )
+
+
+def test_load_config_resolves_patterns(tmp_path):
+    """``_load_config`` resolves intercepted_tool_patterns from the config file
+    and falls back to defaults when the field is absent/malformed."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    assert sb._load_config(None) == {"patterns": sb.DEFAULT_PATTERNS}
+    assert sb._load_config(str(tmp_path / "missing.json")) == {"patterns": sb.DEFAULT_PATTERNS}
+
+    cfg_file = tmp_path / "bridge.json"
+    cfg_file.write_text(json.dumps({"intercepted_tool_patterns": ["git push*"]}), encoding="utf-8")
+    assert sb._load_config(str(cfg_file)) == {"patterns": ("git push*",)}
+
+    bad_file = tmp_path / "bad.json"
+    bad_file.write_text("not json", encoding="utf-8")
+    assert sb._load_config(str(bad_file)) == {"patterns": sb.DEFAULT_PATTERNS}

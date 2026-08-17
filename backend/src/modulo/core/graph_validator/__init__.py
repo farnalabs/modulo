@@ -532,7 +532,12 @@ def _check_sandbox_loop_intercept(node: dict[str, Any], nid: str, result: Valida
             f"Sandbox agent node '{nid}' loop_intercept: {err}",
             node_id=nid,
         )
-    if errors and isinstance(raw.get("intercepted_tool_patterns"), list) and not raw["intercepted_tool_patterns"]:
+    # The empty-patterns warning is independent of other errors: an empty list is
+    # VALID shape (so it contributes no error), yet it means the bridge would
+    # intercept nothing. Warn whenever the list is empty so a declared-but-inert
+    # control never passes silently. (Previously gated on ``errors``, which is
+    # empty exactly when the list is empty — the warning was unreachable.)
+    if isinstance(raw.get("intercepted_tool_patterns"), list) and not raw["intercepted_tool_patterns"]:
         result.warning(
             "SANDBOX_LOOP_INTERCEPT_EMPTY_PATTERNS",
             f"Sandbox agent node '{nid}' loop_intercept.intercepted_tool_patterns is empty — "

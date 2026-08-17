@@ -1184,3 +1184,71 @@ async def test_non_redact_correction_passes_graph_save():
     )
     assert result.is_valid
     assert not any(i.code == "REDACT_CORRECT_BLOCKED" for i in result.issues)
+
+
+# ---------------------------------------------------------------------------
+# Sandbox loop_intercept config (FAR-211 T3)
+# ---------------------------------------------------------------------------
+
+
+def _sandbox_node(**overrides: Any) -> dict[str, Any]:
+    """A minimally-valid sandbox_agent node for graph validation."""
+    node: dict[str, Any] = {
+        "id": _UUID_A,
+        "node_type": "sandbox_agent",
+        "agent_command": "opencode run --format json",
+        "template_id": "opencode",
+    }
+    node.update(overrides)
+    return node
+
+
+async def test_loop_intercept_valid_config_passes_graph_save():
+    graph = {"nodes": [_sandbox_node(loop_intercept={"enabled": True, "latency_budget_ms": 300})], "edges": []}
+    result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+    assert result.is_valid
+    assert not any(i.code == "SANDBOX_LOOP_INTERCEPT_MALFORMED" for i in result.issues)
+
+
+async def test_loop_intercept_absent_passes_graph_save():
+    """Absent config (the default) is not an error — interception is opt-in."""
+    graph = {"nodes": [_sandbox_node()], "edges": []}
+    result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+    assert result.is_valid
+
+
+async def test_loop_intercept_disabled_false_passes_graph_save():
+    graph = {"nodes": [_sandbox_node(loop_intercept=False)], "edges": []}
+    result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+    assert result.is_valid
+
+
+async def test_loop_intercept_non_dict_is_hard_error():
+    """A declared loop_intercept control that is NOT an object is a hard ERROR —
+    a declared control must never silently no-op because its shape was invalid."""
+    graph = {"nodes": [_sandbox_node(loop_intercept="block")], "edges": []}
+    result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+    assert not result.is_valid
+    assert any(i.code == "SANDBOX_LOOP_INTERCEPT_MALFORMED" for i in result.issues)
+
+
+async def test_loop_intercept_malformed_field_is_hard_error():
+    """A malformed field value (e.g. latency_budget_ms out of range) is a hard
+    ERROR at graph-save — mirrors the runtime LoopInterceptConfigError."""
+    graph = {
+        "nodes": [_sandbox_node(loop_intercept={"latency_budget_ms": 0})],
+        "edges": [],
+    }
+    result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+    assert not result.is_valid
+    assert any(i.code == "SANDBOX_LOOP_INTERCEPT_MALFORMED" for i in result.issues)
+
+
+async def test_loop_intercept_empty_patterns_is_warning_not_error():
+    """An empty intercepted_tool_patterns list is valid shape (no error) but
+    warns that nothing will actually be intercepted."""
+    graph = {"nodes": [_sandbox_node(loop_intercept={"intercepted_tool_patterns": []})], "edges": []}
+    result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+    assert result.is_valid
+    assert any(i.code == "SANDBOX_LOOP_INTERCEPT_EMPTY_PATTERNS" for i in result.issues)
+    assert not any(i.code == "SANDBOX_LOOP_INTERCEPT_MALFORMED" for i in result.issues)
