@@ -20,7 +20,10 @@ Design invariants (binding, from plan-review-iterate):
     detection family (guardrails only use ``regex``/``json_schema``). Never two
     LLM-judges from the same backend.
 4.  **Convergence check** — prior states are fingerprinted; a previously-seen
-    state escalates to HITL immediately (no oscillation burn). Divergent
+    state escalates to HITL immediately (no oscillation burn). Within the
+    retry loop the corrected input is unchanged across attempts, so retries
+    strip prior input fingerprints (a repeated input is not itself
+    oscillation) while a repeated produced OUTPUT still converges. Divergent
     states that never repeat are bounded by the single retry budget
     (``max_attempts``): exhaustion escalates ``budget_exhausted`` to HITL, so
     no correction sequence can run unbounded. (A monotone "strictly-worse"
@@ -166,6 +169,13 @@ class CorrectionDefinition(BaseModel):
     output_schema: dict[str, Any] = Field(default_factory=dict)
     revalidation_detector_family: CorrectionDetectorFamily = CorrectionDetectorFamily.PII
     revalidation_model_backend_id: str | None = Field(default=None, min_length=1)
+    revalidation_config: dict[str, Any] | None = Field(
+        default=None,
+        description="Runtime config for the different-family re-validation detector "
+        "(e.g. {'pattern': ..., 'field': ...} for the regex family). A REGEX-family "
+        "correction REQUIRES a non-empty 'pattern' and 'field' — a regex revalidator "
+        "with no pattern would fail open (marked resolved with no actual re-validation).",
+    )
     max_attempts: int = Field(default=1, ge=1, le=3)
     concurrency_cap: int = Field(default=1, ge=1)
 
@@ -201,6 +211,18 @@ class CorrectionDefinition(BaseModel):
                 "revalidation llm_judge must use a DIFFERENT backend than the correction backend "
                 "(never two LLM-judges from the same backend)"
             )
+        if self.revalidation_detector_family == CorrectionDetectorFamily.REGEX:
+            regex_config = self.revalidation_config or {}
+            if not str(regex_config.get("pattern") or "").strip():
+                raise ValueError(
+                    "revalidation_detector_family='regex' requires revalidation_config.pattern "
+                    "(a REGEX revalidator with no pattern would fail open)"
+                )
+            if not str(regex_config.get("field") or "").strip():
+                raise ValueError(
+                    "revalidation_detector_family='regex' requires revalidation_config.field "
+                    "(the engine cannot re-validate without a field to scan)"
+                )
         return self
 
     @staticmethod
@@ -413,7 +435,7 @@ class CorrectionBackend(Protocol):
     async def invoke(self, messages: list[Any], **kwargs: Any) -> Any: ...
 
 
-async def _parse_structured_output(raw: str, schema: dict[str, Any]) -> dict[str, Any]:
+def _parse_structured_output(raw: str, schema: dict[str, Any]) -> dict[str, Any]:
     """Parse *raw* as JSON and validate against *schema* (strict).
 
     Raises:
@@ -492,8 +514,21 @@ def _revalidate_regex(
     """Re-validate with a REGEX detector (different family than json_schema guardrails).
 
     Guardrail regex semantics are inverted (a match IS a violation), so the
-    re-validation passes when the pattern does NOT match.
+    re-validation passes when the pattern does NOT match. An EMPTY pattern or
+    field fails CLOSED: a regex revalidator with no pattern must never mark the
+    correction resolved — ``_evaluate_regex`` returns ``passed=False`` for a
+    missing pattern, and blindly inverting that would turn the failure into a
+    false pass (FAR-210 review MAJOR-1).
     """
+    if not pattern or not field:
+        return EvalResult(
+            run_id=uuid.uuid4(),
+            node_id="correction",
+            eval_id=uuid.uuid4(),
+            passed=False,
+            score=0.0,
+            detail="regex re-validation missing 'pattern'/'field' — fail closed",
+        )
     eval_def = EvalDefinition(
         id=uuid.uuid4(),
         org_id=uuid.uuid4(),
@@ -590,15 +625,19 @@ async def claim_correction_slot(
     *,
     org_id: uuid.UUID,
     correction: CorrectionDefinition,
+    exclude_record_id: uuid.UUID | None = None,
 ) -> bool:
     """Claim an org-wide concurrent-correction slot at CLAIM-TIME.
 
     Counts in-flight single-node corrections for the org (feedback records in
     ``correcting`` status whose ``correction_state`` carries a matching
     ``correction_id``) and admits only while ``active < concurrency_cap``.
-    Counting happens inside the caller's transaction alongside the record
-    write, mirroring the sandbox-cap claim-time pattern — a dispatch-time
-    count would TOCTOU.
+    ``exclude_record_id`` EXCLUDES the record currently being corrected from
+    the count — it is already in ``correcting``, so counting it would make the
+    first correction block itself (concurrency_cap=1 with one 'correcting'
+    record would count 1 and ``1 < 1`` is False). Counting happens inside the
+    caller's transaction alongside the record write, mirroring the sandbox-cap
+    claim-time pattern — a dispatch-time count would TOCTOU.
     """
     try:
         from sqlalchemy import func, select
@@ -609,6 +648,8 @@ async def claim_correction_slot(
             FeedbackRecord.organisation_id == org_id,
             FeedbackRecord.feedback_status == "correcting",
         )
+        if exclude_record_id is not None:
+            count_q = count_q.where(FeedbackRecord.id != exclude_record_id)
         total = (await session.execute(count_q)).scalar() or 0
         admitted = int(total) < correction.concurrency_cap
         if not admitted:
@@ -718,7 +759,7 @@ async def run_single_node_correction(
         )
 
     try:
-        produced = await _parse_structured_output(raw_output, correction.output_schema)
+        produced = _parse_structured_output(raw_output, correction.output_schema)
     except CorrectionConfigError as exc:
         _log.warning("guardrails.correction.output_invalid correction_id=%s: %s", correction.id, exc)
         return CorrectionOutcome(
@@ -730,6 +771,25 @@ async def run_single_node_correction(
 
     # Redact the produced output BEFORE persistence (never persisted raw).
     produced_redacted = redact_payload(produced, correction.input_redaction_patterns)
+
+    # Convergence on the PRODUCED OUTPUT: a retry that reproduces a previously
+    # seen output is oscillation -> HITL immediately (no oscillation burn),
+    # even when the corrected input is unchanged across retries (the retry loop
+    # strips input fingerprints from prior states so the same input does not
+    # spuriously converge on its own repeat).
+    repeated = convergence_verdict(
+        redacted_input=redacted_input,
+        produced_output=produced_redacted,
+        prior_states=list(prior_states or []),
+    )
+    if repeated is not None:
+        return CorrectionOutcome(
+            verdict=repeated,
+            detail="convergence check: previously-seen produced output, escalating to HITL (no oscillation burn)",
+            produced_output=produced_redacted,
+            needs_human_review=True,
+            state=_build_state(idem_key, redacted_input, produced_redacted, attempt),
+        )
 
     revalidation = await _run_different_family_revalidation(
         engine,
@@ -773,7 +833,11 @@ async def _run_different_family_revalidation(
     judge_callable: LLMJudgeCallable | None,
 ) -> EvalResult:
     """Run the different-family re-validation detector over the produced output."""
-    config = revalidation_config or {}
+    # The definition's ``revalidation_config`` (from the guardrail's correction
+    # config block) is the default; a caller-supplied config overrides it.
+    config: dict[str, Any] = dict(correction.revalidation_config or {})
+    if revalidation_config:
+        config.update(revalidation_config)
     try:
         if family == CorrectionDetectorFamily.REGEX:
             return _revalidate_regex(

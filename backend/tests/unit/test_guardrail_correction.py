@@ -157,9 +157,57 @@ def test_different_family_enforced():
     """A correction whose re-validation family equals the fired guardrail's is rejected."""
     # Fired guardrail detects via regex; re-validation is ALSO regex -> violation.
     guardrail = _guardrail(action="block", detection_type="regex")
-    correction = _correction(revalidation_detector_family=CorrectionDetectorFamily.REGEX.value)
+    correction = _correction(
+        revalidation_detector_family=CorrectionDetectorFamily.REGEX.value,
+        revalidation_config={"pattern": r"(?i)secret[:=]\s*\S+", "field": "body"},
+    )
     with pytest.raises(DifferentFamilyViolationError, match="does not differ"):
         correction.validate_guardrail_binding(guardrail)
+
+
+def test_regex_family_requires_revalidation_pattern_at_definition_validation():
+    """MAJOR-1: a REGEX-family correction with no pattern is rejected at definition
+    validation — a regex revalidator with no pattern would fail open (marked
+    resolved with no actual re-validation)."""
+    base = {
+        "id": "corr_regex",
+        "guardrail_id": "gr",
+        "model_backend_id": str(uuid.uuid4()),
+        "output_schema": {"type": "object"},
+        "revalidation_detector_family": CorrectionDetectorFamily.REGEX.value,
+    }
+    with pytest.raises(ValueError, match=r"revalidation_config\.pattern"):
+        CorrectionDefinition.model_validate(base)
+    with pytest.raises(ValueError, match=r"revalidation_config\.pattern"):
+        CorrectionDefinition.model_validate({**base, "revalidation_config": {"field": "body"}})
+    with pytest.raises(ValueError, match=r"revalidation_config\.field"):
+        CorrectionDefinition.model_validate({**base, "revalidation_config": {"pattern": r"(?i)secret[:=]\s*\S+"}})
+    ok = CorrectionDefinition.model_validate(
+        {**base, "revalidation_config": {"pattern": r"(?i)secret[:=]\s*\S+", "field": "body"}}
+    )
+    assert ok.revalidation_config["pattern"]
+
+
+@pytest.mark.asyncio
+async def test_regex_revalidation_with_empty_pattern_fails_closed():
+    """MAJOR-1: a regex revalidator with an empty pattern/field must NOT mark the
+    correction resolved (fail closed) — the empty-pattern engine failure is not
+    inverted into a false pass."""
+    from modulo.core.eval_engine import EvalEngine
+    from modulo.core.guardrails.correction import _revalidate_regex
+
+    engine = EvalEngine()
+    # Empty pattern/field (the pre-fix default) -> passed=False (fail closed).
+    result = _revalidate_regex(engine, {"body": "anything"}, pattern="", field="")
+    assert result.passed is False
+    result = _revalidate_regex(engine, {"body": "anything"}, pattern="secret: x", field="")
+    assert result.passed is False
+    # A PRESENT pattern that does NOT match -> passes (the guarded value is gone).
+    result = _revalidate_regex(engine, {"body": "safe now"}, pattern=r"(?i)secret[:=]\s*\S+", field="body")
+    assert result.passed is True
+    # A present pattern that DOES match -> fails (the guarded value is still there).
+    result = _revalidate_regex(engine, {"body": "secret: hunter2"}, pattern=r"(?i)secret[:=]\s*\S+", field="body")
+    assert result.passed is False
 
 
 def test_restricted_backend_rejects_privileged_capabilities():
@@ -463,10 +511,17 @@ async def test_resume_budget_exhausted_mid_resume_records_interrupted():
 
 
 class _FakeSession:
-    """Minimal session stub returning a configurable active-correction count."""
+    """Minimal session stub returning a configurable active-correction count.
 
-    def __init__(self, active_count: int = 0) -> None:
+    ``excluding_current_record=True`` models the MAJOR-3 fix: the claim query
+    carries an ``id != :excluded`` clause, so the count the DB returns EXCLUDES
+    the record currently being corrected. The fake detects that clause and
+    drops the current record from the reported count.
+    """
+
+    def __init__(self, active_count: int = 0, excluding_current_record: bool = False) -> None:
         self._active = active_count
+        self._excluding_current_record = excluding_current_record
 
     async def execute(self, stmt: Any) -> Any:
         class _Result:
@@ -476,7 +531,10 @@ class _FakeSession:
             def __init__(self, count: int) -> None:
                 self._count = count
 
-        return _Result(self._active)
+        count = self._active
+        if self._excluding_current_record and "!=" in str(stmt):
+            count = max(0, count - 1)
+        return _Result(count)
 
 
 @pytest.mark.asyncio
@@ -487,3 +545,24 @@ async def test_claim_slot_respects_concurrency_cap():
     assert await claim_correction_slot(_FakeSession(active_count=0), org_id=_ORG, correction=correction) is True
     assert await claim_correction_slot(_FakeSession(active_count=1), org_id=_ORG, correction=correction) is True
     assert await claim_correction_slot(_FakeSession(active_count=2), org_id=_ORG, correction=correction) is False
+
+
+@pytest.mark.asyncio
+async def test_claim_slot_excludes_current_record_self_count():
+    """MAJOR-3: the record currently being corrected is NOT counted against the cap.
+
+    cap=1 with one 'correcting' record (the current one) must admit the claim —
+    the current record's own 'correcting' status must not block its correction.
+    """
+    from modulo.core.guardrails.correction import claim_correction_slot
+
+    correction = _correction(concurrency_cap=1)
+    assert (
+        await claim_correction_slot(
+            _FakeSession(active_count=1, excluding_current_record=True),
+            org_id=_ORG,
+            correction=correction,
+            exclude_record_id=uuid.uuid4(),
+        )
+        is True
+    )

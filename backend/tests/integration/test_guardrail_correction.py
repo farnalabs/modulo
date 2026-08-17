@@ -380,10 +380,13 @@ class TestOrgWideConcurrentCap:
         from modulo.core.guardrails.correction import CorrectionDefinition as CorrDef
 
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
-        # Two records already in 'correcting' (in flight) -> cap (2) reached.
+        # THREE records in 'correcting': two OTHER in-flight corrections (cap=2
+        # reached) plus the record being corrected — which is excluded from the
+        # self-count (MAJOR-3). The admission of record 0 is denied.
         record_ids = [
             await _create_feedback_record(db_engine, correction_rig, test_user, run_number=1),
             await _create_feedback_record(db_engine, correction_rig, test_user, run_number=2),
+            await _create_feedback_record(db_engine, correction_rig, test_user, run_number=3),
         ]
         correction = CorrDef(
             id="corr_no_secrets",
@@ -420,6 +423,86 @@ class TestOrgWideConcurrentCap:
                     node_input={"body": "secret: hunter2"},
                     backend=_StubCorrectionBackend({}),
                 )
+
+    async def test_cap_self_count_excluded(
+        self,
+        db_engine: AsyncEngine,
+        test_org: uuid.UUID,
+        test_user: uuid.UUID,
+        correction_rig: dict[str, uuid.UUID | str],
+    ) -> None:
+        """MAJOR-3: the record currently being corrected does NOT count against the cap.
+
+        cap=1 with the ONLY 'correcting' record being the current one must admit
+        the correction. The cap is set to baseline+1 (baseline = other
+        'correcting' records left by prior tests), so without the current-record
+        exclusion the count would be baseline+1 (blocked) and with it baseline
+        (admitted).
+        """
+        from sqlalchemy import text
+
+        from modulo.core.eval_engine import EvalDefinition as EvalDefDTO
+        from modulo.core.guardrails.correction import CorrectionDefinition as CorrDef
+
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        async with db_engine.connect() as conn:
+            baseline = (
+                await conn.execute(
+                    text(
+                        "SELECT count(*) FROM feedback_records "
+                        "WHERE organisation_id = :oid AND feedback_status = 'correcting'"
+                    ),
+                    {"oid": str(test_org)},
+                )
+            ).scalar_one()
+
+        record_id = await _create_feedback_record(db_engine, correction_rig, test_user, run_number=1001)
+        correction = CorrDef(
+            id="corr_no_secrets",
+            guardrail_id="gr_no_secrets",
+            model_backend_id=str(uuid.uuid4()),
+            output_schema={"type": "object", "required": ["body"], "properties": {"body": {"type": "string"}}},
+            revalidation_detector_family=CorrectionDetectorFamily.PII.value,
+            max_attempts=1,
+            concurrency_cap=int(baseline) + 1,
+        )
+        guardrail_dto = EvalDefDTO(
+            id=uuid.uuid4(),
+            org_id=test_org,
+            pipeline_id=uuid.UUID(str(correction_rig["pipeline_id"])),
+            node_id=str(correction_rig["node_id"]),
+            name="gr_no_secrets",
+            eval_type="guardrail",
+            config={
+                "action": "block",
+                "interception_point": "input",
+                "detection": {"type": "regex", "field": "body", "pattern": r"(?i)secret[:=]\s*\S+"},
+            },
+            failure_behaviour="warn",
+        )
+        # The correction carries NO input_redaction_patterns, so the engine
+        # passes the node input through unchanged.
+        backend = _StubCorrectionBackend(
+            {_fixture_key(correction, {"body": "secret: hunter2"}): json.dumps({"body": "safe now"})}
+        )
+
+        async with factory() as session, session.begin():
+            await set_rls_org(session, test_org)
+            mgr = FeedbackManager(session, test_org)
+            result = await mgr.run_single_node_correction(
+                record_id=record_id,
+                guardrail=guardrail_dto,
+                correction=correction,
+                node_input={"body": "secret: hunter2"},
+                backend=backend,
+            )
+        # The current record is excluded from the count -> the claim succeeds and
+        # the correction resolves. Without the exclusion the count would be
+        # baseline+1 (blocked).
+        assert result["verdict"] == CorrectionVerdict.RESOLVED.value
+        assert result["needs_human_review"] is False
+        status, _ = await _load_record(db_engine, record_id)
+        assert status == "resolved"
 
 
 class TestCorrectionRlsIsolation:

@@ -5,6 +5,7 @@ import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
@@ -480,6 +481,106 @@ def test_replace_pipeline_graph_round_trips_delivery_sentinel(client: TestClient
 
     assert resp.status_code == 200
     assert resp.json()["nodes"][0]["delivery_sentinel"] == "EMAIL_SENT"
+
+
+def test_replace_pipeline_graph_round_trips_correction_target(client: TestClient) -> None:
+    """FAR-210 MAJOR-2 contract round-trip: a gate edge carrying correction_target
+    is accepted by the real endpoint and SURVIVES the wire — the persisted edge
+    data (what becomes the snapshot graph_json) carries it, and the response
+    echoes it. Without the HitlGateConfig field, Pydantic's extra='ignore'
+    silently drops it before model_dump."""
+    node_id = uuid.uuid4()
+    target_id = uuid.uuid4()
+    reject_id = uuid.uuid4()
+    correction_id = uuid.uuid4()
+    nodes = [
+        {"id": str(node_id), "agent_id": str(uuid.uuid4()), "position": {"x": 10, "y": 20}, "connector_binding": None},
+        {"id": str(target_id), "agent_id": str(uuid.uuid4()), "position": {"x": 0, "y": 0}, "connector_binding": None},
+        {"id": str(reject_id), "agent_id": str(uuid.uuid4()), "position": {"x": 0, "y": 0}, "connector_binding": None},
+        {
+            "id": str(correction_id),
+            "agent_id": str(uuid.uuid4()),
+            "position": {"x": 0, "y": 0},
+            "connector_binding": None,
+        },
+    ]
+    edges = [
+        {
+            "source_node_id": str(node_id),
+            "target_node_id": str(target_id),
+            "edge_type": "normal",
+            "hitl_gate_config": {
+                "label": "Review",
+                "description": "Gate",
+                "reject_target": str(reject_id),
+                "correction_target": str(correction_id),
+                "claim_expiry_minutes": 60,
+                "human_only": False,
+            },
+        }
+    ]
+    persisted: dict[str, Any] = {}
+
+    async def _fake_replace(session, **kwargs: Any) -> tuple[Any, Any]:
+        persisted["edges"] = kwargs.get("edges")
+        return (nodes, kwargs.get("edges") or [])
+
+    validation = MagicMock(issues=[])
+    with (
+        patch("modulo.api.routes.pipelines.replace_pipeline_graph", side_effect=_fake_replace),
+        patch("modulo.api.routes.pipelines.GraphValidator.validate_definition", return_value=validation),
+        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+            json={"nodes": nodes, "edges": edges},
+        )
+
+    assert resp.status_code == 200
+    # The persisted edge data (the snapshot graph_json source) carries the field.
+    persisted_edge = persisted["edges"][0]
+    assert persisted_edge["hitl_gate_config"]["correction_target"] == str(correction_id)
+    assert persisted_edge["hitl_gate_config"]["reject_target"] == str(reject_id)
+    # The response round-trips it back.
+    assert resp.json()["edges"][0]["hitl_gate_config"]["correction_target"] == str(correction_id)
+
+
+def test_get_pipeline_graph_returns_correction_target(client: TestClient) -> None:
+    """FAR-210 MAJOR-2: a reload (GET /graph) of a gate whose hitl_gate_config
+    carries correction_target returns it — the field survives the
+    PipelineGraphEdge round-trip."""
+    node_id = uuid.uuid4()
+    correction_id = uuid.uuid4()
+    edge = MagicMock()
+    edge.id = uuid.uuid4()
+    edge.source_node_id = node_id
+    edge.target_node_id = uuid.uuid4()
+    edge.edge_type = "normal"
+    edge.condition_expression = None
+    edge.hitl_gate_config = {
+        "label": "Review",
+        "description": "Gate",
+        "reject_target": str(uuid.uuid4()),
+        "correction_target": str(correction_id),
+        "claim_expiry_minutes": 60,
+        "human_only": False,
+    }
+    nodes = [
+        {"id": str(node_id), "agent_id": str(uuid.uuid4()), "position": {"x": 10, "y": 20}, "connector_binding": None}
+    ]
+
+    with (
+        patch("modulo.api.routes.pipelines.get_pipeline_graph", return_value=(nodes, [edge])),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/graph")
+
+    assert resp.status_code == 200
+    assert resp.json()["edges"][0]["hitl_gate_config"]["correction_target"] == str(correction_id)
 
 
 def test_replace_pipeline_graph_rejects_excessive_node_count(client: TestClient) -> None:

@@ -480,37 +480,29 @@ def test_gate_kickback_router_falls_back_to_normal_without_decision():
     assert router({"some_key": "value"}) == "normal_target"
 
 
-def test_gate_kickback_router_routes_rejection_to_correction_target():
-    """FAR-210 reject→correction edge: a rejection routes to correction_target
-    (not the plain reject target) and stamps the _correction_pending marker."""
-    router = _make_gate_kickback_router(
-        "normal_target",
-        "reject_target",
-        correction_target="correction_node",
-    )
-    state: dict[str, Any] = {"_hitl_decision": {"action": "rejected"}}
-    assert router(state) == "correction_node"
-    assert state["_correction_pending"] == "correction_node"
-
-
-def test_gate_kickback_router_without_correction_target_kicks_back_to_reject():
-    """Back-compat: without correction_target, a rejection still kicks back to
-    reject_target and stamps no correction marker (T1's recover_node override
-    stays the break-glass path)."""
+def test_gate_kickback_router_rejection_kicks_back_to_reject_no_correction_marker():
+    """FAR-210 MAJOR-5 (Option B): the reject→correction router is dead routing
+    state — no correction node exists in node_runner and nothing reads
+    ``_correction_pending``. A rejection kicks back to the plain reject target
+    and stamps NO ``_correction_pending`` marker."""
     router = _make_gate_kickback_router("normal_target", "reject_target")
     state: dict[str, Any] = {"_hitl_decision": {"action": "rejected"}}
     assert router(state) == "reject_target"
     assert "_correction_pending" not in state
 
 
-def test_gate_kickback_router_approval_ignores_correction_target():
-    """Approval (and absence of a decision) still route to normal_target even
-    when a correction_target is configured — only a rejection is diverted."""
-    router = _make_gate_kickback_router(
-        "normal_target",
-        "reject_target",
-        correction_target="correction_node",
-    )
+def test_gate_kickback_router_without_correction_target_kicks_back_to_reject():
+    """Back-compat: a rejection kicks back to reject_target and stamps no
+    correction marker (T1's recover_node override stays the break-glass path)."""
+    router = _make_gate_kickback_router("normal_target", "reject_target")
+    state: dict[str, Any] = {"_hitl_decision": {"action": "rejected"}}
+    assert router(state) == "reject_target"
+    assert "_correction_pending" not in state
+
+
+def test_gate_kickback_router_approval_routes_to_normal_target():
+    """Approval (and absence of a decision) route to normal_target."""
+    router = _make_gate_kickback_router("normal_target", "reject_target")
     assert router({"_hitl_decision": {"action": "approved"}}) == "normal_target"
     assert router({}) == "normal_target"
 
@@ -548,8 +540,10 @@ def test_gate_with_reject_target_compiles():
 
 
 def test_gate_with_correction_target_compiles():
-    """A gate whose hitl_gate_config declares correction_target compiles and the
-    correction node is registered as a reachable target (reject→correction edge)."""
+    """A gate whose hitl_gate_config declares correction_target (the accepted API
+    contract) compiles, but a rejection still kicks back to the plain reject
+    target — the reject→correction dispatch seam is not wired (MAJOR-5 Option
+    B), so there is no dead routing to a correction node."""
     graph: dict[str, Any] = {
         "nodes": [
             {"id": "source", "role": None},

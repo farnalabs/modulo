@@ -82,6 +82,23 @@ def _rls(method: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
+def _prior_states_for_retry(prior_states: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return prior states with ``input_fingerprint`` stripped for retry attempts.
+
+    Within the single-node correction's retry loop the corrected INPUT is
+    unchanged across attempts, so a prior state's own ``input_fingerprint``
+    would match on every retry and spuriously converge the correction before
+    the fresh LM attempt runs. Output fingerprints are preserved so a repeated
+    produced output (genuine oscillation) still converges.
+    """
+    stripped: list[dict[str, Any]] = []
+    for state in prior_states:
+        entry = dict(state)
+        entry.pop("input_fingerprint", None)
+        stripped.append(entry)
+    return stripped
+
+
 class FeedbackManager:
     """Manages the feedback lifecycle: creation, status transitions, eval gap detection."""
 
@@ -474,18 +491,31 @@ class FeedbackManager:
         detector, records the idempotency key + prior fingerprints on the
         FeedbackRecord, and escalates to HITL on any persistent violation.
 
+        Retry budget (MAJOR-6): a STILL_VIOLATING outcome issues a FRESH LM
+        attempt while attempts remain below ``max_attempts`` — never a
+        re-validation of the recorded output. Only budget exhaustion (or a
+        terminal verdict: converged / correction_violated / lm_error)
+        escalates. An interrupted correction re-dispatched with the same
+        idempotency key resumes by RE-VALIDATING the recorded output (never
+        re-running the LM), and falls through to a fresh attempt when the
+        recorded output is still violating and attempts remain.
+
         Claim-time concurrency cap is enforced here (mirrors the sandbox-cap
-        pattern — a dispatch-time count would TOCTOU). Returns the correction
-        outcome dict.
+        pattern — a dispatch-time count would TOCTOU). The record currently
+        being corrected is excluded from the cap count so the first correction
+        never blocks itself. Returns the correction outcome dict.
         """
         from modulo.core.audit_logger import append_audit_event
         from modulo.core.guardrails.correction import (
             EVENT_CORRECTION_ATTEMPTED,
             EVENT_CORRECTION_CAP_BLOCKED,
             CorrectionCapExceededError,
+            CorrectionOutcome,
+            CorrectionVerdict,
             build_idempotency_key,
             claim_correction_slot,
             redact_payload,
+            resume_interrupted_correction,
         )
         from modulo.core.guardrails.correction import (
             dispatch_single_node_correction as _run_correction,
@@ -514,63 +544,95 @@ class FeedbackManager:
             redacted_input=redacted_input,
         )
         persisted_state = dict(record.correction_state or {})
+        prior_states: list[dict[str, Any]] = [persisted_state] if persisted_state else []
+        attempt = int(persisted_state.get("attempt") or 0)
+
+        outcome: CorrectionOutcome | None = None
         if persisted_state.get("idempotency_key") == idem_key:
-            return await self._resume_recorded_correction(
-                record_id=record_id,
-                record=record,
-                guardrail=guardrail,
+            # Idempotent re-dispatch: RE-VALIDATE the recorded produced output
+            # (never re-run the LM for a resume). A still-violating recorded
+            # output with attempts remaining falls through to a fresh attempt.
+            outcome = await resume_interrupted_correction(
                 correction=correction,
+                guardrail=guardrail,
                 backend=backend,
                 state=persisted_state,
-                bound_guardrails=bound_guardrails,
                 revalidation_config=revalidation_config,
                 judge_callable=judge_callable,
             )
+            if outcome.verdict == CorrectionVerdict.STILL_VIOLATING and attempt < correction.max_attempts:
+                outcome = None
 
-        admitted = await claim_correction_slot(self._session, org_id=self._org_id, correction=correction)
-        if not admitted:
-            await append_audit_event(
+        if outcome is None:
+            # Claim the org-wide concurrent-correction slot ONCE for this
+            # correction (the whole retry sequence holds one slot; the current
+            # record is excluded from the count).
+            admitted = await claim_correction_slot(
                 self._session,
                 org_id=self._org_id,
-                event_type=EVENT_CORRECTION_CAP_BLOCKED,
-                resource_type="feedback",
-                resource_id=record_id,
-                payload_json={"correction_id": correction.id, "reason": "org concurrent-correction cap reached"},
+                correction=correction,
+                exclude_record_id=record_id,
             )
-            raise CorrectionCapExceededError(
-                f"Correction {correction.id!r} blocked at claim time: org concurrent-correction cap reached"
-            )
+            if not admitted:
+                await append_audit_event(
+                    self._session,
+                    org_id=self._org_id,
+                    event_type=EVENT_CORRECTION_CAP_BLOCKED,
+                    resource_type="feedback",
+                    resource_id=record_id,
+                    payload_json={"correction_id": correction.id, "reason": "org concurrent-correction cap reached"},
+                )
+                raise CorrectionCapExceededError(
+                    f"Correction {correction.id!r} blocked at claim time: org concurrent-correction cap reached"
+                )
+            while attempt < correction.max_attempts:
+                attempt += 1
+                await append_audit_event(
+                    self._session,
+                    org_id=self._org_id,
+                    event_type=EVENT_CORRECTION_ATTEMPTED,
+                    resource_type="feedback",
+                    resource_id=record_id,
+                    payload_json={
+                        "correction_id": correction.id,
+                        "guardrail_id": correction.guardrail_id,
+                        "node_id": record.producing_node_id,
+                        "attempt": attempt,
+                    },
+                )
+                # A retry re-runs the LM on the SAME redacted input, so its own
+                # prior input fingerprint must not spuriously converge it; only
+                # a repeated produced OUTPUT is oscillation.
+                retry_prior = _prior_states_for_retry(prior_states) if attempt > 1 else prior_states
+                outcome = await _run_correction(
+                    correction=correction,
+                    guardrail=guardrail,
+                    node_input=node_input,
+                    backend=backend,
+                    prior_states=retry_prior,
+                    idempotency_key=idem_key,
+                    attempt=attempt,
+                    revalidation_config=revalidation_config,
+                    judge_callable=judge_callable,
+                )
+                outcome.state["produced_output"] = outcome.produced_output
+                record.correction_state = outcome.state
+                prior_states.append(dict(outcome.state))
+                if outcome.verdict != CorrectionVerdict.STILL_VIOLATING:
+                    break
+            if outcome is None:
+                # The recorded state already consumed the whole budget and the
+                # idempotency key did not match (no resume) — terminal exhaustion.
+                outcome = CorrectionOutcome(
+                    verdict=CorrectionVerdict.BUDGET_EXHAUSTED,
+                    detail=(
+                        f"correction budget exhausted (recorded attempt {attempt} of "
+                        f"{correction.max_attempts}): no fresh attempt available"
+                    ),
+                    needs_human_review=True,
+                    state=dict(persisted_state),
+                )
 
-        prior_states: list[dict[str, Any]] = []
-        if persisted_state:
-            prior_states.append(persisted_state)
-        attempt = int(persisted_state.get("attempt") or 0) + 1
-
-        await append_audit_event(
-            self._session,
-            org_id=self._org_id,
-            event_type=EVENT_CORRECTION_ATTEMPTED,
-            resource_type="feedback",
-            resource_id=record_id,
-            payload_json={
-                "correction_id": correction.id,
-                "guardrail_id": correction.guardrail_id,
-                "node_id": record.producing_node_id,
-                "attempt": attempt,
-            },
-        )
-
-        outcome = await _run_correction(
-            correction=correction,
-            guardrail=guardrail,
-            node_input=node_input,
-            backend=backend,
-            prior_states=prior_states,
-            idempotency_key=idem_key,
-            attempt=attempt,
-            revalidation_config=revalidation_config,
-            judge_callable=judge_callable,
-        )
         outcome.state["produced_output"] = outcome.produced_output
         record.correction_state = outcome.state
 
@@ -632,52 +694,6 @@ class FeedbackManager:
                 needs_human_review=True,
             )
         return outcome
-
-    async def _resume_recorded_correction(
-        self,
-        *,
-        record_id: UUID,
-        record: Any,
-        guardrail: Any,
-        correction: Any,
-        backend: Any,
-        state: dict[str, Any],
-        bound_guardrails: list[Any] | None = None,
-        revalidation_config: dict[str, Any] | None,
-        judge_callable: Callable[..., Any] | None,
-    ) -> dict[str, Any]:
-        """Resume a recorded correction by re-validating, never re-running the LM."""
-        from modulo.core.guardrails.correction import resume_interrupted_correction
-
-        outcome = await resume_interrupted_correction(
-            correction=correction,
-            guardrail=guardrail,
-            backend=backend,
-            state=state,
-            revalidation_config=revalidation_config,
-            judge_callable=judge_callable,
-        )
-        outcome.state["produced_output"] = outcome.produced_output
-        record.correction_state = outcome.state
-        outcome = await self._apply_correction_violated_check(
-            outcome=outcome,
-            guardrail=guardrail,
-            correction=correction,
-            bound_guardrails=bound_guardrails or [],
-        )
-        await self._persist_correction_outcome(
-            record_id=record_id,
-            record=record,
-            guardrail=guardrail,
-            correction=correction,
-            outcome=outcome,
-        )
-        await self._session.flush()
-        return {
-            "verdict": outcome.verdict.value,
-            "detail": outcome.detail,
-            "needs_human_review": outcome.needs_human_review,
-        }
 
     async def _persist_correction_outcome(
         self,

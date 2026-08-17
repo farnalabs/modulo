@@ -107,25 +107,22 @@ def _make_gate_id(source: str, target: str) -> str:
 def _make_gate_kickback_router(
     normal_target: str,
     reject_target_str: str,
-    correction_target: str | None = None,
 ) -> Callable[[dict[str, Any]], str]:
     """Build a router that kicks back to reject_target on HITL rejection.
 
-    FAR-210 (reject→correction edge): when the gate config declares a
-    ``correction_target``, a rejection routes to the correction path instead of
-    kicking back to the plain reject target. This is the automated single-node
-    correction edge; T1's ``recover_node`` override stays the break-glass path.
+    FAR-210 (reject→correction edge): a gate config MAY declare a
+    ``correction_target``, but the single-node correction node does not exist
+    in ``node_runner`` and no production code dispatches
+    ``FeedbackManager.run_single_node_correction`` from the graph path — so
+    routing a rejection to a ``correction_target`` would be dead routing state.
+    Until the seam is wired (tracked as a follow-up), a rejection always kicks
+    back to the plain reject target; T1's ``recover_node`` override stays the
+    break-glass path.
     """
 
     def _router(state: dict[str, Any]) -> str:
         decision = state.get("_hitl_decision")
         if decision and isinstance(decision, dict) and decision.get("action") == "rejected":
-            if correction_target:
-                # Stamp the reject→correction routing marker so the correction
-                # node (or the executor seam) can tell a correction dispatch
-                # apart from a plain kick-back.
-                state["_correction_pending"] = correction_target
-                return correction_target
             return reject_target_str
         return normal_target
 
@@ -569,25 +566,14 @@ def build_graph_from_json(
                     if reject_target is None:
                         reject_target = reject_targets_by_source.get(source)
 
-                    # FAR-210: the reject→correction edge. A gate whose config
-                    # declares a ``correction_target`` routes a HITL rejection
-                    # to the single-node correction path instead of the plain
-                    # reject target (the automated correction edge; T1's
-                    # recover_node override stays the break-glass path).
-                    correction_target_raw: Any = hitl_config.get("correction_target")
-                    correction_target: str | None = str(correction_target_raw) if correction_target_raw else None
-
                     if reject_target:
                         reject_target_str = str(reject_target)
                         gate_router = _make_gate_kickback_router(
                             target,
                             reject_target_str,
-                            correction_target=correction_target,
                         )
                         graph.add_conditional_edges(gate_id, gate_router)
                         target_ids.add(reject_target_str)
-                        if correction_target:
-                            target_ids.add(correction_target)
                     else:
                         graph.add_edge(gate_id, target)
 

@@ -164,6 +164,7 @@ async def _run_scenario(
     session: AsyncMock | None = None,
     node_input: dict[str, Any] | None = None,
     active_corrections: int = 0,
+    current_record_in_correcting: bool = False,
     prior_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Drive FeedbackManager.run_single_node_correction with a stub session."""
@@ -178,7 +179,13 @@ async def _run_scenario(
     def _fake_execute(stmt: Any, *args: Any, **kwargs: Any) -> Any:
         text = str(stmt)
         if "count" in text.lower() or "COUNT" in str(stmt):
-            return _Result(active_corrections)
+            # MAJOR-3: the claim query excludes the current record (id != ...).
+            # When the fake is told the current record is itself in 'correcting',
+            # the exclusion drops it from the count the DB would report.
+            count = active_corrections
+            if current_record_in_correcting and "!=" in text:
+                count = max(0, count - 1)
+            return _Result(count)
         # Apply the feedback_status mutation for an UPDATE on feedback_records so
         # the in-memory record mock reflects what _persist_correction_outcome set.
         if "UPDATE feedback_records" in text:
@@ -249,22 +256,93 @@ async def test_e2e_clean_correction_resolves_no_hitl():
 
 
 # ---------------------------------------------------------------------------
-# Scenario 3: still-violating -> HITL
+# Scenario 3: still-violating -> FRESH retry attempt, then HITL on exhaustion
+# (MAJOR-6: max_attempts>1 produces fresh LM attempts, not a re-validation of
+# the recorded output — the e2e test that previously documented the dead path
+# (immediate escalation, no second attempt) is replaced by these retry tests).
 # ---------------------------------------------------------------------------
 
 
+class _SequencedBackend:
+    """Returns a per-invocation sequence of outputs and counts invocations."""
+
+    def __init__(self, outputs: list[str]) -> None:
+        self._outputs = list(outputs)
+        self._index = 0
+        self.invoke_count = 0
+
+    async def invoke(self, messages: list[Any], **kwargs: Any) -> Any:
+        self.invoke_count += 1
+        idx = min(self._index, len(self._outputs) - 1)
+        self._index += 1
+        return self._outputs[idx]
+
+
+class _RepeatingBackend:
+    """Returns the SAME output on every invocation and counts invocations."""
+
+    def __init__(self, output: str) -> None:
+        self._output = output
+        self.invoke_count = 0
+
+    async def invoke(self, messages: list[Any], **kwargs: Any) -> Any:
+        self.invoke_count += 1
+        return self._output
+
+
 @pytest.mark.asyncio
-async def test_e2e_still_violating_escalates_to_hitl():
+async def test_e2e_still_violating_issues_fresh_attempt_then_exhausts():
+    """MAJOR-6: a still-violating outcome issues a FRESH LM attempt while the retry
+    budget remains (max_attempts=2); only exhaustion escalates to HITL."""
     guardrail = _guardrail()
-    # Retry budget remains (2 attempts) but the first produced output still
-    # violates -> STILL_VIOLATING, escalated to HITL (no chained correction).
     correction = _correction(max_attempts=2)
-    redacted = redact_payload({"body": "secret: hunter2"}, correction.input_redaction_patterns)
-    backend = _StubCorrectionBackend(
-        {_fixture_key(correction, redacted): json.dumps({"body": "123456789012345678901"})}
+    # Two DIFFERENT PII-violating outputs (long digit runs): attempt 1 still-
+    # violating -> attempt 2 (fresh LM) still-violating at max_attempts ->
+    # budget_exhausted. The LM must have run TWICE.
+    backend = _SequencedBackend(
+        [
+            json.dumps({"body": "123456789012345678901"}),
+            json.dumps({"body": "098765432109876543210"}),
+        ]
     )
     outcome = await _run_scenario(backend=backend, correction=correction, guardrail=guardrail)
-    assert outcome["result"]["verdict"] == CorrectionVerdict.STILL_VIOLATING.value
+    assert backend.invoke_count == 2
+    assert outcome["result"]["verdict"] == CorrectionVerdict.BUDGET_EXHAUSTED.value
+    assert outcome["result"]["needs_human_review"] is True
+    assert outcome["record"].feedback_status == "escalated"
+
+
+@pytest.mark.asyncio
+async def test_e2e_retry_resolves_on_second_fresh_attempt():
+    """MAJOR-6: a fresh retry that produces a CLEAN output on the second attempt
+    resolves — the retry is a fresh LM run, not a re-validation of attempt 1."""
+    guardrail = _guardrail()
+    correction = _correction(max_attempts=2)
+    backend = _SequencedBackend(
+        [
+            json.dumps({"body": "123456789012345678901"}),
+            json.dumps({"body": "safe now"}),
+        ]
+    )
+    outcome = await _run_scenario(backend=backend, correction=correction, guardrail=guardrail)
+    assert backend.invoke_count == 2
+    assert outcome["result"]["verdict"] == CorrectionVerdict.RESOLVED.value
+    assert outcome["result"]["needs_human_review"] is False
+    assert outcome["record"].feedback_status == "resolved"
+
+
+@pytest.mark.asyncio
+async def test_e2e_retry_converges_on_repeated_output():
+    """MAJOR-6: a retry that reproduces the SAME still-violating output converges
+    (no oscillation burn) instead of burning the remaining budget."""
+    guardrail = _guardrail()
+    correction = _correction(max_attempts=2)
+    backend = _RepeatingBackend(json.dumps({"body": "123456789012345678901"}))
+    outcome = await _run_scenario(backend=backend, correction=correction, guardrail=guardrail)
+    # The second attempt is still a fresh LM run (the retry ran), but the
+    # produced output repeats attempt 1's -> converged (oscillation -> HITL).
+    assert backend.invoke_count == 2
+    assert outcome["result"]["verdict"] == CorrectionVerdict.CONVERGED.value
     assert outcome["result"]["needs_human_review"] is True
     assert outcome["record"].feedback_status == "escalated"
 
@@ -391,6 +469,39 @@ async def test_e2e_concurrent_correction_cap_enforced_at_claim_time():
             correction=correction,
             guardrail=guardrail,
             active_corrections=2,
+        )
+
+
+@pytest.mark.asyncio
+async def test_e2e_cap_does_not_count_the_current_record():
+    """MAJOR-3: cap=1 with one 'correcting' record (the current one) still admits
+    the correction — the current record is excluded from the self-count, so the
+    first correction never blocks itself."""
+    from modulo.core.guardrails.correction import CorrectionCapExceededError
+
+    guardrail = _guardrail()
+    correction = _correction(concurrency_cap=1)
+    redacted = redact_payload({"body": "secret: hunter2"}, correction.input_redaction_patterns)
+    backend = _StubCorrectionBackend({_fixture_key(correction, redacted): json.dumps({"body": "safe now"})})
+    # The DB reports ONE 'correcting' record — which IS the record being
+    # corrected. The claim query excludes it, so the admission succeeds.
+    outcome = await _run_scenario(
+        backend=backend,
+        correction=correction,
+        guardrail=guardrail,
+        active_corrections=1,
+        current_record_in_correcting=True,
+    )
+    assert outcome["result"]["verdict"] == CorrectionVerdict.RESOLVED.value
+    assert outcome["record"].feedback_status == "resolved"
+    # Sanity: without the exclusion the cap would have been reached.
+    with pytest.raises(CorrectionCapExceededError, match="cap"):
+        await _run_scenario(
+            backend=backend,
+            correction=correction,
+            guardrail=guardrail,
+            active_corrections=1,
+            current_record_in_correcting=False,
         )
 
 
