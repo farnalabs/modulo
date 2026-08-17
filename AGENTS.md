@@ -335,7 +335,6 @@ Coverage minimums: `modulo.auth` 90%, `pipeline_engine` 85%, `db.rls` 95%, overa
 22. Run inspection UI — per-node IO, sensitive masking, "Copy as test fixture"
 23. Stage board — search, filter, `awaiting_human` quick filter
 24. Library browser — list, preview, copy-to-adapt
-25. Demo pipeline + first-run walkthrough — `MODULO_DEMO_MODE`
 
 ### Phase 6 — Alpha exit checklist
 All six criteria from PRD §10.3b must be met explicitly.
@@ -404,7 +403,7 @@ pnpm run dev
 - **Migration ID length**: Branch-based migrations have revision IDs >32 chars (e.g. `0005_library_community_visibility`). Alembic creates the `alembic_version` table with `VARCHAR(32)` by default, which causes `StringDataRightTruncationError`. Manually pre-create the table with `VARCHAR(255)` before running migrations.
 - **Migration 0014_fixture_contribution bug**: CHECK constraint on `contribution_status` is created before the column is added. The `add_column` call must precede the `create_check_constraint` call.
 - **Frontend router missing import**: `PluginsSettingsView` is used as a route component in `src/router/index.ts` but was missing from the top-level imports. Always verify named imports match the import list.
-- **Seed org/user (fixed)**: On startup, `main.py` now runs Alembic migrations, creates a default organisation if none exists, and seeds users from `MODULO_USERS`. Plaintext passwords in `MODULO_USERS` (e.g. `admin:admin`) are auto-hashed with bcrypt. Set `MODULO_DEMO_MODE=true` to also create a `demo:demo` read-only user.
+- **Seed org/user (fixed)**: On startup, `main.py` now runs Alembic migrations, creates a default organisation if none exists, and seeds users from `MODULO_USERS`. Plaintext passwords in `MODULO_USERS` (e.g. `admin:admin`) are auto-hashed with bcrypt.
 - **Backend Settings reads `.env`**: The `.env` file must be in `backend/`, not `Product/`. The `Settings` model uses `env_file=".env"` relative to the cwd.
 
 ### Pre-merge smoke test (MANDATORY)
@@ -1561,3 +1560,16 @@ Rules:
 - For ANY large refactor (complexity, DRY, dead-code removal, extracting a god-function), pre-specify the decomposition rather than asking the model to design it. The model's strength is implementing a well-specified extraction, not open-endedly designing one under context pressure.
 - If a sub-agent degenerates into "let me call the tool" loops, STOP and re-scope: shrink to one function, pre-specify the helpers, and retry. Do not keep re-spawning with the same open-ended prompt.
 - This pairs with lesson 13 (mypy strict): every extracted helper is new code that must satisfy mypy strict — run mypy on the whole file after each extraction.
+
+
+### 15. Verify complexity against SonarQube's real S3776, not a local cognitive-complexity package
+
+From the FAR-281 cognitive-complexity sweep (2026-08-16/17): sub-agents verified their decomposition work with the `cognitive_complexity` PyPI package and reported functions "under 15". When SonarQube re-scanned the merged result, its real S3776 algorithm measured the SAME functions 2-3x higher (e.g. `dispatch` reported 13 by the package, 40 by SonarQube; `get_run_status` 9 vs 42; `review_hitl` 18 vs 40). The package under-measures because its cognitive-complexity model differs from SonarQube's (SonarQube counts nesting and certain constructs more aggressively).
+
+The decomposition was still valuable — it roughly halved every monster (update_trigger 149 → under 15 by SonarQube's own measure) — but the "under 15" claims were optimistic for most functions.
+
+Rules:
+- The ONLY authoritative measure of SonarQube S3776 is SonarQube itself. Do NOT trust a local `cognitive_complexity` package to verify a complexity refactor.
+- To verify a complexity refactor against the real threshold, either (a) run a SonarQube scan of the branch (via `harness/tools/sonarqube-scan.ps1`) and query `api/issues/search?rules=python:S3776` for the file, or (b) if you cannot run SonarQube, treat the local package's number as a LOWER BOUND and aim for well under 15 (e.g. target 8-10) to leave margin for SonarQube's stricter count.
+- When a Worker reports "complexity under 15", cross-check it against SonarQube before declaring the function done. A function that is 13 by the package may be 40 by SonarQube.
+- This pairs with lessons 13 (mypy strict) and 14 (pre-specified decomposition): decompose, verify mypy, and verify against SonarQube's real S3776.

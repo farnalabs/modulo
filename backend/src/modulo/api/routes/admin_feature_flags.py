@@ -361,7 +361,7 @@ async def get_org_flag_override(
     current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
-    assert current_user.organisation_id is not None
+    assert current_user.organisation_id is not None  # nosec B101 -- genuine invariant: require_system_permission guarantees a non-None organisation_id for org-scoped system-config routes
     try:
         async with session.begin():
             org = await get_organisation(session, current_user.organisation_id)
@@ -415,7 +415,7 @@ async def set_org_flag_override(
     current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
-    assert current_user.organisation_id is not None
+    assert current_user.organisation_id is not None  # nosec B101 -- genuine invariant: require_system_permission guarantees a non-None organisation_id for org-scoped system-config routes
     try:
         async with session.begin():
             org = await get_organisation(session, current_user.organisation_id)
@@ -474,7 +474,7 @@ async def clear_org_flag_override(
     current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
-    assert current_user.organisation_id is not None
+    assert current_user.organisation_id is not None  # nosec B101 -- genuine invariant: require_system_permission guarantees a non-None organisation_id for org-scoped system-config routes
     try:
         async with session.begin():
             org = await get_organisation(session, current_user.organisation_id)

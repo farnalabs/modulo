@@ -299,11 +299,6 @@ $modelBackendDir = Join-Path (Join-Path (Join-Path $backendDir "src") "modulo") 
 $backendExists = Test-Path -LiteralPath $modelBackendDir
 LogCheckbox $backendExists "Model backend directory exists"
 
-# Seed data / demo pipeline
-$seedFile = Join-Path (Join-Path $productRoot "scripts") "seed.py"
-$seedOk = Test-Path -LiteralPath $seedFile
-LogCheckbox $seedOk "Seed data script exists ($seedFile)"
-
 # BDD feature files exist
 $bddTestDir = Join-Path $backendDir "tests"
 if (Test-Path -LiteralPath $bddTestDir) {
@@ -332,18 +327,11 @@ Log ""
 # --- Criterion #1: Demo pipeline walkable by 3 non-authors ---
 LogHeader "Criterion #1: Demo pipeline walkable by 3 non-authors"
 Log ""
-Log "  [ ] Criterion #1: Demo pipeline walkable"
-Log "      +- How to verify"
-Log "      +- 1. Start Modulo with MODULO_DEMO_MODE=true"
-Log "      +- 2. Load the demo pipeline (prd-to-requirements)"
-Log "      +- 3. Walk through the full pipeline end-to-end"
-Log "      +- 4. Repeat with 2 additional people who did NOT author the code"
-Log "      +- Each walker should complete without assistance"
+Log "  [x] Criterion #1: Demo pipeline — REMOVED/DESCOPED (FAR-308)"
+Log "      +- The pre-loaded demo pipeline (prd-to-requirements) and the demo mode env var"
+Log "      +- were removed; this criterion is no longer an alpha requirement."
 Log ""
-Log "      Verification log:"
-Log "      Walker #1: ___ (name) ___ (date) ___ (signed)"
-Log "      Walker #2: ___ (name) ___ (date) ___ (signed)"
-Log "      Walker #3: ___ (name) ___ (date) ___ (signed)"
+Log "      No longer required for alpha exit."
 Log ""
 
 # --- Criterion #3: Non-demo pipeline ---

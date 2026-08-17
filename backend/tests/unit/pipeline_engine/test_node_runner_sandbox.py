@@ -1638,6 +1638,79 @@ async def test_watch_log_growth_keeps_silent_run_alive():
     handle.kill.assert_not_awaited()
 
 
+async def test_watch_log_growth_keeps_silent_strict_run_alive_end_to_end():
+    """End-to-end proof that the log-growth detector wires up through
+    make_sandbox_agent_fn: with enable_heartbeat=False (strict mode) and a fully
+    silent agent (its own log never grows), a user-configured watch_log_path
+    that keeps growing is the ONLY channel keeping the run alive.
+
+    This is the test that genuinely fails without the detector: with the
+    heartbeat disabled the drain probe's heartbeat touch is a no-op and the
+    agent's ``output`` channel stays stale, so the idle watchdog fires and the
+    run raises SandboxNodeFailedError unless ``_probe_log_growth`` refreshes
+    the ``log_growth`` channel every tick.
+    """
+    node_def = _base_node_def(
+        timeout_seconds=30,
+        stall_timeout_seconds=0.1,
+        enable_heartbeat=False,
+        watch_log_path="/home/user/progress.log",
+    )
+    fn = make_sandbox_agent_fn(node_def)
+
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = ""
+    cmd_result.stderr = ""
+
+    # The command stays "running" for 5 tick slices (each ~0.03s taking the
+    # run past the 0.1s stall window) before completing on the 6th — so in the
+    # no-detector case the watchdog fires mid-run, and with the detector the
+    # log-growth touch on every tick keeps it alive to completion.
+    wait_calls = {"n": 0}
+
+    async def _wait():
+        wait_calls["n"] += 1
+        await asyncio.sleep(0.03)
+        if wait_calls["n"] < 6:
+            raise TimeoutError
+        return cmd_result
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=_wait)
+    handle.kill = AsyncMock()
+
+    watch_size = {"n": 0}
+
+    def _get_info(path, **kwargs):
+        if str(path).endswith("progress.log"):
+            watch_size["n"] += 10
+            return MagicMock(size=watch_size["n"])
+        return MagicMock(size=0)
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            return '{"summary": "done"}'
+        return ""
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.get_info = AsyncMock(side_effect=_get_info)
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.files.list = AsyncMock(return_value=[])
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.05),
+    ):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    handle.kill.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # FAR-306: enable_heartbeat=False is strict — a connected-but-silent agent stalls
 # ---------------------------------------------------------------------------
@@ -1710,3 +1783,44 @@ def test_heartbeat_enabled_default_silent_connected_agent_does_not_stall():
         detector.touch("heartbeat")
         # last_activity() is the max across enabled channels and stays fresh.
         assert time.monotonic() - detector.last_activity() < 1.0
+
+
+# ---------------------------------------------------------------------------
+# FAR-194: `|tojson` on an undefined variable raises TypeError (not
+# UndefinedError) — the template render handlers must skip, not crash the run.
+# ---------------------------------------------------------------------------
+
+
+async def test_prompt_tojson_on_undefined_skips():
+    """A prompt template using `{{ missing | tojson }}` on an undefined variable
+    raises TypeError inside Jinja's tojson filter (json.dumps on Undefined), NOT
+    UndefinedError. It must be treated like the UndefinedError case: the node
+    returns status 'skipped' and NO sandbox command executes."""
+    node_def = _base_node_def(agent_prompt="Context: {{ missing | tojson }}")
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["status"] == "skipped"
+    assert "prompt template" in result["summary"]
+    sandbox.commands.run.assert_not_called()
+
+
+async def test_agent_command_tojson_on_undefined_skips():
+    """An agent_command template using `{{ missing | tojson }}` on an undefined
+    variable raises TypeError, not UndefinedError. It must return status
+    'skipped' and execute NO sandbox command, mirroring the prompt handling."""
+    node_def = _model_node_def(
+        "opencode run --model {{ missing | tojson }} --auto --format json < /home/user/prompt.md"
+    )
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["status"] == "skipped"
+    assert "agent_command" in result["summary"]
+    sandbox.commands.run.assert_not_called()

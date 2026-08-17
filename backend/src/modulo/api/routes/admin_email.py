@@ -155,7 +155,7 @@ async def admin_update_email_settings(
     merged["smtp_port"] = req.smtp_port
     merged["smtp_username"] = req.smtp_username
     if req.clear_password:
-        merged["smtp_password"] = ""
+        merged["smtp_password"] = ""  # nosec B105 -- clears the stored SMTP password (clear_password request); empty string is a clear signal, NOT a hardcoded secret
     elif req.smtp_password:
         merged["smtp_password"] = req.smtp_password
     merged["email_from"] = req.email_from

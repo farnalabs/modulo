@@ -23,7 +23,7 @@ Common issues, their causes, and resolutions.
 |---|---|---|---|
 | `401 Unauthorized` on every request | Invalid, expired, or malformed JWT | Re-login with `POST /api/v1/auth/login` to obtain a fresh token | `401: Token has expired` or `401: Invalid token` |
 | `403 Forbidden` | User role lacks required permission | Check user role (`admin`/`operator`/`runner`); upgrade role via admin API if needed | `403: Insufficient permissions` |
-| Login succeeds but no data returned | No organisation has been created | Create an org via the admin API or run the seed script (`uv run scripts/seed.py`) | No error — empty responses from all API calls |
+| Login succeeds but no data returned | No organisation has been created | Create an org via the admin API (`POST /api/v1/orgs`) | No error — empty responses from all API calls |
 | `Invalid API key` | Wrong key, expired, or revoked | Create a new API key in admin settings; verify the key prefix matches the expected pattern | `401: Invalid API key` |
 | SSO login redirect fails | OIDC/SAML provider misconfiguration | Check provider settings (client ID, client secret, discovery URL); verify `redirect_uri` matches the provider's allowlist | `OIDCError: redirect_uri_mismatch` |
 

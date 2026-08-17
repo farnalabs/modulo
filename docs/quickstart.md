@@ -87,17 +87,6 @@ pnpm run dev
 
 The UI is now live at `http://localhost:5173`. Log in with `admin:admin`.
 
-## 5. Run the demo pipeline
-
-With `MODULO_SEED_DEMO_DATA=true` (set in your `.env`; legacy name `MODULO_DEMO_MODE` also works), a pre-built `prd-to-requirements` pipeline is available:
-
-1. Open the dashboard at `http://localhost:5173`
-2. Click the **Demo pipeline** card
-3. Click **Run**; the pipeline reads a sample PRD and extracts structured requirements
-4. View the output in the run inspection panel
-
-No external API keys are needed; the demo uses `StubModelBackend`.
-
 ## Next steps
 
 - Read the [Architecture Guide](./architecture.md) to understand the system design

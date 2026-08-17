@@ -111,7 +111,7 @@ jobs:
     # full integration suite only runs in the deploy pipeline's pre-deploy
     # gate, so a broken integration test merged to main sails through PR CI
     # and blocks every deploy (2026-08-14: PR #1266 added an assert-after-
-    # delete to test_demo_first_run.py; 6 deploys failed before it was
+    # delete to an integration test; 6 deploys failed before it was
     # caught). Skips green when no backend/tests/integration/ files changed.
     name: Integration tests (changed)
     runs-on: ubicloud-standard-2

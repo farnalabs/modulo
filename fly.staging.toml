@@ -56,9 +56,6 @@ primary_region = 'lhr'
   MODULO_DB = "postgres"
   MODULO_PUBLIC_URL = "https://staging.modulo.run"
   MODULO_PLUGIN_DISCOVERY = "false"
-  # Demo mode seeds the default org with plan_id="team", so staging E2E can
-  # exercise team-gated features (retention, cost-controls, etc.) — matches prod.
-  MODULO_DEMO_MODE = "true"
   # Staging-only dev-mode toggle (preview/in-development features via Admin > Feature Flags).
   MODULO_DEV_MODE = "true"
   MODULO_MAX_LOCAL_CONCURRENCY = "4"

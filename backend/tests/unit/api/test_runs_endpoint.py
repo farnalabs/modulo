@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+from modulo.api.routes import runs as runs_module
 from modulo.api.routes.runs import RunNotFoundError, _validate_run_input_basics
 from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
@@ -25,6 +26,7 @@ from modulo.core.pipeline_engine.recovery import (
     GuardrailOverrideRejectedError,
     GuardrailOverrideRequiredError,
 )
+from modulo.core.rate_limiter import TokenBucketRegistry
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -1504,6 +1506,111 @@ def test_guardrail_override_dispatch_deferred_surfaces_500(client: TestClient) -
 
     assert resp.status_code == 500
     assert "enqueue" in resp.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/runs/{run_id}/guardrail-override — rate limit (FAR-223 PR C)
+# ---------------------------------------------------------------------------
+
+
+def _patch_override_rate_limiter(burst: int) -> patch:
+    """Replace the endpoint's module-level limiter with a fresh one.
+
+    The default burst is 10; each test overrides with a small deterministic
+    burst so the N+1th-request-exceeds behaviour is provable without sharing
+    token state across tests.
+    """
+    return patch.object(
+        runs_module,
+        "_guardrail_override_rate_limiter",
+        TokenBucketRegistry(rate=burst / 60.0, burst=burst),
+    )
+
+
+def test_guardrail_override_within_rate_limit_succeeds(client: TestClient) -> None:
+    """Overrides up to the per-window limit succeed (200)."""
+    run = _make_run(status="pending")
+    with (
+        _patch_override_rate_limiter(burst=3),
+        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("modulo.api.routes.runs.guardrail_override", new_callable=AsyncMock, return_value=run),
+        patch(
+            "modulo.api.routes.runs.dispatch_run",
+            new_callable=AsyncMock,
+            return_value=("enqueued", "job-id"),
+        ),
+    ):
+        for _ in range(3):
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/guardrail-override",
+                json={"input_data": {"body": "clean replacement text"}},
+            )
+            assert resp.status_code == 200
+
+
+def test_guardrail_override_rate_limit_fires_429(client: TestClient) -> None:
+    """The (burst + 1)th override in the window is refused with 429."""
+    run = _make_run(status="pending")
+    with (
+        _patch_override_rate_limiter(burst=2),
+        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("modulo.api.routes.runs.guardrail_override", new_callable=AsyncMock, return_value=run),
+        patch(
+            "modulo.api.routes.runs.dispatch_run",
+            new_callable=AsyncMock,
+            return_value=("enqueued", "job-id"),
+        ),
+    ):
+        assert (
+            client.post(
+                f"/api/v1/runs/{_RUN_ID}/guardrail-override",
+                json={"input_data": {"body": "clean"}},
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                f"/api/v1/runs/{_RUN_ID}/guardrail-override",
+                json={"input_data": {"body": "clean"}},
+            ).status_code
+            == 200
+        )
+        resp = client.post(
+            f"/api/v1/runs/{_RUN_ID}/guardrail-override",
+            json={"input_data": {"body": "clean"}},
+        )
+        assert resp.status_code == 429
+        assert "try again" in resp.json()["detail"].lower()
+
+
+def test_guardrail_override_429_prevents_dispatch(client: TestClient) -> None:
+    """An exceeding override is refused before dispatch_run is ever called."""
+    run = _make_run(status="pending")
+    with (
+        _patch_override_rate_limiter(burst=1),
+        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("modulo.api.routes.runs.guardrail_override", new_callable=AsyncMock, return_value=run),
+        patch(
+            "modulo.api.routes.runs.dispatch_run",
+            new_callable=AsyncMock,
+            return_value=("enqueued", "job-id"),
+        ) as mock_dispatch,
+    ):
+        assert (
+            client.post(
+                f"/api/v1/runs/{_RUN_ID}/guardrail-override",
+                json={"input_data": {"body": "clean"}},
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                f"/api/v1/runs/{_RUN_ID}/guardrail-override",
+                json={"input_data": {"body": "clean"}},
+            ).status_code
+            == 429
+        )
+        assert mock_dispatch.await_count == 1
 
 
 # ---------------------------------------------------------------------------

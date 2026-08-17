@@ -292,7 +292,6 @@ For the production launch checklist, see [`docs/public-launch-checklist.md`](./p
 | `MODULO_PUBLIC_URL` | For SSO | `http://localhost:8000` | Public-facing URL for OAuth redirects |
 | `CORS_ORIGINS` | No | `http://localhost:5173` | Comma-separated allowed CORS origins |
 | `CORS_MAX_AGE` | No | `600` | Preflight cache max-age in seconds |
-| `MODULO_DEMO_MODE` | No | `false` | Enables demo pipeline with StubModelBackend |
 | `MODULO_SECRETS_BACKEND` | No | `fernet` | Secrets backend: `fernet`, `vault`, or `aws` |
 | `MODULO_OIDC_PROVIDERS` | For SSO | — | JSON array of OIDC provider configs |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | — | OTel gRPC/HTTP exporter endpoint |

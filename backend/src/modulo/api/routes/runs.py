@@ -48,6 +48,7 @@ from modulo.core.pipeline_engine.recovery import (
     guardrail_override,
     recover_node,
 )
+from modulo.core.rate_limiter import TokenBucketRegistry
 from modulo.core.trigger_engine import TriggerEngine
 from modulo.db.crud.node_observation import observe_node
 from modulo.db.crud.observability import get_otel_config
@@ -88,6 +89,18 @@ _CODE_RUNS_REVEAL_NODE_PROMPT = "runs.reveal_node_prompt"
 
 
 _log = logging.getLogger(__name__)
+
+# Guardrail-override rate limit (FAR-223 PR C gap). The override re-runs the
+# guardrail pass and re-dispatches the run, so an operator must not be able to
+# hammer it. ~10 overrides per 60s window per (org, actor). Uses the in-memory
+# TokenBucketRegistry (per-process) which fails open -- the override keeps
+# working if Redis is unavailable, which is the established best-effort pattern.
+_GUARDRAIL_OVERRIDE_RATE_LIMIT = 10
+_GUARDRAIL_OVERRIDE_RATE_PER_SEC = _GUARDRAIL_OVERRIDE_RATE_LIMIT / 60.0
+_guardrail_override_rate_limiter = TokenBucketRegistry(
+    rate=_GUARDRAIL_OVERRIDE_RATE_PER_SEC,
+    burst=_GUARDRAIL_OVERRIDE_RATE_LIMIT,
+)
 
 _RETRY_TRANSIENT = retry(
     stop=stop_after_attempt(3),
@@ -1656,6 +1669,17 @@ async def guardrail_override_run(
 
     Requires operator or admin role.
     """
+    rate_key = f"guardrail-override:{principal.organisation_id}:{principal.account_id}"
+    if not await _guardrail_override_rate_limiter.consume(rate_key):
+        _log.warning(
+            "runs.guardrail_override.rate_limited",
+            extra={"org_id": str(principal.organisation_id), "account_id": str(principal.account_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many guardrail overrides. Try again later.",
+        )
+
     if principal.org_role not in ("admin", "operator"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
