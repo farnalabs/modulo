@@ -504,6 +504,43 @@ async def test_resume_budget_exhausted_mid_resume_records_interrupted():
     assert outcome.needs_human_review is True
 
 
+@pytest.mark.asyncio
+async def test_resume_round_trips_engine_persisted_state():
+    """Minor-2 (review FAR-210): the engine's OWN persisted state — the
+    ``outcome.state`` a caller would store — carries ``produced_output`` so an
+    interrupted correction can resume by re-validating it. Previously
+    ``_build_state`` never wrote ``produced_output`` (only
+    ``FeedbackManager.run_single_node_correction`` injected it post-hoc), so a
+    caller persisting just ``outcome.state`` got ``correction_interrupted``
+    ("no recorded produced output") on resume. Without the fix this test FAILS:
+    ``outcome.state`` has no ``produced_output`` -> resume returns INTERRUPTED."""
+    guardrail = _guardrail()
+    correction = _correction()
+    backend = _StubCorrectionBackend({_fixture_key(correction, _REDACTED_BODY): json.dumps({"body": "safe now"})})
+    outcome = await run_single_node_correction(
+        correction=correction,
+        guardrail=guardrail,
+        node_input={"body": "secret: hunter2"},
+        backend=backend,
+    )
+    assert outcome.verdict == CorrectionVerdict.RESOLVED
+    # The engine's own state must carry the redacted produced output.
+    assert outcome.state.get("produced_output") == {"body": "safe now"}
+
+    class _Boom:
+        async def invoke(self, messages: list[Any], **kwargs: Any) -> Any:
+            raise AssertionError("LM must NOT be re-run on resume")
+
+    resumed = await resume_interrupted_correction(
+        correction=correction,
+        guardrail=guardrail,
+        backend=_Boom(),
+        state=outcome.state,
+    )
+    assert resumed.verdict == CorrectionVerdict.RESOLVED
+    assert resumed.produced_output == {"body": "safe now"}
+
+
 # ---------------------------------------------------------------------------
 # Concurrent-correction cap (claim-time)
 # ---------------------------------------------------------------------------

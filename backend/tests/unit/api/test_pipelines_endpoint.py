@@ -17,6 +17,7 @@ from modulo.api.main import app
 from modulo.api.routes.pipelines import PipelineGraphNode, _resolve_graph_references
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.graph_validator._types import ValidationResult
 from modulo.db.crud.pipeline_folder import create_folder, update_folder
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
@@ -581,6 +582,57 @@ def test_get_pipeline_graph_returns_correction_target(client: TestClient) -> Non
 
     assert resp.status_code == 200
     assert resp.json()["edges"][0]["hitl_gate_config"]["correction_target"] == str(correction_id)
+
+
+def test_replace_pipeline_graph_blocks_redact_correct_422(client: TestClient) -> None:
+    """FAR-210 Minor-3 (review): the REDACT_CORRECT_BLOCKED -> 422 branch of
+    replace_pipeline_graph_endpoint is proven at the ENDPOINT level, not just the
+    validator. A graph-save whose guardrail rows carry a 'redact'-action
+    guardrail with a 'correction' block is rejected with 422 and the
+    REDACT_CORRECT_BLOCKED detail message (mirrors the GUARDRAIL_CAP_EXCEEDED
+    coverage). Without the route branch this test fails: the graph would save
+    with a 200."""
+    node_id = uuid.uuid4()
+    target_id = uuid.uuid4()
+    nodes = [
+        {"id": str(node_id), "agent_id": str(uuid.uuid4()), "position": {"x": 10, "y": 20}, "connector_binding": None},
+        {"id": str(target_id), "agent_id": str(uuid.uuid4()), "position": {"x": 0, "y": 0}, "connector_binding": None},
+    ]
+    edges = [
+        {
+            "source_node_id": str(node_id),
+            "target_node_id": str(target_id),
+            "edge_type": "normal",
+        }
+    ]
+    validation = ValidationResult()
+    validation.error(
+        "REDACT_CORRECT_BLOCKED",
+        "Guardrail 'gr_redact' declares a 'correction' block on a 'redact'-action "
+        "guardrail — a correction on a redaction guardrail is an exfiltration channel",
+    )
+    with (
+        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, edges)),
+        patch(
+            "modulo.api.routes.pipelines.GraphValidator.validate_definition",
+            return_value=validation,
+        ),
+        patch(
+            "modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows",
+            return_value=[],
+        ),
+        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+            json={"nodes": nodes, "edges": edges},
+        )
+
+    assert resp.status_code == 422
+    assert "exfiltration channel" in resp.json()["detail"]
 
 
 def test_replace_pipeline_graph_rejects_excessive_node_count(client: TestClient) -> None:

@@ -629,15 +629,18 @@ async def claim_correction_slot(
 ) -> bool:
     """Claim an org-wide concurrent-correction slot at CLAIM-TIME.
 
-    Counts in-flight single-node corrections for the org (feedback records in
-    ``correcting`` status whose ``correction_state`` carries a matching
-    ``correction_id``) and admits only while ``active < concurrency_cap``.
-    ``exclude_record_id`` EXCLUDES the record currently being corrected from
-    the count — it is already in ``correcting``, so counting it would make the
-    first correction block itself (concurrency_cap=1 with one 'correcting'
-    record would count 1 and ``1 < 1`` is False). Counting happens inside the
-    caller's transaction alongside the record write, mirroring the sandbox-cap
-    claim-time pattern — a dispatch-time count would TOCTOU.
+    Counts ALL feedback records in ``correcting`` status for the org — a
+    fail-closed OVER-count that also includes whole-pipeline
+    ``spawn_correction_run`` corrections and every other correction definition
+    on the org (the count is not filtered to records whose ``correction_state``
+    carries this correction's ``correction_id``). Admits only while
+    ``active < concurrency_cap``. ``exclude_record_id`` EXCLUDES the record
+    currently being corrected from the count — it is already in ``correcting``,
+    so counting it would make the first correction block itself
+    (concurrency_cap=1 with one 'correcting' record would count 1 and
+    ``1 < 1`` is False). Counting happens inside the caller's transaction
+    alongside the record write, mirroring the sandbox-cap claim-time pattern —
+    a dispatch-time count would TOCTOU.
     """
     try:
         from sqlalchemy import func, select
@@ -878,7 +881,14 @@ def _build_state(
     produced_output: Mapping[str, Any] | None,
     attempt: int,
 ) -> dict[str, Any]:
-    """Build the persisted correction state (idempotency + convergence data)."""
+    """Build the persisted correction state (idempotency + convergence data).
+
+    The ``produced_output`` (already redacted) is persisted IN the state so
+    ``resume_interrupted_correction`` can re-validate it without re-running the
+    LM. A caller persisting just ``outcome.state`` gets a resumable record; a
+    state WITHOUT ``produced_output`` (e.g. an LM error / parse failure) resumes
+    as ``correction_interrupted`` ("no recorded produced output").
+    """
     state: dict[str, Any] = {
         "idempotency_key": idempotency_key,
         "input_fingerprint": fingerprint_state(redacted_input),
@@ -886,6 +896,7 @@ def _build_state(
     }
     if produced_output is not None:
         state["output_fingerprint"] = fingerprint_state(produced_output)
+        state["produced_output"] = dict(produced_output)
     return state
 
 
@@ -985,7 +996,10 @@ async def resume_interrupted_correction(
     """Resume an interrupted correction WITHOUT re-running the LM.
 
     Re-validates the produced output recorded in *state* against the
-    different-family detector. If the budget is exhausted mid-resume, the
+    different-family detector. *state* MUST carry the recorded produced output
+    under ``produced_output`` for resume to work — ``_build_state`` writes it
+    (redacted) whenever a produced output exists; a state without it resumes as
+    ``correction_interrupted``. If the budget is exhausted mid-resume, the
     outcome is ``correction_interrupted`` (the caller records it).
     """
     engine = engine or EvalEngine()

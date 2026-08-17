@@ -73,6 +73,14 @@ _VALID_STATUS_TRANSITIONS: dict[str, set[str]] = {
     "dismissed": set(),
 }
 
+# Statuses on which a single-node correction outcome may NEVER be written: the
+# human has already decided (``escalated`` -> HITL review, ``resolved``,
+# ``dismissed``). Re-entering one via the correction path would silently reverse
+# that decision, so dispatch/resume gates on non-terminal status and
+# ``_persist_correction_outcome`` fences its writes on the ``correcting``
+# pre-state (review FAR-210 finding 3).
+_CORRECTION_TERMINAL_STATUSES = frozenset({"resolved", "escalated", "dismissed"})
+
 
 def _rls(method: Callable[..., Any]) -> Callable[..., Any]:
     @functools.wraps(method)
@@ -503,7 +511,12 @@ class FeedbackManager:
         Claim-time concurrency cap is enforced here (mirrors the sandbox-cap
         pattern — a dispatch-time count would TOCTOU). The record currently
         being corrected is excluded from the cap count so the first correction
-        never blocks itself. Returns the correction outcome dict.
+        never blocks itself. Dispatch/resume is gated on a NON-TERMINAL status:
+        a record the human has already decided on (``resolved``, ``escalated``,
+        ``dismissed``) raises ``InvalidTransitionError`` before any LM work,
+        and ``_persist_correction_outcome`` fences its status writes on
+        ``correcting`` so a concurrent decision is never reversed. Returns the
+        correction outcome dict.
         """
         from modulo.core.audit_logger import append_audit_event
         from modulo.core.guardrails.correction import (
@@ -524,6 +537,18 @@ class FeedbackManager:
         record = await self.get_feedback_record(record_id)
         if record is None:
             raise FeedbackRecordNotFoundError(f"FeedbackRecord {record_id} not found")
+
+        if record.feedback_status in _CORRECTION_TERMINAL_STATUSES:
+            # Finding 3 (review FAR-210): never run a correction on a record a
+            # human has already decided on. A terminal record (``resolved`` /
+            # ``escalated`` / ``dismissed``) re-entered via dispatch or resume
+            # would silently reverse that decision — fail fast instead of
+            # re-writing the status.
+            raise InvalidTransitionError(
+                f"FeedbackRecord {record_id} is in terminal status "
+                f"'{record.feedback_status}'; cannot run a single-node correction "
+                f"on a record a human has already decided on"
+            )
 
         correction.validate_guardrail_binding(guardrail)
         # FAR-210: the correction backend is RESTRICTED — it must not claim any
@@ -711,6 +736,14 @@ class FeedbackManager:
         correction-violated) escalates to HITL (``escalated``) with a
         machine-readable reason. The corrected output is continuing-suspicious
         and redacted before persistence (the engine already redacted it).
+
+        Both status writes are FENCED on the record still being ``correcting``
+        (the correction path's expected pre-state, matching
+        ``run_post_correction_eval`` and ``_escalate_record``): an UPDATE whose
+        predicate matches no row means the status changed concurrently (e.g. a
+        human escalated the record while the correction ran) and raises
+        ``ConcurrentModificationError`` instead of silently reversing the
+        decision (review FAR-210 finding 3).
         """
         from modulo.core.audit_logger import append_audit_event
         from modulo.core.guardrails.correction import (
@@ -722,14 +755,23 @@ class FeedbackManager:
 
         verdict = CorrectionVerdict(outcome.verdict)
         if verdict == CorrectionVerdict.RESOLVED:
-            await self._session.execute(
-                update(FeedbackRecord)
-                .where(
-                    FeedbackRecord.id == record_id,
-                    FeedbackRecord.organisation_id == self._org_id,
+            updated = (
+                await self._session.execute(
+                    update(FeedbackRecord)
+                    .where(
+                        FeedbackRecord.id == record_id,
+                        FeedbackRecord.organisation_id == self._org_id,
+                        FeedbackRecord.feedback_status == "correcting",
+                    )
+                    .values(feedback_status="resolved", needs_human_review=outcome.needs_human_review)
+                    .returning(FeedbackRecord)
                 )
-                .values(feedback_status="resolved", needs_human_review=outcome.needs_human_review)
-            )
+            ).scalar_one_or_none()
+            if updated is None:
+                raise ConcurrentModificationError(
+                    f"FeedbackRecord {record_id} status changed concurrently. "
+                    f"Expected 'correcting', failed to persist a RESOLVED correction outcome."
+                )
             await append_audit_event(
                 self._session,
                 org_id=self._org_id,
@@ -743,14 +785,23 @@ class FeedbackManager:
                 },
             )
             return
-        await self._session.execute(
-            update(FeedbackRecord)
-            .where(
-                FeedbackRecord.id == record_id,
-                FeedbackRecord.organisation_id == self._org_id,
+        updated = (
+            await self._session.execute(
+                update(FeedbackRecord)
+                .where(
+                    FeedbackRecord.id == record_id,
+                    FeedbackRecord.organisation_id == self._org_id,
+                    FeedbackRecord.feedback_status == "correcting",
+                )
+                .values(feedback_status="escalated", needs_human_review=True)
+                .returning(FeedbackRecord)
             )
-            .values(feedback_status="escalated", needs_human_review=True)
-        )
+        ).scalar_one_or_none()
+        if updated is None:
+            raise ConcurrentModificationError(
+                f"FeedbackRecord {record_id} status changed concurrently. "
+                f"Expected 'correcting', failed to persist an escalated correction outcome."
+            )
         violation_event = (
             EVENT_CORRECTION_VIOLATED
             if verdict == CorrectionVerdict.CORRECTION_VIOLATED

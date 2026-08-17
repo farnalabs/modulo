@@ -166,6 +166,7 @@ async def _run_scenario(
     active_corrections: int = 0,
     current_record_in_correcting: bool = False,
     prior_state: dict[str, Any] | None = None,
+    record_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Drive FeedbackManager.run_single_node_correction with a stub session."""
     session = session or AsyncMock()
@@ -175,20 +176,24 @@ async def _run_scenario(
     record = _record()
     if prior_state is not None:
         record.correction_state = prior_state
+    for key, value in (record_overrides or {}).items():
+        setattr(record, key, value)
 
     def _fake_execute(stmt: Any, *args: Any, **kwargs: Any) -> Any:
         text = str(stmt)
-        if "count" in text.lower() or "COUNT" in str(stmt):
-            # MAJOR-3: the claim query excludes the current record (id != ...).
-            # When the fake is told the current record is itself in 'correcting',
-            # the exclusion drops it from the count the DB would report.
-            count = active_corrections
-            if current_record_in_correcting and "!=" in text:
-                count = max(0, count - 1)
-            return _Result(count)
         # Apply the feedback_status mutation for an UPDATE on feedback_records so
         # the in-memory record mock reflects what _persist_correction_outcome set.
+        # (Checked BEFORE the count branch: the fenced UPDATE's RETURNING clause
+        # carries `account_id`, which contains the substring "count".)
         if "UPDATE feedback_records" in text:
+            # Finding 3 fence: _persist_correction_outcome's UPDATE carries a
+            # `feedback_status == 'correcting'` predicate. When the record's
+            # status has drifted (a human escalated/resolved/dismissed it), the
+            # UPDATE matches 0 rows -> scalar_one_or_none() is None -> the
+            # manager raises ConcurrentModificationError. The fake mirrors that
+            # by returning no row for any non-'correcting' record.
+            if record.feedback_status != "correcting":
+                return _ExecuteResult(None)
             values = getattr(stmt, "_values", {}) or {}
             for key, raw in values.items():
                 column = getattr(key, "name", None)
@@ -199,6 +204,15 @@ async def _run_scenario(
                     record.feedback_status = value
                 elif column == "needs_human_review":
                     record.needs_human_review = value
+            return _ExecuteResult(record)
+        if "count(" in text.lower():
+            # MAJOR-3: the claim query excludes the current record (id != ...).
+            # When the fake is told the current record is itself in 'correcting',
+            # the exclusion drops it from the count the DB would report.
+            count = active_corrections
+            if current_record_in_correcting and "!=" in text:
+                count = max(0, count - 1)
+            return _Result(count)
         return _ExecuteResult(record)
 
     session.execute = AsyncMock(side_effect=_fake_execute)
@@ -641,3 +655,97 @@ async def test_e2e_resume_budget_exhausted_records_interrupted():
     assert outcome["result"]["verdict"] == CorrectionVerdict.INTERRUPTED.value
     assert outcome["result"]["needs_human_review"] is True
     assert outcome["record"].feedback_status == "escalated"
+
+
+# ---------------------------------------------------------------------------
+# Finding 3 (review): unfenced status writes must never reverse a human decision
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_e2e_dispatch_on_terminal_record_raises_invalid_transition():
+    """Finding 3: dispatching a single-node correction on a TERMINAL record
+    (``resolved``) raises ``InvalidTransitionError`` — the correction does NOT
+    execute (the LM never runs) and the record is untouched."""
+    from modulo.core.feedback_manager import InvalidTransitionError
+
+    guardrail = _guardrail()
+    correction = _correction()
+
+    class _ShouldNeverRun:
+        async def invoke(self, messages: list[Any], **kwargs: Any) -> Any:
+            raise AssertionError("LM must NOT run for a terminal record")
+
+    with pytest.raises(InvalidTransitionError, match="terminal"):
+        await _run_scenario(
+            backend=_ShouldNeverRun(),
+            correction=correction,
+            guardrail=guardrail,
+            record_overrides={"feedback_status": "resolved"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_e2e_resume_does_not_reverse_human_escalation():
+    """Finding 3 concrete reversal: a correction is interrupted (record
+    ``correcting``), a human reviews and escalates (``correcting -> escalated``),
+    then the idempotent re-dispatch resumes with the SAME idempotency key and a
+    produced output that would re-validate clean. The resume must NOT silently
+    flip the record back to ``resolved`` — dispatch gates on non-terminal status
+    and raises ``InvalidTransitionError``, leaving the human decision intact."""
+    from modulo.core.feedback_manager import InvalidTransitionError
+    from modulo.core.guardrails.correction import build_idempotency_key
+
+    guardrail = _guardrail()
+    correction = _correction()
+    redacted = redact_payload({"body": "secret: hunter2"}, correction.input_redaction_patterns)
+    idem_key = build_idempotency_key(
+        org_id=_ORG,
+        run_id=_RUN,
+        node_id="node_a",
+        correction_id=correction.id,
+        redacted_input=redacted,
+    )
+    prior_state = {
+        "idempotency_key": idem_key,
+        "attempt": 1,
+        "input_fingerprint": fingerprint_state(redacted),
+        "output_fingerprint": fingerprint_state({"body": "safe now"}),
+        "produced_output": {"body": "safe now"},
+    }
+
+    class _ShouldNeverRun:
+        async def invoke(self, messages: list[Any], **kwargs: Any) -> Any:
+            raise AssertionError("LM must NOT re-run on resume of an escalated record")
+
+    with pytest.raises(InvalidTransitionError, match="terminal"):
+        await _run_scenario(
+            backend=_ShouldNeverRun(),
+            correction=correction,
+            guardrail=guardrail,
+            prior_state=prior_state,
+            record_overrides={"feedback_status": "escalated"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_e2e_persist_fence_rejects_status_drift():
+    """Finding 3 defense-in-depth: even a NON-terminal record that slips through
+    the dispatch gate (``pending``) cannot have its correction outcome persisted
+    once the record has drifted out of ``correcting`` — the fenced UPDATE matches
+    zero rows and ``_persist_correction_outcome`` raises
+    ``ConcurrentModificationError`` instead of silently writing a stale status."""
+    from modulo.core.feedback_manager import ConcurrentModificationError
+
+    guardrail = _guardrail()
+    correction = _correction()
+    redacted = redact_payload({"body": "secret: hunter2"}, correction.input_redaction_patterns)
+    backend = _StubCorrectionBackend({_fixture_key(correction, redacted): json.dumps({"body": "safe now"})})
+
+    with pytest.raises(ConcurrentModificationError, match="Expected 'correcting'"):
+        await _run_scenario(
+            backend=backend,
+            correction=correction,
+            guardrail=guardrail,
+            record_overrides={"feedback_status": "pending"},
+        )
