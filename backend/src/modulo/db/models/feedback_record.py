@@ -44,3 +44,4 @@ class FeedbackRecord(OrgScoped):
     eval_gap: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     needs_human_review: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
     annotation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    correction_state: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
