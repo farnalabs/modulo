@@ -293,20 +293,31 @@ def oidc_callback_with_groups(groups: str, request: Any, ctx: dict[str, Any], cl
     with (
         patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
         patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
+        patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
         patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
         patch("modulo.auth.sso._lookup_provider_by_client_id", new_callable=AsyncMock) as mock_lookup,
         patch("modulo.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,
         patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
     ):
-        mock_disc.return_value = {"token_endpoint": "https://oauth2.googleapis.com/token"}
+        mock_disc.return_value = {
+            "token_endpoint": "https://oauth2.googleapis.com/token",
+            "jwks_uri": "https://www.googleapis.com/oauth2/v3/certs",
+            "issuer": "https://accounts.google.com",
+        }
         mock_ex.return_value = {"id_token": id_token}
+        mock_verify.return_value = {
+            "email": email,
+            "name": name,
+            "sub": "abc123",
+            "groups": group_list,
+        }
 
         user_mock = MagicMock()
         user_mock.email = email
         user_mock.id = uuid.uuid4()
         user_mock.organisation_id = _ORG_ID
         user_mock.org_role = "runner"
-        mock_jit.return_value = user_mock
+        mock_jit.return_value = (user_mock, _ORG_ID, "runner")
 
         provider_mock = MagicMock()
         provider_mock.group_mappings = ctx.get("group_mappings", [])
@@ -344,19 +355,28 @@ def saml_acs_with_groups(groups: str, request: Any, ctx: dict[str, Any], client:
 
     with (
         patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch,
+        patch("modulo.auth.sso.ModuloSamlAuth") as mock_handler,
         patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
         patch("modulo.auth.sso._lookup_provider_by_entity_id", new_callable=AsyncMock) as mock_lookup,
         patch("modulo.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,
         patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
     ):
         mock_fetch.return_value = _SAMPLE_IDP_METADATA
+        mock_handler.return_value.process_response.return_value = {
+            "name_id": email,
+            "attributes": {
+                "email": [email],
+                "displayName": [name],
+                "groups": group_list,
+            },
+        }
 
         user_mock = MagicMock()
         user_mock.email = email
         user_mock.id = uuid.uuid4()
         user_mock.organisation_id = _ORG_ID
         user_mock.org_role = "runner"
-        mock_jit.return_value = user_mock
+        mock_jit.return_value = (user_mock, _ORG_ID, "runner")
 
         provider_mock = MagicMock()
         provider_mock.group_mappings = ctx.get("group_mappings", [])
@@ -412,7 +432,7 @@ def apply_group_mappings_called_with(groups: str, ctx: dict[str, Any]) -> None:
     call = mock_apply.await_args
     assert call is not None
     input_groups = [g.strip() for g in groups.split(",") if g.strip()]
-    actual_groups = call[0][2]
+    actual_groups = call[0][3]
     assert actual_groups == input_groups, f"Expected groups {input_groups}, got {actual_groups}"
 
 
@@ -425,7 +445,7 @@ def mapping_assigns_role(expected_role: str, ctx: dict[str, Any]) -> None:
     mock_apply.assert_awaited_once()
     call = mock_apply.await_args
     assert call is not None
-    group_mappings = call[0][3]
+    group_mappings = call[0][4]
     assert len(group_mappings) > 0, "Expected at least one mapping"
     assert group_mappings[0]["team_role"] == expected_role, (
         f"Expected role {expected_role}, got {group_mappings[0]['team_role']}"
@@ -439,7 +459,7 @@ def apply_group_mappings_no_matches(ctx: dict[str, Any]) -> None:
     mock_apply.assert_awaited_once()
     call = mock_apply.await_args
     assert call is not None
-    idp_groups = call[0][2]
-    group_mappings = call[0][3]
+    idp_groups = call[0][3]
+    group_mappings = call[0][4]
     matched = any(m["idp_group"] in idp_groups for m in group_mappings)
     assert not matched, f"Expected no matching groups, but found match for {idp_groups} in {group_mappings}"

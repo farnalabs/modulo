@@ -90,21 +90,45 @@ def create_team_pipeline(name: str, visibility: str, team_name: str, request, ct
 
 
 @when(parsers.parse('user "{username}" requests the pipeline list'))
-def user_requests_pipeline_list(username: str, request, ctx) -> None:
-    from modulo.api.main import app
+def user_requests_pipeline_list(username: str, request, ctx, client) -> None:
+    from types import SimpleNamespace
 
-    client = TestClient(app)
-    app.dependency_overrides[get_settings] = make_settings
+    from tests.bdd.conftest import ORG_ID, make_mock_pipeline
 
-    ctx["users"].get(username, {"id": str(uuid.uuid4())})
     is_member = username in ctx.get("memberships", {})
-
-    pipelines = [pdata for pdata in ctx["pipelines"].values() if pdata.get("visibility") == "org" or is_member]
+    selected = [p for p in ctx["pipelines"].values() if p.get("visibility") == "org" or is_member]
+    items = [
+        make_mock_pipeline(id=uuid.UUID(p["id"]), org_id=ORG_ID, name=p["name"], visibility=p["visibility"])
+        for p in selected
+    ]
+    page = SimpleNamespace(items=items, total=len(items), page=1, page_size=20, next_cursor=None, has_more=False)
 
     with patch(
         "modulo.api.routes.pipelines.list_pipelines",
         new_callable=AsyncMock,
-        return_value={"items": pipelines, "total": len(pipelines)},
+        return_value=page,
+    ):
+        resp = client.get("/api/v1/pipelines")
+        request.node._resp = resp
+
+
+@when("I request the pipeline list")
+def admin_requests_pipeline_list(request, ctx, client) -> None:
+    from types import SimpleNamespace
+
+    from tests.bdd.conftest import ORG_ID, make_mock_pipeline
+
+    selected = list(ctx["pipelines"].values())
+    items = [
+        make_mock_pipeline(id=uuid.UUID(p["id"]), org_id=ORG_ID, name=p["name"], visibility=p["visibility"])
+        for p in selected
+    ]
+    page = SimpleNamespace(items=items, total=len(items), page=1, page_size=20, next_cursor=None, has_more=False)
+
+    with patch(
+        "modulo.api.routes.pipelines.list_pipelines",
+        new_callable=AsyncMock,
+        return_value=page,
     ):
         resp = client.get("/api/v1/pipelines")
         request.node._resp = resp
@@ -135,33 +159,60 @@ def user_requests_specific_pipeline(username: str, pipeline_name: str, request, 
 
 
 @when(parsers.parse('I update pipeline "{name}" with new name "{new_name}"'))
-def update_pipeline_name(name: str, new_name: str, request, ctx) -> None:
-    from modulo.api.main import app
+def update_pipeline_name(name: str, new_name: str, request, ctx, client) -> None:
+    from tests.bdd.conftest import ORG_ID, make_mock_pipeline
 
     pipeline = ctx["pipelines"].get(name)
     if pipeline:
         pipeline["name"] = new_name
+        updated = make_mock_pipeline(
+            id=uuid.UUID(pipeline["id"]),
+            org_id=ORG_ID,
+            name=new_name,
+            visibility=pipeline["visibility"],
+        )
         with patch(
             "modulo.api.routes.pipelines.update_pipeline",
             new_callable=AsyncMock,
-            return_value=pipeline,
+            return_value=updated,
         ):
-            resp = TestClient(app).put(f"/api/v1/pipelines/{pipeline['id']}", json={"name": new_name})
+            resp = client.patch(f"/api/v1/pipelines/{pipeline['id']}", json={"name": new_name})
             request.node._resp = resp
 
 
 @when(parsers.parse('I update pipeline "{name}" visibility to "{visibility}"'))
-def update_pipeline_visibility(name: str, visibility: str, request, ctx) -> None:
+def update_pipeline_visibility(name: str, visibility: str, request, ctx, client) -> None:
+    from tests.bdd.conftest import ORG_ID, make_mock_pipeline
+
     pipeline = ctx["pipelines"].get(name)
     if pipeline:
         pipeline["visibility"] = visibility
-        request.node._resp = MagicMock()
-        request.node._resp.status_code = 200
-        request.node._resp.json = lambda: pipeline
+        updated = make_mock_pipeline(
+            id=uuid.UUID(pipeline["id"]),
+            org_id=ORG_ID,
+            name=pipeline["name"],
+            visibility=visibility,
+        )
+        with patch(
+            "modulo.api.routes.pipelines.update_pipeline",
+            new_callable=AsyncMock,
+            return_value=updated,
+        ):
+            resp = client.patch(
+                f"/api/v1/pipelines/{pipeline['id']}",
+                json={"visibility": visibility},
+            )
+            request.node._resp = resp
 
 
 @then(parsers.parse('the pipeline has visibility "{visibility}"'))
 def pipeline_visibility(visibility: str, request) -> None:
+    data = request.node._resp.json()
+    assert data["visibility"] == visibility, f"Expected visibility '{visibility}', got {data['visibility']}"
+
+
+@then(parsers.parse('the pipeline visibility is "{visibility}"'))
+def pipeline_visibility_is(visibility: str, request) -> None:
     data = request.node._resp.json()
     assert data["visibility"] == visibility, f"Expected visibility '{visibility}', got {data['visibility']}"
 
