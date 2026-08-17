@@ -55,7 +55,7 @@ unit-tests:
   - backend/tests/integration/crud/test_user_isolation.py
 depends-on:
   - feat-auth-jwt-auth
-status: partial
+status: covered
 ---
 
 # User Management & Access Control
