@@ -58,6 +58,7 @@ Real-time event streaming for pipeline runs over WebSocket. Clients subscribe vi
 - No integration test verifying event streaming across run lifecycle
 
 ## QA History
+- **2026-08-15 (coverage sweep partial-small-b): Verified the 2 unchecked behaviours (WS-token rotation/expiry management; cross-process WebSocket broker) remain genuine unimplemented features — run_ws.py issues a single-use token at connect with no refresh mechanism and the broker is in-memory only. All 21 checked behaviours verified. 21/23 behaviours covered.**
 
 - 2026-07-09: Second-pass product map QA (feat-pipelines-run-websocket): Added Error Handling, Edge Cases, Known Gaps, and QA History sections. Verified all 9 implemented behaviours against run_ws.py code. Confirmed 2 unchecked items (WS-token rotation and cross-process broker) remain genuine unimplemented features.
 - 2026-07-11: Third-pass QA: Fixed prd reference (8.1→6.3), populated bdd and unit-tests fields with existing files, removed stale "No BDD feature files" from Known Gaps. Fixed run_ws.py docstring (15 min→60s TTL) and DB error close codes (4004→1011).

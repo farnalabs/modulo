@@ -80,7 +80,7 @@ with enforcement via DB constraints, RLS policies, and ViewModel validation.
 - [x] Community registry entries are always `visibility=org` — read-only, no team scope — verified in library_service
 - [x] Copy-to-adapt with `target_team_id` assigns `owner_team_id` on the new primitive — verified in library_service and route
 - [x] Copy-to-adapt without `target_team_id` defaults ownership to org-wide — verified
-- [ ] Copy of team-private primitive defaults ownership picker to source team — frontend behaviour, not verified
+- [ ] Copy of team-private primitive defaults ownership picker to source team — VERIFIED 2026-08-15 (partial-small-b sweep): NOT implemented. Both `CopyPipelineWizard.vue` and `LibraryPipelineWizard.vue` initialise `ownership` to `{ owner_team_id: null, visibility: 'org' }` and never pre-select the source team on copy-to-adapt of a team-private primitive; the picker always starts org-wide (see Known Gaps)
 
 ### Bundle Export & Import
 - [x] Export strips `owner_team_id` and `visibility` from bundle — both stripped, visibility defaults to `"org"` in export bundle (feat-teams-team-ownership index 336)
