@@ -442,4 +442,114 @@ async def test_validate_blocks_missing_sandbox_command():
 
     result = await validator.validate(snap, session)
     assert "SANDBOX_MISSING_COMMAND" in _codes(result)
-    assert not result.is_valid
+
+
+# ---------------------------------------------------------------------------
+# FAR-306: opt-in stall-detector fields
+# ---------------------------------------------------------------------------
+
+
+def test_sandbox_stall_detector_defaults_are_valid():
+    """A node without any stall-detector config emits no detector warnings."""
+    graph = {"nodes": [_sandbox_node()], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    codes = _codes(result)
+    assert "SANDBOX_STDOUT_DELTA_INVALID" not in codes
+    assert "SANDBOX_WATCH_GLOBS_INVALID" not in codes
+    assert "SANDBOX_WATCH_LOG_PATH_INVALID" not in codes
+    assert "SANDBOX_ENABLE_HEARTBEAT_INVALID" not in codes
+
+
+def test_sandbox_stdout_delta_out_of_bounds_warns():
+    """stdout_percentage_delta outside (0, 1] is flagged."""
+    for bad in (0, -0.1, 1.5):
+        graph = {"nodes": [_sandbox_node(stdout_percentage_delta=bad)], "edges": []}
+        result = ValidationResult()
+        GraphValidator._check_sandbox_agent_config(graph, result)
+        assert "SANDBOX_STDOUT_DELTA_INVALID" in _codes(result)
+
+
+def test_sandbox_stdout_delta_non_numeric_warns():
+    """A non-numeric stdout_percentage_delta is flagged."""
+    graph = {"nodes": [_sandbox_node(stdout_percentage_delta="abc")], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_STDOUT_DELTA_INVALID" in _codes(result)
+
+
+def test_sandbox_stdout_delta_valid_boundary_is_clean():
+    """stdout_percentage_delta at the valid boundaries (0 exclusive, 1 inclusive)
+    passes — 0.0 is invalid (would treat every identical chunk as activity),
+    1.0 is valid."""
+    for good in (0.5, 1.0):
+        graph = {"nodes": [_sandbox_node(stdout_percentage_delta=good)], "edges": []}
+        result = ValidationResult()
+        GraphValidator._check_sandbox_agent_config(graph, result)
+        assert "SANDBOX_STDOUT_DELTA_INVALID" not in _codes(result)
+
+
+def test_sandbox_watch_globs_non_list_warns():
+    """watch_globs must be an array."""
+    graph = {"nodes": [_sandbox_node(watch_globs="*.log")], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_WATCH_GLOBS_INVALID" in _codes(result)
+
+
+def test_sandbox_watch_globs_non_string_entry_warns():
+    """watch_globs entries must be strings."""
+    graph = {"nodes": [_sandbox_node(watch_globs=["*.log", 42])], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_WATCH_GLOBS_INVALID" in _codes(result)
+
+
+def test_sandbox_watch_globs_valid_list_is_clean():
+    """A list of string globs passes."""
+    graph = {"nodes": [_sandbox_node(watch_globs=["*.log", "/home/user/out/*"])], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_WATCH_GLOBS_INVALID" not in _codes(result)
+
+
+def test_sandbox_watch_log_path_non_string_warns():
+    """watch_log_path must be a string."""
+    graph = {"nodes": [_sandbox_node(watch_log_path=42)], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_WATCH_LOG_PATH_INVALID" in _codes(result)
+
+
+def test_sandbox_watch_log_path_relative_warns():
+    """A relative watch_log_path is flagged."""
+    graph = {"nodes": [_sandbox_node(watch_log_path="agent.log")], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_WATCH_LOG_PATH_RELATIVE" in _codes(result)
+
+
+def test_sandbox_watch_log_path_absolute_is_clean():
+    """An absolute watch_log_path passes."""
+    graph = {"nodes": [_sandbox_node(watch_log_path="/home/user/agent.log")], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_WATCH_LOG_PATH_INVALID" not in _codes(result)
+    assert "SANDBOX_WATCH_LOG_PATH_RELATIVE" not in _codes(result)
+
+
+def test_sandbox_enable_heartbeat_non_bool_warns():
+    """enable_heartbeat must be a boolean."""
+    graph = {"nodes": [_sandbox_node(enable_heartbeat="yes")], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_ENABLE_HEARTBEAT_INVALID" in _codes(result)
+
+
+def test_sandbox_enable_heartbeat_false_is_clean():
+    """enable_heartbeat=False is a valid explicit opt-out."""
+    graph = {"nodes": [_sandbox_node(enable_heartbeat=False)], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_ENABLE_HEARTBEAT_INVALID" not in _codes(result)
+    assert result.is_valid

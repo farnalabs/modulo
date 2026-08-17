@@ -570,6 +570,26 @@
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.timeout') }}</dt>
               <dd>{{ selectedNodeData.timeout_seconds }}s</dd>
             </div>
+            <div v-if="selectedNodeData.stall_timeout_seconds">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider" data-testid="pipeline-editor-stall-timeout-label">{{ $t('views.PipelineEditorView.stall_timeout') }}</dt>
+              <dd data-testid="pipeline-editor-stall-timeout-value">{{ selectedNodeData.stall_timeout_seconds }}s</dd>
+            </div>
+            <div>
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider" data-testid="pipeline-editor-heartbeat-label">{{ $t('views.PipelineEditorView.heartbeat') }}</dt>
+              <dd data-testid="pipeline-editor-heartbeat-value">{{ selectedNodeData.enable_heartbeat === false ? $t('views.PipelineEditorView.disabled') : $t('views.PipelineEditorView.enabled') }}</dd>
+            </div>
+            <div v-if="selectedNodeData.watch_log_path">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider" data-testid="pipeline-editor-watch-log-path-label">{{ $t('views.PipelineEditorView.watch_log_path') }}</dt>
+              <dd class="font-mono text-xs break-all" data-testid="pipeline-editor-watch-log-path-value">{{ selectedNodeData.watch_log_path }}</dd>
+            </div>
+            <div v-if="selectedNodeData.stdout_percentage_delta != null">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider" data-testid="pipeline-editor-stdout-delta-label">{{ $t('views.PipelineEditorView.stdout_delta') }}</dt>
+              <dd data-testid="pipeline-editor-stdout-delta-value">{{ selectedNodeData.stdout_percentage_delta }}</dd>
+            </div>
+            <div v-if="selectedNodeData.watch_globs && selectedNodeData.watch_globs.length > 0">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider" data-testid="pipeline-editor-watch-globs-label">{{ $t('views.PipelineEditorView.watch_globs') }}</dt>
+              <dd class="font-mono text-[10px] break-all" data-testid="pipeline-editor-watch-globs-value">{{ selectedNodeData.watch_globs.join(', ') }}</dd>
+            </div>
             <div v-if="selectedNodeData.env_vars && Object.keys(selectedNodeData.env_vars).length > 0">
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.env_vars') }}</dt>
               <dd class="font-mono text-[10px] break-all">{{ Object.keys(selectedNodeData.env_vars).join(', ') }}</dd>
@@ -1635,6 +1655,11 @@ async function saveEdgeConfig() {
           model_backend_id: n.model_backend_id || null,
           role: n.role || null,
           timeout_seconds: n.timeout_seconds || null,
+          stall_timeout_seconds: n.stall_timeout_seconds || null,
+          enable_heartbeat: n.enable_heartbeat === false ? false : true,
+          watch_log_path: n.watch_log_path || null,
+          stdout_percentage_delta: n.stdout_percentage_delta ?? null,
+          watch_globs: Array.isArray(n.watch_globs) ? n.watch_globs : [],
           position: n.position || null,
           parameter_set_id: n.parameter_set_id || null,
           parameter_overrides: n.parameter_overrides || null,
@@ -1905,6 +1930,11 @@ async function saveGraph() {
           model_backend_id: n.model_backend_id || null,
           role: n.role || null,
           timeout_seconds: n.timeout_seconds || null,
+          stall_timeout_seconds: n.stall_timeout_seconds || null,
+          enable_heartbeat: n.enable_heartbeat === false ? false : true,
+          watch_log_path: n.watch_log_path || null,
+          stdout_percentage_delta: n.stdout_percentage_delta ?? null,
+          watch_globs: Array.isArray(n.watch_globs) ? n.watch_globs : [],
           position: n.position || null,
           parameter_set_id: n.parameter_set_id || null,
           parameter_overrides: n.parameter_overrides || null,

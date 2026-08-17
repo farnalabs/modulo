@@ -11983,6 +11983,32 @@ export interface components {
             } | null;
             /** Description */
             description?: string | null;
+            /**
+             * Stall Timeout Seconds
+             * @description Stall window (seconds) before the idle watchdog treats the agent as stalled.
+             */
+            stall_timeout_seconds?: number | null;
+            /**
+             * Enable Heartbeat
+             * @default true
+             * @description Enable the connection-liveness (heartbeat) stall channel.
+             */
+            enable_heartbeat?: boolean;
+            /**
+             * Watch Log Path
+             * @description Log-growth detector: a path inside the sandbox whose growth counts as activity.
+             */
+            watch_log_path?: string | null;
+            /**
+             * Stdout Percentage Delta
+             * @description stdout-delta detector: fraction of new stdout that must differ to count as activity.
+             */
+            stdout_percentage_delta?: number | null;
+            /**
+             * Watch Globs
+             * @description Filesystem detector: globs of sandbox paths whose change counts as activity.
+             */
+            watch_globs?: string[];
         };
         /** PipelineGraphResponse */
         PipelineGraphResponse: {

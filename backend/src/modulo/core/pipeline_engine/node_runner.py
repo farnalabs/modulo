@@ -42,6 +42,7 @@ Eval-before-interrupt ((Section 8.17):
 
 import asyncio
 import base64
+import difflib
 import hashlib
 import json
 import logging
@@ -1810,6 +1811,103 @@ async def _wait_command_with_idle_watchdog(
                 return None, f"agent produced no output for {idle_timeout:.0f}s"
 
 
+class _StallDetector:
+    """Per-channel liveness tracking for the sandbox_agent idle watchdog (FAR-306).
+
+    Stall detection is OPT-IN tooling layered on top of the default heartbeat
+    (connection liveness). Each *channel* (heartbeat, log-growth, stdout-delta,
+    filesystem) tracks its own last-activity timestamp. The watchdog fires only
+    when ALL *enabled* channels have been silent for ``stall_timeout_seconds``.
+
+    ``last_activity()`` returns the most recent activity across all enabled
+    channels, which is what the idle watchdog compares against the stall window.
+    With the default configuration (only the heartbeat enabled) behaviour is
+    unchanged from the pre-FAR-306 watchdog: connection responsiveness keeps the
+    run alive, never false-killing a busy-but-silent agent.
+
+    Channels are registered explicitly via ``enable(channel)`` so that a channel
+    the user has not opted into never counts as a silent channel (which would
+    otherwise break the all-channels-silent rule for a default run).
+    """
+
+    def __init__(self, now: Callable[[], float] | None = None) -> None:
+        self._now: Callable[[], float] = now or time.monotonic
+        self._activity: dict[str, float] = {}
+        self._enabled: set[str] = set()
+
+    def enable(self, channel: str) -> None:
+        """Mark a channel as active. Enabling seeds its baseline so a brand-new
+        channel does not look "already stalled" the instant the run starts."""
+        self._enabled.add(channel)
+        self._activity.setdefault(channel, self._now())
+
+    def disable(self, channel: str) -> None:
+        """Remove a channel from the active set (e.g. heartbeat opt-out)."""
+        self._enabled.discard(channel)
+
+    @property
+    def enabled(self) -> set[str]:
+        return set(self._enabled)
+
+    def touch(self, channel: str) -> None:
+        """Record activity on a channel. Ignored for a channel that is not
+        enabled (so a stray probe never resurrects a disabled channel)."""
+        if channel in self._enabled:
+            self._activity[channel] = self._now()
+
+    def last_activity(self) -> float:
+        """Most recent activity across all enabled channels.
+
+        With no enabled channels there is nothing to stall on — return ``now``
+        so the watchdog never fires (belt-and-braces against a misconfigured
+        node with every detector disabled).
+        """
+        if not self._enabled:
+            return self._now()
+        return max(self._activity[channel] for channel in self._enabled)
+
+
+def _delta_ratio(prev: str, new: str) -> float:
+    """Fraction of ``new`` that differs from ``prev`` (0.0..1.0).
+
+    Absolute-growth semantics for the stdout-delta detector: a chunk counts as
+    meaningful activity when it is substantially different from the previous
+    chunk (spinner noise like a repeating cursor or progress bar is near-zero).
+    The first chunk always counts as activity (caller handles the None case).
+    """
+    if prev == new:
+        return 0.0
+    if not new:
+        return 0.0
+    if not prev:
+        return 1.0
+    return 1.0 - difflib.SequenceMatcher(None, prev, new).ratio()
+
+
+def _path_matches_any_glob(path: str, globs: list[str]) -> bool:
+    """True when *path* matches any of the filesystem-detector globs.
+
+    Supports ``*`` (any run of chars) and ``?`` (single char) via fnmatch,
+    matched against the basename, the bare path, and a leading-slash form so
+    user globs like ``*.log``, ``/home/user/out/*`` and ``output.json`` all
+    behave intuitively.
+    """
+    import fnmatch
+
+    candidates = (path, path.lstrip("/"))
+    base = path.rsplit("/", 1)[-1]
+    for glob in globs:
+        glob_str = str(glob)
+        if fnmatch.fnmatch(path, glob_str) or fnmatch.fnmatch(path.lstrip("/"), glob_str):
+            return True
+        if fnmatch.fnmatch(base, glob_str):
+            return True
+        for candidate in candidates:
+            if glob_str.endswith("/") and fnmatch.fnmatch(candidate, glob_str + "*"):
+                return True
+    return False
+
+
 # FAR-227: the E2B sandbox wrapper's fallback echo written to /home/user/output.json
 # when the opencode session dies without producing output. It is a PLACEHOLDER,
 # NOT an agent verdict — the agent never spoke; the session was interrupted. When
@@ -1900,6 +1998,27 @@ def make_sandbox_agent_fn(
     sandbox_timeout: int = node_def.get("timeout_seconds", 1200)
     stall_timeout_override: Any = node_def.get("stall_timeout_seconds")
     context_files: dict[str, str] = node_def.get("context_files") or {}
+
+    # FAR-306: opt-in stall detectors layered on the default heartbeat. Each
+    # detector is a separate liveness channel; the idle watchdog fires only when
+    # ALL *enabled* channels are silent for stall_timeout_seconds. Defaults keep
+    # the heartbeat ON and every opt-in detector OFF — behaviour is unchanged
+    # unless a user explicitly enables one.
+    enable_heartbeat: bool = node_def.get("enable_heartbeat", True) is not False
+    watch_log_path: str | None = node_def.get("watch_log_path")
+    watch_log_path = watch_log_path if isinstance(watch_log_path, str) and watch_log_path else None
+    stdout_percentage_delta_raw: Any = node_def.get("stdout_percentage_delta")
+    stdout_percentage_delta: float | None = None
+    if stdout_percentage_delta_raw is not None:
+        try:
+            _d = float(stdout_percentage_delta_raw)
+            stdout_percentage_delta = _d if 0.0 < _d <= 1.0 else None
+        except (TypeError, ValueError):
+            stdout_percentage_delta = None
+    _watch_globs_raw: Any = node_def.get("watch_globs")
+    watch_globs: list[str] = (
+        [g for g in _watch_globs_raw if isinstance(g, str) and g] if isinstance(_watch_globs_raw, (list, tuple)) else []
+    )
     # FAR-228: the opt-in delivery sentinel (full-line marker in sandbox output
     # that proves the side effect — e.g. an email — was sent) and the
     # single-node guard (the gate is inert on multi-node graphs).
@@ -2313,6 +2432,30 @@ def make_sandbox_agent_fn(
             )
 
             try:
+                # FAR-306: per-channel stall detector. The heartbeat channel
+                # (connection liveness) is the default; the opt-in detectors
+                # (log-growth, stdout-delta, filesystem) add extra channels that
+                # must ALL be silent before the watchdog fires. ``_activity``
+                # remains the stream-buffer/throttle dict (not a liveness source).
+                _stall = _StallDetector()
+                # The agent's ACTUAL output is always a liveness signal: its own
+                # redirected log growing is real progress, independent of the
+                # heartbeat. In strict mode (enable_heartbeat=False) this is the
+                # ONLY built-in channel, so a silent-but-connected agent stalls.
+                _stall.enable("output")
+                # Heartbeat (connection liveness) is the DEFAULT extra channel:
+                # a successful get_info proves the sandbox is responsive even
+                # when the agent emits nothing for a long LLM turn (never
+                # false-kills). enable_heartbeat=False drops it (strict mode).
+                _stall.enable("heartbeat")
+                if not enable_heartbeat:
+                    _stall.disable("heartbeat")
+                if watch_log_path is not None:
+                    _stall.enable("log_growth")
+                if stdout_percentage_delta is not None:
+                    _stall.enable("stdout")
+                if watch_globs:
+                    _stall.enable("filesystem")
                 # Track the last time the agent emitted output so the idle
                 # watchdog can fail fast on stalls (FAR-97). The callbacks run
                 # from the SDK's event task and may be async or sync.
@@ -2385,12 +2528,30 @@ def make_sandbox_agent_fn(
                             extra={"node_id": node_id, "run_id": run_id},
                         )
 
+                # stdout-delta detector (FAR-306): a chunk counts as meaningful
+                # activity when it differs from the previous chunk by more than
+                # stdout_percentage_delta (absolute-growth semantics — repeated
+                # spinner noise is near-zero delta and does NOT keep the run
+                # alive). The first chunk always counts as activity.
+                _stdout_prev: str | None = None
+                _stdout_ratio = stdout_percentage_delta
+
+                def _touch_stdout(chunk: str) -> None:
+                    nonlocal _stdout_prev
+                    if _stdout_ratio is None:
+                        return
+                    prev = _stdout_prev
+                    _stdout_prev = chunk
+                    if prev is None or _delta_ratio(prev, chunk) > _stdout_ratio:
+                        _stall.touch("stdout")
+
                 async def _on_stdout(chunk: str) -> None:
-                    _activity["last"] = time.monotonic()
+                    _stall.touch("heartbeat")
+                    _touch_stdout(chunk)
                     _stream_chunk(chunk, "stdout")
 
                 async def _on_stderr(chunk: str) -> None:
-                    _activity["last"] = time.monotonic()
+                    _stall.touch("heartbeat")
                     _stream_chunk(chunk, "stderr")
 
                 # FAR-97 pipe-buffer fix: the agent command's stdout/stderr are
@@ -2421,7 +2582,11 @@ def make_sandbox_agent_fn(
                             sandbox.files.get_info(_SANDBOX_LOG_PATH),
                             timeout=_SANDBOX_TAIL_READ_TIMEOUT,
                         )
-                        _activity["last"] = time.monotonic()
+                        # Heartbeat channel: a successful get_info proves the
+                        # sandbox connection is responsive. When enable_heartbeat
+                        # is False (strict mode) this touch is a no-op because the
+                        # channel is not enabled (FAR-306).
+                        _stall.touch("heartbeat")
                         size = int(getattr(info, "size", 0) or 0)
                     except asyncio.CancelledError:
                         raise
@@ -2475,7 +2640,13 @@ def make_sandbox_agent_fn(
                         _drained_chunks.append(new)
                         _drained_len += len(new)
                         _stream_chunk(new, "stdout")
-                        _activity["last"] = time.monotonic()
+                        # Actual agent-log growth is real progress: refresh the
+                        # output channel (always active, the strict-mode signal),
+                        # the heartbeat (when enabled), and feed the stdout-delta
+                        # detector (FAR-306).
+                        _stall.touch("output")
+                        _stall.touch("heartbeat")
+                        _touch_stdout(new)
                         # Bound retained memory to the drain window: drop the
                         # oldest chunks once the accumulated log exceeds it.
                         while _drained_len > _MAX_DRAIN_WINDOW and len(_drained_chunks) > 1:
@@ -2491,6 +2662,94 @@ def make_sandbox_agent_fn(
                     # where THIS tick's emitted bytes actually ended, not where
                     # the probe saw the file.
                     _drain_offset = max(_drain_offset, full_len)
+
+                # FAR-306 opt-in detectors that run alongside the drain probe on
+                # every watchdog tick. Probe errors are logged and treated as "no
+                # activity" — they must never mask a genuine stall NOR fail the
+                # node (best-effort, fail-open-with-log).
+
+                # log-growth detector: the user-defined watch_log_path grows.
+                _watch_log_prev_size: int | None = None
+
+                async def _probe_log_growth() -> None:
+                    nonlocal _watch_log_prev_size
+                    try:
+                        info = await asyncio.wait_for(
+                            sandbox.files.get_info(watch_log_path),
+                            timeout=_SANDBOX_TAIL_READ_TIMEOUT,
+                        )
+                        size = int(getattr(info, "size", 0) or 0)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        _log.info(
+                            "sandbox_agent.watch_log_probe_failed",
+                            extra={"node_id": node_id, "path": watch_log_path},
+                        )
+                        return
+                    if _watch_log_prev_size is not None and size > _watch_log_prev_size:
+                        _stall.touch("log_growth")
+                    _watch_log_prev_size = size
+
+                # filesystem detector: any file matching a watch_glob changes
+                # (create/modify/delete). State is keyed by (path, mtime, size).
+                _fs_state: dict[str, tuple[Any, int]] = {}
+                _fs_last_stat = 0.0
+                _fs_min_stat_interval = 2.0
+
+                async def _probe_filesystem() -> None:
+                    nonlocal _fs_state, _fs_last_stat
+                    now = time.monotonic()
+                    if now - _fs_last_stat < _fs_min_stat_interval:
+                        return
+                    _fs_last_stat = now
+                    try:
+                        matches = await asyncio.wait_for(
+                            sandbox.files.list(path="/", request_timeout=_SANDBOX_TAIL_READ_TIMEOUT),
+                            timeout=_SANDBOX_TAIL_READ_TIMEOUT,
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        _log.info(
+                            "sandbox_agent.watch_fs_probe_failed",
+                            extra={"node_id": node_id},
+                        )
+                        return
+                    try:
+                        entries = matches if isinstance(matches, list) else list(getattr(matches, "files", []) or [])
+                    except Exception:
+                        _log.info("sandbox_agent.watch_fs_list_invalid", extra={"node_id": node_id})
+                        return
+                    changed = False
+                    seen: set[str] = set()
+                    for entry in entries:
+                        path = getattr(entry, "path", None) or getattr(entry, "name", None)
+                        if not isinstance(path, str):
+                            continue
+                        if path == _SANDBOX_LOG_PATH or (watch_log_path and path == watch_log_path):
+                            continue
+                        if _path_matches_any_glob(path, watch_globs):
+                            seen.add(path)
+                            key = (getattr(entry, "mtime", None), int(getattr(entry, "size", 0) or 0))
+                            if path in _fs_state and _fs_state[path] != key:
+                                changed = True
+                            _fs_state[path] = key
+                    # A previously-seen path that no longer matches (deleted) is
+                    # also activity.
+                    for prev_path in list(_fs_state):
+                        if prev_path not in seen:
+                            del _fs_state[prev_path]
+                            changed = True
+                    if changed:
+                        _stall.touch("filesystem")
+
+                async def _tick() -> None:
+                    await _drain_sandbox_log()
+                    if watch_log_path is not None:
+                        await _probe_log_growth()
+                    if watch_globs:
+                        await _probe_filesystem()
 
                 _drain_fn = _drain_sandbox_log
 
@@ -2587,8 +2846,10 @@ def make_sandbox_agent_fn(
                     cmd_handle,
                     total_timeout=sandbox_timeout,
                     idle_timeout=stall_timeout,
-                    last_activity=lambda: _activity["last"],
-                    on_tick=_drain_sandbox_log,
+                    # FAR-306: last_activity is the max across all ENABLED
+                    # channels (heartbeat + any opt-in detectors).
+                    last_activity=_stall.last_activity,
+                    on_tick=_tick,
                     tick_interval=_SANDBOX_TAIL_INTERVAL,
                 )
             except asyncio.CancelledError:
