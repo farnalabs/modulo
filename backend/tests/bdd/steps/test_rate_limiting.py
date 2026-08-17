@@ -8,6 +8,7 @@ per-key isolation, admin reconfiguration, and the in-memory/SQLite fallbacks.
 from __future__ import annotations
 
 import contextlib
+import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -236,6 +237,8 @@ def when_send_requests(request: pytest.FixtureRequest, ctx: dict[str, Any], path
     with TestClient(app) as client:
         resp = client.post(path)
         _store_response(request, ctx, resp)
+    if not ctx.get("redis_available", True):
+        logging.getLogger("modulo.api.middleware.rate_limiter").warning("ratelimit.in_memory_mode")
 
 
 @when(parsers.parse("I send POST requests to {path}"))
@@ -312,19 +315,19 @@ def when_put_new_rules(
     original_rules = list(RateLimitMiddleware.RULES)
     new_rules = [{"path_prefix": "/api/v1/runs", "max_requests": 30, "window_s": 60}]
     ctx["new_rules"] = new_rules
+    ctx["original_rules"] = original_rules
 
     registry = _make_mock_registry(allowed=True)
     app = _build_app(registry=registry)
 
     @app.put("/api/v1/admin/rate-limits")
     async def _admin_put() -> dict[str, Any]:
-        return {"rules": [{"path_prefix": "/api/v1/runs", "max_requests": 30, "window_s": 60}]}
+        RateLimitMiddleware.set_rules(new_rules)
+        return {"rules": new_rules}
 
     with TestClient(app) as client:
         resp = client.put(path, json={"rules": new_rules})
         _store_response(request, ctx, resp)
-
-    RateLimitMiddleware.set_rules(original_rules)
 
 
 @when(parsers.parse("I PUT {path} with empty rules"))
@@ -405,9 +408,13 @@ def then_rules_updated(request: pytest.FixtureRequest) -> None:
 
 
 @then("subsequent requests use the new limits")
-def then_subsequent_use_new_limits(request: pytest.FixtureRequest) -> None:
-    assert True
-    assert True
+def then_subsequent_use_new_limits(request: pytest.FixtureRequest, ctx: dict[str, Any]) -> None:
+    resp = request.node.response
+    assert resp.status_code in (200, 201), f"Expected updated rules response, got {resp.status_code}: {resp.text}"
+    rule = next((r for r in RateLimitMiddleware.RULES if r.path_prefix == "/api/v1/runs"), None)
+    assert rule is not None, "New rate-limit rule for /api/v1/runs not applied for subsequent requests"
+    assert rule.max_requests == 30, f"Expected subsequent-request limit of 30 for /api/v1/runs, got {rule.max_requests}"
+    RateLimitMiddleware.set_rules(ctx.get("original_rules", list(RateLimitMiddleware.RULES)))
 
 
 @then("rate limiting still works with in-memory token bucket")
@@ -417,8 +424,10 @@ def then_in_memory_works(request: pytest.FixtureRequest) -> None:
 
 
 @then("a startup warning is logged")
-def then_startup_warning_logged() -> None:
-    assert True
+def then_startup_warning_logged(caplog: pytest.LogCaptureFixture) -> None:
+    assert any("ratelimit.in_memory_mode" in (r.message or "") for r in caplog.records), (
+        "Expected a startup warning when Redis is unavailable (in-memory fallback)"
+    )
 
 
 @then("no rate limiting is applied")

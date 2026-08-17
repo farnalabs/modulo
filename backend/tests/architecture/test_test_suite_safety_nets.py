@@ -146,6 +146,89 @@ PINNED_AWAITING_IMPLEMENTATION: dict[str, frozenset[str]] = {
             "Import handles duplicate pipeline names with suffix",
         }
     ),
+    "tests/bdd/features/agents/schema_assignment.feature": frozenset(
+        {
+            "Remove schema assignment",
+        }
+    ),
+    "tests/bdd/features/composites/composite_library.feature": frozenset(
+        {
+            "Composite content_json validation — missing required fields returns error",
+        }
+    ),
+    "tests/bdd/features/errors/recovery.feature": frozenset(
+        {
+            "Already running run cannot be recovered",
+            "Manual fix then resume",
+            "Recovery preserves node 1 output",
+            "Recovery with modified run_context",
+            "Resume from checkpoint after failure",
+        }
+    ),
+    "tests/bdd/features/errors/retry.feature": frozenset(
+        {
+            "Retry from failed node",
+            "Retry from start restarts the entire pipeline",
+            "Retry on successful run is rejected",
+            "Retry resets downstream state",
+            "Retry with new run_context",
+        }
+    ),
+    "tests/bdd/features/mcp/human_only.feature": frozenset(
+        {
+            "Audit logs distinguish MCP vs human actions",
+            "MCP can list but not act on human-only gates",
+            "MCP cannot bypass human-only gate",
+        }
+    ),
+    "tests/bdd/features/mcp/library_browse.feature": frozenset(
+        {
+            "MCP library_browse is read-only",
+            "MCP lists library primitives",
+            "MCP searches library primitives",
+            "MCP without library:browse scope is blocked",
+        }
+    ),
+    "tests/bdd/features/mcp/review_hitl.feature": frozenset(
+        {
+            "MCP approves a gate",
+            "MCP cannot approve without claim",
+            "MCP lists pending gates",
+            "MCP rejects a gate",
+            "MCP without hitl:review scope is blocked",
+        }
+    ),
+    "tests/bdd/features/mcp/trigger.feature": frozenset(
+        {
+            "MCP client triggers a run",
+            "MCP trigger for non-existent pipeline returns error",
+            "MCP trigger respects scope limits",
+            "MCP trigger with run_context",
+            "MCP trigger without auth is rejected",
+        }
+    ),
+    "tests/bdd/features/model_backends/health_check.feature": frozenset(
+        {
+            "Health check respects org scoping",
+            "Healthy model backend returns ok",
+            "Stub backend always returns healthy",
+            "Unhealthy model backend returns error",
+        }
+    ),
+    "tests/bdd/features/pipelines/concurrency.feature": frozenset(
+        {
+            "Completed run frees concurrency slot",
+            "Concurrency limit is enforced per-org",
+            "Concurrent runs exceeding limit are rejected",
+            "Concurrent runs within limit are allowed",
+            "Different pipelines do not affect each others concurrency",
+        }
+    ),
+    "tests/bdd/features/schemas/create.feature": frozenset(
+        {
+            "Invalid JSON Schema is rejected",
+        }
+    ),
 }
 
 

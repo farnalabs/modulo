@@ -1493,7 +1493,8 @@ def _shared_team_has_account_id(request) -> None:
 @then("the response contains a list of teams")
 def _shared_response_team_list(request) -> None:
     data = request.node._resp.json()
-    assert "items" in data and "total" in data
+    assert "items" in data, f"Expected 'items' in response, got {data}"
+    assert "total" in data, f"Expected 'total' in response, got {data}"
 
 
 @then(parsers.parse("the team has {count:d} members"))
@@ -1549,7 +1550,9 @@ def _shared_membership_fields(request) -> None:
     data = request.node._resp.json()
     items = data.get("memberships", data.get("items", []))
     for item in items:
-        assert "team_id" in item and "team_name" in item and "role" in item
+        assert "team_id" in item, f"Missing 'team_id' in membership {item}"
+        assert "team_name" in item, f"Missing 'team_name' in membership {item}"
+        assert "role" in item, f"Missing 'role' in membership {item}"
 
 
 def _role_level(role: str) -> int:
