@@ -5693,25 +5693,21 @@ async def _parse_oauth_form(request: Request) -> tuple[dict[str, str] | None, JS
     )
 
 
-async def _oauth_token(request: Request) -> JSONResponse:
-    """POST /mcp/oauth/token — exchange code for access token.
+def _extract_oauth_client_credentials(
+    request: Request, params: dict[str, str]
+) -> tuple[dict[str, str], JSONResponse | None]:
+    """Extract and validate the client credentials for an authorization-code grant.
 
-    RFC 6749 wire format: form-urlencoded bodies (``request.form()``) with JSON
-    bodies accepted for backwards compatibility; anything else is
-    ``invalid_request``. The PKCE ``code_verifier`` is required and verified
-    against the stored S256 challenge (RFC 7636 §4.5/§4.6). ``client_secret``
-    may arrive in the form body OR an HTTP Basic Authorization header. The
-    consenting account's LIVE org role is re-verified against the granted
-    scopes — a demoted account is denied a token (ADR 017).
+    Validates ``grant_type`` is ``authorization_code`` and reads
+    ``code``/``redirect_uri``/``client_id``/``code_verifier``/``client_secret``
+    from the body, falling back to an HTTP Basic Authorization header for
+    ``client_secret``/``client_id`` (RFC 6749 §2.3.1). Returns
+    ``(creds, error)`` where ``creds`` has the six keys — exactly one of the
+    tuple is non-None only on error.
     """
-    params, parse_err = await _parse_oauth_form(request)
-    if parse_err:
-        return parse_err
-    assert params is not None
-
     grant_type = params.get("grant_type", "")
     if grant_type != "authorization_code":
-        return JSONResponse(
+        return {}, JSONResponse(
             {"error": "unsupported_grant_type"},
             status_code=400,
         )
@@ -5735,16 +5731,55 @@ async def _oauth_token(request: Request) -> JSONResponse:
             if not client_id:
                 client_id = basic_id
         except Exception:
-            return JSONResponse(
+            return {}, JSONResponse(
                 {"error": "invalid_request", "detail": "Malformed Basic Authorization header"},
                 status_code=400,
             )
 
     if not code or not redirect_uri or not client_id or not client_secret:
-        return JSONResponse(
+        return {}, JSONResponse(
             {"error": "invalid_request", "detail": "Missing required parameters"},
             status_code=400,
         )
+
+    return (
+        {
+            "grant_type": grant_type,
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "client_id": client_id,
+            "code_verifier": code_verifier,
+            "client_secret": client_secret,
+        },
+        None,
+    )
+
+
+async def _oauth_token(request: Request) -> JSONResponse:
+    """POST /mcp/oauth/token — exchange code for access token.
+
+    RFC 6749 wire format: form-urlencoded bodies (``request.form()``) with JSON
+    bodies accepted for backwards compatibility; anything else is
+    ``invalid_request``. The PKCE ``code_verifier`` is required and verified
+    against the stored S256 challenge (RFC 7636 §4.5/§4.6). ``client_secret``
+    may arrive in the form body OR an HTTP Basic Authorization header. The
+    consenting account's LIVE org role is re-verified against the granted
+    scopes — a demoted account is denied a token (ADR 017).
+    """
+    params, parse_err = await _parse_oauth_form(request)
+    if parse_err:
+        return parse_err
+    assert params is not None
+
+    creds, cred_err = _extract_oauth_client_credentials(request, params)
+    if cred_err:
+        return cred_err
+
+    code = creds["code"]
+    redirect_uri = creds["redirect_uri"]
+    client_id = creds["client_id"]
+    code_verifier = creds["code_verifier"]
+    client_secret = creds["client_secret"]
 
     from modulo.auth.oauth import (
         InvalidClientError,
