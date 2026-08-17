@@ -1022,6 +1022,11 @@ async def replace_pipeline_graph_endpoint(
                             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                             detail=issue.message,
                         )
+                    if issue.code == "REDACT_CORRECT_BLOCKED":
+                        raise HTTPException(
+                            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                            detail=issue.message,
+                        )
     except HitlGateWeakeningDenied as exc:
         await _deny_hitl_gate(
             session,

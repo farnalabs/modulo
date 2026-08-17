@@ -143,6 +143,7 @@ class GraphValidator:
         await self._check_composite_nodes(graph_json, session, result)
         await self._check_parameter_references(graph_json, session, result)
         self._check_guardrail_caps(guardrail_definitions or [], result)
+        self._check_guardrail_correction_bindings(guardrail_definitions or [], result)
 
         return result
 
@@ -1124,6 +1125,40 @@ class GraphValidator:
         violation = guardrail_cap_violation(definitions)
         if violation:
             result.error("GUARDRAIL_CAP_EXCEEDED", violation)
+
+    @staticmethod
+    def _check_guardrail_correction_bindings(
+        guardrail_rows: list[Any],
+        result: ValidationResult,
+    ) -> None:
+        """Reject a ``redact``-action guardrail that declares a ``correction`` block.
+
+        FAR-210: a correction on a redaction guardrail is an exfiltration
+        channel for the exact data redaction protects. The runtime
+        ``RedactCorrectBlockedError`` (``modulo.core.guardrails.correction``)
+        is the fail-closed backstop; this save-time check rejects the
+        mis-bound config at authoring time so it can never be saved onto a
+        redaction guardrail.
+        """
+        if not guardrail_rows:
+            return
+        from modulo.core.guardrails import GuardrailAction
+
+        for row in guardrail_rows:
+            config = getattr(row, "config_json", None)
+            if not isinstance(config, dict):
+                continue
+            if config.get("action") != GuardrailAction.REDACT.value:
+                continue
+            if not isinstance(config.get("correction"), dict):
+                continue
+            result.error(
+                "REDACT_CORRECT_BLOCKED",
+                f"Guardrail {row.name!r} declares a 'correction' block on a 'redact'-action "
+                "guardrail — a correction on a redaction guardrail is an exfiltration channel "
+                "for the exact data redaction protects. Remove the correction block or change "
+                "the guardrail action.",
+            )
 
     # ------------------------------------------------------------------
     # Composite nodes

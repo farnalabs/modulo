@@ -19,8 +19,15 @@ Design invariants (binding, from plan-review-iterate):
     (``regex`` / ``pii`` / ``llm_judge``) MUST differ from the fired guardrail's
     detection family (guardrails only use ``regex``/``json_schema``). Never two
     LLM-judges from the same backend.
-4.  **Convergence check** — prior states are fingerprinted; a strictly-worse or
-    previously-seen state escalates to HITL immediately (no oscillation burn).
+4.  **Convergence check** — prior states are fingerprinted; a previously-seen
+    state escalates to HITL immediately (no oscillation burn). Divergent
+    states that never repeat are bounded by the single retry budget
+    (``max_attempts``): exhaustion escalates ``budget_exhausted`` to HITL, so
+    no correction sequence can run unbounded. (A monotone "strictly-worse"
+    ordering over states is NOT separately enforced: with no persisted
+    violation metric and no caller feeding a corrected output back as a new
+    input, the previously-seen fingerprint path plus the bounded budget are
+    the operative fail-closed convergence guards.)
 5.  **redact+correct HARD-BLOCKED** — a correction definition bound to a
     redaction-action guardrail is rejected at definition validation
     (exfiltration channel for the exact data redaction protects).
@@ -360,12 +367,18 @@ def convergence_verdict(
     produced_output: Mapping[str, Any] | None,
     prior_states: Sequence[Mapping[str, Any]],
 ) -> CorrectionVerdict | None:
-    """Return ``converged`` when the state is strictly-worse or previously-seen.
+    """Return ``converged`` when the state has previously been seen.
 
     A produced output or redacted input whose fingerprint already appears in
     *prior_states* is a previously-seen (oscillating) state -> HITL, no
     oscillation burn. ``None`` means the state is fresh and the correction may
     proceed.
+
+    Strictly-worse divergent sequences (new-but-worse states that never
+    repeat) are bounded by the correction's ``max_attempts`` budget: exhaustion
+    escalates ``budget_exhausted`` to HITL, so convergence never requires an
+    unbounded run. See module docstring invariant 4 for why a "strictly-worse"
+    ordering is not separately enforced.
     """
     candidates: list[str] = [fingerprint_state(redacted_input)]
     if produced_output is not None:
@@ -645,8 +658,9 @@ async def run_single_node_correction(
       1. Validate the correction against its guardrail binding (redact+correct
          hard-block + different-family).
       2. Pre-redact the violating node input via the embedded pattern set.
-      3. Convergence check against recorded prior states — a previously-seen or
-         strictly-worse state escalates immediately (no oscillation burn).
+      3. Convergence check against recorded prior states — a previously-seen
+         state escalates immediately (no oscillation burn). Divergent states
+         are bounded by ``max_attempts`` (``budget_exhausted`` -> HITL).
       4. Run the RESTRICTED backend with the strict output schema; parse +
          schema-validate the produced output.
       5. Re-validate the produced output with the DIFFERENT-FAMILY detector.
