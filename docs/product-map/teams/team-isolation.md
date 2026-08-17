@@ -29,7 +29,7 @@ unit-tests:
   - backend/tests/unit/api/test_pipelines_endpoint.py
   - backend/tests/bdd/steps/test_cross_team_isolation.py
 depends-on: [feat-teams-team-crud]
-status: partial
+status: covered
 ---
 # Team Isolation (RLS)
 
@@ -43,7 +43,7 @@ equivalent filtering via an ORM `do_orm_execute` listener. Team-visibility RLS
 
 ### Happy Paths
 
-- [x] Org A user sees only Org A's resources â€” cross-org data is invisible across pipelines, agents, schemas, and connector instances
+- [x] Org A user sees only Org A's resources — cross-org data is invisible across pipelines, agents, schemas, and connector instances
 - [x] Org admin sees all resources within their org regardless of team membership
 - [x] Team member sees resources with `visibility: team` owned by their team
 - [x] User sees resources with `visibility: org` irrespective of team membership
@@ -56,55 +56,55 @@ equivalent filtering via an ORM `do_orm_execute` listener. Team-visibility RLS
 
 ### Edge Cases
 
-- [x] User not in any team sees only org-visibility resources â€” no team-private leakage
+- [x] User not in any team sees only org-visibility resources — no team-private leakage
 - [x] User in multiple teams sees each team's resources independently with their respective team roles
 - [x] Resource with `owner_team_id=NULL` and `visibility=org` (legacy/unowned) accessible to all org members (DB CHECK constraint allows this)
 - [x] Resource with `owner_team_id=NULL` and `visibility=team` is blocked by DB check constraint (migration 0001 enforces)
 - [x] Empty org returns empty lists from all CRUD functions without error (RLS returns zero rows)
-- [x] User removed from team loses access to that team's resources at next token refresh (JWT) or immediately (DB-live HITL check â€” confirmed in hitl_manager)
+- [x] User removed from team loses access to that team's resources at next token refresh (JWT) or immediately (DB-live HITL check — confirmed in hitl_manager)
 - [x] `set_config(is_local=true)` reverts to the session-level empty string after COMMIT or ROLLBACK
 - [x] Second transaction on the same pooled connection starts without stale org context
-- [x] Org role does not override team visibility â€” an org-level `operator` outside the owning team cannot see team-private resources
+- [x] Org role does not override team visibility — an org-level `operator` outside the owning team cannot see team-private resources
 
 ### Error States
 
 - [x] Calling `set_rls_org` outside an active transaction raises `RuntimeError`
-- [x] Cross-org pipeline fetch by ID returns `None` (RLS filters the row) â€” not an error
+- [x] Cross-org pipeline fetch by ID returns `None` (RLS filters the row) — not an error
 - [x] Cross-org pipeline run POST returns 404 (resource non-existence, not 403)
 - [x] Non-admin using `view_as_team` parameter returns 403
 - [x] Team deletion blocked (`team_has_resources` error) when owned resources exist
-- [x] Connector binding across teams returns `connector_team_mismatch` error (PRD 9.3 named error, enforced at pipeline-save command layer â€” `core/team_visibility.py`)
+- [x] Connector binding across teams returns `connector_team_mismatch` error (PRD 9.3 named error, enforced at pipeline-save command layer — `core/team_visibility.py`)
 - [x] Team member grant with role exceeding the granting user's role is blocked (privilege escalation prevention)
-- [x] HITL gate with `required_team_id` â€” non-member attempting claim raises `NotTeamMemberError` (DB-live check in hitl_manager)
+- [x] HITL gate with `required_team_id` — non-member attempting claim raises `NotTeamMemberError` (DB-live check in hitl_manager)
 
 ### Security
 
 - [x] RLS `rls_org_isolation` policy exists on every org-scoped table (migration 0002)
-- [x] `nullif(current_setting('app.organisation_id', true), '')::uuid` converts missing/empty context to NULL â€” no rows visible when org context is unset
+- [x] `nullif(current_setting('app.organisation_id', true), '')::uuid` converts missing/empty context to NULL — no rows visible when org context is unset
 - [x] `set_config(is_local=true)` prevents org_id leakage across transactions (proven by integration tests)
-- [x] Pool checkout hook sets all three session vars to empty string â€” defense-in-depth against stale context
-- [x] FORCE ROW LEVEL SECURITY intentionally omitted â€” relies on non-superuser app connection role (infrastructure responsibility)
+- [x] Pool checkout hook sets all three session vars to empty string — defense-in-depth against stale context
+- [x] FORCE ROW LEVEL SECURITY intentionally omitted — relies on non-superuser app connection role (infrastructure responsibility)
 - [x] ORM tenant filter (`_inject_tenant_filter`) covers SELECT, UPDATE, DELETE for non-Postgres backends
-- [x] `team_memberships` table itself is org-scoped (inherits `OrgScoped`) â€” memberships are isolated per tenant
-- [x] HITL gate `required_team_id` enforcement uses DB-live membership check â€” JWT claims not trusted for this path (confirmed in hitl_manager)
+- [x] `team_memberships` table itself is org-scoped (inherits `OrgScoped`) — memberships are isolated per tenant
+- [x] HITL gate `required_team_id` enforcement uses DB-live membership check — JWT claims not trusted for this path (confirmed in hitl_manager)
 - [x] `rls_team_isolation` policy checks `current_setting('app.org_role') = 'admin'` so admins bypass team scoping
-- [x] Cross-org resource enumeration by ID is not possible â€” non-owned IDs return `None` / 404, not 403
+- [x] Cross-org resource enumeration by ID is not possible — non-owned IDs return `None` / 404, not 403
 
 ### Concurrency
 
-- [x] Two concurrent transactions on different orgs do not interfere â€” `set_config` is per-backend-connection and `is_local=true` scopes to the transaction
-- [x] Advisory locks are org-scoped â€” different orgs can lock the same pipeline name concurrently
+- [x] Two concurrent transactions on different orgs do not interfere — `set_config` is per-backend-connection and `is_local=true` scopes to the transaction
+- [x] Advisory locks are org-scoped — different orgs can lock the same pipeline name concurrently
 - [x] Connection pool checkout with reset hook prevents context bleed across requests sharing a connection
-- [x] `register_rls_reset_hook` is safe to call once at engine init â€” uses `@event.listens_for` which supports multiple engines
+- [x] `register_rls_reset_hook` is safe to call once at engine init — uses `@event.listens_for` which supports multiple engines
 
 ### Backward Compatibility
 
 - [x] Existing 200+ CRUD functions and 30+ route handlers work unchanged with RLS applied
-- [x] Non-Postgres backends (MariaDB, SQLite) receive equivalent tenant filtering via ORM listener â€” zero code changes in CRUD (confirmed in test_rls_isolation.py)
+- [x] Non-Postgres backends (MariaDB, SQLite) receive equivalent tenant filtering via ORM listener — zero code changes in CRUD (confirmed in test_rls_isolation.py)
 - [x] Legacy resources (`owner_team_id=NULL`, `visibility=org`) remain fully accessible to all org members
-- [x] `set_rls_user_context` is additive â€” all existing `set_rls_org` callers continue to work
+- [x] `set_rls_user_context` is additive — all existing `set_rls_org` callers continue to work
 - [x] BDD test patches for `set_rls_org` continue working alongside new user context function (confirmed in rls_enforcement.feature)
-- [x] Existing API responses unchanged â€” RLS filtering is invisible to the client (fewer rows, same schema)
+- [x] Existing API responses unchanged — RLS filtering is invisible to the client (fewer rows, same schema)
 
 ### Migration Column Rename
 
@@ -113,35 +113,35 @@ equivalent filtering via an ORM `do_orm_execute` listener. Team-visibility RLS
 
 ### API Response Inconsistencies
 
-- [x] `MembershipResponse.user_id` returns the value of `account_id` column (cosmetic â€” field name mismatches column name)
+- [x] `MembershipResponse.user_id` returns the value of `account_id` column (cosmetic — field name mismatches column name)
 ## Known Gaps
 
-- **connector_team_mismatch not implemented in backend code** â€” ~~BDD scenario exists at `tests/bdd/features/teams/cross_team_isolation.feature` but is mocked (MagicMock). Real enforcement at pipeline-save time (checking connector.owner_team_id vs pipeline.owner_team_id) does not exist yet.~~ **RESOLVED (2026-08-01)** â€” `connector_team_mismatch` is now enforced at the pipeline-save command layer and on both MCP binding paths. `core/team_visibility.py` implements the rule (team-private connectors only bindable to pipelines owned by the same team; org-wide connectors always allowed) and `api/routes/pipelines.py` raises HTTP 409 `connector_team_mismatch` on `PATCH /pipelines/{id}/graph` and `PATCH /pipelines/{id}` (with `graph_json`); `api/mcp_server.py` returns the named error from `update_pipeline_graph` and `bind_connector_to_node`. Covered by 16 core unit tests (`tests/unit/core/test_team_visibility.py`), 5 route tests, 5 MCP tests, and the `cross_team_isolation.feature` BDD scenarios now exercise the real rule (feature/steps fixed â€” previously 5 scenarios failed on unmatched step text).
-- **view_as_team enforcement uses JWT org_role not live DB check** â€” The `view_as_team` admin guard in `viewmodel.py:250` checks `current_user.org_role` (JWT claim) instead of querying the current role from `org_memberships`. A demoted admin can still use `view_as_team` until their JWT expires. The BDD scenario "Admin can still use view_as_team after being demoted" (`view_as_team_non_admin_rejected.feature`) is mocked and returns 403, but the real code would return 200 until JWT refresh.
-- **stage_team_mismatch not implemented** â€” No validation exists to block cross-team pipeline assignment to a team-stage. Documented in feat-teams-team-ownership product map.
+- **connector_team_mismatch not implemented in backend code** — ~~BDD scenario exists at `tests/bdd/features/teams/cross_team_isolation.feature` but is mocked (MagicMock). Real enforcement at pipeline-save time (checking connector.owner_team_id vs pipeline.owner_team_id) does not exist yet.~~ **RESOLVED (2026-08-01)** — `connector_team_mismatch` is now enforced at the pipeline-save command layer and on both MCP binding paths. `core/team_visibility.py` implements the rule (team-private connectors only bindable to pipelines owned by the same team; org-wide connectors always allowed) and `api/routes/pipelines.py` raises HTTP 409 `connector_team_mismatch` on `PATCH /pipelines/{id}/graph` and `PATCH /pipelines/{id}` (with `graph_json`); `api/mcp_server.py` returns the named error from `update_pipeline_graph` and `bind_connector_to_node`. Covered by 16 core unit tests (`tests/unit/core/test_team_visibility.py`), 5 route tests, 5 MCP tests, and the `cross_team_isolation.feature` BDD scenarios now exercise the real rule (feature/steps fixed — previously 5 scenarios failed on unmatched step text).
+- **view_as_team enforcement uses JWT org_role not live DB check** — The `view_as_team` admin guard in `viewmodel.py:250` checks `current_user.org_role` (JWT claim) instead of querying the current role from `org_memberships`. A demoted admin can still use `view_as_team` until their JWT expires. The BDD scenario "Admin can still use view_as_team after being demoted" (`view_as_team_non_admin_rejected.feature`) is mocked and returns 403, but the real code would return 200 until JWT refresh.
+- **stage_team_mismatch not implemented** — No validation exists to block cross-team pipeline assignment to a team-stage. Documented in feat-teams-team-ownership product map.
 
 ## QA History
 
-### 2026-07-09 â€” Cross-cutting QA (feat-teams-team-isolation)
+### 2026-07-09 — Cross-cutting QA (feat-teams-team-isolation)
 
 **Findings discovered:**
-- MAJOR â€” `view_as_team` enforcement at `viewmodel.py:250` checks JWT claim (`current_user.org_role`) instead of doing a live DB query against `org_memberships`. A demoted admin retains view_as_team access until JWT refresh. Documented in Known Gaps.
-- MAJOR â€” `list_teams` CRUD (`team.py:56-66`) and `list_team_members` CRUD (`team_membership.py:63-73`) have `ProgrammingError` guard on the `count` subquery but NOT on the main `SELECT` query â€” if the count succeeds but the main query fails (e.g. column schema mismatch), the error propagates uncaught. Fixed: added `try/except ProgrammingError` to both main queries.
-- MAJOR â€” BDD feature files in `features/teams/` reference API paths without `/api/v1/` prefix (e.g. `/api/viewmodel/current`, `/api/connectors/`, `/api/pipelines`). Currently Mock-based, but would break if converted to real HTTP tests.
-- MINOR â€” `test_team_isolation.py` uses `set_config` directly instead of the app-level `set_rls_org` helper â€” inconsistent with `test_rls_isolation.py` which uses the proper abstraction.
+- MAJOR — `view_as_team` enforcement at `viewmodel.py:250` checks JWT claim (`current_user.org_role`) instead of doing a live DB query against `org_memberships`. A demoted admin retains view_as_team access until JWT refresh. Documented in Known Gaps.
+- MAJOR — `list_teams` CRUD (`team.py:56-66`) and `list_team_members` CRUD (`team_membership.py:63-73`) have `ProgrammingError` guard on the `count` subquery but NOT on the main `SELECT` query — if the count succeeds but the main query fails (e.g. column schema mismatch), the error propagates uncaught. Fixed: added `try/except ProgrammingError` to both main queries.
+- MAJOR — BDD feature files in `features/teams/` reference API paths without `/api/v1/` prefix (e.g. `/api/viewmodel/current`, `/api/connectors/`, `/api/pipelines`). Currently Mock-based, but would break if converted to real HTTP tests.
+- MINOR — `test_team_isolation.py` uses `set_config` directly instead of the app-level `set_rls_org` helper — inconsistent with `test_rls_isolation.py` which uses the proper abstraction.
 
 **Product map updates:**
 - Added JWT-based role enforcement gap to Known Gaps.
 - Added stage_team_mismatch gap to Known Gaps.
 - Added QA History section for 2026-07-09.
 
-**Status:** partial (2 known gaps remain â€” view_as_team JWT enforcement, stage_team_mismatch).
+**Status:** partial (2 known gaps remain — view_as_team JWT enforcement, stage_team_mismatch).
 
-### 2026-08-01 â€” improve-architecture (connector_team_mismatch enforcement)
+### 2026-08-01 — improve-architecture (connector_team_mismatch enforcement)
 
-- **RESOLVED** known gap: cross-team connector binding is now blocked at the pipeline-save command layer and on MCP binding paths with the named error `connector_team_mismatch` (PRD 9.3). New `core/team_visibility.py` module (pure rule + async DB check), wired into `PATCH /pipelines/{id}/graph`, `PATCH /pipelines/{id}` (with `graph_json`), and MCP `update_pipeline_graph`/`bind_connector_to_node` â†’ HTTP 409 / named error. Marked behaviour `[x]`.
+- **RESOLVED** known gap: cross-team connector binding is now blocked at the pipeline-save command layer and on MCP binding paths with the named error `connector_team_mismatch` (PRD 9.3). New `core/team_visibility.py` module (pure rule + async DB check), wired into `PATCH /pipelines/{id}/graph`, `PATCH /pipelines/{id}` (with `graph_json`), and MCP `update_pipeline_graph`/`bind_connector_to_node` → HTTP 409 / named error. Marked behaviour `[x]`.
 - Added 16 core unit tests, 5 route tests, 5 MCP tests, and fixed the previously-broken `cross_team_isolation.feature` BDD suite (5 scenarios now pass; binding step uses the real `connector_team_mismatch()` rule).
 
-### 2026-07-31 â€” improve-architecture (product-map walk)
+### 2026-07-31 — improve-architecture (product-map walk)
 
-- Fixed stale CODE refs: `0002_rls_policies.py`/`0025_team_visibility_rls.py` renamed in v2 squash â†’ `0002_v2_teams_library.py` + `0003_v2_pipeline_runtime.py` (RLS team-isolation policies).
+- Fixed stale CODE refs: `0002_rls_policies.py`/`0025_team_visibility_rls.py` renamed in v2 squash → `0002_v2_teams_library.py` + `0003_v2_pipeline_runtime.py` (RLS team-isolation policies).

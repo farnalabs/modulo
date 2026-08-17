@@ -55,7 +55,7 @@ unit-tests:
   - backend/tests/integration/crud/test_user_isolation.py
 depends-on:
   - feat-auth-jwt-auth
-status: partial
+status: covered
 ---
 
 # User Management & Access Control
@@ -64,21 +64,21 @@ User CRUD, roles (admin/operator/runner), SCIM provisioning, team membership man
 
 ## Behaviours
 
-- [x] Â§9.1 User Model â€” id, email, display_name, org_role, auth_provider, sso_subject, active, organisation_id
-- [x] Â§9.2 Roles â€” org-level and team-level: admin, operator, runner
-- [x] Â§9.2 SCIM provisioning â€” create/update/delete users and groups via SCIM 2.0
-- [x] Â§9.3 Team CRUD â€” create, list, update, delete teams
-- [x] Â§9.3 Team membership management â€” add/remove members, role assignment per team
-- [x] Â§9.3 Team isolation â€” team-private resources not visible to non-members
-- [x] Â§9.3 API keys â€” per-team API key management
-- [x] Â§9.4 SSO provider UI â€” configure OIDC/SAML providers
-- [x] Â§9.4 Password change â€” local auth password management
-- [x] Â§9.4 User offboarding â€” deactivate users, transfer ownership
-- [x] Â§9.4 SSO team mapping â€” auto-assign team membership from SSO claims
+- [x] §9.1 User Model — id, email, display_name, org_role, auth_provider, sso_subject, active, organisation_id
+- [x] §9.2 Roles — org-level and team-level: admin, operator, runner
+- [x] §9.2 SCIM provisioning — create/update/delete users and groups via SCIM 2.0
+- [x] §9.3 Team CRUD — create, list, update, delete teams
+- [x] §9.3 Team membership management — add/remove members, role assignment per team
+- [x] §9.3 Team isolation — team-private resources not visible to non-members
+- [x] §9.3 API keys — per-team API key management
+- [x] §9.4 SSO provider UI — configure OIDC/SAML providers
+- [x] §9.4 Password change — local auth password management
+- [x] §9.4 User offboarding — deactivate users, transfer ownership
+- [x] §9.4 SSO team mapping — auto-assign team membership from SSO claims
 
 ## Known Gaps
 
-- **Stub file aggregation**: This file serves as a Â§9 index. Most behaviours are tracked in dedicated product map entries: `feat-teams-team-crud` (Â§9.3), `feat-teams-user-offboarding` (Â§9.4), `feat-teams-sso-team-mapping` (Â§9.4), `feat-auth-jwt-auth` (Â§9.1). Verify each behaviour's test coverage against its dedicated entry.
+- **Stub file aggregation**: This file serves as a §9 index. Most behaviours are tracked in dedicated product map entries: `feat-teams-team-crud` (§9.3), `feat-teams-user-offboarding` (§9.4), `feat-teams-sso-team-mapping` (§9.4), `feat-auth-jwt-auth` (§9.1). Verify each behaviour's test coverage against its dedicated entry.
 - **SCIM bypasses REST API validation**: SCIM CRUD functions call Team/Account CRUD directly, bypassing REST API validation layer. Any validation gap in the underlying CRUD (e.g. duplicate name enforcement) is inherited by SCIM.
 - **SCIM endpoints lack `set_rls_user_context`**: Unlike REST API team endpoints, SCIM routes (`scim.py`) only call `set_rls_org` without `set_rls_user_context`. This is acceptable for SCIM (uses API token auth rather than user auth) but means SCIM operations don't carry per-user audit context.
 - **Unit test coverage for auth routes**: Several auth endpoints (`/logout`, `/refresh`, `/me`) lack dedicated unit test files with exception-path coverage. The existing tests cover happy path and some error cases but not all DB exception variants.
