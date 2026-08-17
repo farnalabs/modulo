@@ -849,6 +849,110 @@ async def _authenticate_api_key(
     return True, None
 
 
+async def _authenticate_oauth_jwt(
+    request: Request,
+    token: str,
+    settings: Any,
+) -> tuple[bool, Response | None, Any]:
+    """Authenticate an OAuth access token (JWT), falling back to a regular JWT.
+
+    Returns ``(handled, error_response, claims)``:
+
+    * ``(True, None, None)`` — a regular JWT (Remy) fully authenticated; the
+      caller should ``call_next`` and return.
+    * ``(False, None, claims)`` — an OAuth access token decoded successfully;
+      the caller continues to the token-family check with ``claims``.
+    * ``(False, error_response, None)`` — authentication failed.
+
+    Sets the ``_ctx_*`` contextvars and ``request.scope["auth_principal"]`` for
+    the regular-JWT fallback path. The OAuth claims path defers context-setting
+    until after the token-family and scope checks (in the caller).
+    """
+    try:
+        claims = decode_oauth_access_token(token, settings.secret_key)
+    except JWTError:
+        # Fall back to regular JWT access token (used by Remy MCP tool calls).
+        try:
+            from modulo.auth.jwt import decode_principal
+
+            principal = decode_principal(token, settings.secret_key)
+        except JWTError:
+            return (
+                False,
+                Response(
+                    '{"error":"unauthorized","detail":"Invalid or expired access token"}',
+                    status_code=401,
+                    media_type=_CT_APPLICATION_JSON,
+                ),
+                None,
+            )
+        if principal.organisation_id is None:
+            return (
+                False,
+                Response(
+                    _JSON_FORBIDDEN_ORG_MEMBERSHIP,
+                    status_code=403,
+                    media_type=_CT_APPLICATION_JSON,
+                ),
+                None,
+            )
+        # ADR 017: no claim-less default-up. A None role claim fails closed,
+        # and the LIVE role is re-read from org_memberships so a demoted or
+        # removed member loses access on the very next request.
+        if principal.org_role is None:
+            return (
+                False,
+                Response(
+                    '{"error":"forbidden","detail":"No org role claim on token"}',
+                    status_code=403,
+                    media_type=_CT_APPLICATION_JSON,
+                ),
+                None,
+            )
+        try:
+            async with _session(principal.organisation_id) as s:
+                live_role = await resolve_role_from_membership(
+                    s,
+                    str(principal.account_id),
+                    str(principal.organisation_id),
+                )
+        except (SQLAlchemyError, OperationalError, TimeoutError):
+            _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
+            return (
+                False,
+                Response(
+                    _JSON_AUTH_DB_UNAVAILABLE,
+                    status_code=503,
+                    media_type=_CT_APPLICATION_JSON,
+                ),
+                None,
+            )
+        if live_role is None:
+            return (
+                False,
+                Response(
+                    _JSON_FORBIDDEN_ORG_MEMBERSHIP,
+                    status_code=403,
+                    media_type=_CT_APPLICATION_JSON,
+                ),
+                None,
+            )
+        _ctx_org_id.set(principal.organisation_id)
+        _ctx_role.set(live_role)
+        _ctx_key_id.set(uuid.UUID(int=0))
+        _ctx_user_id.set(principal.account_id)
+        _ctx_auth_token.set(token)
+        _ctx_auth_type.set("oauth")
+        _ctx_team_id.set(None)  # user tokens carry no team boundary
+        request.scope["auth_principal"] = {
+            "type": "user",
+            "org_id": str(principal.organisation_id) if principal.organisation_id else "",
+            "user_id": str(principal.account_id) if principal.account_id else "",
+        }
+        return True, None, None
+    return False, None, claims
+
+
 async def _dispatch_unauth_paths(
     request: Request,
     call_next: Callable[[Request], Awaitable[Response]],
@@ -902,70 +1006,12 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
 
         # Try OAuth access token (JWT).
         settings = get_settings()
-        try:
-            claims = decode_oauth_access_token(token, settings.secret_key)
-        except JWTError:
-            # Fall back to regular JWT access token (used by Remy MCP tool calls).
-            try:
-                from modulo.auth.jwt import decode_principal
-
-                principal = decode_principal(token, settings.secret_key)
-            except JWTError:
-                return Response(
-                    '{"error":"unauthorized","detail":"Invalid or expired access token"}',
-                    status_code=401,
-                    media_type=_CT_APPLICATION_JSON,
-                )
-            if principal.organisation_id is None:
-                return Response(
-                    _JSON_FORBIDDEN_ORG_MEMBERSHIP,
-                    status_code=403,
-                    media_type=_CT_APPLICATION_JSON,
-                )
-            # ADR 017: no claim-less default-up. A None role claim fails closed,
-            # and the LIVE role is re-read from org_memberships so a demoted or
-            # removed member loses access on the very next request.
-            if principal.org_role is None:
-                return Response(
-                    '{"error":"forbidden","detail":"No org role claim on token"}',
-                    status_code=403,
-                    media_type=_CT_APPLICATION_JSON,
-                )
-            try:
-                async with _session(principal.organisation_id) as s:
-                    live_role = await resolve_role_from_membership(
-                        s,
-                        str(principal.account_id),
-                        str(principal.organisation_id),
-                    )
-            except (SQLAlchemyError, OperationalError, TimeoutError):
-                _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
-                return Response(
-                    _JSON_AUTH_DB_UNAVAILABLE,
-                    status_code=503,
-                    media_type=_CT_APPLICATION_JSON,
-                )
-            if live_role is None:
-                return Response(
-                    _JSON_FORBIDDEN_ORG_MEMBERSHIP,
-                    status_code=403,
-                    media_type=_CT_APPLICATION_JSON,
-                )
-            _ctx_org_id.set(principal.organisation_id)
-            _ctx_role.set(live_role)
-            _ctx_key_id.set(uuid.UUID(int=0))
-            _ctx_user_id.set(principal.account_id)
-            _ctx_auth_token.set(token)
-            _ctx_auth_type.set("oauth")
-            _ctx_team_id.set(None)  # user tokens carry no team boundary
-            request.scope["auth_principal"] = {
-                "type": "user",
-                "org_id": str(principal.organisation_id) if principal.organisation_id else "",
-                "user_id": str(principal.account_id) if principal.account_id else "",
-            }
-            await _set_authz_enforce(principal.organisation_id)
-            resp4: Response = await call_next(request)
-            return resp4
+        handled2, oauth_err, claims = await _authenticate_oauth_jwt(request, token, settings)
+        if oauth_err is not None:
+            return oauth_err
+        if handled2:
+            await _set_authz_enforce(_ctx_org_id.get())
+            return await call_next(request)
 
         # Verify token family is not blacklisted.
         try:
