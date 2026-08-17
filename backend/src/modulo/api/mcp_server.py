@@ -1427,6 +1427,58 @@ def _parse_analytics_params(
     return params, None
 
 
+def _parse_analytics_concurrency_params(
+    group_by: str,
+    auto_granularity: bool,
+    trigger_type: str | None,
+    status: str | None,
+    pipeline_id: list[str] | None,
+    folder_id: str | None,
+    date_from: str | None,
+    date_to: str | None,
+    limit: int,
+) -> tuple[AnalyticsParams | None, dict[str, Any] | None]:
+    try:
+        grp = AnalyticsGroupBy(group_by)
+        tt = AnalyticsTriggerType(trigger_type) if trigger_type is not None else None
+        st = AnalyticsStatus(status) if status is not None else None
+    except ValueError:
+        return None, {
+            "error": "invalid_params",
+            "detail": f"invalid enum value (group_by={group_by!r})",
+        }
+
+    pids: tuple[uuid.UUID, ...] = ()
+    if pipeline_id:
+        try:
+            pids = tuple(uuid.UUID(p) for p in pipeline_id)
+        except ValueError:
+            return None, {"error": "invalid_params", "detail": "pipeline_id entries must be valid UUIDs"}
+
+    fid: uuid.UUID | None = None
+    if folder_id is not None:
+        try:
+            fid = uuid.UUID(folder_id)
+        except ValueError:
+            return None, {"error": "invalid_params", "detail": f"Invalid folder_id UUID: {folder_id}"}
+
+    params = AnalyticsParams(
+        group_by=grp,
+        auto_granularity=auto_granularity,
+        dimension=None,
+        trigger_type=tt,
+        status=st,
+        pipeline_ids=pids,
+        team_id=_ctx_team_id_val(),
+        error_code=None,
+        folder_id=fid,
+        date_from=_parse_mcp_datetime(date_from, "date_from") if date_from is not None else None,
+        date_to=_parse_mcp_datetime(date_to, "date_to") if date_to is not None else None,
+        limit=max(1, min(limit, 1000)),
+    )
+    return params, None
+
+
 @mcp.tool(
     name="query_analytics",
     description=(
@@ -1547,55 +1599,25 @@ async def query_analytics_concurrency(
         org_id = _ctx_org_id_val()
         settings = get_settings()
 
-        # analytics_page feature gate — mirror the REST route's require_feature.
-        from modulo.core.feature_flags import resolve_plan_context
-        from modulo.db.crud.organisation import get_organisation
+        feat_err = await _require_analytics_feature(org_id, settings)
+        if feat_err:
+            return feat_err
 
-        async with _session(org_id) as s:
-            org = await get_organisation(s, org_id)
-        async with _session(org_id) as s:
-            plan_ctx = await resolve_plan_context(settings, s, org)
-        if not plan_ctx.feature_enabled("analytics_page"):
-            return {"error": "feature_required", "detail": "analytics_page is not available on your plan"}
-
-        try:
-            grp = AnalyticsGroupBy(group_by)
-            tt = AnalyticsTriggerType(trigger_type) if trigger_type is not None else None
-            st = AnalyticsStatus(status) if status is not None else None
-        except ValueError:
-            return {
-                "error": "invalid_params",
-                "detail": f"invalid enum value (group_by={group_by!r})",
-            }
-
-        pids: tuple[uuid.UUID, ...] = ()
-        if pipeline_id:
-            try:
-                pids = tuple(uuid.UUID(p) for p in pipeline_id)
-            except ValueError:
-                return {"error": "invalid_params", "detail": "pipeline_id entries must be valid UUIDs"}
-
-        fid: uuid.UUID | None = None
-        if folder_id is not None:
-            try:
-                fid = uuid.UUID(folder_id)
-            except ValueError:
-                return {"error": "invalid_params", "detail": f"Invalid folder_id UUID: {folder_id}"}
-
-        params = AnalyticsParams(
-            group_by=grp,
-            auto_granularity=auto_granularity,
-            dimension=None,
-            trigger_type=tt,
-            status=st,
-            pipeline_ids=pids,
-            team_id=_ctx_team_id_val(),
-            error_code=None,
-            folder_id=fid,
-            date_from=_parse_mcp_datetime(date_from, "date_from") if date_from is not None else None,
-            date_to=_parse_mcp_datetime(date_to, "date_to") if date_to is not None else None,
-            limit=max(1, min(limit, 1000)),
+        params, p_err = _parse_analytics_concurrency_params(
+            group_by,
+            auto_granularity,
+            trigger_type,
+            status,
+            pipeline_id,
+            folder_id,
+            date_from,
+            date_to,
+            limit,
         )
+        if p_err:
+            return p_err
+        assert params is not None
+
         return await run_concurrency_query(
             org_id=org_id,
             params=params,
