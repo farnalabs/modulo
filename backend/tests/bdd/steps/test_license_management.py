@@ -77,8 +77,8 @@ def _setup_client(ctx: dict[str, Any]) -> None:
     from modulo.api.dependencies import _get_engine as _eng
     from modulo.api.dependencies import get_db_session
     from modulo.api.main import app as _app
-    from modulo.auth.dependencies import get_current_user
-    from modulo.auth.jwt import AuthenticatedPrincipal
+    from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
+    from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
     from modulo.settings import Settings, get_settings
 
     set_public_key(_TEST_PUB)
@@ -98,15 +98,23 @@ def _setup_client(ctx: dict[str, Any]) -> None:
         modulo_license_key="",
     )
 
+    _principal_kwargs = {
+        "username": "admin" if is_admin else "operator",
+        "organisation_id": "00000000-0000-0000-0000-000000000001",
+        "account_id": "00000000-0000-0000-0000-000000000002",
+        "org_role": "admin" if is_admin else "operator",
+    }
+
     _app.dependency_overrides[get_settings] = lambda: _settings
     _app.dependency_overrides[get_db_session] = _override_session
     _app.dependency_overrides[_eng] = lambda: None
-    _app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="admin" if is_admin else "operator",
-        organisation_id="00000000-0000-0000-0000-000000000001",
-        account_id="00000000-0000-0000-0000-000000000002",
-        org_role="admin" if is_admin else "operator",
-    )
+    _app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(**_principal_kwargs)
+
+    async def _override_tenant() -> TenantPrincipal:
+        return TenantPrincipal(**_principal_kwargs)
+
+    _app.dependency_overrides[get_current_tenant_user] = _override_tenant
+    _app.dependency_overrides[get_current_tenant_user_or_api_key] = _override_tenant
 
     get_settings.cache_clear()
 
