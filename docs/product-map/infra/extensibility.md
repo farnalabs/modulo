@@ -19,7 +19,6 @@ unit-tests:
   - backend/tests/unit/otel_bridge/test_export.py
   - backend/tests/unit/otel_bridge/test_telemetry_toggle.py
   - backend/tests/unit/core/runtime_config/test_store.py
-  - backend/tests/integration/test_demo_first_run.py
 depends-on:
   - feat-pipelines-core
   - feat-core-runtime-config
@@ -33,7 +32,7 @@ Extensibility architecture — plugin system (§10.2), first-run experience/onbo
 ## Behaviours
 
 - [x] §10.2 Plugin / Extension API — Python entry-point groups (`modulo.connectors`, `modulo.model_backends`) with discovery, registration, builder lookup, and health-checking (`PluginRegistry`); `modulo.evals` / `modulo.schema_types` groups documented but not wired — see Known Gaps
-- [x] §10.3 First-Run Experience — Pre-loaded demo pipeline, guided walkthrough, MODULO_DEMO_MODE
+- [x] §10.3 First-Run Experience — guided walkthrough (pre-loaded demo pipeline and demo mode env var removed/descoped in FAR-308)
 - [x] §10.3a Alpha Documentation — dev-setup.md, architecture.md, CONTRIBUTING.md
 - [x] §10.3b Alpha Exit Criteria — 6 conditions codified in `scripts/verify-alpha-exit.ps1` (criterion #2 auto-verifies happy-path BDD green in CI; criteria #1,3,4,5,6 require human sign-off)
 - [x] §10.4 Documentation (Public Launch) — quickstart.md, deployment.md + deployment-security.md (TLS, SECRET_KEY, Postgres, env var reference), connector-authoring.md, model-backend-authoring.md, schema-reference.md, architecture.md; REST API reference auto-generated from FastAPI OpenAPI

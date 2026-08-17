@@ -40,7 +40,6 @@ Production deployment readiness checklist for the Modulo V1 Core public launch. 
 - [ ] `CORS_ORIGINS` lists exact production origins — no wildcards, no trailing slashes
 - [ ] `MODULO_LOG_LEVEL` is set to `INFO` (not `DEBUG`)
 - [ ] `MODULO_TELEMETRY_ENABLED` is set appropriately for data residency requirements
-- [ ] `MODULO_DEMO_MODE` is `false` (or absent)
 - [ ] `MODULO_USERS` uses bcrypt-hashed passwords and is **not** committed to git
 
 ---

@@ -147,9 +147,8 @@ Two concrete implementations of every primitive type exist to validate the abstr
 - Per-event SSE org context validation
 - MCP onboarding page `/settings/mcp`
 
-### Demo and First-Run
+### First-Run
 
-- `MODULO_DEMO_MODE=true`: auto-configures `StubModelBackend` + `FilesystemConnector` with pre-canned data; demo runs with zero external API keys
 - Compiled StateGraph cache (in-memory LRU keyed by `snapshot_id`)
 - Per-run event broker (in-memory pub/sub fan-out for WebSocket + SSE)
 
@@ -309,10 +308,6 @@ npm install
 npm run dev
 ```
 
-### Run the Demo
-
-Set `MODULO_DEMO_MODE=true` in your `.env`. The pre-loaded `prd-to-requirements` pipeline is available on the dashboard. No external API keys are needed – the demo uses `StubModelBackend`.
-
 **Full quickstart**: See [quickstart.md](./quickstart.md)
 **Architecture overview**: See [architecture.md](./architecture.md)
 **Deployment guide**: See [deployment.md](./deployment.md)
@@ -356,7 +351,7 @@ Alpha is done when ALL six conditions from PRD §10.3b are met. Alpha does not b
 
 | # | Criterion | Verification | Status |
 |---|---|---|---|
-| 1 | Demo pipeline (`prd-to-requirements`) walkable by 3 non-authors without assistance, using `MODULO_DEMO_MODE` (deprecated alias for `modulo_seed_demo_data`) | Manual sign-off by each walker | PENDING |
+| 1 | ~~Demo pipeline (`prd-to-requirements`) walkable by 3 non-authors~~ — **removed/descoped** (FAR-308); no longer an alpha requirement | — | REMOVED |
 | 2 | All happy-path BDD scenarios green in CI | Automated (`scripts/verify-alpha-exit.ps1` runs `pytest tests/bdd/`) | PENDING |
 | 3 | At least one non-demo pipeline built by an internal user and run to completion | Manual sign-off by builder | PENDING |
 | 4 | HITL approve and reject demonstrated by two different named users (`MODULO_USERS` with ≥2 entries) | Manual sign-off by reviewer | PENDING |

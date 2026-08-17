@@ -2,7 +2,6 @@ export interface TestEnv {
   name: 'local' | 'staging' | 'app'
   credentials: {
     admin: { email: string; password: string }
-    demo: { email: string; password: string }
     loginFormEmailSelector: string
     loginFormPasswordSelector: string
   }
@@ -18,7 +17,6 @@ const ENVS: Record<string, TestEnv> = {
     name: 'local',
     credentials: {
       admin: { email: 'admin@example.com', password: 'password123' },
-      demo: { email: 'demo', password: 'demo' },
       loginFormEmailSelector: FORM_SELECTORS.email,
       loginFormPasswordSelector: FORM_SELECTORS.password,
     },
@@ -26,10 +24,9 @@ const ENVS: Record<string, TestEnv> = {
   staging: {
     name: 'staging',
     credentials: {
-      // Staging uses the demo account by default (admin@demo.modulo is invalid there and returns 401).
-      // The app block below keeps admin@modulo.run.
-      admin: { email: process.env.E2E_ADMIN_EMAIL || 'demo', password: process.env.E2E_ADMIN_PASSWORD || 'demo' },
-      demo: { email: 'demo', password: 'demo' },
+      // Staging uses the real admin account, provided via E2E_ADMIN_EMAIL /
+      // E2E_ADMIN_PASSWORD (must match the deployment's MODULO_USERS).
+      admin: { email: process.env.E2E_ADMIN_EMAIL, password: process.env.E2E_ADMIN_PASSWORD },
       loginFormEmailSelector: FORM_SELECTORS.email,
       loginFormPasswordSelector: FORM_SELECTORS.password,
     },
@@ -37,8 +34,7 @@ const ENVS: Record<string, TestEnv> = {
   app: {
     name: 'app',
     credentials: {
-      admin: { email: process.env.E2E_ADMIN_EMAIL || 'admin@modulo.run', password: process.env.E2E_ADMIN_PASSWORD || 'admin123' },
-      demo: { email: 'demo', password: 'demo' },
+      admin: { email: process.env.E2E_ADMIN_EMAIL, password: process.env.E2E_ADMIN_PASSWORD || 'admin123' },
       loginFormEmailSelector: FORM_SELECTORS.email,
       loginFormPasswordSelector: FORM_SELECTORS.password,
     },
