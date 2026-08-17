@@ -397,6 +397,37 @@ async def test_write_invalid_resource(connector: GrafanaConnector) -> None:
 
 
 @respx.mock
+async def test_query_dashboards_non_list_body_no_crash(connector: GrafanaConnector) -> None:
+    """A corrupt/hostile non-list body must degrade to an empty page."""
+    respx.get(f"{_BASE}/api/search", params={"type": "dash-db"}).mock(
+        return_value=httpx.Response(200, json={"not": "a list"})
+    )
+    result = await connector.query(ConnectorQuery(resource="dashboards"))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_alerts_non_list_body_no_crash(connector: GrafanaConnector) -> None:
+    """A corrupt/hostile non-list body must degrade to an empty page."""
+    respx.get(f"{_BASE}/api/alerts").mock(return_value=httpx.Response(200, json="corrupt"))
+    result = await connector.query(ConnectorQuery(resource="alerts"))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_datasources_list_with_non_dict_entries(connector: GrafanaConnector) -> None:
+    """Non-dict entries within a list must be dropped rather than crash the query."""
+    respx.get(f"{_BASE}/api/datasources").mock(
+        return_value=httpx.Response(200, json=[{"id": 1, "name": "Prometheus"}, "corrupt", 42])
+    )
+    result = await connector.query(ConnectorQuery(resource="datasources"))
+    assert len(result.records) == 1
+    assert result.records[0]["name"] == "Prometheus"
+
+
+@respx.mock
 async def test_query_http_401(connector: GrafanaConnector) -> None:
     respx.get(f"{_BASE}/api/search", params={"type": "dash-db"}).mock(
         return_value=httpx.Response(401, text="Unauthorized")
