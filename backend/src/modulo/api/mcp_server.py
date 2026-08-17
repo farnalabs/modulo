@@ -3077,6 +3077,55 @@ async def _load_trigger_for_update(s: AsyncSession, org_id: uuid.UUID, tid: uuid
     return trigger
 
 
+async def _validate_ongoing_trigger_update(
+    s: AsyncSession,
+    trigger: Any,
+    max_concurrent_runs: int | None,
+    daily_spend_limit: float | None,
+    config_json: dict[str, Any] | None,
+    active: bool | None,
+    clear_daily_spend_limit: bool,
+) -> tuple[bool, dict[str, Any] | None]:
+    """FAR-158 ongoing guards (identical to REST PUT); returns (scan_interval_changed, error)."""
+    from fastapi import HTTPException
+
+    from modulo.core.trigger_validation import validate_ongoing_config
+    from modulo.db.models.pipeline import Pipeline
+
+    ongoing_scan_interval_changed = False
+    if trigger.trigger_type == "ongoing":
+        if clear_daily_spend_limit:
+            return False, {
+                "error": "validation",
+                "detail": "ongoing triggers require daily_spend_limit; clearing it is not allowed",
+            }
+        ongoing_fields_changing = any(x is not None for x in [max_concurrent_runs, config_json, active]) or (
+            daily_spend_limit is not None
+        )
+        if ongoing_fields_changing:
+            pipeline = await s.get(Pipeline, trigger.pipeline_id)
+            pipeline_cap = pipeline.max_concurrent_runs if pipeline is not None else 0
+            try:
+                validate_ongoing_config(
+                    trigger.trigger_type,
+                    max_concurrent_runs=(
+                        max_concurrent_runs if max_concurrent_runs is not None else trigger.max_concurrent_runs
+                    ),
+                    daily_spend_limit=(Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else None)
+                    if daily_spend_limit is not None
+                    else trigger.daily_spend_limit,
+                    config_json=(config_json if config_json is not None else trigger.config_json),
+                    pipeline_max_concurrent_runs=pipeline_cap,
+                )
+            except HTTPException as exc:
+                return False, {"error": "validation", "detail": str(exc.detail)}
+        if config_json is not None:
+            old_scan = int((trigger.config_json or {}).get("scan_interval_seconds") or 60)
+            new_scan = int(config_json.get("scan_interval_seconds") or 60)
+            ongoing_scan_interval_changed = new_scan != old_scan
+    return ongoing_scan_interval_changed, None
+
+
 @mcp.tool(
     description="Update an existing trigger's configuration. "
     "Mirrors PUT /api/v1/triggers/{id}. Setting cron_expression or "
@@ -3104,9 +3153,6 @@ async def update_trigger(
             return input_err
         assert tid is not None
 
-        from modulo.core.trigger_validation import validate_ongoing_config
-        from modulo.db.models.pipeline import Pipeline
-
         async with _session(org_id) as s:
             trigger = await _load_trigger_for_update(s, org_id, tid)
             if trigger is _TEAM_SCOPE_ERROR:
@@ -3117,42 +3163,11 @@ async def update_trigger(
             if (cron_expression is not None or cron_timezone is not None) and trigger.trigger_type != "cron":
                 return {"error": "validation", "detail": "Only cron triggers can have cron configuration"}
 
-            # FAR-158 ongoing guards (identical to REST PUT).
-            ongoing_scan_interval_changed = False
-            if trigger.trigger_type == "ongoing":
-                from fastapi import HTTPException
-
-                if clear_daily_spend_limit:
-                    return {
-                        "error": "validation",
-                        "detail": "ongoing triggers require daily_spend_limit; clearing it is not allowed",
-                    }
-                ongoing_fields_changing = any(x is not None for x in [max_concurrent_runs, config_json, active]) or (
-                    daily_spend_limit is not None
-                )
-                if ongoing_fields_changing:
-                    pipeline = await s.get(Pipeline, trigger.pipeline_id)
-                    pipeline_cap = pipeline.max_concurrent_runs if pipeline is not None else 0
-                    try:
-                        validate_ongoing_config(
-                            trigger.trigger_type,
-                            max_concurrent_runs=(
-                                max_concurrent_runs if max_concurrent_runs is not None else trigger.max_concurrent_runs
-                            ),
-                            daily_spend_limit=(
-                                Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else None
-                            )
-                            if daily_spend_limit is not None
-                            else trigger.daily_spend_limit,
-                            config_json=(config_json if config_json is not None else trigger.config_json),
-                            pipeline_max_concurrent_runs=pipeline_cap,
-                        )
-                    except HTTPException as exc:
-                        return {"error": "validation", "detail": str(exc.detail)}
-                if config_json is not None:
-                    old_scan = int((trigger.config_json or {}).get("scan_interval_seconds") or 60)
-                    new_scan = int(config_json.get("scan_interval_seconds") or 60)
-                    ongoing_scan_interval_changed = new_scan != old_scan
+            ongoing_scan_interval_changed, ongoing_err = await _validate_ongoing_trigger_update(
+                s, trigger, max_concurrent_runs, daily_spend_limit, config_json, active, clear_daily_spend_limit
+            )
+            if ongoing_err:
+                return ongoing_err
 
             next_fire_at = None
             if cron_expression is not None or cron_timezone is not None:
