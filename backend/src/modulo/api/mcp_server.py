@@ -3596,6 +3596,25 @@ def _validate_cron_update(
     return next_fire_at, None
 
 
+def _merge_trigger_config_json(trigger: Any, config_json: dict[str, Any] | None) -> None:
+    if config_json is None:
+        return
+    # MERGE into the existing blob — never wholesale replace.
+    current_cfg = trigger.config_json or {}
+    merged_cfg = dict(current_cfg)
+    for k, v in config_json.items():
+        if isinstance(v, str) and v == SENSITIVE_VALUE_MASK:
+            # A masked placeholder must never clobber the stored secret
+            # (read-modify-write round-trip guard). Keep the existing value.
+            continue
+        if v is None:
+            # Explicit null clears the key; a missing key leaves it intact.
+            merged_cfg.pop(k, None)
+        else:
+            merged_cfg[k] = v
+    trigger.config_json = merged_cfg
+
+
 async def _apply_trigger_field_updates(
     s: AsyncSession,
     trigger: Any,
@@ -3622,21 +3641,7 @@ async def _apply_trigger_field_updates(
         trigger.daily_spend_limit = None
     elif daily_spend_limit is not None:
         trigger.daily_spend_limit = Decimal(str(daily_spend_limit))
-    if config_json is not None:
-        # MERGE into the existing blob — never wholesale replace.
-        current_cfg = trigger.config_json or {}
-        merged_cfg = dict(current_cfg)
-        for k, v in config_json.items():
-            if isinstance(v, str) and v == SENSITIVE_VALUE_MASK:
-                # A masked placeholder must never clobber the stored secret
-                # (read-modify-write round-trip guard). Keep the existing value.
-                continue
-            if v is None:
-                # Explicit null clears the key; a missing key leaves it intact.
-                merged_cfg.pop(k, None)
-            else:
-                merged_cfg[k] = v
-        trigger.config_json = merged_cfg
+    _merge_trigger_config_json(trigger, config_json)
     if cron_expression is not None:
         trigger.cron_expression = cron_expression
     if cron_timezone is not None:
