@@ -89,4 +89,4 @@ def _then_tier_shape(request) -> None:
 
 @then("the tiers array is empty")
 def _then_tiers_empty(request) -> None:
-    assert request.node._resp.json()["tiers"] == []
+    assert not request.node._resp.json()["tiers"]
