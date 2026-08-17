@@ -569,7 +569,7 @@ def test_wrap_command_redact_emits_redacted_marker(monkeypatch, capsys):
     assert "REDACTED" in out
 
 
-def test_notify_cli_exit_code_3_on_block(monkeypatch, capsys):
+def test_notify_cli_exit_code_3_on_block(monkeypatch):
     """The ``--notify`` CLI returns exit code 3 on a block decision, 0 on pass."""
     import modulo.core.guardrails.sandbox_bridge as sb
 
