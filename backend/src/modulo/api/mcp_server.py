@@ -1372,6 +1372,61 @@ async def _require_analytics_feature(org_id: uuid.UUID, settings: Any) -> dict[s
     return None
 
 
+def _parse_analytics_params(
+    dimension: str | None,
+    group_by: str,
+    auto_granularity: bool,
+    trigger_type: str | None,
+    status: str | None,
+    pipeline_id: list[str] | None,
+    folder_id: str | None,
+    error_code: str | None,
+    date_from: str | None,
+    date_to: str | None,
+    limit: int,
+) -> tuple[AnalyticsParams | None, dict[str, Any] | None]:
+    try:
+        dim = AnalyticsDimension(dimension) if dimension is not None else None
+        grp = AnalyticsGroupBy(group_by)
+        tt = AnalyticsTriggerType(trigger_type) if trigger_type is not None else None
+        st = AnalyticsStatus(status) if status is not None else None
+    except ValueError:
+        return None, {
+            "error": "invalid_params",
+            "detail": f"invalid enum value (dimension={dimension!r} group_by={group_by!r})",
+        }
+
+    pids: tuple[uuid.UUID, ...] = ()
+    if pipeline_id:
+        try:
+            pids = tuple(uuid.UUID(p) for p in pipeline_id)
+        except ValueError:
+            return None, {"error": "invalid_params", "detail": "pipeline_id entries must be valid UUIDs"}
+
+    fid: uuid.UUID | None = None
+    if folder_id is not None:
+        try:
+            fid = uuid.UUID(folder_id)
+        except ValueError:
+            return None, {"error": "invalid_params", "detail": f"Invalid folder_id UUID: {folder_id}"}
+
+    params = AnalyticsParams(
+        group_by=grp,
+        auto_granularity=auto_granularity,
+        dimension=dim,
+        trigger_type=tt,
+        status=st,
+        pipeline_ids=pids,
+        team_id=_ctx_team_id_val(),
+        error_code=error_code,
+        folder_id=fid,
+        date_from=_parse_mcp_datetime(date_from, "date_from") if date_from is not None else None,
+        date_to=_parse_mcp_datetime(date_to, "date_to") if date_to is not None else None,
+        limit=max(1, min(limit, 1000)),
+    )
+    return params, None
+
+
 @mcp.tool(
     name="query_analytics",
     description=(
@@ -1411,45 +1466,23 @@ async def query_analytics(
         if feat_err:
             return feat_err
 
-        try:
-            dim = AnalyticsDimension(dimension) if dimension is not None else None
-            grp = AnalyticsGroupBy(group_by)
-            tt = AnalyticsTriggerType(trigger_type) if trigger_type is not None else None
-            st = AnalyticsStatus(status) if status is not None else None
-        except ValueError:
-            return {
-                "error": "invalid_params",
-                "detail": f"invalid enum value (dimension={dimension!r} group_by={group_by!r})",
-            }
-
-        pids: tuple[uuid.UUID, ...] = ()
-        if pipeline_id:
-            try:
-                pids = tuple(uuid.UUID(p) for p in pipeline_id)
-            except ValueError:
-                return {"error": "invalid_params", "detail": "pipeline_id entries must be valid UUIDs"}
-
-        fid: uuid.UUID | None = None
-        if folder_id is not None:
-            try:
-                fid = uuid.UUID(folder_id)
-            except ValueError:
-                return {"error": "invalid_params", "detail": f"Invalid folder_id UUID: {folder_id}"}
-
-        params = AnalyticsParams(
-            group_by=grp,
-            auto_granularity=auto_granularity,
-            dimension=dim,
-            trigger_type=tt,
-            status=st,
-            pipeline_ids=pids,
-            team_id=_ctx_team_id_val(),
-            error_code=error_code,
-            folder_id=fid,
-            date_from=_parse_mcp_datetime(date_from, "date_from") if date_from is not None else None,
-            date_to=_parse_mcp_datetime(date_to, "date_to") if date_to is not None else None,
-            limit=max(1, min(limit, 1000)),
+        params, p_err = _parse_analytics_params(
+            dimension,
+            group_by,
+            auto_granularity,
+            trigger_type,
+            status,
+            pipeline_id,
+            folder_id,
+            error_code,
+            date_from,
+            date_to,
+            limit,
         )
+        if p_err:
+            return p_err
+        assert params is not None
+
         result = await run_analytics_query(
             org_id=org_id,
             params=params,
