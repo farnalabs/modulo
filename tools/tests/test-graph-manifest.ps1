@@ -6,7 +6,7 @@
 
 BeforeAll {
     $toolsDir = Join-Path $PSScriptRoot ".."
-    $script:GraphValidatorPath = Join-Path $toolsDir "graph-validate.ps1"
+    $script:GraphValidatorPath = Join-Path (Join-Path $PSScriptRoot "..\..") "scripts\run_graph_validate.py"
     $script:ManifestValidatorPath = Join-Path $toolsDir "validate-manifest.ps1"
     $script:RepoRoot = Resolve-Path (Join-Path $toolsDir "..")
 
@@ -82,28 +82,29 @@ export default {
 </template>
 '@
 
-    # Create a temporary copy of graph-validate.ps1 that uses our TestDir as repo root
-    $script:TestGraphValidator = Join-Path $TestDir "graph-validate-test.ps1"
-    $originalContent = Get-Content -Raw -LiteralPath $GraphValidatorPath
-    $testContent = $originalContent -replace [regex]::Escape('$repoRoot=Resolve-Path (Join-Path $PSScriptRoot "..")'), "`$repoRoot='$TestDir'"
-    Set-Content -Path $TestGraphValidator -Value $testContent
-    Copy-Item -LiteralPath (Join-Path $toolsDir "product-map-metadata.ps1") -Destination $TestDir
-
     # Create a temporary copy of validate-manifest.ps1 that uses our TestDir
     $script:TestManifestValidator = Join-Path $TestDir "validate-manifest.ps1"
     $origManifestContent = Get-Content -Raw -LiteralPath $ManifestValidatorPath
     $testManifestContent = $origManifestContent -replace [regex]::Escape('$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")'), "`$repoRoot='$TestDir'"
     Set-Content -Path $TestManifestValidator -Value $testManifestContent
 
-    # Helper to run graph-validate against a fixture manifest
+    # Helper to run graph-validate against a fixture repo root
     function Invoke-GraphValidator {
         param([string]$ManifestContent)
         $manifestPath = Join-Path (Join-Path (Join-Path $TestDir "frontend") "src") "manifest.yaml"
         $parent = Split-Path -Parent $manifestPath
         if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
         Set-Content -Path $manifestPath -Value $ManifestContent
-        $output = & $TestGraphValidator *>&1
-        $exitCode = $LASTEXITCODE
+        # The Python validator writes its status/issue lines to stderr; run it
+        # with Continue so stderr doesn't raise a NativeCommandError under Stop.
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $output = uv run --project backend --no-sync python $GraphValidatorPath --repo-root $TestDir 2>&1
+            $exitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $prevEap
+        }
         return @{ Output = $output; ExitCode = $exitCode }
     }
 

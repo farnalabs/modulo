@@ -199,6 +199,6 @@ status: covered | partial | gap    # auto-updated by graph-validate
 | `partial` | Some behaviours tested, gaps exist |
 | `gap` | No BDD tests, or entry is speculative |
 
-Run `..\..\tools\graph-validate.ps1` to check graph integrity.
-Run `..\..\tools\graph-query.ps1 -Uncovered` to list entries needing attention.
-Run `..\..\tools\graph-query.ps1 -Impact feat-<id>` to see downstream dependents.
+Run `uv run --project backend --no-sync python scripts/run_graph_validate.py` to check graph integrity.
+Run `uv run --project backend --no-sync python scripts/run_graph_query.py --uncovered` to list entries needing attention.
+Run `uv run --project backend --no-sync python scripts/run_graph_query.py --impact feat-<id>` to see downstream dependents.
