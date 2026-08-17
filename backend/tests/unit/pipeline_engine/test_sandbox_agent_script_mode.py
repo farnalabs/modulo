@@ -346,8 +346,8 @@ async def test_script_mode_output_is_raw_parsed_output():
     assert out["status"] == "completed"
     assert art["output_json"] == script_output
     assert out["summary"] == "script mode: exit_code=0"
-    assert art["changed_files"] == []
-    assert art["pr_url"] == ""
+    assert not art["changed_files"]
+    assert not art["pr_url"]
     assert out["agent_status"] is None
     assert out["agent_outcome"] is None
     assert art["exit_code"] == 0
@@ -376,8 +376,8 @@ async def test_script_mode_does_not_elevate_llm_envelope_fields():
     art = result["artifacts"][0]["output"]
     assert out["status"] == "completed"  # from exit_code, NOT output_json["status"]
     assert out["summary"] == "script mode: exit_code=0"  # auto-generated, not the script's summary
-    assert art["changed_files"] == []
-    assert art["pr_url"] == ""
+    assert not art["changed_files"]
+    assert not art["pr_url"]
     assert out["agent_status"] is None
     assert out["agent_outcome"] is None
     assert art["output_json"]["summary"] == "llm-ish summary"  # raw, untouched
