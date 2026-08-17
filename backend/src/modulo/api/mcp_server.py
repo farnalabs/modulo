@@ -2005,6 +2005,19 @@ async def trigger_pipeline(
         return _tool_error("Failed to trigger pipeline")
 
 
+async def _load_run_for_status(s: AsyncSession, org_id: uuid.UUID, rid: uuid.UUID, run_id: str) -> Any | None:
+    run = await get_run(s, rid)
+    if run is None:
+        return None
+    # The run carries its own owner_team_id (snapshot at creation) — that
+    # is the source of truth, not the pipeline's current team assignment.
+    # Legacy runs with a NULL stamp fall back to the pipeline owner.
+    run_owner_team_id = await _run_owner_team_id(s, run)
+    if _team_scoped_key_mismatch(run_owner_team_id):
+        return _TEAM_SCOPE_ERROR
+    return run
+
+
 @mcp.tool(description="Get current run status. Pass detail=true for per-node breakdown.")
 @_RETRY_DB
 async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
@@ -2017,15 +2030,11 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
         except ValueError:
             return {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
         async with _session(org_id) as s:
-            run = await get_run(s, rid)
+            run = await _load_run_for_status(s, org_id, rid, run_id)
+            if run is _TEAM_SCOPE_ERROR:
+                return _team_scope_error("run", run_id)
             if run is None:
                 return {"error": "run_not_found", "run_id": run_id}
-            # The run carries its own owner_team_id (snapshot at creation) — that
-            # is the source of truth, not the pipeline's current team assignment.
-            # Legacy runs with a NULL stamp fall back to the pipeline owner.
-            run_owner_team_id = await _run_owner_team_id(s, run)
-        if _team_scoped_key_mismatch(run_owner_team_id):
-            return _team_scope_error("run", run_id)
         result: dict[str, Any] = {
             "run_id": str(run.id),
             "pipeline_id": str(run.pipeline_id),
