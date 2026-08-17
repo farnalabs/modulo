@@ -2018,6 +2018,26 @@ async def _load_run_for_status(s: AsyncSession, org_id: uuid.UUID, rid: uuid.UUI
     return run
 
 
+def _run_status_base(run: Run) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "run_id": str(run.id),
+        "pipeline_id": str(run.pipeline_id),
+        "status": run.status,
+        "trigger_type": run.trigger_type,
+        "created_at": run.created_at.isoformat(),
+    }
+    if run.started_at:
+        result["started_at"] = run.started_at.isoformat()
+    if run.completed_at:
+        result["completed_at"] = run.completed_at.isoformat()
+    if run.error_code:
+        result["error_code"] = map_legacy_code(run.error_code)
+    if run.error_detail is not None:
+        _, error_detail = present_error(run.error_code, run.error_detail, limit=5000)
+        result["error_detail"] = error_detail
+    return result
+
+
 @mcp.tool(description="Get current run status. Pass detail=true for per-node breakdown.")
 @_RETRY_DB
 async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
@@ -2035,22 +2055,7 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
                 return _team_scope_error("run", run_id)
             if run is None:
                 return {"error": "run_not_found", "run_id": run_id}
-        result: dict[str, Any] = {
-            "run_id": str(run.id),
-            "pipeline_id": str(run.pipeline_id),
-            "status": run.status,
-            "trigger_type": run.trigger_type,
-            "created_at": run.created_at.isoformat(),
-        }
-        if run.started_at:
-            result["started_at"] = run.started_at.isoformat()
-        if run.completed_at:
-            result["completed_at"] = run.completed_at.isoformat()
-        if run.error_code:
-            result["error_code"] = map_legacy_code(run.error_code)
-        if run.error_detail is not None:
-            _, error_detail = present_error(run.error_code, run.error_detail, limit=5000)
-            result["error_detail"] = error_detail
+        result = _run_status_base(run)
         if detail:
             from modulo.api.routes.runs import _clamp_node_token_usage_union
 
