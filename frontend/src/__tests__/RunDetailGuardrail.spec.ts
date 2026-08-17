@@ -88,10 +88,10 @@ function guardrailBlockedRun() {
   }
 }
 
-function mountView() {
+function mountView(run: unknown = guardrailBlockedRun()) {
   ;(api.GET as any).mockImplementation((url: string) => {
     if (url === '/api/v1/runs/{run_id}') {
-      return Promise.resolve({ data: guardrailBlockedRun(), error: undefined })
+      return Promise.resolve({ data: run, error: undefined })
     }
     if (url === '/api/v1/runs/{run_id}/io') {
       return Promise.resolve({ data: { outputs_json: {}, node_telemetry: {}, input_payload: {} }, error: undefined })
@@ -185,5 +185,41 @@ describe('RunDetailView guardrail summary + override', () => {
     const err = wrapper.find('[data-testid="run-detail-override-error"]')
     expect(err.exists()).toBe(true)
     expect(err.text()).toContain('still violates')
+  })
+
+  it('hides the guardrail summary card when the run has no guardrail_summary', async () => {
+    const noSummary = { ...guardrailBlockedRun(), guardrail_summary: undefined }
+    const wrapper = mountView(noSummary)
+    await flush()
+
+    expect(wrapper.find('[data-testid="run-detail-guardrail-summary"]').exists()).toBe(false)
+  })
+
+  it('shows a success message and clears the override dialog after a successful override', async () => {
+    postMock.mockResolvedValue({ data: { run_id: 'test-run-id', status: 'pending', action: 'override' }, error: undefined })
+    const wrapper = mountView()
+    await flush()
+
+    await wrapper.find('[data-testid="run-detail-override-input"]').setValue('{ "query": "safe" }')
+    await wrapper.find('[data-testid="run-detail-override-submit"]').trigger('click')
+    await flush()
+
+    const ok = wrapper.find('[data-testid="run-detail-override-success"]')
+    expect(ok.exists()).toBe(true)
+    expect(wrapper.find('[data-testid="run-detail-override-error"]').exists()).toBe(false)
+    expect(postMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects invalid JSON input without calling the override endpoint', async () => {
+    const wrapper = mountView()
+    await flush()
+
+    await wrapper.find('[data-testid="run-detail-override-input"]').setValue('{ not valid json')
+    await wrapper.find('[data-testid="run-detail-override-submit"]').trigger('click')
+    await flush()
+
+    const err = wrapper.find('[data-testid="run-detail-override-error"]')
+    expect(err.exists()).toBe(true)
+    expect(postMock).not.toHaveBeenCalled()
   })
 })

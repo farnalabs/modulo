@@ -145,6 +145,93 @@ describe('SettingsGuardrailsView', () => {
     expect(badge.attributes('aria-live')).toBe('polite')
   })
 
+  it('does not show the observe badge for block/warn/redact guardrails', async () => {
+    const wrapper = mountView(fakeJwt('admin'), {
+      list: {
+        items: [
+          guardrailItem({ name: 'block_cc', config_json: { action: 'block', type: 'regex', field: 'payload.card_number', pattern: '^4' } }),
+          guardrailItem({ id: 'gr-2', name: 'warn_secrets', config_json: { action: 'warn', type: 'regex', field: 'payload.secret', pattern: 'sk-' } }),
+          guardrailItem({ id: 'gr-3', name: 'redact_pii', config_json: { action: 'redact', type: 'json_schema', field: 'payload.email' } }),
+        ],
+        total: 3,
+        page: 1,
+        page_size: 100,
+      },
+    })
+    await flush()
+
+    expect(wrapper.find('[data-testid="settings-guardrails-observe-badge"]').exists()).toBe(false)
+  })
+
+  it('lists guardrails by field name only — never renders configured values', async () => {
+    const pattern = '^4[0-9]{12}(?:[0-9]{3})?$'
+    const wrapper = mountView(fakeJwt('admin'), {
+      list: {
+        items: [guardrailItem({ name: 'block_credit_card' })],
+        total: 1,
+        page: 1,
+        page_size: 100,
+      },
+    })
+    await flush()
+
+    // The field NAME is rendered...
+    expect(wrapper.text()).toContain('payload.card_number')
+    // ...but the actual configured pattern value must never surface.
+    expect(wrapper.text()).not.toContain(pattern)
+  })
+
+  it('does not fetch or show the kill-switch banner for non-admin users', async () => {
+    const wrapper = mountView(fakeJwt('viewer'), {
+      list: { items: [guardrailItem()], total: 1, page: 1, page_size: 100 },
+      killSwitch: { enabled: true },
+    })
+    await flush()
+
+    expect(wrapper.find('[data-testid="settings-guardrails-kill-switch-banner"]').exists()).toBe(false)
+    expect(getMock).not.toHaveBeenCalled()
+  })
+
+  it('regex detection requires a pattern before POSTing', async () => {
+    const wrapper = mountView(fakeJwt('admin'))
+    await flush()
+
+    ;(wrapper.vm as any).form.name = 'block_cc'
+    ;(wrapper.vm as any).form.pipeline_id = 'p1'
+    ;(wrapper.vm as any).form.action = 'block'
+    ;(wrapper.vm as any).form.detectionType = 'regex'
+    ;(wrapper.vm as any).form.field = 'payload.card_number'
+    ;(wrapper.vm as any).form.pattern = ''
+
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    const error = wrapper.find('[data-testid="settings-guardrails-form-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toContain('pattern')
+    expect(api.POST).not.toHaveBeenCalled()
+  })
+
+  it('json_schema detection requires valid JSON schema before POSTing', async () => {
+    const wrapper = mountView(fakeJwt('admin'))
+    await flush()
+
+    ;(wrapper.vm as any).form.name = 'schema_guard'
+    ;(wrapper.vm as any).form.pipeline_id = 'p1'
+    ;(wrapper.vm as any).form.action = 'block'
+    ;(wrapper.vm as any).form.detectionType = 'json_schema'
+    ;(wrapper.vm as any).form.field = 'payload.record'
+    ;(wrapper.vm as any).form.schema = 'not-json'
+
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    const error = wrapper.find('[data-testid="settings-guardrails-form-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toContain('JSON')
+    expect(api.POST).not.toHaveBeenCalled()
+  })
+
   it('shows the kill-switch banner when the org kill-switch is ON and downgrades block guardrails to observe', async () => {
     const wrapper = mountView(fakeJwt('admin'), {
       list: {
