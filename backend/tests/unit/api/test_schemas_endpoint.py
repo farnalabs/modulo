@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -726,6 +726,36 @@ def test_validate_schema_invalid_returns_valid_false(client: TestClient) -> None
     assert resp.status_code == 200
     assert resp.json()["valid"] is False
     assert resp.json()["errors"]
+
+
+def test_validate_schema_non_dict_definition_returns_422(client: TestClient) -> None:
+    """definition must be a JSON object; a non-dict value is a client validation error."""
+    for bad_definition in ([1, 2, 3], "string", 42, None, True):
+        resp = client.post(
+            "/api/v1/schemas/validate",
+            json={"definition": bad_definition},
+        )
+        assert resp.status_code == 422, f"definition={bad_definition!r} -> {resp.status_code}: {resp.text}"
+
+
+def test_validate_schema_non_object_body_returns_422(client: TestClient) -> None:
+    """A raw non-object JSON body (array) is rejected as a request-validation error."""
+    resp = client.post("/api/v1/schemas/validate", content="[1,2,3]")
+    assert resp.status_code == 422
+
+
+def test_create_schema_integrity_error_returns_409(client: TestClient) -> None:
+    """Duplicate schema name per org surfaces as 409 (IntegrityError caught in route)."""
+    with (
+        patch(
+            "modulo.api.routes.schemas.create_schema",
+            side_effect=IntegrityError("INSERT", {}, Exception("duplicate key")),
+        ),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+    ):
+        resp = client.post("/api/v1/schemas", json={"name": "Dup"})
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "A schema with this name already exists."
 
 
 # ---------------------------------------------------------------------------

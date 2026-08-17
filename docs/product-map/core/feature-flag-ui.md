@@ -136,8 +136,8 @@ Feature flag inspection dashboard at `/admin/feature-flags` listing all known fl
 
 - [x] FeatureGate component with modes: `show-disabled` (40% opacity) or full lock wall
 - [x] LockIcon component for gated features
-- [ ] Tooltip says "Requires a Team license — see /settings/license" (actual text: "Available on a higher plan tier" and links to modulo.run/pricing)
-- [ ] Lock icon links to `/settings/license` (actual link: modulo.run/pricing)
+- [ ] Tooltip says "Requires a Team license — see /settings/license" (actual text: "Available on higher plan tier" — the tooltip text gap is genuine; see below)
+- [x] Lock icon / FeatureGate "View Plans" CTA links to `/settings/license` by default — VERIFIED. `FeatureGate.vue` defaults `pricingUrl` to `/settings/license` (line 76) and no `<FeatureGate>` usage overrides it to the external pricing page. The only `modulo.run/pricing` link is the intentional Upgrade CTA in `SettingsLicenseView.vue:36`. (Product-map claim that the lock links to modulo.run/pricing was stale.)
 
 ### Frontend — License settings page (`SettingsLicenseView.vue`)
 
@@ -219,6 +219,12 @@ Feature flag inspection dashboard at `/admin/feature-flags` listing all known fl
 - [x] Frontend tests for error/loading/empty states in AdminFeatureFlagsView added
 - [x] planStore unit tests exist at frontend/src/__tests__/planStore.spec.ts
 
+## QA History (2026-08-15 — distribute coverage sweep)
+
+### Findings
+- **Stale claim corrected — lock icon link:** `FeatureGate.vue` already defaults `pricingUrl` to `/settings/license` and no `<FeatureGate>` usage overrides it to the external pricing page (verified by grep across `frontend/src`). The only `modulo.run/pricing` reference is the intentional Upgrade CTA in `SettingsLicenseView.vue:36`. Marked the "Lock icon links to /settings/license" checkbox `[x]`.
+- **Tooltip text gap (genuine):** `FeatureGate.vue` tooltip still reads "Available on higher plan tier" rather than "Requires a Team license — see /settings/license". Fixing it requires editing the locale file (`frontend/src/locales/en-US.js`) and the `FeatureGate.spec.ts` assertion, which are outside this task's allowlist — left as a Known Gap.
+
 ## QA History (index 351 — cross-cutting)
 
 ### Findings fixed
@@ -288,7 +294,7 @@ Feature flag inspection dashboard at `/admin/feature-flags` listing all known fl
 
 ### Frontend
 - No frontend route guard for admin-only routes (any authenticated user can reach `/admin/feature-flags`)
-- Lock icon tooltip text and link point to modulo.run/pricing instead of /settings/license per PRD
+- Lock icon tooltip text reads "Available on higher plan tier" instead of "Requires a Team license — see /settings/license" per PRD (the lock/FeatureGate **link** already points to `/settings/license` — only the tooltip text needs updating, and doing so requires a locale-file + spec-test edit outside this scope)
 - No "License expired" badge state in sidebar footer
 - No SettingsLicenseView frontend tests
 
