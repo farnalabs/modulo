@@ -1131,10 +1131,6 @@ async def create_pipeline(
         return _tool_error("Failed to create pipeline")
 
 
-@mcp.tool(
-    description="List pipeline runs with filtering and cursor-based pagination.",
-)
-@_RETRY_DB
 def _mcp_run_item(r: Any, child_rollup: dict[Any, tuple[Any, int]]) -> dict[str, Any]:
     child_cost, child_count = child_rollup.get(r.id, (_MCP_COST_ROLLUP_ZERO, 0))
     child_cost = _quantize_mcp_cost_rollup(child_cost)
@@ -1158,6 +1154,10 @@ def _mcp_run_item(r: Any, child_rollup: dict[Any, tuple[Any, int]]) -> dict[str,
     }
 
 
+@mcp.tool(
+    description="List pipeline runs with filtering and cursor-based pagination.",
+)
+@_RETRY_DB
 async def list_runs(
     pipeline_id: str | None = None,
     status: str | None = None,
