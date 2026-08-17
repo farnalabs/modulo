@@ -222,10 +222,6 @@ def unauth_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
 
 from pytest_bdd import given, parsers, then, when  # noqa: E402
 
-from unittest.mock import patch  # noqa: E402
-
-from pytest_bdd import given, parsers, then, when  # noqa: E402
-
 
 def _make_mock_pipeline_full(name: str = "Test Pipeline", **kwargs: Any) -> MagicMock:
     """Full-shaped Pipeline ORM mock matching PipelineResponse validation."""
@@ -597,6 +593,7 @@ def _bdd_error_detail_mentions(text: str, request: Any) -> None:
     body = request.node._resp.json()
     detail = body.get("detail", "")
     assert text in detail, f"Expected the error detail to mention {text!r}, got {detail!r}"
+
 
 @then("the response contains id and slug")
 def _bdd_response_id_and_slug(request) -> None:

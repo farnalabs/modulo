@@ -3194,6 +3194,31 @@ export interface paths {
         patch: operations["update_connector_endpoint_api_v1_connectors__connector_id__patch"];
         trace?: never;
     };
+    "/api/v1/connectors/{connector_id}/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Connector Health Endpoint
+         * @description Run a live health check against a connector instance.
+         *
+         *     Builds the connector from the stored config/credentials and runs its
+         *     ``health_check``. A missing connector (or one outside the caller's org) is
+         *     a 404. Build/decrypt failures are 502; a failing health check is reported
+         *     in-band as ``ok: false`` with the connector's detail.
+         */
+        get: operations["connector_health_endpoint_api_v1_connectors__connector_id__health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/library/contribute": {
         parameters: {
             query?: never;
@@ -8578,6 +8603,19 @@ export interface components {
              * @enum {string}
              */
             tier: "native" | "preview" | "in_dev";
+        };
+        /**
+         * ConnectorHealthResponse
+         * @description Live connector health check result.
+         */
+        ConnectorHealthResponse: {
+            /** Ok */
+            ok: boolean;
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
         };
         /** ConnectorListResponse */
         ConnectorListResponse: {
@@ -23512,6 +23550,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConnectorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    connector_health_endpoint_api_v1_connectors__connector_id__health_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                connector_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorHealthResponse"];
                 };
             };
             /** @description Validation Error */

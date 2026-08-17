@@ -439,6 +439,7 @@ class TestPipelineSnapshotSchemas:
         pipeline_id = uuid.uuid4()
 
         with (
+            patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_mock_pipeline(id=pipeline_id)),
             patch("modulo.api.routes.pipelines.list_snapshots", new=AsyncMock(return_value=([], 0))),
             patch("modulo.api.routes.pipelines.set_rls_org"),
             patch("modulo.api.routes.pipelines.set_rls_user_context"),
