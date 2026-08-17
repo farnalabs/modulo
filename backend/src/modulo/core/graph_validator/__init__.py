@@ -497,6 +497,50 @@ def _check_sandbox_output_schema(node: dict[str, Any], nid: str, result: Validat
         )
 
 
+def _check_sandbox_loop_intercept(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
+    """Sandbox check 8: loop_intercept config shape (FAR-211).
+
+    The ``loop_intercept`` config enables the agent-loop interior tool-call
+    interception bridge (ADR 003 amendment). A malformed config is a hard
+    ERROR — a declared control must never silently no-op because its shape was
+    invalid. Absent config (the default) passes.
+    """
+    raw = node.get("loop_intercept")
+    if raw is None or raw is False:
+        return
+    if not isinstance(raw, dict):
+        result.error(
+            "SANDBOX_LOOP_INTERCEPT_MALFORMED",
+            f"Sandbox agent node '{nid}' loop_intercept must be an object (or omitted)",
+            node_id=nid,
+        )
+        return
+    try:
+        from modulo.core.guardrails.loop_intercept import validate_loop_intercept_config_errors
+    except Exception:
+        # Lazy import failure must not crash validation — surface as an error.
+        result.error(
+            "SANDBOX_LOOP_INTERCEPT_MALFORMED",
+            f"Sandbox agent node '{nid}' loop_intercept could not be validated",
+            node_id=nid,
+        )
+        return
+    errors = validate_loop_intercept_config_errors(raw)
+    for err in errors:
+        result.error(
+            "SANDBOX_LOOP_INTERCEPT_MALFORMED",
+            f"Sandbox agent node '{nid}' loop_intercept: {err}",
+            node_id=nid,
+        )
+    if errors and isinstance(raw.get("intercepted_tool_patterns"), list) and not raw["intercepted_tool_patterns"]:
+        result.warning(
+            "SANDBOX_LOOP_INTERCEPT_EMPTY_PATTERNS",
+            f"Sandbox agent node '{nid}' loop_intercept.intercepted_tool_patterns is empty — "
+            "no tool calls will be intercepted",
+            node_id=nid,
+        )
+
+
 def _check_edge_references(
     edges: list[dict[str, Any]],
     node_ids: set[str],
@@ -1879,6 +1923,7 @@ class GraphValidator:
             _check_sandbox_context_files(node, nid, result)
             _check_sandbox_env_vars(node, nid, _reserved_env_prefixes, result)
             _check_sandbox_output_schema(node, nid, result)
+            _check_sandbox_loop_intercept(node, nid, result)
 
     # ------------------------------------------------------------------
     # Pipeline retry_policy
