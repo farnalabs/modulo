@@ -14,8 +14,9 @@ Two distinct canaries, run through the REAL interception seam
    designed to evade a naive regex (obfuscated / encoded marker) is asserted
    NOT to fire. This is deliberately excluded from CI failure: it documents
    the evasion band (what a naive structural detector does NOT catch) rather
-   than gating on it. It is marked ``skipif(True)`` so it never runs and never
-   fails CI, and its assertions are soft (logged, never raised).
+   than gating on it. It RUNS through the real interception seam and asserts
+   the weak-evasion payload genuinely does NOT fire, pinning the documented
+   non-coverage to reality — it is a real assertion, not a skipped no-op.
 
 The purpose of the informational canary is to record, for the operator, that a
 naive regex guardrail does NOT catch obfuscated credentials — the known
@@ -23,7 +24,6 @@ non-coverage documented in PRD §8.17 ("What guardrails do NOT cover"). It is
 intentionally not a gate.
 """
 
-import logging
 import uuid
 from typing import Any
 
@@ -117,30 +117,25 @@ async def test_detectable_canary_clean_payload_never_fires():
     assert fired == 0, f"clean payload fired {fired} times — false positive"
 
 
-@pytest.mark.skipif(True, reason="informational evasion band — never a CI gate")
 @pytest.mark.asyncio
 async def test_weak_evasion_canary_does_not_fire_informational_only():
-    """INFORMATIONAL ONLY — never fails CI.
+    """INFORMATIONAL ONLY — documents the known evasion band.
 
     This canary documents the known evasion band: a naive structural regex
     (``CANARY_[A-Z0-9]{8}``) does NOT catch a marker whose characters are
     obfuscated (digits swapped for letter-lookalikes: ``C4N4RY_ABC12345``).
     This is EXPECTED behaviour — it is precisely the free-text/obfuscation
     non-coverage the PRD §8.17 records as known failure class. It is NOT a
-    regression and MUST NOT gate CI. Kept soft so that if it is ever
-    deliberately enabled it logs rather than failing the suite.
+    regression and MUST NOT gate CI; it runs and asserts the weak-evasion
+    payload genuinely evades the regex, so the documented band stays pinned
+    to reality rather than being a never-executed no-op.
 
     If this canary ever fires, the regex was tightened to catch the evasion —
     that is a *new* detection capability worth reviewing, not a failure.
     """
     payload = {"body": f"leak {_EVASION_PAYLOAD} here"}
-    outcome = await run_interception_pass_async(
-        EvalEngine(),
-        [_canary_definition(action=GuardrailAction.OBSERVE.value)],
-        payload,
+    fired = await _pass_once(GuardrailAction.OBSERVE.value, payload)
+    assert not fired, (
+        f"evasion canary fired for {_EVASION_PAYLOAD!r} — the naive regex "
+        "CANARY_[A-Z0-9]{8} unexpectedly caught this obfuscation"
     )
-    fired = any(r.passed for r in outcome.results)
-    if fired:
-        # Informational band widening (the naive regex now catches this evasion).
-        # Log-only; deliberately not an assertion failure.
-        logging.getLogger(__name__).info("evasion canary fired (%s) — detection widened", _EVASION_PAYLOAD)
