@@ -1779,6 +1779,37 @@ async def _wait_command_with_idle_watchdog(
                 return None, f"agent produced no output for {idle_timeout:.0f}s"
 
 
+# FAR-227: the E2B sandbox wrapper's fallback echo written to /home/user/output.json
+# when the opencode session dies without producing output. It is a PLACEHOLDER,
+# NOT an agent verdict — the agent never spoke; the session was interrupted. When
+# this echo is detected, the node must NOT be classified as ``agent.failed``
+# (a genuine self-declared verdict, non-retryable) — the session death is a
+# transient sandbox infra failure, routed to the retryable ``sandbox.no_output_json``.
+_SANDBOX_SESSION_LOST_SUMMARY = "No output from agent - session interrupted"
+
+
+def _is_sandbox_session_lost_echo(output_json: Any) -> bool:
+    """True when output.json is the E2B wrapper's fallback echo for a dead session.
+
+    Matched on the wrapper's exact placeholder summary (and the ``error`` field
+    as a secondary surface), AND on ``status == "failed"`` — the wrapper always
+    writes ``"status":"failed"`` on the echo. Requiring the failed status is the
+    anti-false-positive guard: a genuine agent verdict that merely MENTIONS
+    session interruption (e.g. "the session was interrupted, here is what I
+    completed") carries a ``summary`` without the dead-session signature, and a
+    non-failed status can never be the wrapper's dead-session echo. Non-dict /
+    non-matching output is never misread.
+    """
+    if not isinstance(output_json, dict):
+        return False
+    if output_json.get("status") != "failed":
+        return False
+    summary = output_json.get("summary")
+    error = output_json.get("error")
+    haystack = [s for s in (summary, error) if isinstance(s, str)]
+    return any(_SANDBOX_SESSION_LOST_SUMMARY in s for s in haystack)
+
+
 def make_sandbox_agent_fn(
     node_def: dict[str, Any],
     *,
@@ -2699,17 +2730,30 @@ def make_sandbox_agent_fn(
             # missing status can never look like a false "complete".
             agent_status: str | None = None
             agent_outcome: str | None = None
+            # FAR-227: the E2B wrapper's fallback echo for a dead opencode
+            # session is NOT an agent verdict — the agent never wrote it. Detect
+            # the placeholder, suppress the fabricated ``agent_status="failed"``
+            # (which A1-elevates to non-retryable ``agent.failed``), and stamp a
+            # distinct marker the executor routes to retryable
+            # ``sandbox.no_output_json`` instead. The summary is preserved so the
+            # failure detail stays visible.
+            sandbox_session_lost: bool = False
 
             if isinstance(output_json, dict):
                 result_summary = output_json.get("summary", "")
                 changed_files = output_json.get("changed_files", [])
                 pr_url = output_json.get("pr_url", "")
+                sandbox_session_lost = _is_sandbox_session_lost_echo(output_json)
                 _raw_status = output_json.get("status")
                 _raw_outcome = output_json.get("outcome")
-                if isinstance(_raw_status, str):
+                if isinstance(_raw_status, str) and not sandbox_session_lost:
                     agent_status = _raw_status
-                if isinstance(_raw_outcome, str):
+                if isinstance(_raw_outcome, str) and not sandbox_session_lost:
                     agent_outcome = _raw_outcome
+                if sandbox_session_lost:
+                    # A dead session is never a completed node, regardless of the
+                    # command's exit code (the wrapper may exit 0 after echoing).
+                    status = "failed"
 
             if status == "failed" and not result_summary:
                 # Never report a silent empty-summary failure — explain WHY the
@@ -2718,6 +2762,10 @@ def make_sandbox_agent_fn(
 
             _cost_estimate_usd = _compute_sandbox_cost(elapsed, output_json)
             _stall_reason_field: dict[str, str] = {"stall_reason": stall_reason} if stall_reason else {}
+            # FAR-227: distinct marker the executor routes on — present ONLY for
+            # the E2B wrapper's fallback echo (dead session). Absent for normal
+            # nodes, so ordinary envelopes stay byte-identical.
+            _session_lost_field: dict[str, bool] = {"sandbox_session_lost": True} if sandbox_session_lost else {}
 
             # Only the timeout/stall failure carries the sandbox trace — the
             # success path doesn't need it and stays small.
@@ -2784,6 +2832,7 @@ def make_sandbox_agent_fn(
                             "agent_status": agent_status,
                             "agent_outcome": agent_outcome,
                             **_stall_reason_field,
+                            **_session_lost_field,
                             **_sandbox_failure_fields,
                             "attempt_key": attempt_key,
                         },
@@ -2802,6 +2851,7 @@ def make_sandbox_agent_fn(
                     "agent_status": agent_status,
                     "agent_outcome": agent_outcome,
                     **_stall_reason_field,
+                    **_session_lost_field,
                     **_sandbox_failure_fields,
                     "attempt_key": attempt_key,
                 },
