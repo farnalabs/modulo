@@ -85,9 +85,9 @@ const enabled = computed(() => {
 });
 
 const tooltipText = computed(() => {
-  if (props.requiredTier) {
-    return `${t("components.FeatureGate.available_on_higher_plan_tier")} — ${planStore.getTierLabel(props.requiredTier)}`;
-  }
-  return t("components.FeatureGate.available_on_higher_plan_tier");
+  const base = props.requiredTier
+    ? `${t("components.FeatureGate.available_on_higher_plan_tier")} — ${planStore.getTierLabel(props.requiredTier)}`
+    : t("components.FeatureGate.available_on_higher_plan_tier");
+  return `${base} — /settings/license`;
 });
 </script>

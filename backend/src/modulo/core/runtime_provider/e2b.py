@@ -77,9 +77,13 @@ class E2BRuntimeProvider(RuntimeProvider):
             )
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except TimeoutError:
+            raise RuntimeError(
+                f"Timed out after {timeout}s provisioning E2B sandbox with template {template_id!r}"
+            ) from None
+        except Exception as exc:
             _log.exception("Failed to create E2B sandbox with template %s", template_id)
-            raise
+            raise RuntimeError(f"Failed to create E2B sandbox with template {template_id!r}: {exc}") from exc
 
         repo_url = (spec.labels or {}).get("repo_url", "")
         if repo_url:

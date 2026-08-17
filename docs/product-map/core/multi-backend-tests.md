@@ -139,3 +139,15 @@ Tests that verify Modulo's database abstraction layer works across all three sup
 ## Known Gaps
 - 2026-07-06: improve-architecture (index 226) — Fixed product map `bdd:` frontmatter (was `[]`, now points to `multi_backend.feature`). Added `RepositoryHub` construction/dispatch unit tests (3 repo types × 3 lock types = 6 tests). Added `register_tenant_filter()` registration behaviour test (skips postgres, registers for sqlite/mariadb). Added `register_rls_reset_hook` skip behaviour test (skips sqlite/mysql, registers for postgres). Fixed `test_backend_type_hint_in_repository_hub` — removed `or True` that made it always pass. Removed stale Known Gap about missing BDD feature file. Status: partial (6 known gaps remain — `_build_engine()` test, MariaDB CI, SQLite CRUD suite, Alembic conditional DDL, API difference tests, GenericRepository integration test).
 - 2026-07-12: improve-architecture (r2) — Fixed `prd:` frontmatter (was `12`, no longer exists; now `6.2` for multi-tenant architecture). Added MariaDB deprecation notes to Known Gaps and unchecked behaviours. Fixed N806 naming violations (`_USER_ID` → `user_id`, `_ORG_ROLE` → `org_role`) in test_rls_multibackend.py. Added `except asyncio.CancelledError: raise` guard before `except Exception` in rls.py `_reset_org_on_checkout` (per project convention).
+
+## QA History
+
+### 2026-08-15 — dist/partial-core3 (no behaviour changes to this entry)
+
+This session added schema-versioning and runtime-provider structured-error tests
+(see schema-union-types.md and runtime-provider-core.md) — none of which touch the
+multi-backend DB abstraction suite. No behaviours in this entry were flipped this
+session; the remaining unchecked items (`_build_engine()` test, MariaDB CI — deprecated,
+SQLite CRUD suite, Alembic conditional DDL, API difference tests, GenericRepository
+cross-tenant integration test, migration failure on non-Postgres, concurrent cross-process
+locks, RLS direct-DB-bypass, session.info leakage) remain genuine gaps.
