@@ -953,6 +953,48 @@ async def _authenticate_oauth_jwt(
     return False, None, claims
 
 
+async def _verify_oauth_token_family(
+    request: Request,
+    token: str,
+    claims: Any,
+    settings: Any,
+) -> Response | None:
+    """Return an error response if the OAuth token family is blacklisted.
+
+    Returns ``None`` when the family is valid (the caller should continue), or
+    the appropriate error ``Response`` otherwise.
+    """
+    try:
+        async with _session(claims.organisation_id) as s:
+            valid = await check_oauth_token_family_valid(
+                s,
+                family_id=claims.token_family,
+                client_id=claims.client_id,
+                org_id=claims.organisation_id,
+            )
+            if not valid:
+                return Response(
+                    '{"error":"unauthorized","detail":"Token family revoked"}',
+                    status_code=401,
+                    media_type=_CT_APPLICATION_JSON,
+                )
+    except (SQLAlchemyError, OperationalError, TimeoutError):
+        _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
+        return Response(
+            _JSON_AUTH_DB_UNAVAILABLE,
+            status_code=503,
+            media_type=_CT_APPLICATION_JSON,
+        )
+    except Exception:
+        _log.exception("OAuth token family check failed")
+        return Response(
+            '{"error":"unauthorized","detail":"Token validation failed"}',
+            status_code=401,
+            media_type=_CT_APPLICATION_JSON,
+        )
+    return None
+
+
 async def _dispatch_unauth_paths(
     request: Request,
     call_next: Callable[[Request], Awaitable[Response]],
@@ -1014,34 +1056,9 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Verify token family is not blacklisted.
-        try:
-            async with _session(claims.organisation_id) as s:
-                valid = await check_oauth_token_family_valid(
-                    s,
-                    family_id=claims.token_family,
-                    client_id=claims.client_id,
-                    org_id=claims.organisation_id,
-                )
-                if not valid:
-                    return Response(
-                        '{"error":"unauthorized","detail":"Token family revoked"}',
-                        status_code=401,
-                        media_type=_CT_APPLICATION_JSON,
-                    )
-        except (SQLAlchemyError, OperationalError, TimeoutError):
-            _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
-            return Response(
-                _JSON_AUTH_DB_UNAVAILABLE,
-                status_code=503,
-                media_type=_CT_APPLICATION_JSON,
-            )
-        except Exception:
-            _log.exception("OAuth token family check failed")
-            return Response(
-                '{"error":"unauthorized","detail":"Token validation failed"}',
-                status_code=401,
-                media_type=_CT_APPLICATION_JSON,
-            )
+        family_err = await _verify_oauth_token_family(request, token, claims, settings)
+        if family_err is not None:
+            return family_err
 
         # Resolve role from scopes (highest scope wins) — ADR 017: the scope
         # grant is then CLAMPED to the account's LIVE org role so a demoted
