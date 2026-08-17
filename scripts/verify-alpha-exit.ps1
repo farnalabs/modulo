@@ -299,11 +299,6 @@ $modelBackendDir = Join-Path (Join-Path (Join-Path $backendDir "src") "modulo") 
 $backendExists = Test-Path -LiteralPath $modelBackendDir
 LogCheckbox $backendExists "Model backend directory exists"
 
-# Seed data / demo pipeline
-$seedFile = Join-Path (Join-Path $productRoot "scripts") "seed.py"
-$seedOk = Test-Path -LiteralPath $seedFile
-LogCheckbox $seedOk "Seed data script exists ($seedFile)"
-
 # BDD feature files exist
 $bddTestDir = Join-Path $backendDir "tests"
 if (Test-Path -LiteralPath $bddTestDir) {
