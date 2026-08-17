@@ -2670,6 +2670,26 @@ async def _dispatch_hitl_action(
     return {"status": "rejected", "gate_id": gate_id}
 
 
+def _hitl_error_response(exc: BaseException, run_id: str, gate_id: str) -> dict[str, Any]:
+    if isinstance(exc, GateNotFoundError):
+        return {"error": "gate_not_found", "run_id": run_id, "gate_id": gate_id}
+    if isinstance(exc, NotTeamMemberError):
+        return {"error": "not_team_member", "detail": "You are not a member of the team required by this gate"}
+    if isinstance(exc, AlreadyClaimedError):
+        return {"error": "already_claimed", "detail": "Gate is already held by another client"}
+    if isinstance(exc, ClaimTokenInvalidError):
+        return {"error": "claim_token_invalid"}
+    if isinstance(exc, ClaimTokenExpiredError):
+        return {"error": "claim_token_expired", "detail": "Re-claim the gate"}
+    if isinstance(exc, GateAlreadyDecidedError):
+        return {"error": "already_decided", "detail": "Gate already has a final decision"}
+    if isinstance(exc, ProgrammingError):
+        _log.exception("review_hitl failed")
+        return {"error": "migration_required", "detail": "DB migration required. Run alembic upgrade head."}
+    _log.exception("review_hitl failed")
+    return _tool_error("Failed to process HITL action")
+
+
 @mcp.tool(
     description=(
         "Unified HITL gate action: claim, approve, reject, or deliver_manual. "
@@ -2722,24 +2742,22 @@ async def review_hitl(
                 return await _dispatch_hitl_action(
                     mgr, s, action, rid, gate_id, org_id, key_id, claim_token, output, reason
                 )
-            except GateNotFoundError:
-                return {"error": "gate_not_found", "run_id": run_id, "gate_id": gate_id}
-            except NotTeamMemberError:
-                return {"error": "not_team_member", "detail": "You are not a member of the team required by this gate"}
-            except AlreadyClaimedError:
-                return {"error": "already_claimed", "detail": "Gate is already held by another client"}
-            except ClaimTokenInvalidError:
-                return {"error": "claim_token_invalid"}
-            except ClaimTokenExpiredError:
-                return {"error": "claim_token_expired", "detail": "Re-claim the gate"}
-            except GateAlreadyDecidedError:
-                return {"error": "already_decided", "detail": "Gate already has a final decision"}
-            except ProgrammingError:
-                _log.exception("review_hitl failed")
-                return {"error": "migration_required", "detail": "DB migration required. Run alembic upgrade head."}
-            except Exception:
-                _log.exception("review_hitl failed")
-                return _tool_error("Failed to process HITL action")
+            except GateNotFoundError as exc:
+                return _hitl_error_response(exc, run_id, gate_id)
+            except NotTeamMemberError as exc:
+                return _hitl_error_response(exc, run_id, gate_id)
+            except AlreadyClaimedError as exc:
+                return _hitl_error_response(exc, run_id, gate_id)
+            except ClaimTokenInvalidError as exc:
+                return _hitl_error_response(exc, run_id, gate_id)
+            except ClaimTokenExpiredError as exc:
+                return _hitl_error_response(exc, run_id, gate_id)
+            except GateAlreadyDecidedError as exc:
+                return _hitl_error_response(exc, run_id, gate_id)
+            except ProgrammingError as exc:
+                return _hitl_error_response(exc, run_id, gate_id)
+            except Exception as exc:
+                return _hitl_error_response(exc, run_id, gate_id)
     except OperationalError:
         raise
     except Exception:
