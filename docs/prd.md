@@ -1724,7 +1724,9 @@ The boundary philosophy: the agent definition is the driver's manual; boundary c
 
 What guardrails do NOT cover (known failure classes, follow-on work): free-text PII embedded in otherwise-valid field values, content-based detection (semantic, not structural), the interior of an agent loop (e.g. a long-running agent's intermediate steps), and output-side effects (already specified in the §8.17 output-side gates above).
 
-Planned (not shipped): canary guardrails, and the guardrail management UI.
+Canary guardrails are **shipped** (FAR-223 PR C): a known-DETECTABLE canary guardrail (a regex that deterministically matches a fixed marker in a fixed payload) is asserted to fire 100% of the time through the real interception seam as a HARD CI gate — it fails CI if the detection engine ever stops firing on a known marker. A known-WEAK evasion canary (an obfuscated/encoded marker that evades a naive regex) is an INFORMATIONAL BAND ONLY, deliberately excluded from CI failure, documenting the free-text/obfuscation non-coverage above rather than gating on it.
+
+Planned (not shipped): the guardrail management UI.
 
 #### Guardrail summary telemetry on run detail (shipped — FAR-223 PR B)
 
