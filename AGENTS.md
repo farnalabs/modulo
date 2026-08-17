@@ -1560,3 +1560,16 @@ Rules:
 - For ANY large refactor (complexity, DRY, dead-code removal, extracting a god-function), pre-specify the decomposition rather than asking the model to design it. The model's strength is implementing a well-specified extraction, not open-endedly designing one under context pressure.
 - If a sub-agent degenerates into "let me call the tool" loops, STOP and re-scope: shrink to one function, pre-specify the helpers, and retry. Do not keep re-spawning with the same open-ended prompt.
 - This pairs with lesson 13 (mypy strict): every extracted helper is new code that must satisfy mypy strict — run mypy on the whole file after each extraction.
+
+
+### 15. Verify complexity against SonarQube's real S3776, not a local cognitive-complexity package
+
+From the FAR-281 cognitive-complexity sweep (2026-08-16/17): sub-agents verified their decomposition work with the `cognitive_complexity` PyPI package and reported functions "under 15". When SonarQube re-scanned the merged result, its real S3776 algorithm measured the SAME functions 2-3x higher (e.g. `dispatch` reported 13 by the package, 40 by SonarQube; `get_run_status` 9 vs 42; `review_hitl` 18 vs 40). The package under-measures because its cognitive-complexity model differs from SonarQube's (SonarQube counts nesting and certain constructs more aggressively).
+
+The decomposition was still valuable — it roughly halved every monster (update_trigger 149 → under 15 by SonarQube's own measure) — but the "under 15" claims were optimistic for most functions.
+
+Rules:
+- The ONLY authoritative measure of SonarQube S3776 is SonarQube itself. Do NOT trust a local `cognitive_complexity` package to verify a complexity refactor.
+- To verify a complexity refactor against the real threshold, either (a) run a SonarQube scan of the branch (via `harness/tools/sonarqube-scan.ps1`) and query `api/issues/search?rules=python:S3776` for the file, or (b) if you cannot run SonarQube, treat the local package's number as a LOWER BOUND and aim for well under 15 (e.g. target 8-10) to leave margin for SonarQube's stricter count.
+- When a Worker reports "complexity under 15", cross-check it against SonarQube before declaring the function done. A function that is 13 by the package may be 40 by SonarQube.
+- This pairs with lessons 13 (mypy strict) and 14 (pre-specified decomposition): decompose, verify mypy, and verify against SonarQube's real S3776.

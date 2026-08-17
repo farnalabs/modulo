@@ -459,6 +459,71 @@ def _as_int_or_none(value: Any) -> int | None:
         return None
 
 
+def _check_sandbox_stall_detectors(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
+    """Sandbox check 8: FAR-306 opt-in stall-detector field validation.
+
+    - ``stdout_percentage_delta`` must be a number in (0, 1] if set.
+    - ``watch_globs`` must be an array of strings if set.
+    - ``watch_log_path`` must be a string if set.
+    - ``enable_heartbeat`` must be a boolean if set.
+    """
+    delta = node.get("stdout_percentage_delta")
+    if delta is not None:
+        try:
+            d = float(delta) if not isinstance(delta, (int, float)) else delta
+            if not (0.0 < d <= 1.0):
+                result.warning(
+                    "SANDBOX_STDOUT_DELTA_INVALID",
+                    f"Sandbox agent node '{nid}' stdout_percentage_delta={d} is outside (0, 1]",
+                    node_id=nid,
+                )
+        except (ValueError, TypeError):
+            result.warning(
+                "SANDBOX_STDOUT_DELTA_INVALID",
+                f"Sandbox agent node '{nid}' stdout_percentage_delta is not a valid number",
+                node_id=nid,
+            )
+
+    globs = node.get("watch_globs")
+    if globs is not None and not isinstance(globs, list):
+        result.warning(
+            "SANDBOX_WATCH_GLOBS_INVALID",
+            f"Sandbox agent node '{nid}' watch_globs must be an array of strings",
+            node_id=nid,
+        )
+    elif isinstance(globs, list):
+        for g in globs:
+            if not isinstance(g, str):
+                result.warning(
+                    "SANDBOX_WATCH_GLOBS_INVALID",
+                    f"Sandbox agent node '{nid}' watch_globs entries must be strings",
+                    node_id=nid,
+                )
+                break
+
+    log_path = node.get("watch_log_path")
+    if log_path is not None and not isinstance(log_path, str):
+        result.warning(
+            "SANDBOX_WATCH_LOG_PATH_INVALID",
+            f"Sandbox agent node '{nid}' watch_log_path must be a string",
+            node_id=nid,
+        )
+    elif isinstance(log_path, str) and log_path and not log_path.startswith("/"):
+        result.warning(
+            "SANDBOX_WATCH_LOG_PATH_RELATIVE",
+            f"Sandbox agent node '{nid}' watch_log_path '{log_path}' is not an absolute path",
+            node_id=nid,
+        )
+
+    heartbeat = node.get("enable_heartbeat")
+    if heartbeat is not None and not isinstance(heartbeat, bool):
+        result.warning(
+            "SANDBOX_ENABLE_HEARTBEAT_INVALID",
+            f"Sandbox agent node '{nid}' enable_heartbeat must be a boolean",
+            node_id=nid,
+        )
+
+
 def _check_sandbox_context_files(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
     """Sandbox check 4: context_files paths must be absolute."""
     context_files = node.get("context_files")
@@ -1966,6 +2031,8 @@ class GraphValidator:
         5. env_vars keys avoid reserved prefixes.
         6. output_schema_json has valid JSON Schema structure if present.
         7. stall_timeout_seconds is a positive number, not exceeding timeout_seconds.
+        8. FAR-306 opt-in stall-detector fields (stdout_percentage_delta,
+           watch_globs, watch_log_path, enable_heartbeat) are well-formed.
         """
         _reserved_env_prefixes = ("MODULO_", "OPENCODE_API_KEY")
 
@@ -1981,6 +2048,7 @@ class GraphValidator:
             _check_sandbox_env_vars(node, nid, _reserved_env_prefixes, result)
             _check_sandbox_output_schema(node, nid, result)
             _check_sandbox_loop_intercept(node, nid, result)
+            _check_sandbox_stall_detectors(node, nid, result)
             _check_sandbox_egress(node, nid, result)
             _check_sandbox_resource_limits(node, nid, result)
 

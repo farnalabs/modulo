@@ -3,6 +3,7 @@
 RLS is set to test_org; all ORM changes are rolled back after each test.
 """
 
+import json
 import uuid
 from collections.abc import AsyncGenerator
 
@@ -368,7 +369,7 @@ async def _seed_pipeline_snapshot_run(
                 "id": str(snapshot_id),
                 "pid": str(pipeline_id),
                 "oid": str(org_id),
-                "mb_pins": str([{"model_backend_id": str(backend_id)}]),
+                "mb_pins": json.dumps([{"model_backend_id": str(backend_id)}]),
             },
         )
         await conn.execute(

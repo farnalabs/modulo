@@ -181,15 +181,19 @@ describe('SettingsGuardrailsView', () => {
     expect(wrapper.text()).not.toContain(pattern)
   })
 
-  it('does not fetch or show the kill-switch banner for non-admin users', async () => {
+  it('shows the kill-switch banner for non-admin org members via the org-scoped read', async () => {
     const wrapper = mountView(fakeJwt('viewer'), {
       list: { items: [guardrailItem()], total: 1, page: 1, page_size: 100 },
       killSwitch: { enabled: true },
     })
     await flush()
 
-    expect(wrapper.find('[data-testid="settings-guardrails-kill-switch-banner"]').exists()).toBe(false)
-    expect(getMock).not.toHaveBeenCalled()
+    const banner = wrapper.find('[data-testid="settings-guardrails-kill-switch-banner"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.attributes('role')).toBe('status')
+    expect(banner.attributes('aria-live')).toBe('polite')
+    // Non-admins read the org-scoped endpoint (not the admin-only one).
+    expect(getMock).toHaveBeenCalledWith('/api/v1/org/settings/guardrails/kill-switch')
   })
 
   it('regex detection requires a pattern before POSTing', async () => {

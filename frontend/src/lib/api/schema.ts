@@ -5149,6 +5149,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/org/settings/guardrails/kill-switch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Org Guardrails Kill Switch
+         * @description Read the org's guardrails kill-switch state (any org member).
+         *
+         *     Unlike the admin-only write endpoint (``admin_orgs``), this read is
+         *     available to every authenticated member of the caller's own organisation
+         *     so non-admin members can see whether the kill-switch is ON. It is
+         *     read-only — toggling remains admin-only.
+         */
+        get: operations["get_org_guardrails_kill_switch_api_v1_org_settings_guardrails_kill_switch_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/registry/primitives": {
         parameters: {
             query?: never;
@@ -11520,6 +11545,13 @@ export interface components {
             /** Exported At */
             exported_at: string;
         };
+        /** OrgGuardrailsKillSwitchResponse */
+        OrgGuardrailsKillSwitchResponse: {
+            /** Enabled */
+            enabled: boolean;
+            /** Enabled At */
+            enabled_at: string | null;
+        };
         /** OrgLicenseResponse */
         OrgLicenseResponse: {
             /** Has License */
@@ -11989,6 +12021,32 @@ export interface components {
             } | null;
             /** Description */
             description?: string | null;
+            /**
+             * Stall Timeout Seconds
+             * @description Stall window (seconds) before the idle watchdog treats the agent as stalled.
+             */
+            stall_timeout_seconds?: number | null;
+            /**
+             * Enable Heartbeat
+             * @description Enable the connection-liveness (heartbeat) stall channel.
+             * @default true
+             */
+            enable_heartbeat: boolean;
+            /**
+             * Watch Log Path
+             * @description Log-growth detector: a path inside the sandbox whose growth counts as activity.
+             */
+            watch_log_path?: string | null;
+            /**
+             * Stdout Percentage Delta
+             * @description stdout-delta detector: fraction of new stdout that must differ to count as activity.
+             */
+            stdout_percentage_delta?: number | null;
+            /**
+             * Watch Globs
+             * @description Filesystem detector: globs of sandbox paths whose change counts as activity.
+             */
+            watch_globs?: string[];
         };
         /** PipelineGraphResponse */
         PipelineGraphResponse: {
@@ -27501,6 +27559,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OrgSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_org_guardrails_kill_switch_api_v1_org_settings_guardrails_kill_switch_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgGuardrailsKillSwitchResponse"];
                 };
             };
             /** @description Validation Error */

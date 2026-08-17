@@ -235,7 +235,6 @@ function readJwtPayload(): JwtPayload | null {
   return decodeJwtPayload(getAccessToken()) as JwtPayload | null
 }
 
-const isOrgAdmin = computed(() => readJwtPayload()?.org_role === 'admin')
 const orgId = computed(() => readJwtPayload()?.org_id ?? '')
 
 type PipelineItem = components['schemas']['PipelineResponse']
@@ -270,11 +269,11 @@ const pipelines = computed<PipelineItem[]>(() =>
 const killSwitchEnabled = ref(false)
 
 async function loadKillSwitch() {
-  if (!isOrgAdmin.value || !orgId.value) return
+  if (!orgId.value) return
   try {
     const { get } = useApi()
     const res = await get<{ enabled: boolean }>(
-      `/api/v1/admin/orgs/${orgId.value}/guardrails/kill-switch`,
+      `/api/v1/org/settings/guardrails/kill-switch`,
     )
     killSwitchEnabled.value = Boolean(res?.enabled)
   } catch (e: unknown) {

@@ -14,24 +14,19 @@ def _bdd_auth_admin() -> None:
 
 
 @given("I am not authenticated")
-def _bdd_not_authenticated(request) -> None:
-    """Flag scenario for unauth client."""
-    request.node._unauth = True
+def _bdd_not_authenticated(request, unauth_client) -> None:
+    """Stash the unauth client for _active_client."""
+    request.node._client = unauth_client
 
 
 @when("I request GET /api/v1/admin/runtime-config")
-def _bdd_get_runtime_config(client: TestClient, unauth_client: TestClient, request) -> None:
-    if getattr(request.node, "_unauth", False):
-        resp = unauth_client.get("/api/v1/admin/runtime-config")
-        request.node._resp = resp
-        return
-    if getattr(request.node, "_viewer_auth", False):
-        resp = client.get("/api/v1/admin/runtime-config")
-        request.node._resp = resp
-        return
+def _bdd_get_runtime_config(request) -> None:
+    from tests.bdd.conftest import _active_client
+
+    active = _active_client(request)
     store = get_runtime_config_store()
     items_before = store.get_all()
-    resp = client.get("/api/v1/admin/runtime-config")
+    resp = active.get("/api/v1/admin/runtime-config")
     request.node._resp = resp
     request.node._items_before = items_before
 
