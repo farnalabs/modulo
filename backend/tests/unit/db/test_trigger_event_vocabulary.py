@@ -40,7 +40,8 @@ _MIGRATION_PATH = (
     Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 )
 
-# The chain head after the FAR-223 guardrail_summary migration (0113).
+# The chain head after the FAR-210 feedback correction_state migration (0112),
+# now topped by the FAR-223 PR B guardrail_summary migration (0113).
 _CHAIN_HEAD_MIGRATION_NAME = "0113_guardrail_summary"
 
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
