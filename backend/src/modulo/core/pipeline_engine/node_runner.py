@@ -1408,10 +1408,11 @@ def _build_llm_judge_callable(
             parsed = json.loads(text)
         except (json.JSONDecodeError, ValueError):
             parsed = {"passed": False, "score": 0.0, "detail": text}
+        detail = parsed.get("detail", "")
         return {
             "passed": bool(parsed.get("passed", False)),
             "score": parsed.get("score"),
-            "detail": str(parsed.get("detail", "")),
+            "detail": str(detail) if detail is not None else "",
         }
 
     return _judge
