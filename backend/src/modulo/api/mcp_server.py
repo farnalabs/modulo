@@ -244,22 +244,28 @@ def _sanitize_cost_breakdown(breakdown: Any) -> list[dict[str, Any]]:
     for entry in breakdown:
         if not isinstance(entry, dict):
             continue
-        out: dict[str, Any] = {}
-        for key, value in entry.items():
-            if key not in _MCP_BREAKDOWN_KEYS:
-                continue
-            if key == "basis":
-                out[key] = _sanitize_mcp_basis_value(value)
-            elif isinstance(value, str):
-                out[key] = _sanitize_mcp_string(value)
-            elif isinstance(value, bool) or value is None:
-                out[key] = value
-            elif isinstance(value, (int, float)):
-                out[key] = _clamp_mcp_number(value)
-            else:
-                out[key] = _sanitize_mcp_string(str(value))
+        out = _sanitize_cost_breakdown_entry(entry)
         sanitized.append(out)
     return sanitized
+
+
+def _sanitize_cost_breakdown_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    """Sanitize a single cost-breakdown entry (key-filtering + type-dispatch)."""
+    out: dict[str, Any] = {}
+    for key, value in entry.items():
+        if key not in _MCP_BREAKDOWN_KEYS:
+            continue
+        if key == "basis":
+            out[key] = _sanitize_mcp_basis_value(value)
+        elif isinstance(value, str):
+            out[key] = _sanitize_mcp_string(value)
+        elif isinstance(value, bool) or value is None:
+            out[key] = value
+        elif isinstance(value, (int, float)):
+            out[key] = _clamp_mcp_number(value)
+        else:
+            out[key] = _sanitize_mcp_string(str(value))
+    return out
 
 
 _MCP_COST_ROLLUP_ZERO = Decimal("0.000000")
