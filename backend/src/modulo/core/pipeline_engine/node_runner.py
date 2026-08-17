@@ -2455,7 +2455,7 @@ def make_sandbox_agent_fn(
                         return
                     payload: dict[str, Any] = {
                         "node_id": node_id,
-                        "chunk": "".join(buf),
+                        "chunk": _redact_raw_output("".join(buf)),
                         "ts": int(now * 1000),
                     }
                     buf.clear()
