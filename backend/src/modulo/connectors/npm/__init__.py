@@ -133,8 +133,8 @@ class NpmConnector(ConnectorBase):
         resp = await c.get(_NPM_SEARCH_ENDPOINT, params=params)
         resp.raise_for_status()
         body = resp.json()
-        objects = _safe_records(body, "objects")
-        records = [o.get("package", {}) for o in objects]
+        objects: list[dict[str, Any]] = _safe_records(body, "objects")
+        records = [o.get("package", {}) for o in objects if isinstance(o, dict)]
 
         total = _safe_int(body.get("total"), len(records)) if isinstance(body, dict) else len(records)
         next_cursor = None

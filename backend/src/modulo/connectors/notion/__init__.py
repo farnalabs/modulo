@@ -5,6 +5,7 @@ from typing import Any, cast
 import httpx
 
 from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
+from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -71,8 +72,8 @@ class NotionConnector(ConnectorBase):
             if r.status_code != 200:
                 return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
 
-            body: dict[str, Any] = r.json()
-            results = body.get("results", [])
+            body = r.json()
+            results = _safe_records(body, "results")
             return HealthResult(ok=True, detail=f"{len(results)} users accessible")
         except httpx.HTTPStatusError as exc:
             return HealthResult(
@@ -102,11 +103,11 @@ class NotionConnector(ConnectorBase):
                     r = await client.post("/search", json=payload)
                     r.raise_for_status()
                     body = r.json()
-                    records: list[dict[str, Any]] = body.get("results", [])
+                    records: list[dict[str, Any]] = _safe_records(body, "results")
                     return ConnectorResult(
                         records=records,
                         total=len(records),
-                        next_cursor=_safe_cursor(body.get("next_cursor")),
+                        next_cursor=_safe_cursor(body.get("next_cursor")) if isinstance(body, dict) else None,
                     )
 
                 case "database":
@@ -134,11 +135,11 @@ class NotionConnector(ConnectorBase):
                     r = await client.post(f"/databases/{database_id}/query", json=payload)
                     r.raise_for_status()
                     body = r.json()
-                    records = body.get("results", [])
+                    records = _safe_records(body, "results")
                     return ConnectorResult(
                         records=records,
                         total=len(records),
-                        next_cursor=_safe_cursor(body.get("next_cursor")),
+                        next_cursor=_safe_cursor(body.get("next_cursor")) if isinstance(body, dict) else None,
                     )
 
                 case "page":
@@ -162,11 +163,11 @@ class NotionConnector(ConnectorBase):
                     r = await client.get(f"/blocks/{block_id}/children", params=params)
                     r.raise_for_status()
                     body = r.json()
-                    records = body.get("results", [])
+                    records = _safe_records(body, "results")
                     return ConnectorResult(
                         records=records,
                         total=len(records),
-                        next_cursor=_safe_cursor(body.get("next_cursor")),
+                        next_cursor=_safe_cursor(body.get("next_cursor")) if isinstance(body, dict) else None,
                     )
 
                 case "users":
@@ -178,11 +179,11 @@ class NotionConnector(ConnectorBase):
                     r = await client.get("/users", params=params)
                     r.raise_for_status()
                     body = r.json()
-                    records = body.get("results", [])
+                    records = _safe_records(body, "results")
                     return ConnectorResult(
                         records=records,
                         total=len(records),
-                        next_cursor=_safe_cursor(body.get("next_cursor")),
+                        next_cursor=_safe_cursor(body.get("next_cursor")) if isinstance(body, dict) else None,
                     )
 
                 case _:
