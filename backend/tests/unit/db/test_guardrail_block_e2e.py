@@ -16,6 +16,7 @@ dispatched, one of these assertions would fail.
 
 import uuid
 from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
 from typing import Any, cast
 
 import pytest
@@ -77,8 +78,16 @@ async def session(engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
         yield s
 
 
-async def _seed(session: AsyncSession) -> None:
-    session.add(Organisation(id=_ORG, name="test org", slug="test-org"))
+async def _seed(session: AsyncSession, *, kill_switch: bool = False) -> None:
+    session.add(
+        Organisation(
+            id=_ORG,
+            name="test org",
+            slug="test-org",
+            guardrails_kill_switch=kill_switch,
+            guardrails_kill_switch_at=datetime.now(UTC) if kill_switch else None,
+        )
+    )
     session.add(Account(id=_ACCOUNT, email="admin@example.com", display_name="admin"))
     session.add(Pipeline(id=_PIPELINE, organisation_id=_ORG, name="pipeline", account_id=_ACCOUNT, visibility="org"))
     session.add(
@@ -182,3 +191,24 @@ async def test_block_e2e_clean_input_dispatches_normally(session: AsyncSession):
     # no violation) so the pass is observable but never blocks.
     assert len(rows) == 1
     assert rows[0].passed is False
+
+
+async def test_kill_switch_downgrades_block_to_observe(session: AsyncSession):
+    """Kill-switch ON downgrades a bound block guardrail to observe (shadow-only):
+    a violating payload creates a PENDING run (never blocked, never dispatched as
+    eval_failed) with observe-mode evidence — the run is not created terminal."""
+    await _seed(session, kill_switch=True)
+    await _seed_guardrail(session, name="no-secrets", action="block")
+    run = await _create(session, input_payload={"body": "leak SECRET_ABC12345"})
+
+    # Downgrade: the run is pending, not terminal eval_failed.
+    assert run.status == "pending"
+    assert run.error_code is None
+
+    # Observe-mode evidence: the guardrail is marked observed and the regex
+    # matched (passed=True = violation detected) but no block outcome.
+    rows = (await session.execute(select(EvalResult).where(EvalResult.run_id == run.id))).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].observed is True
+    assert rows[0].passed is True  # regex matched = violation detected in observe mode
+    assert "SECRET_ABC12345" not in (rows[0].detail or "")

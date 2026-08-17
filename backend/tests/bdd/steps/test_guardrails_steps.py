@@ -460,16 +460,21 @@ def bdd_override_rejected(ctx: dict[str, Any]) -> None:
 def _bdd_do_override(run_id: uuid.UUID, input_data: dict[str, Any]) -> Run:
     async def _do() -> Run:
         session = await _bdd_open_session()
-        override_run = await guardrail_override(
-            session,
-            org_id=_ORG_ID,
-            run_id=run_id,
-            input_data=input_data,
-            actor_id=_ACTOR_ID,
-        )
-        await session.commit()
-        await _bdd_close_session(session)
-        return override_run
+        try:
+            override_run = await guardrail_override(
+                session,
+                org_id=_ORG_ID,
+                run_id=run_id,
+                input_data=input_data,
+                actor_id=_ACTOR_ID,
+            )
+            await session.commit()
+            return override_run
+        finally:
+            # Always release the session/connection, even when the override is
+            # rejected (GuardrailOverrideRejectedError) — otherwise the open
+            # transaction leaks a non-checked-in connection to the GC.
+            await _bdd_close_session(session)
 
     import asyncio
 
