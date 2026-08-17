@@ -107,6 +107,7 @@ Correction run spawning, linking, and post-correction evaluation for the Feedbac
 - [x] run_context_overrides can shadow standard _feedback_correction keys — caller responsibility, documented edge case
 
 ## QA History
+- **2026-08-15 — distribute (final-pass sweep C)**: Documented two remaining unchecked behaviours in Known Gaps — the correction run's re-entry through the full eval suite before returning to the HITL gate is not end-to-end verified, and a correction run that fails to start leaves the record in `correcting` with no runtime-failure escalation. Status: partial.
 
 ### 2026-08-15 — Coverage-completion (FAR-233)
 - **Fixed (PRD compliance)**: the `dismiss` review action now sets `dismissed` instead of `resolved`; `_VALID_STATUS_TRANSITIONS` gained `pending`/`escalated` → `dismissed` and `PATCH /status` accepts `dismissed`. This reverts the Round-3 "dismiss → resolved" change, which misread PRD §8.20 (the PRD explicitly lists `dismissed` as a terminal state and says dismiss sets it).
@@ -159,6 +160,8 @@ Correction run spawning, linking, and post-correction evaluation for the Feedbac
 - Verified `run_context_overrides` merge can shadow standard keys (e.g. `producing_node_id`) — documented edge case, not fixed (caller responsibility)
 
 ## Known Gaps
+- **Correction run goes through the full eval suite before reaching the HITL gate again is not end-to-end verified** — the eval-suite re-entry path after a correction run has no full-lifecycle test
+- **Correction run fails to start leaves the record in `correcting`** — if a spawned correction run never starts, the feedback record stays in the `correcting` status with no runtime-failure escalation
 - ~~**"dismiss" action used "resolved" status** — reverted 2026-08-15: the PRD §8.20 actually specifies dismiss sets "dismissed", so the action, state machine, and PATCH /status now use "dismissed". The Round 3 "dismiss → resolved" change was based on a misreading of the PRD.~~
 - No BDD feature files for the correction error paths — only happy-path BDD scenarios exist
 - No integration test for full correction lifecycle: reject → spawn → run → eval → resolve

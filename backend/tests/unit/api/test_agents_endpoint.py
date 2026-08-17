@@ -288,6 +288,37 @@ def test_update_agent_max_input_length(client: TestClient) -> None:
     assert resp.json()["max_input_length"] == 10000
 
 
+def test_update_agent_can_change_input_output_schemas(client: TestClient) -> None:
+    """PATCH can change input/output schema references after create.
+
+    ``AgentUpdate`` exposes ``input_schema_id``/``output_schema_id`` and the
+    update endpoint applies ``model_dump(exclude_unset=True)`` via CRUD, so
+    schemas are NOT fixed at create time — they are re-assignable via PATCH.
+    """
+    agent = _make_agent()
+    new_input = uuid.uuid4()
+    new_output = uuid.uuid4()
+    updated = _make_agent()
+    updated.input_schema_id = new_input
+    updated.output_schema_id = new_output
+    with (
+        patch(f"{_AGENT_PATCH_PREFIX}get_agent", return_value=agent),
+        patch(f"{_AGENT_PATCH_PREFIX}update_agent", return_value=updated),
+        patch(f"{_AGENT_PATCH_PREFIX}set_rls_org"),
+    ):
+        resp = client.patch(
+            f"/api/v1/agents/{_AGENT_ID}",
+            json={
+                **_UPDATE_BODY,
+                "input_schema_id": str(new_input),
+                "output_schema_id": str(new_output),
+            },
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["input_schema_id"] == str(new_input)
+    assert resp.json()["output_schema_id"] == str(new_output)
+
+
 def test_update_agent_patch_returns_200_and_reflects_update(client: TestClient) -> None:
     """Regression: PATCH with a valid body must return 200, not 500.
 

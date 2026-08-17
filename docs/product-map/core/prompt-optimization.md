@@ -121,6 +121,8 @@ LLM-driven prompt improvement from eval failures, with full version history, rol
 - [ ] No circuit breaker if the LLM backend is persistently unavailable
 
 ## Known Gaps
+- No retry/backoff on credential decryption failure in the optimize endpoint — a Fernet decrypt failure is not retried
+- No circuit breaker if the LLM backend is persistently unavailable — each optimize call retries in-process but there is no trip-and-cool-down across requests
 - No unit test for get_prompt_diffs SequenceMatcher diff logic as a standalone function — hash comparison has dedicated tests in `TestGetPromptDiffs` but the diff comparison (SequenceMatcher) logic is inlined in the route handler and only tested via the API endpoint, not as an independent unit
 - No integration test exercising the full optimize→LLM→parse→response chain with a real model backend
 - No performance or regression tests for large version histories (100+ entries)
@@ -130,6 +132,7 @@ LLM-driven prompt improvement from eval failures, with full version history, rol
 - ~~`version` path parameter in `optimize_prompt` is accepted but never validated or used — non-existent version accepted as source~~ **RESOLVED 2026-08-12**: see QA History.
 
 ## QA History
+- **2026-08-15 — distribute (final-pass sweep C)**: Documented two unchecked resilience gaps in Known Gaps — no retry/backoff on credential decryption failure in the optimize endpoint, and no circuit breaker when the LLM backend is persistently unavailable. Status: partial.
 
 ### 2026-08-12 — improve-architecture: validate + use the optimize `version` path param RESOLVED
 - **RESOLVED "version path param accepted but never validated or used"** (`api/routes/agents.py`). `optimize_prompt` accepted any `version` (e.g. `v99` or garbage) and silently optimized from the agent's *current* template.

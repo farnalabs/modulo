@@ -65,7 +65,7 @@ In-app notification panel, SSE streaming, dashboard panel, dismiss/review-later 
 - [x] Dismiss all with no notifications is no-op
 - [ ] SSE connection with no new notifications — no heartbeat mechanism
 - [ ] Notification preferences return 501 — not implemented
-- [ ] `expires_at` not exposed in response (fixed per QA history)
+- [x] `expires_at` exposed in response — verified 2026-08-15: `in_app_notifications.py:111` sets `expires_at=n.expires_at.isoformat() if n.expires_at else None` in the notification response schema (no dedicated unit assertion yet)
 
 ## Security
 
@@ -75,3 +75,12 @@ In-app notification panel, SSE streaming, dashboard panel, dismiss/review-later 
 - [ ] No rate limiting on SSE connections
 
 ## Known Gaps
+
+- **BDD steps are stubs — no runtime error-path verification** — the in-app-notifications BDD feature steps are stubs; SSE/runtime error paths are not end-to-end verified in Gherkin.
+- **No SSE heartbeat** — an SSE connection with no new notifications sends no heartbeat/ping; idle connections rely on client-side reconnect only.
+- **Notification preferences return 501 — not implemented** — no preferences endpoint exists.
+- **No rate limiting on SSE connections** — an authenticated client can open unbounded SSE connections. Not PRD-mandated; a hardening item.
+
+## QA History
+
+- **2026-08-15 — distribute (final-pass sweep C)**: Verified `expires_at` is now exposed in the notification response (code `in_app_notifications.py:111`) and marked `[x]` (the old "not exposed" claim was stale). Documented the 4 remaining unchecked behaviours as genuine non-PRD gaps in the previously-empty Known Gaps section: stub BDD error paths, no SSE heartbeat, preferences endpoint 501 (not implemented), and no SSE rate limiting. No code changes — `in_app_notifications.py` is outside this sweep's scope. Status: partial.

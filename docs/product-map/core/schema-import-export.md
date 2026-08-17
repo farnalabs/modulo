@@ -61,6 +61,15 @@ Parse raw JSON Schema content and extract fields for use in the schema builder U
 
 ## Known Gaps
 
+- **No size limit on imported schemas** — a very large raw JSON Schema payload is accepted and parsed in full; no byte/size cap is enforced before parsing.
+- **Draft 2020-12 validation rejects valid older drafts** — the import validates against the 2020-12 metaschema, so a structurally-valid draft-07/2019-09 schema can be rejected. Not PRD-mandated; a compatibility gap.
+- **`$ref` to external URLs is not resolved** — external references are stored as-is and not dereferenced/resolved on import.
+- **Imported schema content not sanitised** — `title`/`description` fields from imported schemas are stored verbatim and later rendered in the frontend, a potential XSS vector. Not PRD-mandated; a hardening item.
+
 ### 2026-07-12 — Round 3 (systemic sweep: B904, exc_info, dead code)
 - No code issues found in entry code paths (schemas.py clean from earlier passes)
 - Frontmatter valid; Known Gaps remain accurate
+
+## QA History
+
+- **2026-08-15 — distribute (final-pass sweep C)**: Verified the 4 previously-unchecked behaviours are genuine, non-PRD gaps and documented them in Known Gaps: no import size limit, draft-2020-12 rejection of older drafts, unresolved external `$ref`s, and unsanitised imported `title`/`description` (potential XSS). No code changes — `schemas.py` is outside this sweep's scope. Status: partial.

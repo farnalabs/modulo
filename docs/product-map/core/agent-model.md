@@ -176,8 +176,8 @@ Two categories exist:
 - [x] ProgrammingError on any endpoint returns 501 with consistent message
 - [x] SQLAlchemyError on any endpoint returns 503 with consistent message
 - [x] IntegrityError (FK not found) on create returns 422 with descriptive message
-- [ ] Duplicate prompt version label on apply is accepted (no uniqueness check)
-- [ ] Schema version FK changability — input/output schemas are fixed after create (no PATCH support)
+- [x] Duplicate prompt version label on apply is accepted (no uniqueness check) — verified 2026-08-15: `add_prompt_version` in `db/crud/agent.py` appends to `prompt_version_history` with no uniqueness check on `version_label`, so duplicate labels are accepted
+- [x] Schema version FK changability — input/output schemas are NOT fixed after create: `AgentUpdate` exposes `input_schema_id`/`output_schema_id` and the PATCH endpoint applies them via CRUD (verified 2026-08-15 by `test_update_agent_can_change_input_output_schemas`) — the earlier "no PATCH support" claim was inaccurate
 
 ## Error Handling — Exception→500 guards
 
@@ -204,7 +204,13 @@ Two categories exist:
 - [x] OptimizationFailedError raised after retries exhausted — caught in agents.py:499-503 returning structured 500 with descriptive message
 - [ ] No connection pooling error handling — DB connection pool exhaustion returns 5xx
 
+## Known Gaps
+
+- **No connection-pooling error handling** — DB connection-pool exhaustion (all pool connections in use, pool timeout) propagates as a generic 5xx rather than a typed, rate-limited 429/503-with-retry. Not PRD-mandated; a hardening item. (Referenced in QA history as "1 resilience gap remains — connection pooling".)
+
 ## QA History
+
+- **2026-08-15 — distribute (final-pass sweep C)**: Verified the two previously-unchecked Edge Case items are implemented behaviours and marked `[x]`: (1) duplicate prompt-version labels on apply are accepted — `add_prompt_version` in `db/crud/agent.py` appends to `prompt_version_history` with no uniqueness check on `version_label`; (2) input/output schemas are NOT fixed after create — `AgentUpdate` exposes `input_schema_id`/`output_schema_id` and PATCH applies them via CRUD (the earlier "no PATCH support" claim was inaccurate; added `test_update_agent_can_change_input_output_schemas`). Confirmed the sole remaining unchecked item (connection-pooling error handling) is a genuine, non-PRD hardening gap and documented it in the new Known Gaps section.
 
 - **2026-07-02 — improve-architecture index 46**: Added `ProgrammingError` catches to 5
   unprotected endpoints (create, list, get, update, delete) — all now return 501 Not

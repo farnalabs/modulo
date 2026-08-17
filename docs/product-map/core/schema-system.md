@@ -183,6 +183,12 @@ CRUD for Schema and SchemaVersion, JSON Schema validation, import, migration, an
 
 ### Known Gaps
 
+- **No `except Exception` catch-all on DB routes** — Python-level errors (TypeError, ValueError) on schema-inference DB routes propagate to CatchAllMiddleware as an opaque 500
+- **No timeout on `ModelBackendHub.initialise` for infer/generate endpoints**
+- **No retry logic for connector sampling failures**
+- **No retry logic for LLM inference/generation failures**
+- **No connection pooling for the model backend hub in schema inference**
+- **No circuit breaker for external connector sampling**
 - **No `force=true` BDD scenario verified end-to-end** — unit test exists in `test_schema_programming_error.py` but no Gherkin `.feature` scenario
 - **No graph validation warning for deprecated schemas** — no alert when a pipeline uses a deprecated schema
 - **No admin UI listing pipelines pinned to deprecated schemas**
@@ -196,6 +202,7 @@ CRUD for Schema and SchemaVersion, JSON Schema validation, import, migration, an
 - **Deprecation warning in schema picker**: PRD §8.3 specifies deprecated schema versions should show a deprecation badge in the picker — not yet implemented
 
 ### QA History
+- **2026-08-15 — distribute (final-pass sweep C)**: Documented six unchecked resilience gaps in Known Gaps — no `except Exception` catch-all on schema-inference DB routes, no timeout on `ModelBackendHub.initialise`, no retry for connector sampling or LLM inference/generation failures, no model-backend connection pooling, and no circuit breaker for external connector sampling. Status: partial.
 
 - 2026-07-02: Cross-cutting QA — enriched product map from stub to partial, expanded deletion protection to check PipelineSnapshot (schema_pins_json) and LibraryPrimitive (content_json) references, added force=true parameter to delete_schema and delete endpoint, added unit tests for force=true deletion scenario.
 - 2026-07-06: Cross-cutting QA — verified behaviours match code (force delete, deprecation endpoint, ProgrammingError handling on all routes), cleaned up resolved known gaps, added missing PRD gaps (pinned-version edit block, deprecation badge), created website docs stub at `Website/modulo-website/src/docs/schemas/core-schema-system.md`.
