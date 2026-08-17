@@ -473,13 +473,17 @@ def _bdd_remove_user_from_team(request: Any, name: str, team: str, ctx: dict[str
             resp = _active_client(request, client).delete(f"/api/v1/teams/{uuid.uuid4()}/members/{uuid.uuid4()}")
         _store_response(request, ctx, resp)
         return
-    membership = _make_mock_membership(team_mock.id, user_id, "viewer")
+    team_id = team_mock.get("id") if isinstance(team_mock, dict) else team_mock.id
+    membership = _make_mock_membership(team_id, user_id, "viewer")
     with (
         patch("modulo.api.routes.teams.get_membership", new_callable=AsyncMock, return_value=membership),
         patch("modulo.api.routes.teams.remove_team_member", new_callable=AsyncMock),
     ):
-        resp = _active_client(request, client).delete(f"/api/v1/teams/{team_mock.id}/members/{membership.id}")
+        resp = _active_client(request, client).delete(f"/api/v1/teams/{team_id}/members/{membership.id}")
     _store_response(request, ctx, resp)
+    # Reflect the removal in local state so downstream steps (e.g. stale-JWT
+    # team-scoped access checks) see the user no longer a member.
+    ctx.setdefault("memberships", {}).pop(name, None)
 
 
 @then(parsers.parse('the response contains a team with name "{name}"'))
