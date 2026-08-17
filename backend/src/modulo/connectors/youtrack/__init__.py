@@ -18,6 +18,21 @@ from modulo.connectors.base import (
 type _DICT_STR_ANY = dict[str, Any]
 
 
+def _safe_top_level_records(body: Any) -> list[dict[str, Any]]:
+    """Return *body* as a page list, or an empty page for a corrupt body.
+
+    YouTrack's list endpoints (`/issues`, `/admin/projects`, `/users`) return a
+    top-level JSON array. A corrupt or hostile response may place anything
+    there — an object, a string, a number, ``null``. Such a body would crash
+    downstream list iteration, so only an actual list is treated as records and
+    everything else degrades to an empty page (mirrors the ``safe_records``
+    hardening lens applied to the other connectors).
+    """
+    if isinstance(body, list):
+        return [item for item in body if isinstance(item, dict)]
+    return []
+
+
 class YouTrackConnector(ConnectorBase):
     """Read/write YouTrack issues, projects, users via the REST API.
 
@@ -88,7 +103,7 @@ class YouTrackConnector(ConnectorBase):
                 async with self._client() as client:
                     r = await client.get("/issues", params=params)
                     r.raise_for_status()
-                    records: list[dict[str, Any]] = r.json()
+                    records = _safe_top_level_records(r.json())
                 return ConnectorResult(records=records, total=len(records))
 
             case "issue":
@@ -108,7 +123,7 @@ class YouTrackConnector(ConnectorBase):
                 async with self._client() as client:
                     r = await client.get("/admin/projects")
                     r.raise_for_status()
-                    records = r.json()
+                    records = _safe_top_level_records(r.json())
                 return ConnectorResult(records=records, total=len(records))
 
             case "project":
@@ -128,7 +143,7 @@ class YouTrackConnector(ConnectorBase):
                 async with self._client() as client:
                     r = await client.get("/users", params=params)
                     r.raise_for_status()
-                    records = r.json()
+                    records = _safe_top_level_records(r.json())
                 return ConnectorResult(records=records, total=len(records))
 
             case _:

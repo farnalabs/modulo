@@ -307,6 +307,33 @@ async def test_write_invalid_resource(connector: CodeClimateConnector) -> None:
 
 
 @respx.mock
+async def test_query_repos_non_list_data_no_crash(connector: CodeClimateConnector) -> None:
+    """A corrupt body placing a non-list in ``data`` must fall back to an empty list."""
+    respx.get(f"{_BASE}/repos").mock(return_value=httpx.Response(200, json={"data": "corrupt"}))
+    result = await connector.query(ConnectorQuery(resource="repos"))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_repos_non_dict_body_no_crash(connector: CodeClimateConnector) -> None:
+    """A corrupt/hostile non-dict body must degrade to an empty page."""
+    respx.get(f"{_BASE}/repos").mock(return_value=httpx.Response(200, json=["not-a-dict"]))
+    result = await connector.query(ConnectorQuery(resource="repos"))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_test_reports_missing_data_no_crash(connector: CodeClimateConnector) -> None:
+    """A missing ``data`` key must behave like an empty page for list resources."""
+    respx.get(f"{_BASE}/repos/r1/test_reports").mock(return_value=httpx.Response(200, json={}))
+    result = await connector.query(ConnectorQuery(resource="test_reports", filters={"repo_id": "r1"}))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
 async def test_query_repos_with_http_401(connector: CodeClimateConnector) -> None:
     respx.get(f"{_BASE}/repos").mock(return_value=httpx.Response(401, text="Unauthorized"))
     with pytest.raises(httpx.HTTPStatusError):

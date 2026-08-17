@@ -132,87 +132,11 @@ async def export_pipeline_bundle(
         if pipeline is None:
             raise ValueError(f"Pipeline {pipeline_id} not found")
 
-        agent_ids: set[uuid.UUID] = set()
-        schema_ids: set[uuid.UUID] = set()
-        model_backend_ids: set[uuid.UUID] = set()
+        agent_ids, schema_ids, model_backend_ids = _collect_referenced_ids(pipeline.graph_nodes_json)
 
-        if pipeline.graph_nodes_json:
-            for node in pipeline.graph_nodes_json:
-                agent_id_str = node.get("agent_id")
-                if agent_id_str:
-                    try:
-                        agent_id = _safe_uuid(agent_id_str, "node.agent_id")
-                    except ValueError:
-                        logger.warning("Skipping node with invalid agent_id: %s", agent_id_str)
-                        continue
-                    agent_ids.add(agent_id)
-
-                schema_id_str = node.get("output_schema_id")
-                if schema_id_str:
-                    try:
-                        schema_ids.add(_safe_uuid(schema_id_str, "node.output_schema_id"))
-                    except ValueError:
-                        logger.warning("Skipping node with invalid output_schema_id: %s", schema_id_str)
-
-        agents_list: list[dict[str, Any]] = []
-        if agent_ids:
-            agent_result = await session.execute(select(Agent).where(Agent.id.in_(agent_ids)))
-            agents = list(agent_result.scalars())
-            for a in agents:
-                agents_list.append(
-                    {
-                        "id": str(a.id),
-                        "name": a.name,
-                        "description": a.description,
-                        "input_schema_id": str(a.input_schema_id) if a.input_schema_id else None,
-                        "input_schema_version": a.input_schema_version or DEFAULT_SCHEMA_VERSION,
-                        "output_schema_id": str(a.output_schema_id) if a.output_schema_id else None,
-                        "output_schema_version": a.output_schema_version or DEFAULT_SCHEMA_VERSION,
-                        "prompt_template": a.prompt_template,
-                        "model_backend_id": str(a.model_backend_id) if a.model_backend_id else None,
-                        "connector_type_refs": list(a.connector_type_refs or []),
-                        "evals": list(a.evals or []),
-                        "retry_policy": dict(a.retry_policy or {}),
-                        "token_budget": a.token_budget,
-                    }
-                )
-                if a.input_schema_id:
-                    schema_ids.add(a.input_schema_id)
-                if a.output_schema_id:
-                    schema_ids.add(a.output_schema_id)
-                if a.model_backend_id:
-                    model_backend_ids.add(a.model_backend_id)
-
-        schemas_list: list[dict[str, Any]] = []
-        if schema_ids:
-            schema_result = await session.execute(select(Schema).where(Schema.id.in_(schema_ids)))
-            schemas = list(schema_result.scalars())
-            for s in schemas:
-                latest_version = await _get_latest_published_version(session, s.id)
-                schemas_list.append(
-                    {
-                        "id": str(s.id),
-                        "name": s.name,
-                        "description": s.description,
-                        "abstract_name": s.abstract_name,
-                        "latest_version": latest_version.version if latest_version else None,
-                        "definition_json": latest_version.definition_json if latest_version else None,
-                    }
-                )
-
-        model_backends_list: list[dict[str, Any]] = []
-        if model_backend_ids:
-            mb_result = await session.execute(select(ModelBackend).where(ModelBackend.id.in_(model_backend_ids)))
-            backends = list(mb_result.scalars())
-            model_backends_list = [
-                {
-                    "id": str(b.id),
-                    "name": b.name,
-                    "provider": b.provider,
-                    "model_id": b.model_id,
-                }
-                for b in backends
-            ]
+        agents_list = await _build_agents_list(session, agent_ids, schema_ids, model_backend_ids)
+        schemas_list = await _build_schemas_list(session, schema_ids)
+        model_backends_list = await _build_model_backends_list(session, model_backend_ids)
 
         # Edges
         edge_result = await session.execute(
@@ -260,6 +184,114 @@ async def export_pipeline_bundle(
     return buf.getvalue()
 
 
+def _collect_referenced_ids(
+    graph_nodes_json: list[dict[str, Any]] | None,
+) -> tuple[set[uuid.UUID], set[uuid.UUID], set[uuid.UUID]]:
+    """Collect agent/schema/model-backend ids referenced by the graph nodes."""
+    agent_ids: set[uuid.UUID] = set()
+    schema_ids: set[uuid.UUID] = set()
+    model_backend_ids: set[uuid.UUID] = set()
+
+    if not graph_nodes_json:
+        return agent_ids, schema_ids, model_backend_ids
+
+    for node in graph_nodes_json:
+        agent_id_str = node.get("agent_id")
+        if agent_id_str:
+            try:
+                agent_ids.add(_safe_uuid(agent_id_str, "node.agent_id"))
+            except ValueError:
+                logger.warning("Skipping node with invalid agent_id: %s", agent_id_str)
+                continue
+
+        schema_id_str = node.get("output_schema_id")
+        if schema_id_str:
+            try:
+                schema_ids.add(_safe_uuid(schema_id_str, "node.output_schema_id"))
+            except ValueError:
+                logger.warning("Skipping node with invalid output_schema_id: %s", schema_id_str)
+
+    return agent_ids, schema_ids, model_backend_ids
+
+
+async def _build_agents_list(
+    session: AsyncSession,
+    agent_ids: set[uuid.UUID],
+    schema_ids: set[uuid.UUID],
+    model_backend_ids: set[uuid.UUID],
+) -> list[dict[str, Any]]:
+    """Build the bundle's agents section, extending the referenced-id sets."""
+    agents_list: list[dict[str, Any]] = []
+    if not agent_ids:
+        return agents_list
+    agent_result = await session.execute(select(Agent).where(Agent.id.in_(agent_ids)))
+    agents = list(agent_result.scalars())
+    for a in agents:
+        agents_list.append(
+            {
+                "id": str(a.id),
+                "name": a.name,
+                "description": a.description,
+                "input_schema_id": str(a.input_schema_id) if a.input_schema_id else None,
+                "input_schema_version": a.input_schema_version or DEFAULT_SCHEMA_VERSION,
+                "output_schema_id": str(a.output_schema_id) if a.output_schema_id else None,
+                "output_schema_version": a.output_schema_version or DEFAULT_SCHEMA_VERSION,
+                "prompt_template": a.prompt_template,
+                "model_backend_id": str(a.model_backend_id) if a.model_backend_id else None,
+                "connector_type_refs": list(a.connector_type_refs or []),
+                "evals": list(a.evals or []),
+                "retry_policy": dict(a.retry_policy or {}),
+                "token_budget": a.token_budget,
+            }
+        )
+        if a.input_schema_id:
+            schema_ids.add(a.input_schema_id)
+        if a.output_schema_id:
+            schema_ids.add(a.output_schema_id)
+        if a.model_backend_id:
+            model_backend_ids.add(a.model_backend_id)
+    return agents_list
+
+
+async def _build_schemas_list(session: AsyncSession, schema_ids: set[uuid.UUID]) -> list[dict[str, Any]]:
+    """Build the bundle's schemas section from the referenced schema ids."""
+    schemas_list: list[dict[str, Any]] = []
+    if not schema_ids:
+        return schemas_list
+    schema_result = await session.execute(select(Schema).where(Schema.id.in_(schema_ids)))
+    schemas = list(schema_result.scalars())
+    for s in schemas:
+        latest_version = await _get_latest_published_version(session, s.id)
+        schemas_list.append(
+            {
+                "id": str(s.id),
+                "name": s.name,
+                "description": s.description,
+                "abstract_name": s.abstract_name,
+                "latest_version": latest_version.version if latest_version else None,
+                "definition_json": latest_version.definition_json if latest_version else None,
+            }
+        )
+    return schemas_list
+
+
+async def _build_model_backends_list(session: AsyncSession, model_backend_ids: set[uuid.UUID]) -> list[dict[str, Any]]:
+    """Build the bundle's model-backends section from the referenced ids."""
+    if not model_backend_ids:
+        return []
+    mb_result = await session.execute(select(ModelBackend).where(ModelBackend.id.in_(model_backend_ids)))
+    backends = list(mb_result.scalars())
+    return [
+        {
+            "id": str(b.id),
+            "name": b.name,
+            "provider": b.provider,
+            "model_id": b.model_id,
+        }
+        for b in backends
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Export v2 — pipeline_id → YAML string
 # ---------------------------------------------------------------------------
@@ -281,68 +313,10 @@ async def export_pipeline_bundle_v2(
         if pipeline is None:
             raise ValueError(f"Pipeline {pipeline_id} not found")
 
-        agent_ids: set[uuid.UUID] = set()
-        schema_ids: set[uuid.UUID] = set()
+        agent_ids, schema_ids = _collect_agent_and_schema_ids(pipeline.graph_nodes_json)
 
-        if pipeline.graph_nodes_json:
-            for node in pipeline.graph_nodes_json:
-                agent_id_str = node.get("agent_id")
-                if agent_id_str:
-                    try:
-                        agent_id = _safe_uuid(agent_id_str, "node.agent_id")
-                    except ValueError:
-                        logger.warning("Skipping node with invalid agent_id: %s", agent_id_str)
-                        continue
-                    agent_ids.add(agent_id)
-
-                schema_id_str = node.get("output_schema_id")
-                if schema_id_str:
-                    try:
-                        schema_ids.add(_safe_uuid(schema_id_str, "node.output_schema_id"))
-                    except ValueError:
-                        logger.warning("Skipping node with invalid output_schema_id: %s", schema_id_str)
-
-        agents_list: list[dict[str, Any]] = []
-        if agent_ids:
-            agent_result = await session.execute(select(Agent).where(Agent.id.in_(agent_ids)))
-            agents = list(agent_result.scalars())
-            for a in agents:
-                agent_entry: dict[str, Any] = {
-                    "id": str(a.id),
-                    "name": a.name,
-                    "description": a.description,
-                    "input_schema": str(a.input_schema_id) if a.input_schema_id else None,
-                    "output_schema": str(a.output_schema_id) if a.output_schema_id else None,
-                    "prompt_template": a.prompt_template,
-                    "template_id": a.template_id,
-                    "agent_command": a.agent_command,
-                    "connector_type_refs": list(a.connector_type_refs or []),
-                    "evals": list(a.evals or []),
-                    "retry_policy": dict(a.retry_policy or {}),
-                    "token_budget": a.token_budget,
-                }
-                agents_list.append(agent_entry)
-                if a.input_schema_id:
-                    schema_ids.add(a.input_schema_id)
-                if a.output_schema_id:
-                    schema_ids.add(a.output_schema_id)
-
-        schemas_list: list[dict[str, Any]] = []
-        if schema_ids:
-            schema_result = await session.execute(select(Schema).where(Schema.id.in_(schema_ids)))
-            schemas = list(schema_result.scalars())
-            for s in schemas:
-                latest_version = await _get_latest_published_version(session, s.id)
-                schemas_list.append(
-                    {
-                        "id": str(s.id),
-                        "name": s.name,
-                        "description": s.description,
-                        "abstract_name": s.abstract_name,
-                        "latest_version": latest_version.version if latest_version else None,
-                        "definition_json": latest_version.definition_json if latest_version else None,
-                    }
-                )
+        agents_list = await _build_v2_agents_list(session, agent_ids, schema_ids)
+        schemas_list = await _build_schemas_list(session, schema_ids)
 
         # Edges
         edge_result = await session.execute(
@@ -359,45 +333,9 @@ async def export_pipeline_bundle_v2(
             for e in edges
         ]
 
-        # Triggers
-        try:
-            trig_stmt = select(Trigger).where(Trigger.pipeline_id == pipeline_id)
-            triggers = (await session.execute(trig_stmt)).scalars().all()
-            triggers_list = [
-                {
-                    "trigger_type": t.trigger_type,
-                    "config": dict(t.config_json or {}),
-                    "active": t.active,
-                }
-                for t in triggers
-            ]
-        except Exception:
-            triggers_list = []
-            logger.warning(
-                "Could not fetch triggers for v2 bundle export (table may not exist yet)",
-                exc_info=True,
-            )
-
-        # Owner team name
-        owner_team_name = None
-        if pipeline.owner_team_id:
-            try:
-                team_result = await session.execute(select(Team).where(Team.id == pipeline.owner_team_id))
-                team = team_result.scalar_one_or_none()
-                if team:
-                    owner_team_name = team.name
-            except Exception:
-                logger.warning("Could not resolve owner_team for v2 bundle export", exc_info=True)
-
-        # Creator email for author field
-        author = str(pipeline.account_id)
-        try:
-            acct_result = await session.execute(select(Account).where(Account.id == pipeline.account_id))
-            creator = acct_result.scalar_one_or_none()
-            if creator:
-                author = creator.email
-        except Exception:
-            logger.warning("Could not resolve creator email for v2 bundle export", exc_info=True)
+        triggers_list = await _fetch_v2_triggers(session, pipeline_id)
+        owner_team_name = await _resolve_owner_team_name(session, pipeline.owner_team_id)
+        author = await _resolve_author_email(session, pipeline)
 
         # Collect required connector types from agent connector_type_refs
         connector_type_refs_set: set[str] = set()
@@ -453,6 +391,112 @@ async def export_pipeline_bundle_v2(
     return yaml_str
 
 
+def _collect_agent_and_schema_ids(
+    graph_nodes_json: list[dict[str, Any]] | None,
+) -> tuple[set[uuid.UUID], set[uuid.UUID]]:
+    """Collect agent + schema ids referenced by the v2 bundle graph nodes."""
+    agent_ids: set[uuid.UUID] = set()
+    schema_ids: set[uuid.UUID] = set()
+    if not graph_nodes_json:
+        return agent_ids, schema_ids
+    for node in graph_nodes_json:
+        agent_id_str = node.get("agent_id")
+        if agent_id_str:
+            try:
+                agent_ids.add(_safe_uuid(agent_id_str, "node.agent_id"))
+            except ValueError:
+                logger.warning("Skipping node with invalid agent_id: %s", agent_id_str)
+                continue
+        schema_id_str = node.get("output_schema_id")
+        if schema_id_str:
+            try:
+                schema_ids.add(_safe_uuid(schema_id_str, "node.output_schema_id"))
+            except ValueError:
+                logger.warning("Skipping node with invalid output_schema_id: %s", schema_id_str)
+    return agent_ids, schema_ids
+
+
+async def _build_v2_agents_list(
+    session: AsyncSession,
+    agent_ids: set[uuid.UUID],
+    schema_ids: set[uuid.UUID],
+) -> list[dict[str, Any]]:
+    """Build the v2 bundle's agents section, extending the schema-id set."""
+    agents_list: list[dict[str, Any]] = []
+    if not agent_ids:
+        return agents_list
+    agent_result = await session.execute(select(Agent).where(Agent.id.in_(agent_ids)))
+    agents = list(agent_result.scalars())
+    for a in agents:
+        agent_entry: dict[str, Any] = {
+            "id": str(a.id),
+            "name": a.name,
+            "description": a.description,
+            "input_schema": str(a.input_schema_id) if a.input_schema_id else None,
+            "output_schema": str(a.output_schema_id) if a.output_schema_id else None,
+            "prompt_template": a.prompt_template,
+            "template_id": a.template_id,
+            "agent_command": a.agent_command,
+            "connector_type_refs": list(a.connector_type_refs or []),
+            "evals": list(a.evals or []),
+            "retry_policy": dict(a.retry_policy or {}),
+            "token_budget": a.token_budget,
+        }
+        agents_list.append(agent_entry)
+        if a.input_schema_id:
+            schema_ids.add(a.input_schema_id)
+        if a.output_schema_id:
+            schema_ids.add(a.output_schema_id)
+    return agents_list
+
+
+async def _fetch_v2_triggers(session: AsyncSession, pipeline_id: uuid.UUID) -> list[dict[str, Any]]:
+    """Fetch the pipeline's triggers for the v2 bundle (best-effort)."""
+    try:
+        trig_stmt = select(Trigger).where(Trigger.pipeline_id == pipeline_id)
+        triggers = (await session.execute(trig_stmt)).scalars().all()
+        return [
+            {
+                "trigger_type": t.trigger_type,
+                "config": dict(t.config_json or {}),
+                "active": t.active,
+            }
+            for t in triggers
+        ]
+    except Exception:
+        logger.warning(
+            "Could not fetch triggers for v2 bundle export (table may not exist yet)",
+            exc_info=True,
+        )
+        return []
+
+
+async def _resolve_owner_team_name(session: AsyncSession, owner_team_id: uuid.UUID | None) -> str | None:
+    """Resolve the pipeline's owner-team name (best-effort)."""
+    if not owner_team_id:
+        return None
+    try:
+        team_result = await session.execute(select(Team).where(Team.id == owner_team_id))
+        team = team_result.scalar_one_or_none()
+        return team.name if team else None
+    except Exception:
+        logger.warning("Could not resolve owner_team for v2 bundle export", exc_info=True)
+        return None
+
+
+async def _resolve_author_email(session: AsyncSession, pipeline: Pipeline) -> str:
+    """Resolve the pipeline's creator email for the v2 bundle author field."""
+    author = str(pipeline.account_id)
+    try:
+        acct_result = await session.execute(select(Account).where(Account.id == pipeline.account_id))
+        creator = acct_result.scalar_one_or_none()
+        if creator:
+            author = creator.email
+    except Exception:
+        logger.warning("Could not resolve creator email for v2 bundle export", exc_info=True)
+    return author
+
+
 # ---------------------------------------------------------------------------
 # Import helpers — resolve references from a bundle to local equivalents
 # ---------------------------------------------------------------------------
@@ -480,59 +524,15 @@ async def resolve_schema(
     try:
         # First try abstract_name match
         if abstract_name:
-            stmt = (
-                select(Schema)
-                .where(
-                    Schema.organisation_id == org_id,
-                    Schema.abstract_name == abstract_name,
-                )
-                .order_by(Schema.created_at.desc())
-            )
-            result = await session.execute(stmt)
-            schema = result.scalar_one_or_none()
-            if schema is not None:
-                sv = await _get_latest_published_version(session, schema.id)
-                return {
-                    "schema_id": str(schema.id),
-                    "version": sv.version if sv else DEFAULT_SCHEMA_VERSION,
-                    "warning": None,
-                }
+            matched = await _resolve_schema_by_abstract_name(session, org_id, abstract_name)
+            if matched is not None:
+                return matched
 
         # Try matching by same definition structure — batch load all schema versions
         if definition:
-            all_schemas = (
-                (await session.execute(select(Schema).where(Schema.organisation_id == org_id))).scalars().all()
-            )
-            schema_ids = [s.id for s in all_schemas]
-            if schema_ids:
-                all_svs = (
-                    (
-                        await session.execute(
-                            select(SchemaVersion)
-                            .where(
-                                SchemaVersion.schema_id.in_(schema_ids),
-                                SchemaVersion.published.is_(True),
-                            )
-                            .order_by(SchemaVersion.schema_id, SchemaVersion.version_number.desc())
-                        )
-                    )
-                    .scalars()
-                    .all()
-                )
-
-                published: dict[uuid.UUID, SchemaVersion] = {}
-                for sv in all_svs:
-                    if sv.schema_id not in published:
-                        published[sv.schema_id] = sv
-
-                for s in all_schemas:
-                    sv = published.get(s.id)
-                    if sv and sv.definition_json == definition:
-                        return {
-                            "schema_id": str(s.id),
-                            "version": sv.version,
-                            "warning": None,
-                        }
+            matched = await _resolve_schema_by_definition(session, org_id, definition)
+            if matched is not None:
+                return matched
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -544,6 +544,73 @@ async def resolve_schema(
         "version": None,
         "warning": f"Schema '{name}' not found locally. It will need to be created.",
     }
+
+
+async def _resolve_schema_by_abstract_name(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    abstract_name: str,
+) -> dict[str, Any] | None:
+    """Match an exported schema by its abstract_name (most specific)."""
+    stmt = (
+        select(Schema)
+        .where(
+            Schema.organisation_id == org_id,
+            Schema.abstract_name == abstract_name,
+        )
+        .order_by(Schema.created_at.desc())
+    )
+    result = await session.execute(stmt)
+    schema = result.scalar_one_or_none()
+    if schema is None:
+        return None
+    sv = await _get_latest_published_version(session, schema.id)
+    return {
+        "schema_id": str(schema.id),
+        "version": sv.version if sv else DEFAULT_SCHEMA_VERSION,
+        "warning": None,
+    }
+
+
+async def _resolve_schema_by_definition(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    definition: Any,
+) -> dict[str, Any] | None:
+    """Match an exported schema by its published definition JSON structure."""
+    all_schemas = (await session.execute(select(Schema).where(Schema.organisation_id == org_id))).scalars().all()
+    schema_ids = [s.id for s in all_schemas]
+    if not schema_ids:
+        return None
+    all_svs = (
+        (
+            await session.execute(
+                select(SchemaVersion)
+                .where(
+                    SchemaVersion.schema_id.in_(schema_ids),
+                    SchemaVersion.published.is_(True),
+                )
+                .order_by(SchemaVersion.schema_id, SchemaVersion.version_number.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    published: dict[uuid.UUID, SchemaVersion] = {}
+    for sv in all_svs:
+        if sv.schema_id not in published:
+            published[sv.schema_id] = sv
+
+    for s in all_schemas:
+        candidate_sv = published.get(s.id)
+        if candidate_sv and candidate_sv.definition_json == definition:
+            return {
+                "schema_id": str(s.id),
+                "version": candidate_sv.version,
+                "warning": None,
+            }
+    return None
 
 
 async def resolve_connector_type(
@@ -799,7 +866,125 @@ async def materialize_import(
         len(edges_data),
     )
 
-    # --- Step 1: Create any schemas that don't exist locally ---
+    schema_id_map, schema_version_map = await _materialize_schemas(
+        session,
+        org_id,
+        created_by,
+        schemas_data,
+        schema_overrides,
+        sv_overrides,
+        warnings,
+    )
+
+    agent_id_map = await _materialize_agents(
+        session,
+        org_id,
+        created_by,
+        agents_data,
+        existing_agent_names,
+        schema_id_map,
+        schema_version_map,
+        mb_overrides,
+        warnings,
+    )
+
+    raw_graph_nodes = pipeline_info.get("graph_nodes_json")
+    if isinstance(raw_graph_nodes, list):
+        graph_nodes = raw_graph_nodes
+    else:
+        graph_nodes = []
+        warnings.append("Pipeline 'graph_nodes_json' is not a list; nodes will be empty.")
+
+    graph_nodes = _rewire_graph_nodes(graph_nodes, agent_id_map, schema_id_map, conn_overrides)
+
+    pipeline = await _create_imported_pipeline(
+        session,
+        org_id,
+        created_by,
+        pname,
+        pipeline_info,
+        owner_team_id,
+        existing_pipeline_names,
+        name,
+        warnings,
+    )
+
+    pipeline.graph_nodes_json = list(graph_nodes)
+    imported_retry_policy = pipeline_info.get("retry_policy")
+    sanitized_retry_policy = _sanitize_retry_policy(imported_retry_policy)
+    if imported_retry_policy is not None and sanitized_retry_policy != imported_retry_policy:
+        warnings.append("Imported pipeline 'retry_policy' was malformed; dropped to the no-policy default ({}).")
+    pipeline.retry_policy = sanitized_retry_policy
+    await session.flush()
+
+    pipeline_edges_added = await _materialize_edges(session, org_id, pipeline, edges_data, warnings)
+    await session.flush()
+
+    # --- Step 5: Create library primitive for the workflow ---
+    try:
+        prim = await create_library_primitive(
+            session,
+            org_id=org_id,
+            source="local",
+            primitive_type="workflow",
+            name=pname,
+            slug=_sanitize_slug(pname),
+            description=pipeline_info.get("description", ""),
+            author=created_by.hex[:8],
+            version=DEFAULT_SCHEMA_VERSION,
+            tags=["imported"],
+            content_json={
+                "pipeline_id": str(pipeline.id),
+                "bundle": bundle,
+            },
+            source_url=None,
+            forked_from=None,
+            checksum=None,
+            ed25519_signature=None,
+            verified=None,
+            download_count=None,
+            average_rating=None,
+            review_count=None,
+            owner_team_id=owner_team_id,
+            visibility="org",
+            account_id=created_by,
+        )
+    except Exception:
+        logger.exception("Failed to create library primitive for pipeline '%s'", pname)
+        raise
+
+    logger.info(
+        "Imported pipeline '%s' (id=%s) with %d agents, %d edges, %d schemas",
+        pname,
+        pipeline.id,
+        len(agents_data),
+        len(edges_data),
+        len(schemas_data),
+    )
+
+    return {
+        "pipeline_id": str(pipeline.id),
+        "pipeline_name": pname,
+        "primitive_id": str(prim.id),
+        "agent_count": len(agents_data),
+        "edge_count": len(pipeline_edges_added),
+        "schema_count": len(schemas_data),
+        "agents": agent_id_map,
+        "schemas": schema_id_map,
+        "warnings": warnings,
+    }
+
+
+async def _materialize_schemas(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    created_by: uuid.UUID,
+    schemas_data: list[dict[str, Any]],
+    schema_overrides: dict[str, str],
+    sv_overrides: dict[str, str],
+    warnings: list[str],
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Create any schemas that don't exist locally; return the id/version maps."""
     schema_id_map: dict[str, str] = {}
     schema_version_map: dict[str, str] = {}
     existing_schema_names: set[str] | None = None
@@ -845,11 +1030,8 @@ async def materialize_import(
             existing_sv = await _get_latest_published_version(session, existing_schema.id)
             if existing_sv and existing_sv.definition_json != definition:
                 if existing_schema_names is None:
-                    all_existing = (
-                        (await session.execute(select(Schema).where(Schema.organisation_id == org_id))).scalars().all()
-                    )
-                    existing_schema_names = {s.name for s in all_existing}
-                sname = suggest_import_name(existing_schema_names, sname, suffix=_IMPORTED_SUFFIX)
+                    existing_schema_names = await _load_schema_names(session, org_id)
+                sname = suggest_import_name(existing_schema_names, sname, suffix="(imported)")
                 existing_schema_names.add(sname)
                 warnings.append(
                     f"Schema '{existing_schema.name}' exists with different structure. Created as '{sname}' instead."
@@ -859,38 +1041,15 @@ async def materialize_import(
                 schema_version_map[export_schema_id] = existing_sv.version
                 continue
 
-        # Every loop exit is either a break after a successful create or a raise,
-        # so the loop is guaranteed to leave `new_schema` bound.
-        attempt_sc = 0
-        while True:
-            try:
-                async with session.begin_nested():
-                    new_schema = await create_schema(
-                        session,
-                        org_id=org_id,
-                        name=sname,
-                        account_id=created_by,
-                        description=sd.get("description"),
-                        abstract_name=sd.get("abstract_name"),
-                    )
-                break
-            except IntegrityError:
-                if attempt_sc == _MAX_NAME_RETRIES - 1:
-                    raise
-                attempt_sc += 1
-                if existing_schema_names is None:
-                    all_existing = (
-                        (await session.execute(select(Schema).where(Schema.organisation_id == org_id))).scalars().all()
-                    )
-                    existing_schema_names = {s.name for s in all_existing}
-                existing_schema_names.add(sname)
-                new_sname = suggest_import_name(existing_schema_names, sname, suffix=_IMPORTED_SUFFIX)
-                warnings.append(f"Schema name '{sname}' collided; retrying as '{new_sname}'.")
-                sname = new_sname
-                existing_schema_names.add(sname)
-            except Exception:
-                logger.exception("Failed to create schema '%s'", sname)
-                raise
+        new_schema = await _create_schema_with_retry(
+            session,
+            org_id,
+            created_by,
+            sname,
+            sd,
+            existing_schema_names,
+            warnings,
+        )
 
         schema_id_map[export_schema_id] = str(new_schema.id)
 
@@ -911,7 +1070,65 @@ async def materialize_import(
 
         schema_version_map[export_schema_id] = new_sv.version
 
-    # --- Step 2: Create agents ---
+    return schema_id_map, schema_version_map
+
+
+async def _load_schema_names(session: AsyncSession, org_id: uuid.UUID) -> set[str]:
+    """Load all local schema names for collision-avoiding suggestions."""
+    all_existing = (await session.execute(select(Schema).where(Schema.organisation_id == org_id))).scalars().all()
+    return {s.name for s in all_existing}
+
+
+async def _create_schema_with_retry(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    created_by: uuid.UUID,
+    sname: str,
+    sd: dict[str, Any],
+    existing_schema_names: set[str] | None,
+    warnings: list[str],
+) -> Schema:
+    """Create a schema, retrying with a suffixed name on IntegrityError collision."""
+    attempt_sc = 0
+    while True:
+        try:
+            async with session.begin_nested():
+                return await create_schema(
+                    session,
+                    org_id=org_id,
+                    name=sname,
+                    account_id=created_by,
+                    description=sd.get("description"),
+                    abstract_name=sd.get("abstract_name"),
+                )
+        except IntegrityError:
+            if attempt_sc == _MAX_NAME_RETRIES - 1:
+                raise
+            attempt_sc += 1
+            if existing_schema_names is None:
+                existing_schema_names = await _load_schema_names(session, org_id)
+            existing_schema_names.add(sname)
+            new_sname = suggest_import_name(existing_schema_names, sname, suffix="(imported)")
+            warnings.append(f"Schema name '{sname}' collided; retrying as '{new_sname}'.")
+            sname = new_sname
+            existing_schema_names.add(sname)
+        except Exception:
+            logger.exception("Failed to create schema '%s'", sname)
+            raise
+
+
+async def _materialize_agents(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    created_by: uuid.UUID,
+    agents_data: list[dict[str, Any]],
+    existing_agent_names: set[str],
+    schema_id_map: dict[str, str],
+    schema_version_map: dict[str, str],
+    mb_overrides: dict[str, str],
+    warnings: list[str],
+) -> dict[str, str]:
+    """Create the bundle's agents; return the export→local agent id map."""
     agent_id_map: dict[str, str] = {}
     for ad in agents_data:
         export_agent_id = ad.get("id", "")
@@ -969,38 +1186,50 @@ async def materialize_import(
         if resolved_mb_id:
             agent_args["model_backend_id"] = _safe_uuid(resolved_mb_id, "agent.model_backend_id")
 
-        # Every loop exit is either a break after a successful create or a raise,
-        # so the loop is guaranteed to leave `agent` bound.
-        attempt_a = 0
-        while True:
-            try:
-                async with session.begin_nested():
-                    agent = await create_agent(**agent_args)
-                break
-            except IntegrityError:
-                if attempt_a == _MAX_NAME_RETRIES - 1:
-                    raise
-                attempt_a += 1
-                existing_agent_names.add(aname)
-                aname = suggest_import_name(existing_agent_names, ad.get("name", "Imported Agent"))
-                existing_agent_names.add(aname)
-                agent_args["name"] = aname
-                warnings.append(f"Agent name collided; retrying as '{aname}'.")
-            except (ValueError, SQLAlchemyError):
-                logger.exception("Failed to create agent '%s'", aname)
-                raise
+        agent = await _create_agent_with_retry(
+            session, agent_args, existing_agent_names, ad.get("name", "Imported Agent"), warnings
+        )
 
         agent_id_map[export_agent_id] = str(agent.id)
 
-    # --- Step 3: Create pipeline ---
-    raw_graph_nodes = pipeline_info.get("graph_nodes_json")
-    if isinstance(raw_graph_nodes, list):
-        graph_nodes = raw_graph_nodes
-    else:
-        graph_nodes = []
-        warnings.append("Pipeline 'graph_nodes_json' is not a list; nodes will be empty.")
+    return agent_id_map
 
-    # Rewire agent_id, output_schema_id, and connector binding references in graph nodes
+
+async def _create_agent_with_retry(
+    session: AsyncSession,
+    agent_args: dict[str, Any],
+    existing_agent_names: set[str],
+    base_name: str,
+    warnings: list[str],
+) -> Agent:
+    """Create an agent, retrying with a suffixed name on IntegrityError collision."""
+    aname = agent_args["name"]
+    attempt_a = 0
+    while True:
+        try:
+            async with session.begin_nested():
+                return await create_agent(**agent_args)
+        except IntegrityError:
+            if attempt_a == _MAX_NAME_RETRIES - 1:
+                raise
+            attempt_a += 1
+            existing_agent_names.add(aname)
+            aname = suggest_import_name(existing_agent_names, base_name)
+            existing_agent_names.add(aname)
+            agent_args["name"] = aname
+            warnings.append(f"Agent name collided; retrying as '{aname}'.")
+        except (ValueError, SQLAlchemyError):
+            logger.exception("Failed to create agent '%s'", aname)
+            raise
+
+
+def _rewire_graph_nodes(
+    graph_nodes: list[dict[str, Any]],
+    agent_id_map: dict[str, str],
+    schema_id_map: dict[str, str],
+    conn_overrides: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Rewire agent/schema/connector references in the imported graph nodes."""
     graph_nodes = copy.deepcopy(graph_nodes)
     for node in graph_nodes:
         node_export_id = node.get("agent_id")
@@ -1014,14 +1243,26 @@ async def materialize_import(
             existing_id = connector_binding.get("instance_id", "")
             if existing_id and existing_id in conn_overrides:
                 connector_binding["instance_id"] = conn_overrides[existing_id]
+    return graph_nodes
 
-    # Every loop exit is either a break after a successful create or a raise,
-    # so the loop is guaranteed to leave `pipeline` bound.
+
+async def _create_imported_pipeline(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    created_by: uuid.UUID,
+    pname: str,
+    pipeline_info: dict[str, Any],
+    owner_team_id: uuid.UUID | None,
+    existing_pipeline_names: set[str],
+    base_name: str,
+    warnings: list[str],
+) -> Pipeline:
+    """Create the imported pipeline, retrying with a suffixed name on collision."""
     attempt_p = 0
     while True:
         try:
             async with session.begin_nested():
-                pipeline = await create_pipeline(
+                return await create_pipeline(
                     session,
                     org_id=org_id,
                     name=pname,
@@ -1032,27 +1273,26 @@ async def materialize_import(
                     node_timeout_seconds=pipeline_info.get("node_timeout_seconds") or DEFAULT_NODE_TIMEOUT,
                     run_context_defaults=pipeline_info.get("run_context_defaults"),
                 )
-            break
         except IntegrityError:
             if attempt_p == _MAX_NAME_RETRIES - 1:
                 raise
             attempt_p += 1
             existing_pipeline_names.add(pname)
-            pname = suggest_import_name(existing_pipeline_names, name)
-            warnings.append(f"Pipeline name '{name}' conflicted; retrying as '{pname}'.")
+            pname = suggest_import_name(existing_pipeline_names, base_name)
+            warnings.append(f"Pipeline name '{base_name}' conflicted; retrying as '{pname}'.")
         except Exception:
             logger.exception("Failed to create pipeline '%s'", pname)
             raise
 
-    pipeline.graph_nodes_json = list(graph_nodes)
-    imported_retry_policy = pipeline_info.get("retry_policy")
-    sanitized_retry_policy = _sanitize_retry_policy(imported_retry_policy)
-    if imported_retry_policy is not None and sanitized_retry_policy != imported_retry_policy:
-        warnings.append("Imported pipeline 'retry_policy' was malformed; dropped to the no-policy default ({}).")
-    pipeline.retry_policy = sanitized_retry_policy
-    await session.flush()
 
-    # --- Step 4: Create edges ---
+async def _materialize_edges(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    pipeline: Pipeline,
+    edges_data: list[dict[str, Any]],
+    warnings: list[str],
+) -> list[PipelineEdge]:
+    """Create the imported edges; returns the edges added."""
     pipeline_edges_added: list[PipelineEdge] = []
     for ed in edges_data:
         try:
@@ -1077,58 +1317,4 @@ async def materialize_import(
         )
         session.add(edge)
         pipeline_edges_added.append(edge)
-    await session.flush()
-
-    # --- Step 5: Create library primitive for the workflow ---
-    try:
-        prim = await create_library_primitive(
-            session,
-            org_id=org_id,
-            source="local",
-            primitive_type="workflow",
-            name=pname,
-            slug=_sanitize_slug(pname),
-            description=pipeline_info.get("description", ""),
-            author=created_by.hex[:8],
-            version=DEFAULT_SCHEMA_VERSION,
-            tags=["imported"],
-            content_json={
-                "pipeline_id": str(pipeline.id),
-                "bundle": bundle,
-            },
-            source_url=None,
-            forked_from=None,
-            checksum=None,
-            ed25519_signature=None,
-            verified=None,
-            download_count=None,
-            average_rating=None,
-            review_count=None,
-            owner_team_id=owner_team_id,
-            visibility="org",
-            account_id=created_by,
-        )
-    except Exception:
-        logger.exception("Failed to create library primitive for pipeline '%s'", pname)
-        raise
-
-    logger.info(
-        "Imported pipeline '%s' (id=%s) with %d agents, %d edges, %d schemas",
-        pname,
-        pipeline.id,
-        len(agents_data),
-        len(edges_data),
-        len(schemas_data),
-    )
-
-    return {
-        "pipeline_id": str(pipeline.id),
-        "pipeline_name": pname,
-        "primitive_id": str(prim.id),
-        "agent_count": len(agents_data),
-        "edge_count": len(pipeline_edges_added),
-        "schema_count": len(schemas_data),
-        "agents": agent_id_map,
-        "schemas": schema_id_map,
-        "warnings": warnings,
-    }
+    return pipeline_edges_added

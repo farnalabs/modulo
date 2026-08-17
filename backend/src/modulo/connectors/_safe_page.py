@@ -9,8 +9,10 @@ SonarQube (``components``/``analyses``/``issues``/``qualitygates``/
 ``metrics``/``plugins``/``hotspots``), PagerDuty
 (``incidents``/``services``/``teams``/``users``/``escalation_policies``/
 ``schedules``/``oncalls``), Slack (``channels``/``messages``/``members``/
-``scheduled_messages``), and npm (``objects``) connectors each guard their
-list parsing against corrupt or hostile response bodies. A corrupt or hostile
+``scheduled_messages``), npm (``objects``), Confluence (``results``),
+CodeClimate (``data``), Jenkins (``builds``/``jobs``/``computer``), and
+Dropbox Paper (``doc_ids``/``entries``) connectors each guard their list
+parsing against corrupt or hostile response bodies. A corrupt or hostile
 response may return a non-dict body (list, string, number, ...) or a non-list
 page field — either crashes the connector with ``AttributeError`` on the bare
 ``body.get(key, [])`` chain or returns a bare string as the records list.

@@ -87,7 +87,7 @@ Union type validation (oneOf/anyOf) and array schema validation for the Schema R
 
 ### Concurrency
 
-- [ ] Schema version creation is explicit action, not auto-save (UNTESTED)
+- [x] Schema version creation is explicit action, not auto-save
 - [ ] Schema versions pinned by snapshots cannot be deleted (UNTESTED)
 
 ### Error Handling
@@ -126,7 +126,7 @@ Union type validation (oneOf/anyOf) and array schema validation for the Schema R
 - [x] SQLAlchemyError on infer schema returns 503
 - [x] SQLAlchemyError on generate schema returns 503
 - [x] SQLAlchemyError on migrate data returns 503
-- [ ] IntegrityError on create schema (duplicate name per org) returns 409 — UNTESTED, add as unchecked
+- [x] IntegrityError on create schema (duplicate name per org) returns 409
 - [ ] Validate endpoint error for non-dict JSON parsed body returns 400 — UNTESTED, add as unchecked
 
 ### Backward Compatibility
@@ -146,7 +146,16 @@ Union type validation (oneOf/anyOf) and array schema validation for the Schema R
 
 ## QA History
 
-### 2026-07-12 — Round 3 (systemic sweep: B904, exc_info, dead code)
+### 2026-08-15 — Schema versioning + duplicate-name error tests (dist/partial-core3)
+
+**Tests added to `test_schemas_endpoint.py`:**
+- `test_create_schema_auto_creates_latest_placeholder_version` — creating a schema seeds a `latest` placeholder version (`version_number=0`); the explicit POST `/versions` endpoint is the only way a numbered version is created.
+- `test_schema_version_creation_is_explicit_endpoint` — POST `/versions` calls `create_schema_version` once and returns the created version.
+- `test_validate_schema_integrity_error_create_returns_409` — duplicate schema name per org surfaces as 409 (`IntegrityError` catch).
+
+Flipped `Schema version creation is explicit action, not auto-save` and `IntegrityError on create schema returns 409` checkboxes `[ ]`→`[x]`. The `Validate endpoint non-dict JSON parsed body → 400` behaviour remains untested (no test added this session) — left unchecked.
+
+
 - No B904 violations or exc_info issues in schema_registry code paths
 - Frontmatter valid with extensive test coverage; Known Gaps accurate
 

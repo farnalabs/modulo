@@ -91,66 +91,91 @@ def run_output_validation(
         config = eval_def.config
         match eval_def.type:
             case "regex":
-                pattern = config.get("pattern", "")
-                if not isinstance(pattern, str):
-                    failures.append(_eval_fail(name, "'pattern' must be a string"))
-                    continue
-                if not pattern:
-                    failures.append(_eval_fail(name, "missing 'pattern' in config"))
-                    continue
-                field = _validate_validation_field(config, name, failures)
-                if field is None:
-                    continue
-                raw = mapped_output.get(field)
-                value = "" if raw is None else str(raw)
-                try:
-                    flags = 0
-                    flags_str = config.get("flags", "")
-                    if isinstance(flags_str, str) and "i" in flags_str:
-                        flags |= re.IGNORECASE
-                    if not re.search(pattern, value, flags):
-                        failures.append(_eval_fail(name, f"regex /{pattern}/ did not match field '{field}'"))
-                except re.error as exc:
-                    failures.append(_eval_fail(name, f"regex error: {exc}"))
-
+                _validate_regex_eval(name, config, mapped_output, failures)
             case "json_schema":
-                schema = config.get("schema", {})
-                if not isinstance(schema, dict):
-                    failures.append(_eval_fail(name, "'schema' must be a dict"))
-                    continue
-                field = _validate_validation_field(config, name, failures, required=False)
-                if field is not None and field not in mapped_output:
-                    failures.append(_eval_fail(name, f"configured field '{field}' not found in output"))
-                    continue
-                data = mapped_output[field] if field else mapped_output
-                try:
-                    jsonschema.validate(data, schema)
-                except jsonschema.ValidationError as exc:
-                    failures.append(_eval_fail(name, f"JSON Schema validation failed: {exc.message}"))
-                except jsonschema.SchemaError as exc:
-                    failures.append(_eval_fail(name, f"JSON Schema definition error: {exc.message}"))
-
+                _validate_json_schema_eval(name, config, mapped_output, failures)
             case "llm_judge":
-                if llm_judge_callable is None:
-                    failures.append(_eval_fail(name, "llm_judge requires a callable but none provided"))
-                    continue
-                try:
-                    raw = llm_judge_callable(mapped_output, config)
-                    if not isinstance(raw, dict):
-                        failures.append(_eval_fail(name, "llm_judge returned non-dict result"))
-                        continue
-                    if not raw.get("passed"):
-                        detail = raw.get("detail", "llm_judge evaluated as failed")
-                        failures.append(_eval_fail(name, detail))
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    failures.append(_eval_fail(name, f"llm_judge raised: {exc}"))
-
+                _validate_llm_judge_eval(name, config, mapped_output, llm_judge_callable, failures)
             case _:
                 raise ValueError(f"Unknown eval type for output validation: {eval_def.type}")
 
     return ValidationResult(passed=len(failures) == 0, failures=failures)
+
+
+def _validate_regex_eval(
+    name: str,
+    config: dict[str, Any],
+    mapped_output: dict[str, Any],
+    failures: list[str],
+) -> None:
+    pattern = config.get("pattern", "")
+    if not isinstance(pattern, str):
+        failures.append(_eval_fail(name, "'pattern' must be a string"))
+        return
+    if not pattern:
+        failures.append(_eval_fail(name, "missing 'pattern' in config"))
+        return
+    field = _validate_validation_field(config, name, failures)
+    if field is None:
+        return
+    raw = mapped_output.get(field)
+    value = "" if raw is None else str(raw)
+    try:
+        flags = 0
+        flags_str = config.get("flags", "")
+        if isinstance(flags_str, str) and "i" in flags_str:
+            flags |= re.IGNORECASE
+        if not re.search(pattern, value, flags):
+            failures.append(_eval_fail(name, f"regex /{pattern}/ did not match field '{field}'"))
+    except re.error as exc:
+        failures.append(_eval_fail(name, f"regex error: {exc}"))
+
+
+def _validate_json_schema_eval(
+    name: str,
+    config: dict[str, Any],
+    mapped_output: dict[str, Any],
+    failures: list[str],
+) -> None:
+    schema = config.get("schema", {})
+    if not isinstance(schema, dict):
+        failures.append(_eval_fail(name, "'schema' must be a dict"))
+        return
+    field = _validate_validation_field(config, name, failures, required=False)
+    if field is not None and field not in mapped_output:
+        failures.append(_eval_fail(name, f"configured field '{field}' not found in output"))
+        return
+    data = mapped_output[field] if field else mapped_output
+    try:
+        jsonschema.validate(data, schema)
+    except jsonschema.ValidationError as exc:
+        failures.append(_eval_fail(name, f"JSON Schema validation failed: {exc.message}"))
+    except jsonschema.SchemaError as exc:
+        failures.append(_eval_fail(name, f"JSON Schema definition error: {exc.message}"))
+
+
+def _validate_llm_judge_eval(
+    name: str,
+    config: dict[str, Any],
+    mapped_output: dict[str, Any],
+    llm_judge_callable: Any | None,
+    failures: list[str],
+) -> None:
+    if llm_judge_callable is None:
+        failures.append(_eval_fail(name, "llm_judge requires a callable but none provided"))
+        return
+    try:
+        raw = llm_judge_callable(mapped_output, config)
+        if not isinstance(raw, dict):
+            failures.append(_eval_fail(name, "llm_judge returned non-dict result"))
+            return
+        if not raw.get("passed"):
+            detail = raw.get("detail", "llm_judge evaluated as failed")
+            failures.append(_eval_fail(name, detail))
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        failures.append(_eval_fail(name, f"llm_judge raised: {exc}"))
 
 
 async def execute_composite_with_retry(
@@ -210,20 +235,7 @@ async def execute_composite_with_retry(
         if result.passed:
             return mapped_output
 
-        retry_eligible_failures: list[str] = []
-        blocking_failures: list[str] = []
-        for eval_def in output_validation.eval_definitions:
-            eval_failures = [f for f in result.failures if f.startswith(f"Eval '{eval_def.name}':")]
-            if eval_failures:
-                if eval_def.failure_behaviour == "block":
-                    blocking_failures.extend(eval_failures)
-                elif eval_def.failure_behaviour == "retry":
-                    retry_eligible_failures.extend(eval_failures)
-                elif eval_def.failure_behaviour == "warn":
-                    logger.warning(
-                        "Composite output validation warn: %s",
-                        "; ".join(eval_failures),
-                    )
+        retry_eligible_failures, blocking_failures = _classify_validation_failures(output_validation, result.failures)
 
         if blocking_failures:
             raise CompositeValidationError(blocking_failures, attempt_count)
@@ -241,6 +253,34 @@ async def execute_composite_with_retry(
             await asyncio.sleep(0.5 * (attempt_count + 1))
 
     raise CompositeValidationError(result.failures, max_retries)
+
+
+def _classify_validation_failures(
+    output_validation: OutputValidation,
+    failures: list[str],
+) -> tuple[list[str], list[str]]:
+    """Partition eval failures into retry-eligible and blocking buckets.
+
+    ``warn``-behaviour failures are logged and dropped from both buckets. The
+    match on ``failure_behaviour`` is strict — only ``block`` and ``retry``
+    are recognised (matching ``OutputValidation``'s behaviour enum).
+    """
+    retry_eligible_failures: list[str] = []
+    blocking_failures: list[str] = []
+    for eval_def in output_validation.eval_definitions:
+        eval_failures = [f for f in failures if f.startswith(f"Eval '{eval_def.name}':")]
+        if not eval_failures:
+            continue
+        if eval_def.failure_behaviour == "block":
+            blocking_failures.extend(eval_failures)
+        elif eval_def.failure_behaviour == "retry":
+            retry_eligible_failures.extend(eval_failures)
+        elif eval_def.failure_behaviour == "warn":
+            logger.warning(
+                "Composite output validation warn: %s",
+                "; ".join(eval_failures),
+            )
+    return retry_eligible_failures, blocking_failures
 
 
 def expand_composite_node(
@@ -563,15 +603,7 @@ class _CompositeExpander:
 
         parent_node_id = str(composite_node.get("id"))
 
-        leaf_id_map: dict[str, str] = {}
-        for sub in sub_nodes:
-            old_id = sub.get("id")
-            if not old_id:
-                raise ValueError(f"Composite template '{template.id}' has a sub-node without an id")
-            key = str(old_id)
-            if key in leaf_id_map:
-                raise ValueError(f"Composite template '{template.id}' has duplicate sub-node id '{key}'")
-            leaf_id_map[key] = str(uuid.uuid4())
+        leaf_id_map = _build_leaf_id_map(sub_nodes, template)
 
         composite_id_map: dict[str, _ExpandedComposite] = {}
         incoming_ids: set[str] = {str(e.get("target")) for e in sub_edges}
@@ -585,24 +617,17 @@ class _CompositeExpander:
         for idx, sub in enumerate(sub_nodes):
             old_id = str(sub.get("id"))
             if _is_composite_node(sub):
-                ref = sub.get("composite_ref")
-                if ref is None:
-                    raise ValueError(f"Composite sub-node '{old_id}' is missing required 'composite_ref' field")
-                nested_template = await self._load_template(uuid.UUID(str(ref)))
-                if nested_template is None:
-                    raise ValueError(f"Composite sub-node '{old_id}' references missing CompositeTemplate '{ref}'")
-                nested_values = sub.get("composite_parameter_values")
-                if not isinstance(nested_values, dict):
-                    nested_values = parameter_values
-                nested = await self._expand_composite(sub, nested_template, nested_values, depth=depth + 1)
+                nested, nested_entries, nested_exits = await self._expand_nested_composite(
+                    old_id, sub, parameter_values, depth
+                )
                 composite_id_map[old_id] = nested
                 del leaf_id_map[old_id]
                 flat_nodes.extend(nested.nodes)
                 bindings.extend(nested.bindings)
                 if old_id not in incoming_ids:
-                    entry_ids.extend(nested.entry_node_ids)
+                    entry_ids.extend(nested_entries)
                 if old_id not in outgoing_ids:
-                    exit_ids.extend(nested.exit_node_ids)
+                    exit_ids.extend(nested_exits)
                 continue
 
             new_id = leaf_id_map[old_id]
@@ -619,12 +644,7 @@ class _CompositeExpander:
 
         remapped_edges = _rewire_edges(sub_edges, leaf_map=leaf_id_map, composite_map=composite_id_map)
 
-        output_schema_json = composite_node.get("output_schema_json")
-        if isinstance(output_schema_json, dict) and exit_ids:
-            exit_id_set = set(exit_ids)
-            for node in flat_nodes:
-                if node.get("id") in exit_id_set:
-                    node.setdefault("output_schema_json", output_schema_json)
+        _propagate_output_schema(composite_node, flat_nodes, exit_ids)
 
         bindings.append(
             {
@@ -643,6 +663,54 @@ class _CompositeExpander:
             entry_node_ids=entry_ids,
             exit_node_ids=exit_ids,
         )
+
+    async def _expand_nested_composite(
+        self,
+        old_id: str,
+        sub: dict[str, Any],
+        parameter_values: dict[str, Any],
+        depth: int,
+    ) -> tuple[_ExpandedComposite, list[str], list[str]]:
+        """Recursively expand a nested composite sub-node and return its entries/exits."""
+        ref = sub.get("composite_ref")
+        if ref is None:
+            raise ValueError(f"Composite sub-node '{old_id}' is missing required 'composite_ref' field")
+        nested_template = await self._load_template(uuid.UUID(str(ref)))
+        if nested_template is None:
+            raise ValueError(f"Composite sub-node '{old_id}' references missing CompositeTemplate '{ref}'")
+        nested_values = sub.get("composite_parameter_values")
+        if not isinstance(nested_values, dict):
+            nested_values = parameter_values
+        nested = await self._expand_composite(sub, nested_template, nested_values, depth=depth + 1)
+        return nested, nested.entry_node_ids, nested.exit_node_ids
+
+
+def _build_leaf_id_map(sub_nodes: list[dict[str, Any]], template: CompositeTemplate) -> dict[str, str]:
+    """Assign fresh UUIDs to every leaf sub-node id, rejecting duplicates."""
+    leaf_id_map: dict[str, str] = {}
+    for sub in sub_nodes:
+        old_id = sub.get("id")
+        if not old_id:
+            raise ValueError(f"Composite template '{template.id}' has a sub-node without an id")
+        key = str(old_id)
+        if key in leaf_id_map:
+            raise ValueError(f"Composite template '{template.id}' has duplicate sub-node id '{key}'")
+        leaf_id_map[key] = str(uuid.uuid4())
+    return leaf_id_map
+
+
+def _propagate_output_schema(
+    composite_node: dict[str, Any],
+    flat_nodes: list[dict[str, Any]],
+    exit_ids: list[str],
+) -> None:
+    """Stamp the composite's ``output_schema_json`` onto its exit sub-nodes."""
+    output_schema_json = composite_node.get("output_schema_json")
+    if isinstance(output_schema_json, dict) and exit_ids:
+        exit_id_set = set(exit_ids)
+        for node in flat_nodes:
+            if node.get("id") in exit_id_set:
+                node.setdefault("output_schema_json", output_schema_json)
 
 
 async def expand_composites_in_graph(

@@ -1,6 +1,7 @@
 """OIDC and SAML 2.0 SSO support with JIT account provisioning."""
 
 import base64
+import binascii
 import hmac
 import json
 import logging
@@ -468,6 +469,46 @@ async def saml_get_auth_url(
     return auth_url, ""
 
 
+def _decode_saml_response(saml_response: str) -> bytes:
+    """Decode a base64 SAML Response, normalising padding for urlsafe input.
+
+    Raises ValueError on base64 decode failure (mirrors the existing error
+    contract so the ACS route returns 401).
+    """
+    try:
+        return base64.b64decode(saml_response, validate=False)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError(f"Invalid base64 SAML response: {exc}") from None
+
+
+def _validate_saml_response_destination(saml_response: str, acs_url: str) -> None:
+    """Validate the SAML Response ``Destination`` matches the configured ACS URL.
+
+    SAML 2.0 Core §4.1.1 requires the Response ``Destination`` to match the
+    SP's ACS endpoint. A mismatched Destination is a replay/misdelivery signal
+    and MUST be rejected. The attribute may be legitimately absent from some
+    IdPs, in which case validation is skipped (python3-saml enforces it only
+    in strict mode, which is not enabled here).
+    """
+    try:
+        raw = _decode_saml_response(saml_response)
+    except ValueError:
+        return
+    try:
+        root = ElementTree.fromstring(raw)
+    except ElementTree.ParseError:
+        return
+    destination = root.get("Destination")
+    if destination is None:
+        return
+    if destination.rstrip("/") != acs_url.rstrip("/"):
+        _log.warning(
+            "sso.saml_destination_mismatch",
+            extra={"expected": acs_url, "actual": destination},
+        )
+        raise ValueError("SAML response Destination does not match the ACS URL")
+
+
 async def saml_process_response(
     saml_response: str,
     settings: Settings,
@@ -496,6 +537,7 @@ async def saml_process_response(
         raise ValueError(f"Failed to parse IdP metadata: {exc}") from None
 
     acs_url = f"{settings.modulo_public_url.rstrip('/')}/api/v1/auth/saml/acs"
+    _validate_saml_response_destination(saml_response, acs_url)
     handler = ModuloSamlAuth(
         entity_id=settings.modulo_saml_entity_id,
         acs_url=acs_url,

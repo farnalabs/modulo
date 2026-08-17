@@ -6,7 +6,7 @@ Feature: Cost Controls
   Background:
     Given I am authenticated as an admin in org "acme"
 
-  # ── Token budget (future: per-agent hard stop) ─────────────────────────────
+  # ── Token budget (implemented: per-agent hard stop) ────────────────────────
 
   Scenario: Token budget enforced
     Given agent "code-writer" has a token budget of 100000 tokens
@@ -42,7 +42,7 @@ Feature: Cost Controls
     And the org run count is incremented
     And the team run count is incremented
 
-  # ── Circuit breaker (future: per-pipeline permanent pause) ────────────────
+  # ── Circuit breaker (implemented: per-pipeline permanent pause) ────────────
 
   Scenario: Circuit breaker trips when pipeline exceeds spend threshold
     Given pipeline "data-pipeline" has a circuit breaker threshold of $1000.00

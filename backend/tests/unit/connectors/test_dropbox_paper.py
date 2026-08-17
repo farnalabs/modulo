@@ -207,6 +207,42 @@ async def test_query_folders_corrupt_cursor(connector):
     assert result.next_cursor is None
 
 
+@respx.mock
+async def test_query_docs_non_list_doc_ids_no_crash(connector):
+    """A corrupt body placing a non-list in ``doc_ids`` must not leak a bare
+    string into the records list."""
+    respx.post(f"{_BASE}/paper/docs/list").mock(
+        return_value=_mock_response(json={"doc_ids": "corrupt", "cursor": {"value": "cursor_val"}})
+    )
+    result = await connector.query(ConnectorQuery(resource="docs", filters={"filter_by": "docs_created"}))
+    assert not result.records
+    assert result.next_cursor == "cursor_val"
+
+
+@respx.mock
+async def test_query_docs_non_dict_body_no_crash(connector):
+    """A corrupt/hostile non-dict body must degrade to an empty records list."""
+    respx.post(f"{_BASE}/paper/docs/list").mock(return_value=_mock_response(json=["not-a-dict"]))
+    result = await connector.query(ConnectorQuery(resource="docs", filters={"filter_by": "docs_created"}))
+    assert not result.records
+
+
+@respx.mock
+async def test_query_folders_non_list_entries_no_crash(connector):
+    """A corrupt body placing a non-list in ``entries`` must degrade gracefully."""
+    respx.post(f"{_BASE}/files/list_folder").mock(return_value=_mock_response(json={"entries": "corrupt"}))
+    result = await connector.query(ConnectorQuery(resource="folders", filters={"path": "/Paper"}))
+    assert not result.records
+
+
+@respx.mock
+async def test_query_folders_missing_entries_no_crash(connector):
+    """A missing ``entries`` key must behave like an empty page."""
+    respx.post(f"{_BASE}/files/list_folder").mock(return_value=_mock_response(json={"cursor": None}))
+    result = await connector.query(ConnectorQuery(resource="folders", filters={"path": "/Paper"}))
+    assert not result.records
+
+
 async def test_query_unsupported_resource(connector):
     with pytest.raises(ValueError, match="Unsupported Dropbox Paper resource"):
         await connector.query(ConnectorQuery(resource="users"))

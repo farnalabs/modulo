@@ -100,6 +100,131 @@ async def _streak_status_for(session: AsyncSession, trigger: Trigger) -> dict[st
     return await get_trigger_streak_status(session, trigger, config_threshold=threshold)
 
 
+def _trigger_type_and_pipeline_filters(
+    base_filter: Any,
+    pipeline_id: uuid.UUID | None,
+    trigger_type: str | None,
+) -> list[Any]:
+    """Build the shared list/count WHERE conditions for the optional filters."""
+    filters: list[Any] = [base_filter]
+    if pipeline_id is not None:
+        filters.append(Trigger.pipeline_id == pipeline_id)
+    if trigger_type is not None:
+        filters.append(Trigger.trigger_type == trigger_type)
+    return filters
+
+
+async def _read_org_pause_state(session: AsyncSession, organisation_id: uuid.UUID) -> tuple[bool, str | None]:
+    """Read the org-wide trigger pause state with the SAME predicate create_run uses."""
+    org_state = (
+        await session.execute(
+            select(
+                Organisation.triggers_paused,
+                Organisation.triggers_paused_at,
+                Organisation.status,
+            ).where(Organisation.id == organisation_id)
+        )
+    ).one_or_none()
+    if org_state is None:
+        return False, None
+    triggers_paused_col, paused_at, status = org_state
+    org_triggers_paused = org_row_is_paused(status, triggers_paused_col)
+    org_paused_at = paused_at.isoformat() if paused_at else None
+    return org_triggers_paused, org_paused_at
+
+
+async def _serialize_trigger(session: AsyncSession, trigger: Trigger) -> dict[str, Any]:
+    """Serialize one trigger row to the API shape (runs INSIDE the RLS tx)."""
+    return {
+        "id": str(trigger.id),
+        "pipeline_id": str(trigger.pipeline_id),
+        "trigger_type": trigger.trigger_type,
+        "active": trigger.active,
+        "max_concurrent_runs": trigger.max_concurrent_runs,
+        "daily_spend_limit": _serialize_spend_limit(trigger.daily_spend_limit),
+        "config_json": mask_config_json(trigger.config_json),
+        "cron_expression": trigger.cron_expression,
+        "cron_timezone": trigger.cron_timezone,
+        "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
+        "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
+        "created_by": str(trigger.account_id),
+        "in_flight": await _ongoing_in_flight(session, trigger),
+        "streak_status": await _streak_status_for(session, trigger),
+    }
+
+
+async def _load_trigger_for_update(
+    session: AsyncSession,
+    organisation_id: uuid.UUID,
+    trigger_id: uuid.UUID,
+) -> Trigger:
+    """Load a trigger for an update path, 404 when missing/soft-deleted."""
+    result = await session.execute(
+        select(Trigger).where(
+            Trigger.id == trigger_id,
+            Trigger.organisation_id == organisation_id,
+            Trigger.deleted_at.is_(None),
+        )
+    )
+    trigger = result.scalar_one_or_none()
+    if trigger is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
+    return trigger
+
+
+def _merge_trigger_config(current: dict[str, Any] | None, update: dict[str, Any]) -> dict[str, Any]:
+    """MERGE config fields — never wholesale replace (drops unmanaged keys).
+
+    A masked placeholder must never clobber the stored secret (read-modify-write
+    round-trip guard); an explicit ``None`` clears the key; a missing key leaves
+    it intact.
+    """
+    merged_cfg = dict(current or {})
+    for k, v in update.items():
+        if isinstance(v, str) and v == SENSITIVE_VALUE_MASK:
+            continue
+        if v is None:
+            merged_cfg.pop(k, None)
+        else:
+            merged_cfg[k] = v
+    return merged_cfg
+
+
+async def _guard_and_resolve_ongoing_changes(
+    session: AsyncSession,
+    trigger: Trigger,
+    req: "TriggerUpdate",
+) -> bool:
+    """FAR-158 ongoing guards; returns True when the scan interval changed."""
+    if "daily_spend_limit" in req.model_fields_set and req.daily_spend_limit is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="ongoing triggers require daily_spend_limit; clearing it is not allowed",
+        )
+    ongoing_fields_changing = any(x is not None for x in [req.max_concurrent_runs, req.config_json, req.active]) or (
+        "daily_spend_limit" in req.model_fields_set
+    )
+    if ongoing_fields_changing:
+        pipeline = await session.get(Pipeline, trigger.pipeline_id)
+        pipeline_cap = pipeline.max_concurrent_runs if pipeline is not None else 0
+        validate_ongoing_config(
+            trigger.trigger_type,
+            max_concurrent_runs=(
+                req.max_concurrent_runs if req.max_concurrent_runs is not None else trigger.max_concurrent_runs
+            ),
+            daily_spend_limit=(
+                req.daily_spend_limit if "daily_spend_limit" in req.model_fields_set else trigger.daily_spend_limit
+            ),
+            config_json=(req.config_json if req.config_json is not None else trigger.config_json),
+            pipeline_max_concurrent_runs=pipeline_cap,
+        )
+    if req.config_json is not None:
+        old_scan = int((trigger.config_json or {}).get("scan_interval_seconds") or 60)
+        new_scan = int(req.config_json.get("scan_interval_seconds") or 60)
+        return new_scan != old_scan
+    return False
+
+
 @router.get("/triggers", status_code=status.HTTP_200_OK)
 @handle_db_errors("triggers.list_triggers")
 async def list_triggers(
@@ -116,45 +241,17 @@ async def list_triggers(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             base_filter = Trigger.organisation_id == principal.organisation_id
-            q = select(Trigger).where(base_filter, Trigger.deleted_at.is_(None))
+            trigger_filter = _trigger_type_and_pipeline_filters(base_filter, pipeline_id, trigger_type)
 
-            if pipeline_id is not None:
-                q = q.where(Trigger.pipeline_id == pipeline_id)
-            if trigger_type is not None:
-                q = q.where(Trigger.trigger_type == trigger_type)
-
-            count_q = select(func.count()).select_from(Trigger).where(base_filter, Trigger.deleted_at.is_(None))
-            if pipeline_id is not None:
-                count_q = count_q.where(Trigger.pipeline_id == pipeline_id)
-            if trigger_type is not None:
-                count_q = count_q.where(Trigger.trigger_type == trigger_type)
+            q = select(Trigger).where(*trigger_filter, Trigger.deleted_at.is_(None))
+            count_q = select(func.count()).select_from(Trigger).where(*trigger_filter, Trigger.deleted_at.is_(None))
             total_raw = (await session.execute(count_q)).scalar_one()
             total = int(total_raw) if total_raw is not None else 0
             offset = (page - 1) * page_size
             q = q.order_by(Trigger.created_at.desc()).offset(offset).limit(page_size)
             rows = (await session.execute(q)).scalars().all()
 
-            # Org-wide trigger pause state — the SAME predicate the create_run
-            # gate applies (org_row_is_paused: triggers_paused column OR a
-            # non-active org status). A suspended/deleted org therefore shows the
-            # paused banner and the toggle state matches the server truth. Fresh
-            # column-level read (never the ORM identity map).
-            org_state = (
-                await session.execute(
-                    select(
-                        Organisation.triggers_paused,
-                        Organisation.triggers_paused_at,
-                        Organisation.status,
-                    ).where(Organisation.id == principal.organisation_id)
-                )
-            ).one_or_none()
-            if org_state is None:
-                org_triggers_paused = False
-                org_paused_at = None
-            else:
-                triggers_paused_col, paused_at, status = org_state
-                org_triggers_paused = org_row_is_paused(status, triggers_paused_col)
-                org_paused_at = paused_at.isoformat() if paused_at else None
+            org_triggers_paused, org_paused_at = await _read_org_pause_state(session, principal.organisation_id)
 
             # Serialize the items INSIDE the RLS transaction (FIX 2): the
             # in-flight + streak-status reads rely on the ``SET LOCAL
@@ -162,24 +259,7 @@ async def list_triggers(
             # after commit sees zero rows on strict-RLS Postgres, silently
             # showing a deactivated trigger as state 'ok'.
             for r in rows:
-                items.append(
-                    {
-                        "id": str(r.id),
-                        "pipeline_id": str(r.pipeline_id),
-                        "trigger_type": r.trigger_type,
-                        "active": r.active,
-                        "max_concurrent_runs": r.max_concurrent_runs,
-                        "daily_spend_limit": _serialize_spend_limit(r.daily_spend_limit),
-                        "config_json": mask_config_json(r.config_json),
-                        "cron_expression": r.cron_expression,
-                        "cron_timezone": r.cron_timezone,
-                        "last_fired_at": r.last_fired_at.isoformat() if r.last_fired_at else None,
-                        "next_fire_at": r.next_fire_at.isoformat() if r.next_fire_at else None,
-                        "created_by": str(r.account_id),
-                        "in_flight": await _ongoing_in_flight(session, r),
-                        "streak_status": await _streak_status_for(session, r),
-                    }
-                )
+                items.append(await _serialize_trigger(session, r))
     except ProgrammingError:
         _log.exception("triggers.list_triggers")
         raise HTTPException(
@@ -259,16 +339,7 @@ async def update_cron_config(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            result = await session.execute(
-                select(Trigger).where(
-                    Trigger.id == trigger_id,
-                    Trigger.organisation_id == principal.organisation_id,
-                    Trigger.deleted_at.is_(None),
-                )
-            )
-            trigger = result.scalar_one_or_none()
-            if trigger is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND)
+            trigger = await _load_trigger_for_update(session, principal.organisation_id, trigger_id)
 
             if trigger.trigger_type != "cron":
                 raise HTTPException(
@@ -445,16 +516,7 @@ async def update_polling_config(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            result = await session.execute(
-                select(Trigger).where(
-                    Trigger.id == trigger_id,
-                    Trigger.organisation_id == principal.organisation_id,
-                    Trigger.deleted_at.is_(None),
-                )
-            )
-            trigger = result.scalar_one_or_none()
-            if trigger is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND)
+            trigger = await _load_trigger_for_update(session, principal.organisation_id, trigger_id)
 
             if trigger.trigger_type != "polling":
                 raise HTTPException(
@@ -571,16 +633,7 @@ async def update_ongoing_config(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            result = await session.execute(
-                select(Trigger).where(
-                    Trigger.id == trigger_id,
-                    Trigger.organisation_id == principal.organisation_id,
-                    Trigger.deleted_at.is_(None),
-                )
-            )
-            trigger = result.scalar_one_or_none()
-            if trigger is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND)
+            trigger = await _load_trigger_for_update(session, principal.organisation_id, trigger_id)
 
             if trigger.trigger_type != "ongoing":
                 raise HTTPException(
@@ -868,16 +921,7 @@ async def update_trigger(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            result = await session.execute(
-                select(Trigger).where(
-                    Trigger.id == trigger_id,
-                    Trigger.organisation_id == principal.organisation_id,
-                    Trigger.deleted_at.is_(None),
-                )
-            )
-            trigger = result.scalar_one_or_none()
-            if trigger is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND)
+            trigger = await _load_trigger_for_update(session, principal.organisation_id, trigger_id)
 
             if (req.cron_expression is not None or req.cron_timezone is not None) and trigger.trigger_type != "cron":
                 raise HTTPException(
@@ -891,36 +935,7 @@ async def update_trigger(
             # shared validator against the MERGED (post-update) values.
             ongoing_scan_interval_changed = False
             if trigger.trigger_type == "ongoing":
-                if "daily_spend_limit" in req.model_fields_set and req.daily_spend_limit is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                        detail="ongoing triggers require daily_spend_limit; clearing it is not allowed",
-                    )
-                ongoing_fields_changing = any(
-                    x is not None for x in [req.max_concurrent_runs, req.config_json, req.active]
-                ) or ("daily_spend_limit" in req.model_fields_set)
-                if ongoing_fields_changing:
-                    pipeline = await session.get(Pipeline, trigger.pipeline_id)
-                    pipeline_cap = pipeline.max_concurrent_runs if pipeline is not None else 0
-                    validate_ongoing_config(
-                        trigger.trigger_type,
-                        max_concurrent_runs=(
-                            req.max_concurrent_runs
-                            if req.max_concurrent_runs is not None
-                            else trigger.max_concurrent_runs
-                        ),
-                        daily_spend_limit=(
-                            req.daily_spend_limit
-                            if "daily_spend_limit" in req.model_fields_set
-                            else trigger.daily_spend_limit
-                        ),
-                        config_json=(req.config_json if req.config_json is not None else trigger.config_json),
-                        pipeline_max_concurrent_runs=pipeline_cap,
-                    )
-                if req.config_json is not None:
-                    old_scan = int((trigger.config_json or {}).get("scan_interval_seconds") or 60)
-                    new_scan = int(req.config_json.get("scan_interval_seconds") or 60)
-                    ongoing_scan_interval_changed = new_scan != old_scan
+                ongoing_scan_interval_changed = await _guard_and_resolve_ongoing_changes(session, trigger, req)
 
             next_fire_at: datetime.datetime | None = None
             if req.cron_expression is not None or req.cron_timezone is not None:
@@ -945,22 +960,7 @@ async def update_trigger(
             if "daily_spend_limit" in req.model_fields_set:
                 trigger.daily_spend_limit = req.daily_spend_limit
             if req.config_json is not None:
-                # MERGE into the existing blob — never wholesale replace (the
-                # PUT only carries the fields the client is changing; a replace
-                # would silently drop unmanaged config keys).
-                current_cfg = trigger.config_json or {}
-                merged_cfg = dict(current_cfg)
-                for k, v in req.config_json.items():
-                    if isinstance(v, str) and v == SENSITIVE_VALUE_MASK:
-                        # A masked placeholder must never clobber the stored secret
-                        # (read-modify-write round-trip guard). Keep the existing value.
-                        continue
-                    if v is None:
-                        # Explicit null clears the key; a missing key leaves it intact.
-                        merged_cfg.pop(k, None)
-                    else:
-                        merged_cfg[k] = v
-                trigger.config_json = merged_cfg
+                trigger.config_json = _merge_trigger_config(trigger.config_json, req.config_json)
             if req.cron_expression is not None:
                 trigger.cron_expression = req.cron_expression
             if req.cron_timezone is not None:
