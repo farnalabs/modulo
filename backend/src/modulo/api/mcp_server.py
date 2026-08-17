@@ -3055,6 +3055,28 @@ def _validate_trigger_update_inputs(
     return tid, None
 
 
+_TEAM_SCOPE_ERROR: object = object()
+
+
+async def _load_trigger_for_update(s: AsyncSession, org_id: uuid.UUID, tid: uuid.UUID) -> Any | None:
+    """Load the trigger row for update; None if not found, _TEAM_SCOPE_ERROR if team-scope mismatch."""
+    from sqlalchemy import select
+
+    from modulo.db.models.trigger import Trigger
+
+    q = select(Trigger).where(
+        Trigger.id == tid,
+        Trigger.organisation_id == org_id,
+        Trigger.deleted_at.is_(None),
+    )
+    trigger = (await s.execute(q)).scalar_one_or_none()
+    if trigger is None:
+        return None
+    if _team_scoped_key_mismatch(await _pipeline_owner_team_id(s, trigger.pipeline_id)):
+        return _TEAM_SCOPE_ERROR
+    return trigger
+
+
 @mcp.tool(
     description="Update an existing trigger's configuration. "
     "Mirrors PUT /api/v1/triggers/{id}. Setting cron_expression or "
@@ -3082,23 +3104,15 @@ async def update_trigger(
             return input_err
         assert tid is not None
 
-        from sqlalchemy import select
-
         from modulo.core.trigger_validation import validate_ongoing_config
         from modulo.db.models.pipeline import Pipeline
-        from modulo.db.models.trigger import Trigger
 
         async with _session(org_id) as s:
-            q = select(Trigger).where(
-                Trigger.id == tid,
-                Trigger.organisation_id == org_id,
-                Trigger.deleted_at.is_(None),
-            )
-            trigger = (await s.execute(q)).scalar_one_or_none()
+            trigger = await _load_trigger_for_update(s, org_id, tid)
+            if trigger is _TEAM_SCOPE_ERROR:
+                return _team_scope_error("pipeline", str(tid))
             if trigger is None:
                 return {"error": "not_found", "detail": _MSG_TRIGGER_NOT_FOUND}
-            if _team_scoped_key_mismatch(await _pipeline_owner_team_id(s, trigger.pipeline_id)):
-                return _team_scope_error("pipeline", str(trigger.pipeline_id))
 
             if (cron_expression is not None or cron_timezone is not None) and trigger.trigger_type != "cron":
                 return {"error": "validation", "detail": "Only cron triggers can have cron configuration"}
