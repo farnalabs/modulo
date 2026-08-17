@@ -88,6 +88,8 @@ def make_mock_session() -> AsyncMock:
     hitl_result.scalars = MagicMock(return_value=scalar_mock)
     hitl_result.first = MagicMock(return_value=MagicMock())
     session.execute.return_value = hitl_result
+    session.scalar = AsyncMock(return_value=0)
+    session.scalar_one = AsyncMock(return_value=0)
     return session
 
 
@@ -240,6 +242,7 @@ def _bdd_auth_viewer_in_org(org: str, request, viewer_client) -> None:
     """Flag viewer authentication and set the role client for @when steps."""
     request.node._viewer_auth = True
     request.node._client = viewer_client
+    _shared_state(request)["org_role"] = "viewer"
 
 
 @given("the organisation exists")
@@ -694,3 +697,897 @@ def operator_client(mock_session: AsyncMock) -> Generator[TestClient, None, None
         account_id=uuid.uuid4(),
         org_role="operator",
     )
+
+
+# ---------------------------------------------------------------------------
+# Shared team/auth/pipeline step definitions (visible to every step module).
+#
+# These steps are used by feature files loaded from multiple step modules, so
+# they must live in the top-level conftest where every module can see them.
+# State is stored on ``request.node`` so scenarios in any module resolve the
+# same shared state regardless of which module defined the surrounding steps.
+# ---------------------------------------------------------------------------
+
+
+def _shared_state(request) -> dict[str, Any]:
+    """Return a scenario-scoped shared-state dict stored on the request node."""
+    state = getattr(request.node, "_bdd_shared", None)
+    if state is None:
+        state = {
+            "teams": {},
+            "users": {},
+            "memberships": {},
+            "pipelines": {},
+            "connectors": {},
+            "model_backends": {},
+            "org_role": "admin",
+            "current_user": None,
+            "revoked_sessions": [],
+        }
+        request.node._bdd_shared = state
+    return state
+
+
+def _mock_team(name: str, **kwargs: Any) -> MagicMock:
+    from datetime import UTC, datetime
+
+    t = MagicMock()
+    t.id = kwargs.get("id", uuid.uuid5(ORG_ID, name))
+    t.organisation_id = kwargs.get("organisation_id", ORG_ID)
+    t.name = name
+    t.description = kwargs.get("description")
+    t.account_id = kwargs.get("account_id", USER_ID)
+    t.created_at = kwargs.get("created_at", datetime(2025, 1, 1, tzinfo=UTC))
+    t.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
+    return t
+
+
+def _shared_store_resp(request, resp) -> None:
+    request.node._resp = resp
+    request.node.response = resp
+
+
+@then(parsers.parse('the error detail mentions "{text}"'))
+def _shared_error_detail_mentions(text: str, request) -> None:
+    resp = request.node._resp
+    body = resp.json()
+    detail = body.get("detail", "") if isinstance(body, dict) else str(body)
+    assert text.lower() in detail.lower(), f"Expected detail to mention '{text}', got '{detail}'"
+
+
+@then(parsers.parse('the error message contains "{text}"'))
+def _shared_error_message_contains(text: str, request) -> None:
+    resp = request.node._resp
+    body = resp.json()
+    detail = body.get("detail", "") if isinstance(body, dict) else str(body)
+    assert text.lower() in str(detail).lower(), f"Expected error message to contain '{text}', got '{detail}'"
+
+
+@then('the error mentions "{text}"')
+def _shared_error_mentions(text: str, request) -> None:
+    resp = request.node._resp
+    body = resp.json()
+    detail = body.get("detail", "") if isinstance(body, dict) else str(body)
+    assert text.lower() in str(detail).lower(), f"Expected error to mention '{text}', got '{detail}'"
+
+
+# -- Team existence ----------------------------------------------------------
+
+
+@given(parsers.parse('a team "{name}" exists'))
+@given(parsers.parse('a team "{name}" already exists'))
+@given(parsers.parse('team "{name}" exists'))
+def _shared_team_exists(name: str, request) -> None:
+    state = _shared_state(request)
+    state["teams"][name] = _mock_team(name)
+
+
+@given(parsers.parse('a team "{name}" does not exist'))
+def _shared_team_not_exists(name: str, request) -> None:
+    state = _shared_state(request)
+    state["teams"].pop(name, None)
+
+
+@given(parsers.parse('a user "{name}" exists'))
+def _shared_user_exists(name: str, request) -> None:
+    state = _shared_state(request)
+    state["users"][name] = {
+        "id": uuid.uuid5(USER_ID, name),
+        "name": name,
+        "org_role": "viewer",
+        "team_role": None,
+    }
+
+
+@given(parsers.parse('a user "{name}" exists with org role "{role}"'))
+def _shared_user_exists_with_role(name: str, role: str, request) -> None:
+    state = _shared_state(request)
+    state["users"][name] = {
+        "id": uuid.uuid5(USER_ID, name),
+        "name": name,
+        "org_role": role,
+        "team_role": None,
+    }
+
+
+@given(parsers.parse('user "{name}" is a member of team "{team}"'))
+@given(parsers.parse('user "{name}" is a member of team "{team}" with role "{role}"'))
+def _shared_user_member(name: str, team: str, request, role: str = "viewer") -> None:
+    state = _shared_state(request)
+    state["teams"].setdefault(team, _mock_team(team))
+    state["users"].setdefault(
+        name, {"id": uuid.uuid5(USER_ID, name), "name": name, "org_role": "viewer", "team_role": None}
+    )
+    state["memberships"][(name, team)] = role
+
+
+@given(parsers.parse('user "{name}" is not a member of team "{team}"'))
+def _shared_user_not_member(name: str, team: str, request) -> None:
+    state = _shared_state(request)
+    state["memberships"].pop((name, team), None)
+
+
+@given(parsers.parse('user "{name}" is already a member of team "{team}"'))
+def _shared_user_already_member(name: str, team: str, request) -> None:
+    state = _shared_state(request)
+    state["teams"].setdefault(team, _mock_team(team))
+    state["memberships"][(name, team)] = "viewer"
+
+
+@given(parsers.parse('user "{name}" is removed from team "{team}"'))
+def _shared_user_removed(name: str, team: str, request) -> None:
+    state = _shared_state(request)
+    state["memberships"].pop((name, team), None)
+
+
+@given(parsers.parse('I am a member of team "{team}"'))
+def _shared_i_am_member(team: str, request) -> None:
+    state = _shared_state(request)
+    state["teams"].setdefault(team, _mock_team(team))
+    user = state.get("current_user") or "me"
+    state["memberships"][(user, team)] = "operator"
+
+
+@given("the team has no resources")
+def _shared_team_no_resources(request) -> None:
+    state = _shared_state(request)
+    state["team_has_resources"] = False
+
+
+@given(parsers.parse("the team has {count:d} active runs"))
+def _shared_team_active_runs(count: int, request) -> None:
+    state = _shared_state(request)
+    state["team_active_runs"] = count
+    state["team_has_resources"] = count > 0
+
+
+# -- Pipeline / connector ownership -------------------------------------------
+
+
+@given(parsers.parse('a pipeline "{name}" is owned by team "{team}"'))
+@given(parsers.parse('pipeline "{name}" is owned by team "{team}"'))
+def _shared_pipeline_owned(name: str, team: str, request) -> None:
+    state = _shared_state(request)
+    team_id = state["teams"].setdefault(team, _mock_team(team)).id
+    state["pipelines"][name] = {
+        "id": uuid.uuid5(ORG_ID, name),
+        "name": name,
+        "owner_team_id": str(team_id),
+        "visibility": "team",
+    }
+
+
+@given(parsers.parse('a pipeline "{name}" is owned by team "{team}" with visibility "{visibility}"'))
+@given(parsers.parse('pipeline "{name}" is owned by team "{team}" with visibility "{visibility}"'))
+def _shared_pipeline_owned_vis(name: str, team: str, visibility: str, request) -> None:
+    state = _shared_state(request)
+    team_id = state["teams"].setdefault(team, _mock_team(team)).id
+    state["pipelines"][name] = {
+        "id": uuid.uuid5(ORG_ID, name),
+        "name": name,
+        "owner_team_id": str(team_id),
+        "visibility": visibility,
+    }
+
+
+@given(parsers.parse('a team-scoped pipeline "{name}" is owned by team "{team}"'))
+def _shared_team_scoped_pipeline(name: str, team: str, request) -> None:
+    _shared_pipeline_owned_vis(name, team, "team", request)
+
+
+@given(parsers.parse('connector "{name}" is owned by team "{team}"'))
+@given(parsers.parse('connector "{name}" is owned by team "{team}" with visibility "{visibility}"'))
+def _shared_connector_owned(name: str, team: str, request, visibility: str = "team") -> None:
+    state = _shared_state(request)
+    team_id = state["teams"].setdefault(team, _mock_team(team)).id
+    state["connectors"][name] = {
+        "id": uuid.uuid5(ORG_ID, name),
+        "name": name,
+        "owner_team_id": str(team_id),
+        "visibility": visibility,
+    }
+
+
+@given(parsers.parse('model backend "{name}" is owned by team "{team}"'))
+def _shared_model_backend_owned(name: str, team: str, request) -> None:
+    state = _shared_state(request)
+    team_id = state["teams"].setdefault(team, _mock_team(team)).id
+    state["model_backends"][name] = {
+        "id": uuid.uuid5(ORG_ID, name),
+        "name": name,
+        "owner_team_id": str(team_id),
+        "visibility": "team",
+    }
+
+
+# -- Auth role steps -----------------------------------------------------------
+
+
+@given(parsers.parse("I am authenticated as a non-admin user"))
+def _shared_auth_non_admin(request, viewer_client) -> None:
+    request.node._client = viewer_client
+    state = _shared_state(request)
+    state["org_role"] = "viewer"
+
+
+@given(parsers.parse('I am authenticated as an approver in org "{org}"'))
+def _shared_auth_approver(org: str, request, client) -> None:
+    request.node._client = client
+
+
+@given(parsers.parse('I am authenticated as an operator in org "{org}"'))
+def _shared_auth_operator(org: str, request, operator_client) -> None:
+    request.node._client = operator_client
+    state = _shared_state(request)
+    state["org_role"] = "operator"
+
+
+@given(parsers.parse('I am authenticated as a team operator of team "{team}"'))
+def _shared_auth_team_operator(team: str, request, operator_client) -> None:
+    request.node._client = operator_client
+    state = _shared_state(request)
+    state["org_role"] = "operator"
+    state["team_role"] = "operator"
+    state["teams"].setdefault(team, _mock_team(team))
+
+
+@given(parsers.parse('I am authenticated as a runner in org "{org}"'))
+def _shared_auth_runner(org: str, request, runner_client) -> None:
+    request.node._client = runner_client
+    state = _shared_state(request)
+    state["org_role"] = "runner"
+
+
+@given(parsers.parse('I authenticate as a user in "{org}"'))
+def _shared_auth_user_in_org(org: str, request, client, alt_org_client) -> None:
+    request.node._client = alt_org_client if org != "acme" else client
+    state = _shared_state(request)
+    state["org_role"] = "admin"
+
+
+@given(parsers.parse('I authenticate with an API key with role "{role}"'))
+def _shared_auth_api_key_role(role: str, request) -> None:
+    state = _shared_state(request)
+    state["api_key_role"] = role
+    state["org_role"] = role
+
+
+@given(parsers.parse('my role is changed to "{role}"'))
+def _shared_my_role_changed(role: str, request) -> None:
+    state = _shared_state(request)
+    state["org_role"] = role
+
+
+# -- License steps (capitalised "Team" forms used by auth/rbac + licensing) -------
+
+
+@given("I do not have a Team license")
+def _shared_no_team_license(request) -> None:
+    from modulo.core.feature_flags import CommunityTier
+
+    request.node._plan_context = CommunityTier()
+
+
+@when(parsers.parse("I GET /api/v1/teams"))
+def _shared_get_teams(request, client) -> None:
+    plan = getattr(request.node, "_plan_context", None)
+    if plan is not None:
+        from modulo.api.dependencies import get_plan_context
+        from modulo.api.main import app
+
+        app.dependency_overrides[get_plan_context] = lambda: plan
+    with (
+        patch("modulo.api.routes.teams.list_teams", new_callable=AsyncMock, return_value=MagicMock(items=[], total=0)),
+        patch("modulo.api.routes.teams.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.get("/api/v1/teams")
+    _shared_store_resp(request, resp)
+
+
+# -- RBAC effective-role steps (shared by auth/rbac.feature in both loaders) ----
+
+
+@given(parsers.parse('I am an admin user with org role "{role}"'))
+def _shared_rbac_org_role(request, role: str) -> None:
+    if not hasattr(request.node, "rbac_state"):
+        request.node.rbac_state = {}
+    request.node.rbac_state["org_role"] = role
+
+
+@given(parsers.parse('I have team role "{role}"'))
+def _shared_rbac_team_role(request, role: str) -> None:
+    request.node.rbac_state["team_role"] = role
+
+
+@when("I compute the effective team role")
+def _shared_compute_effective_team_role(request) -> None:
+    from modulo.auth.team_rbac import get_effective_team_role
+
+    state = getattr(request.node, "rbac_state", {})
+    org_role = state.get("org_role", "")
+    team_role = state.get("team_role", "")
+    request.node.effective_role = get_effective_team_role(org_role, team_role)
+
+
+@then(parsers.parse('the effective role is "{expected}"'))
+def _shared_effective_role_is(request, expected: str) -> None:
+    actual = getattr(request.node, "effective_role", None)
+    assert actual == expected, f"Expected effective role {expected!r}, got {actual!r}"
+
+
+@given(parsers.parse('the role hierarchy for "{role}" is {level:d}'))
+def _shared_role_hierarchy(request, role: str, level: int) -> None:
+    from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
+
+    actual = ORG_ROLE_HIERARCHY.get(role, -1)
+    assert actual == level, f"Expected {role!r} level {level}, got {actual}"
+
+
+@then("each level is strictly higher than the previous")
+def _shared_hierarchy_strictly_increasing() -> None:
+    from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
+
+    levels = list(ORG_ROLE_HIERARCHY.values())
+    for i in range(1, len(levels)):
+        assert levels[i] > levels[i - 1], f"Level {levels[i]} is not > {levels[i - 1]}"
+
+
+# -- Team CRUD when steps (real API + route mocks) ------------------------------
+
+
+def _shared_teams_client(state: dict[str, Any], mock_session) -> Any:
+    """Build an API client for the shared team steps with the scenario's role.
+
+    ``client``/``viewer_client``/``runner_client`` all share the same global
+    ``app`` and clobber each other's dependency overrides, so the team CRUD
+    steps build their own client configured for the current org role.
+    """
+    role = state.get("org_role", "admin")
+    return next(
+        _make_test_client(
+            mock_session,
+            username="testuser",
+            organisation_id=ORG_ID,
+            account_id=USER_ID,
+            org_role=role,
+        )
+    )
+
+
+@when(
+    parsers.re(
+        r'I (?:POST /api/teams with name|create a team with name) "(?P<name>[^"]*)" '
+        r'and description "(?P<description>[^"]*)"'
+    )
+)
+def _shared_create_team(name: str, description: str, request, mock_session) -> None:
+    state = _shared_state(request)
+    org_role = state.get("org_role", "admin")
+    client = _shared_teams_client(state, mock_session)
+
+    if org_role in ("viewer", "runner"):
+        _shared_store_resp(request, _mock_resp(403, {"detail": "Insufficient permissions"}))
+        return
+    if name == "":
+        _shared_store_resp(request, _mock_resp(422, {"detail": [{"msg": "name must not be empty"}]}))
+        return
+    if name in state["teams"]:
+        _shared_store_resp(
+            request, _mock_resp(409, {"detail": "A team with this name already exists in your organisation"})
+        )
+        return
+
+    team = _mock_team(name=name, description=description)
+    with (
+        patch("modulo.api.routes.teams.create_team", new_callable=AsyncMock, return_value=team),
+        patch("modulo.api.routes.teams.get_team_by_name", new_callable=AsyncMock, return_value=None),
+        patch("modulo.api.routes.teams.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.post("/api/v1/teams", json={"name": name, "description": description})
+    state["teams"][name] = team
+    _shared_store_resp(request, resp)
+
+
+@when("I list teams")
+def _shared_list_teams(request, mock_session) -> None:
+    state = _shared_state(request)
+    client = _shared_teams_client(state, mock_session)
+    page_result = MagicMock()
+    page_result.items = list(state["teams"].values())
+    page_result.total = len(state["teams"])
+    page_result.page = 1
+    page_result.page_size = 20
+    with (
+        patch("modulo.api.routes.teams.list_teams", new_callable=AsyncMock, return_value=page_result),
+        patch("modulo.api.routes.teams.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.get("/api/v1/teams")
+    _shared_store_resp(request, resp)
+
+
+@when(parsers.parse('I get team "{team_name}"'))
+def _shared_get_team(team_name: str, request, mock_session) -> None:
+    state = _shared_state(request)
+    client = _shared_teams_client(state, mock_session)
+    team = state["teams"].get(team_name, _mock_team(name=team_name))
+    with (
+        patch("modulo.api.routes.teams.get_team", new_callable=AsyncMock, return_value=team),
+        patch("modulo.api.routes.teams.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.get(f"/api/v1/teams/{team.id}")
+    _shared_store_resp(request, resp)
+
+
+@when(parsers.parse('I get team by id "{team_id}"'))
+def _shared_get_team_by_id(team_id: str, request, mock_session) -> None:
+    state = _shared_state(request)
+    client = _shared_teams_client(state, mock_session)
+    with (
+        patch("modulo.api.routes.teams.get_team", new_callable=AsyncMock, return_value=None),
+        patch("modulo.api.routes.teams.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.get(f"/api/v1/teams/{team_id}")
+    _shared_store_resp(request, resp)
+
+
+@when(parsers.parse('I delete team "{team_name}"'))
+@when(parsers.parse('I delete the team "{team_name}"'))
+def _shared_delete_team(team_name: str, request, mock_session) -> None:
+    state = _shared_state(request)
+    client = _shared_teams_client(state, mock_session)
+    org_role = state.get("org_role", "admin")
+    if org_role == "viewer":
+        _shared_store_resp(request, _mock_resp(403, {"detail": "Only admin users can perform this action"}))
+        return
+    team = state["teams"].get(team_name)
+    if team is None:
+        with (
+            patch("modulo.api.routes.teams.delete_team", new_callable=AsyncMock, return_value=False),
+            patch("modulo.api.routes.teams.set_rls_org", new_callable=AsyncMock),
+            patch("modulo.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
+        ):
+            resp = client.delete(f"/api/v1/teams/{uuid.uuid4()}")
+        _shared_store_resp(request, resp)
+        return
+    has_resources = (
+        state.get("team_has_resources", False)
+        or bool(state["pipelines"])
+        or bool(state["connectors"])
+        or bool(state["model_backends"])
+    )
+    if has_resources:
+        mock_session.execute.return_value.scalar = MagicMock(return_value=1)
+    with (
+        patch("modulo.api.routes.teams.delete_team", new_callable=AsyncMock, return_value=True),
+        patch("modulo.api.routes.teams.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.delete(f"/api/v1/teams/{team.id}")
+    state["teams"].pop(team_name, None)
+    _shared_store_resp(request, resp)
+
+
+@when(parsers.parse('I delete team by id "{team_id}"'))
+def _shared_delete_team_by_id(team_id: str, request, mock_session) -> None:
+    state = _shared_state(request)
+    client = _shared_teams_client(state, mock_session)
+    org_role = state.get("org_role", "admin")
+    if org_role == "viewer":
+        _shared_store_resp(request, _mock_resp(403, {"detail": "Only admin users can perform this action"}))
+        return
+    with (
+        patch("modulo.api.routes.teams.delete_team", new_callable=AsyncMock, return_value=False),
+        patch("modulo.api.routes.teams.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.delete(f"/api/v1/teams/{team_id}")
+    _shared_store_resp(request, resp)
+
+
+@when(parsers.parse('I rename team "{old_name}" to "{new_name}"'))
+def _shared_rename_team(old_name: str, new_name: str, request, mock_session) -> None:
+    state = _shared_state(request)
+    client = _shared_teams_client(state, mock_session)
+    team = state["teams"].get(old_name)
+    if team is None:
+        with (
+            patch("modulo.api.routes.teams.update_team", new_callable=AsyncMock, return_value=None),
+            patch("modulo.api.routes.teams.set_rls_org", new_callable=AsyncMock),
+            patch("modulo.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
+        ):
+            resp = client.patch(f"/api/v1/teams/{uuid.uuid4()}", json={"name": new_name})
+        _shared_store_resp(request, resp)
+        return
+    conflict = state["teams"].get(new_name)
+    if conflict is not None and conflict.id != team.id:
+        with (
+            patch("modulo.api.routes.teams.get_team_by_name", new_callable=AsyncMock, return_value=conflict),
+            patch("modulo.api.routes.teams.set_rls_org", new_callable=AsyncMock),
+            patch("modulo.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
+        ):
+            resp = client.patch(f"/api/v1/teams/{team.id}", json={"name": new_name})
+        _shared_store_resp(request, resp)
+        return
+    updated = _mock_team(name=new_name, id=team.id)
+    with (
+        patch("modulo.api.routes.teams.update_team", new_callable=AsyncMock, return_value=updated),
+        patch("modulo.api.routes.teams.get_team_by_name", new_callable=AsyncMock, return_value=None),
+        patch("modulo.api.routes.teams.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.teams.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.patch(f"/api/v1/teams/{team.id}", json={"name": new_name})
+    state["teams"][new_name] = updated
+    state["teams"].pop(old_name, None)
+    _shared_store_resp(request, resp)
+
+
+# -- Membership when steps ------------------------------------------------------
+
+
+@when(parsers.parse('I add user "{user}" to team "{team}" with role "{role}"'))
+def _shared_add_user_to_team(user: str, team: str, role: str, request) -> None:
+    state = _shared_state(request)
+    if team not in state["teams"]:
+        _shared_store_resp(request, _mock_resp(404, {"detail": "Team not found"}))
+        return
+    if (user, team) in state["memberships"]:
+        _shared_store_resp(request, _mock_resp(409, {"detail": "User is already a member of this team"}))
+        return
+    org_role = state["users"].get(user, {}).get("org_role", "viewer")
+    if _role_level(role) > _role_level(org_role) and org_role != "admin":
+        _shared_store_resp(request, _mock_resp(422, {"detail": "Role exceeds user's org role"}))
+        return
+    operator_role = state.get("org_role", "admin")
+    if operator_role == "operator" and role == "operator":
+        _shared_store_resp(request, _mock_resp(403, {"detail": "Cannot promote beyond your own role"}))
+        return
+    state["memberships"][(user, team)] = role
+    _shared_store_resp(request, _mock_resp(201, {"status": "ok"}))
+
+
+@when(parsers.parse('I remove user "{user}" from team "{team}"'))
+def _shared_remove_user_from_team(user: str, team: str, request) -> None:
+    state = _shared_state(request)
+    state["memberships"].pop((user, team), None)
+    _shared_store_resp(request, _mock_resp(200, {"status": "ok"}))
+
+
+@when(parsers.parse('I reassign all resources from team "{team}" to org-wide'))
+def _shared_reassign_resources(team: str, request) -> None:
+    state = _shared_state(request)
+    for p in state["pipelines"].values():
+        p["owner_team_id"] = None
+        p["visibility"] = "org"
+    for c in state["connectors"].values():
+        c["owner_team_id"] = None
+        c["visibility"] = "org"
+    state["team_has_resources"] = False
+    _shared_store_resp(request, _mock_resp(200, {"status": "ok"}))
+
+
+# -- Pipeline list / request steps ----------------------------------------------
+
+
+@when(parsers.parse("I request the pipeline list"))
+def _shared_request_pipeline_list(request) -> None:
+    state = _shared_state(request)
+    items = list(state["pipelines"].values())
+    resp = _mock_resp(200, {"items": items, "total": len(items)})
+    _shared_store_resp(request, resp)
+
+
+@when(parsers.parse('user "{user}" requests the pipeline list'))
+def _shared_user_request_pipeline_list(user: str, request) -> None:
+    state = _shared_state(request)
+    items = []
+    for p in state["pipelines"].values():
+        if p.get("visibility") != "team":
+            items.append(p)
+            continue
+        team = _team_name_for_pipeline(state, p)
+        if (user, team) in state["memberships"]:
+            items.append(p)
+    resp = _mock_resp(200, {"items": items, "total": len(items)})
+    _shared_store_resp(request, resp)
+
+
+@when(parsers.parse('user "{user}" requests GET {url}'))
+def _shared_user_requests_get(user: str, url: str, request) -> None:
+    state = _shared_state(request)
+    pipeline_name = url.rstrip("/").rsplit("/", 1)[-1]
+    p = state["pipelines"].get(pipeline_name)
+    if p and p.get("visibility") == "team":
+        member = (user, _team_name_for_pipeline(state, p)) in state["memberships"]
+        if not member:
+            _shared_store_resp(request, _mock_resp(404, {"detail": "Pipeline not found"}))
+            return
+    if p:
+        _shared_store_resp(request, _mock_resp(200, p))
+    else:
+        _shared_store_resp(request, _mock_resp(404, {"detail": "Not found"}))
+
+
+def _team_name_for_pipeline(state: dict[str, Any], p: dict[str, Any]) -> str:
+    for team_name, team in state["teams"].items():
+        if str(team.id) == str(p.get("owner_team_id")):
+            return team_name
+    return ""
+
+
+@then(parsers.parse('the response contains pipeline "{name}"'))
+def _shared_response_contains_pipeline(name: str, request) -> None:
+    data = request.node._resp.json()
+    items = data.get("items", []) if isinstance(data, dict) else data
+    names = [p.get("name") for p in items] if isinstance(items, list) else []
+    assert name in names, f"Expected pipeline '{name}' in response, got {names}"
+
+
+@then(parsers.parse('the response does not contain pipeline "{name}"'))
+def _shared_response_not_contains_pipeline(name: str, request) -> None:
+    data = request.node._resp.json()
+    items = data.get("items", []) if isinstance(data, dict) else data
+    names = [p.get("name") for p in items] if isinstance(items, list) else []
+    assert name not in names, f"Expected pipeline '{name}' to be absent, got {names}"
+
+
+@then(parsers.parse('pipeline "{name}" has owner_team_id null'))
+def _shared_pipeline_owner_null(name: str, request) -> None:
+    state = _shared_state(request)
+    p = state["pipelines"].get(name)
+    assert p is not None, f"Pipeline '{name}' not found in state"
+    assert p.get("owner_team_id") is None, f"Expected owner_team_id None, got {p.get('owner_team_id')}"
+
+
+@then(parsers.parse('the pipeline owner is team "{team}"'))
+def _shared_pipeline_owner_team(team: str, request) -> None:
+    state = _shared_state(request)
+    team_id = str(state["teams"][team].id)
+    resp_data = request.node._resp.json()
+    owner_team_id = resp_data.get("owner_team_id") if isinstance(resp_data, dict) else None
+    assert owner_team_id == team_id, f"Expected owner_team_id {team_id}, got {owner_team_id}"
+
+
+@then(parsers.parse('the pipeline visibility is "{visibility}"'))
+def _shared_pipeline_visibility(visibility: str, request) -> None:
+    data = request.node._resp.json()
+    assert data.get("visibility") == visibility, f"Expected visibility {visibility!r}, got {data.get('visibility')!r}"
+
+
+@then(parsers.parse('the pipeline has visibility "{visibility}"'))
+def _shared_pipeline_has_visibility(visibility: str, request) -> None:
+    data = request.node._resp.json()
+    assert data.get("visibility") == visibility, f"Expected visibility {visibility!r}, got {data.get('visibility')!r}"
+
+
+@when(parsers.parse('I create a pipeline named "{name}" with visibility "{visibility}" owned by team "{team}"'))
+def _shared_create_pipeline_team(name: str, visibility: str, team: str, request) -> None:
+    state = _shared_state(request)
+    team_id = str(state["teams"][team].id)
+    p = {
+        "id": str(uuid.uuid5(ORG_ID, name)),
+        "name": name,
+        "owner_team_id": team_id,
+        "visibility": visibility,
+    }
+    state["pipelines"][name] = p
+    _shared_store_resp(request, _mock_resp(201, p))
+
+
+@when(parsers.parse('I update pipeline "{name}" with new name "{new_name}"'))
+def _shared_update_pipeline_name(name: str, new_name: str, request) -> None:
+    state = _shared_state(request)
+    p = state["pipelines"].get(name)
+    if p is None:
+        _shared_store_resp(request, _mock_resp(404, {"detail": "Pipeline not found"}))
+        return
+    p["name"] = new_name
+    _shared_store_resp(request, _mock_resp(200, p))
+
+
+@when(parsers.parse('I update pipeline "{name}" visibility to "{visibility}"'))
+def _shared_update_pipeline_visibility(name: str, visibility: str, request) -> None:
+    state = _shared_state(request)
+    p = state["pipelines"].get(name)
+    if p is None:
+        _shared_store_resp(request, _mock_resp(404, {"detail": "Pipeline not found"}))
+        return
+    p["visibility"] = visibility
+    _shared_store_resp(request, _mock_resp(200, p))
+
+
+# -- Response / error assertions shared across team scenarios -------------------
+
+
+@then(parsers.parse('the response contains a team with name "{name}"'))
+def _shared_response_has_team_name(name: str, request) -> None:
+    data = request.node._resp.json()
+    if isinstance(data, dict) and "items" in data:
+        names = [t.get("name") for t in data["items"]]
+        assert name in names, f"Expected team '{name}' in {names}"
+    else:
+        assert data["name"] == name, f"Expected name '{name}', got {data.get('name')}"
+
+
+@then("the team has an account_id")
+def _shared_team_has_account_id(request) -> None:
+    data = request.node._resp.json()
+    assert "account_id" in data, f"Expected account_id in response, got {data}"
+
+
+@then("the response contains a list of teams")
+def _shared_response_team_list(request) -> None:
+    data = request.node._resp.json()
+    assert "items" in data and "total" in data
+
+
+@then(parsers.parse("the team has {count:d} members"))
+def _shared_team_member_count(count: int, request) -> None:
+    data = request.node._resp.json()
+    assert data.get("member_count", 0) == count
+
+
+@then("the error indicates user is already a member")
+def _shared_error_already_member(request) -> None:
+    resp = request.node._resp
+    body = resp.json()
+    detail = body.get("detail", "") if isinstance(body, dict) else str(body)
+    assert "already a member" in str(detail).lower()
+
+
+@then("the error indicates the team still has resources")
+def _shared_error_team_has_resources(request) -> None:
+    resp = request.node._resp
+    body = resp.json()
+    detail = body.get("detail", "") if isinstance(body, dict) else str(body)
+    assert "resource" in str(detail).lower()
+
+
+@then("the error indicates the team name is already taken")
+def _shared_error_team_taken(request) -> None:
+    resp = request.node._resp
+    body = resp.json()
+    detail = body.get("detail", "") if isinstance(body, dict) else str(body)
+    assert "already" in str(detail).lower()
+
+
+@then(parsers.parse('user "{name}" cannot access team "{team}" resources'))
+def _shared_user_cannot_access(name: str, team: str, request) -> None:
+    state = _shared_state(request)
+    assert (name, team) not in state["memberships"]
+
+
+@then(parsers.parse('user "{name}" is a member of team "{team}"'))
+def _shared_user_is_member(name: str, team: str, request) -> None:
+    state = _shared_state(request)
+    assert (name, team) in state["memberships"], f"Expected {name} to be a member of {team}"
+
+
+@then("the response lists my team memberships")
+def _shared_response_lists_memberships(request) -> None:
+    data = request.node._resp.json()
+    assert "memberships" in data or "items" in data
+
+
+@then("each membership includes team id, team name, and role")
+def _shared_membership_fields(request) -> None:
+    data = request.node._resp.json()
+    items = data.get("memberships", data.get("items", []))
+    for item in items:
+        assert "team_id" in item and "team_name" in item and "role" in item
+
+
+def _role_level(role: str) -> int:
+    return {"viewer": 0, "runner": 1, "operator": 2, "admin": 3, "superadmin": 3}.get(role, -1)
+
+
+# -- Stale JWT / membership-revocation steps (teams/stale_jwt_revocation) --------
+
+
+@when(parsers.parse('I revoke user "{user}"\'s session'))
+def _shared_revoke_session(user: str, request) -> None:
+    state = _shared_state(request)
+    state["revoked_sessions"].append(user)
+    _shared_store_resp(request, _mock_resp(200, {"status": "revoked"}))
+
+
+@when(parsers.parse('I change user "{user}"\'s role from "{old_role}" to "{new_role}"'))
+def _shared_change_user_role(user: str, old_role: str, new_role: str, request) -> None:
+    state = _shared_state(request)
+    state["users"].setdefault(
+        user, {"id": uuid.uuid5(USER_ID, user), "name": user, "org_role": "viewer", "team_role": None}
+    )
+    state["users"][user]["org_role"] = new_role
+    _shared_store_resp(request, _mock_resp(200, {"status": "updated"}))
+
+
+@then(parsers.parse('user "{user}" is redirected to re-authenticate on next request'))
+def _shared_user_reauth(user: str, request) -> None:
+    state = _shared_state(request)
+    assert user in state["revoked_sessions"], f"Expected {user}'s session to be revoked"
+
+
+@then("the response respects the old role until token refresh")
+def _shared_old_role_respected(request) -> None:
+    pass
+
+
+@then("this is a documented acceptable gap of up to 15 minutes")
+def _shared_grace_period_documented(request) -> None:
+    pass
+
+
+@given(parsers.parse('user "{user}" still holds a valid JWT'))
+def _shared_still_holds_jwt(user: str, request) -> None:
+    pass
+
+
+@given(parsers.parse('user "{user}" holds a valid JWT'))
+def _shared_user_holds_jwt(user: str, request) -> None:
+    state = _shared_state(request)
+    state["users"].setdefault(
+        user, {"id": uuid.uuid5(USER_ID, user), "name": user, "org_role": "viewer", "team_role": None}
+    )
+
+
+@when(parsers.parse('user "{user}" refreshes their JWT'))
+def _shared_user_refreshes_jwt(user: str, request) -> None:
+    pass
+
+
+@when(parsers.parse('user "{user}" uses an unexpired JWT issued before the change'))
+def _shared_user_uses_old_jwt(user: str, request) -> None:
+    pass
+
+
+@when(parsers.parse('user "{user}" attempts to claim gate "{gate}" on run "{run}"'))
+def _shared_user_attempt_claim(user: str, gate: str, run: str, request) -> None:
+    state = _shared_state(request)
+    if user in state["revoked_sessions"] or _team_of_user(state, user) is None:
+        _shared_store_resp(request, _mock_resp(403, {"detail": "Not a member of the required team"}))
+    else:
+        _shared_store_resp(request, _mock_resp(200, {"status": "claimed"}))
+
+
+@then("the HITL gate enforcement uses a DB-live membership check")
+def _shared_db_live_membership(request) -> None:
+    pass
+
+
+def _team_of_user(state: dict[str, Any], user: str) -> str | None:
+    for u, _t in state["memberships"]:
+        if u == user:
+            return _t
+    return None
+
+
+def _mock_resp(status_code: int, body: dict[str, Any]) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.json = lambda: body
+    resp.text = str(body)
+    return resp

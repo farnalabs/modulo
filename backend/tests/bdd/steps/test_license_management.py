@@ -145,7 +145,7 @@ def non_admin_user(ctx: dict[str, Any]) -> None:
     ctx["is_admin"] = False
 
 
-@given("I have a signed team license key")
+@given("I have a signed Team license key")
 def signed_team_key(ctx: dict[str, Any]) -> None:
     payload = _valid_payload()
     ctx["license_key"] = _sign_license_payload(payload)
@@ -176,7 +176,7 @@ def no_license(ctx: dict[str, Any]) -> None:
     clear_license()
 
 
-@given("I have stored a valid team license")
+@given("I have stored a valid Team license")
 def stored_valid_license(ctx: dict[str, Any]) -> None:
     payload = _valid_payload()
     key = _sign_license_payload(payload)
@@ -186,7 +186,7 @@ def stored_valid_license(ctx: dict[str, Any]) -> None:
     ctx["stored_key"] = key
 
 
-@given("I have stored a valid team license with a known expiry")
+@given("I have stored a valid Team license with a known expiry")
 def stored_license_with_expiry(ctx: dict[str, Any]) -> None:
     payload = _valid_payload()
     key = _sign_license_payload(payload)

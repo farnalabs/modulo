@@ -1082,3 +1082,204 @@ def then_parameter_ports_contain(port_name: str, request: pytest.FixtureRequest)
     ports = body.get("parameter_ports", [])
     names = [p.get("name") for p in ports]
     assert port_name in names, f"Expected parameter port '{port_name}' in {names}"
+
+
+# ---------------------------------------------------------------------------
+#  /api/v1/ step variants (composite_crud.feature uses /api/v1/ paths)
+#  These mirror the /api/ steps above but match the feature file text.
+# ---------------------------------------------------------------------------
+
+
+@when(parsers.parse("I GET /api/v1/composite-templates"))
+def crud_list_composites_v1(client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
+    from modulo.db.crud.base import PageResult
+
+    _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
+    mock_templates = getattr(request.node, "_mock_templates", [])
+    page_result = getattr(request.node, "_page_result", None)
+    if page_result is None:
+        page_result = PageResult(items=mock_templates, total=len(mock_templates), page=1, page_size=20)
+    patcher = patch(
+        "modulo.api.routes.composite_templates.list_composite_templates",
+        new_callable=AsyncMock,
+        return_value=page_result,
+    )
+    patcher.start()
+    patches.append(patcher)
+    resp = client.get("/api/v1/composite-templates")
+    _store_response(request, resp)
+
+
+@when(parsers.parse("I GET /api/v1/composite-templates/{template_id}"))
+def crud_get_composite_v1(client, template_id: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
+    _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
+    mock_template = getattr(request.node, "_mock_template", _make_template(id=uuid.UUID(template_id)))
+    patcher = patch(
+        "modulo.api.routes.composite_templates.get_composite_template",
+        new_callable=AsyncMock,
+        return_value=mock_template,
+    )
+    patcher.start()
+    patches.append(patcher)
+    resp = client.get(f"/api/v1/composite-templates/{template_id}")
+    _store_response(request, resp)
+
+
+@when(parsers.parse('I PATCH /api/v1/composite-templates/{template_id} with new name "{new_name}"'))
+def crud_patch_composite_v1(
+    client, template_id: str, new_name: str, request: pytest.FixtureRequest, patches: list[Any]
+) -> None:
+    _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
+    mock_template = getattr(request.node, "_mock_template", _make_template(id=uuid.UUID(template_id), name=new_name))
+    patcher = patch(
+        "modulo.api.routes.composite_templates.update_composite_template",
+        new_callable=AsyncMock,
+        return_value=mock_template,
+    )
+    patcher.start()
+    patches.append(patcher)
+    resp = client.patch(f"/api/v1/composite-templates/{template_id}", json={"name": new_name})
+    _store_response(request, resp)
+
+
+@when(parsers.parse("I DELETE /api/v1/composite-templates/{template_id}"))
+def crud_delete_composite_v1(client, template_id: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
+    _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
+    patcher = patch(
+        "modulo.api.routes.composite_templates.delete_composite_template",
+        new_callable=AsyncMock,
+        return_value=True,
+    )
+    patcher.start()
+    patches.append(patcher)
+    resp = client.delete(f"/api/v1/composite-templates/{template_id}")
+    _store_response(request, resp)
+
+
+@when(parsers.parse('the user from org "{org}" requests GET /api/v1/composite-templates/{template_id}'))
+def other_org_get_composite_v1(org: str, template_id: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
+    _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
+    patcher = patch(
+        "modulo.api.routes.composite_templates.get_composite_template",
+        new_callable=AsyncMock,
+        return_value=None,
+    )
+    patcher.start()
+    patches.append(patcher)
+    resp = request.getfixturevalue("alt_org_client").get(f"/api/v1/composite-templates/{template_id}")
+    _store_response(request, resp)
+
+
+@when(
+    parsers.parse(
+        'I POST /api/v1/composite-templates with name "{name}" and a sub-pipeline containing agent "{agent_name}"'
+    )
+)
+def crud_post_composite_v1(
+    client, name: str, agent_name: str, request: pytest.FixtureRequest, patches: list[Any]
+) -> None:
+    _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
+    mock_template = _make_template(name=name)
+    patcher = patch(
+        "modulo.api.routes.composite_templates.create_composite_template",
+        new_callable=AsyncMock,
+        return_value=mock_template,
+    )
+    patcher.start()
+    patches.append(patcher)
+    agent_id = str(uuid.uuid4())
+    body = {
+        "name": name,
+        "sub_pipeline_graph_json": {
+            "nodes": [{"id": agent_id, "agent_id": agent_id, "prompt": "You are a critic."}],
+            "edges": [],
+        },
+        "parameter_ports_json": [
+            {
+                "id": str(uuid.uuid4()),
+                "name": "tone",
+                "label": "Tone",
+                "type": "string",
+                "required": False,
+                "target_injection": {
+                    "mode": "prompt_replace",
+                    "node_id": agent_id,
+                    "injection_point": "prompt_template",
+                },
+            },
+        ],
+    }
+    resp = client.post("/api/v1/composite-templates", json=body)
+    _store_response(request, resp)
+
+
+@when("I POST /api/v1/composite-templates with an empty name")
+def crud_post_composite_empty_name_v1(client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
+    _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
+    resp = client.post(
+        "/api/v1/composite-templates", json={"name": "", "sub_pipeline_graph_json": {"nodes": [], "edges": []}}
+    )
+    _store_response(request, resp)
+
+
+@when('I POST /api/v1/composite-templates with invalid port type "blob"')
+def crud_post_composite_invalid_port_v1(client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
+    _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
+    body = {
+        "name": "test",
+        "sub_pipeline_graph_json": {"nodes": [], "edges": []},
+        "parameter_ports_json": [
+            {
+                "id": str(uuid.uuid4()),
+                "name": "bad",
+                "label": "Bad",
+                "type": "blob",
+                "target_injection": {
+                    "mode": "prompt_replace",
+                    "node_id": str(uuid.uuid4()),
+                    "injection_point": "prompt_template",
+                },
+            },
+        ],
+    }
+    resp = client.post("/api/v1/composite-templates", json=body)
+    _store_response(request, resp)
+
+
+@then(parsers.parse('the response name is "{expected}"'))
+def then_response_name_v1(expected: str, request: pytest.FixtureRequest) -> None:
+    body = request.node._resp_body
+    name = body.get("name") if isinstance(body, dict) else ""
+    assert name == expected, f"Expected name '{expected}', got '{name}'"
+
+
+@given("a composite template with input schema compatible with the parent pipeline output")
+def composite_template_compatible_input(request: pytest.FixtureRequest) -> None:
+    request.node._composite_node = {
+        "id": str(uuid.uuid4()),
+        "node_type": "composite",
+        "composite_ref": str(uuid.uuid4()),
+    }
+    request.node._parent_output = {"data": "value"}
+
+
+@given(parsers.parse('a composite node with composite_input_mapping mapping "{target}" to "{source}"'))
+def composite_node_with_mapping_pair(target: str, source: str, request: pytest.FixtureRequest) -> None:
+    request.node._input_mapping = {target: source}
+    request.node._composite_node = {
+        "id": str(uuid.uuid4()),
+        "node_type": "composite",
+        "composite_ref": str(uuid.uuid4()),
+        "composite_input_mapping": request.node._input_mapping,
+    }
+
+
+@given("a pipeline graph has a composite node without composite_ref")
+@given("the pipeline graph has a composite node without providing {param}")
+def composite_node_no_ref(request: pytest.FixtureRequest, param: str = "") -> None:
+    request.node._composite_node = {
+        "id": str(uuid.uuid4()),
+        "node_type": "composite",
+    }
+    if param:
+        request.node._required_param = param

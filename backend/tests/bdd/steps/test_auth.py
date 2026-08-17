@@ -159,52 +159,8 @@ def expired_auth_request(unauth_client: Any, request: Any, ctx: dict[str, Any]) 
 # ===========================================================================
 # auth/rbac.feature  —  5 scenarios
 # ===========================================================================
-
-
-@given(parsers.parse('I am an admin user with org role "{role}"'))
-def step_rbac_org_role(request: Any, role: str) -> None:
-    """Record the org role in request state."""
-    if not hasattr(request.node, "rbac_state"):
-        request.node.rbac_state = {}
-    request.node.rbac_state["org_role"] = role
-
-
-@given(parsers.parse('I have team role "{role}"'))
-def step_rbac_team_role(request: Any, role: str) -> None:
-    request.node.rbac_state["team_role"] = role
-
-
-@when("I compute the effective team role")
-def step_compute_effective_team_role(request: Any) -> None:
-    from modulo.auth.team_rbac import get_effective_team_role
-
-    state = getattr(request.node, "rbac_state", {})
-    org_role = state.get("org_role", "")
-    team_role = state.get("team_role", "")
-    request.node.effective_role = get_effective_team_role(org_role, team_role)
-
-
-@then(parsers.parse('the effective role is "{expected}"'))
-def step_effective_role_is(expected: str, request: Any) -> None:
-    actual = getattr(request.node, "effective_role", None)
-    assert actual == expected, f"Expected effective role {expected!r}, got {actual!r}"
-
-
-@given(parsers.parse('the role hierarchy for "{role}" is {level:d}'))
-def step_role_hierarchy(role: str, level: int, request: Any) -> None:
-    from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
-
-    actual = ORG_ROLE_HIERARCHY.get(role, -1)
-    assert actual == level, f"Expected {role!r} level {level}, got {actual}"
-
-
-@then("each level is strictly higher than the previous")
-def step_hierarchy_strictly_increasing() -> None:
-    from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
-
-    levels = list(ORG_ROLE_HIERARCHY.values())
-    for i in range(1, len(levels)):
-        assert levels[i] > levels[i - 1], f"Level {levels[i]} is not > {levels[i - 1]}"
+# The role-hierarchy steps live in tests/bdd/conftest.py so they are visible
+# to BOTH modules that load rbac.feature (test_auth.py and test_auth_rbac.py).
 
 
 # ===========================================================================

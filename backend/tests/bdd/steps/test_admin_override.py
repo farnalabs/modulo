@@ -28,6 +28,7 @@ def team_exists(name: str, ctx) -> None:
 
 
 @given(parsers.parse('pipeline "{name}" is owned by team "{team_name}" with visibility "{visibility}"'))
+@given(parsers.parse('a pipeline "{name}" is owned by team "{team_name}" with visibility "{visibility}"'))
 def pipeline_owned_by_team(name: str, team_name: str, visibility: str, ctx) -> None:
     team_id = ctx["teams"].get(team_name, {}).get("id", str(uuid.uuid4()))
     ctx["pipelines"][name] = {
@@ -36,6 +37,14 @@ def pipeline_owned_by_team(name: str, team_name: str, visibility: str, ctx) -> N
         "owner_team_id": team_id,
         "visibility": visibility,
     }
+
+
+@then(parsers.parse('the pipeline owner is team "{team_name}"'))
+def pipeline_owner_is_team(team_name: str, request, ctx) -> None:
+    resp = request.node._resp
+    data = resp.json() if hasattr(resp, "json") else {}
+    team_id = ctx["teams"].get(team_name, {}).get("id")
+    assert data.get("owner_team_id") == team_id, f"Expected owner_team_id {team_id}, got {data.get('owner_team_id')}"
 
 
 @given(parsers.parse('connector "{name}" is owned by team "{team_name}" with visibility "{visibility}"'))
