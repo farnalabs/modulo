@@ -24,6 +24,7 @@ import pytest
 from modulo.core.pipeline_engine.executor import (
     _failure_event_matches,
     _graph_has_script_mode,
+    _retry_after_policy,
     _script_lease_probe_ok,
 )
 from modulo.core.pipeline_engine.node_runner import (
@@ -340,6 +341,26 @@ def test_failure_event_matches_still_retries_llm_mode_and_preclaim():
     """LLM-mode / pre-claim retryable codes still retry on a ``failure`` event."""
     assert (
         _failure_event_matches({"failure"}, "failed", "SandboxNodeFailedError", "sandbox.no_output_json", None) is True
+    )
+
+
+def test_script_mode_schema_failure_never_retried():
+    """A script-mode post-claim schema failure is NEVER retried (exactly-once).
+
+    The executor's generic catch publishes the raw exception class name
+    (``ScriptInvalidOutputError``) as the error code, so the retry decision must
+    round-trip that spelling through ``_retry_after_policy`` and yield None
+    (no retry budget) — never re-dispatch a side-effecting script whose output
+    failed schema validation.
+    """
+    assert (
+        _retry_after_policy(
+            {"on": ["failure"], "max_retries": 3},
+            "failed",
+            "ScriptInvalidOutputError",
+            None,
+        )
+        is None
     )
 
 
