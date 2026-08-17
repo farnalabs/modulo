@@ -430,7 +430,7 @@ def test_update_model_backend_empty_list_removes_fallback(client_with_fallback_i
         )
     assert resp.status_code == 200
     assert captured == [{"fallback_backend_ids": []}]
-    assert resp.json()["fallback_backend_ids"] == []
+    assert not resp.json()["fallback_backend_ids"]
 
 
 def test_delete_model_backend_referenced_as_fallback_returns_409(client: TestClient) -> None:
