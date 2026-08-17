@@ -29,10 +29,10 @@ application-layer validation and audit logging**.
 
 | Situation | Do this |
 |-----------|---------|
-| A pipeline run is stuck and `/api/runs/:id/reset` does not work | Follow `docs/operations/admin-bypass.md` |
+| A pipeline run is stuck and `POST /api/v1/runs/{id}/cancel` cannot recover it | Follow `docs/operations/admin-bypass.md` |
 | An admin user forgot their password | **Reset via CLI below** (§2) |
 | `SECRET_KEY` was rotated and all sessions are invalid | Restart services — sessions re-negotiate (§3.1) |
-| `FERNET_KEY` was rotated and credentials fail to decrypt | Run `uv run modulo rotate-credentials` (§3.2) |
+| `FERNET_KEY` was rotated and credentials fail to decrypt | Re-enter credentials under the new key; `modulo restore --previous-fernet-key` does not recover a lost key (§3.2) |
 | Both `SECRET_KEY` and `FERNET_KEY` are lost | **You cannot recover encrypted data** — restore from backup (§4) |
 | You cannot authenticate to the admin UI to debug a configuration issue | Local auth bypass (§5) |
 | You suspect a bug in the application | File a GitHub issue — do not modify the database |
@@ -63,9 +63,7 @@ WHERE is_admin = true;
 ### 2.2 Generate a bcrypt Password Hash
 
 ```bash
-# Using the modulo CLI
-uv run modulo init --generate-password-hash
-# Or using python directly:
+# Generate a bcrypt hash using python directly:
 python3 -c "
 import bcrypt
 password = b'<new-temporary-password>'
@@ -91,10 +89,8 @@ WHERE id = '<admin-user-uuid>';
    admin settings before logging out.
 
 > ⚠️ This bypass does not invalidate existing sessions. If the password reset
-> is part of a security incident, also revoke all sessions:
-> ```bash
-> uv run modulo sessions revoke --user-id <admin-user-uuid>
-> ```
+> is part of a security incident, rotate `SECRET_KEY` and restart services to
+> invalidate all outstanding JWTs (see §3.1).
 
 ---
 
@@ -130,10 +126,8 @@ webhook secrets, and model backend API keys at rest. If the key is lost:
 3. **If the key is truly unrecoverable**:
    - Any encrypted credential will fail to decrypt on next access.
    - You must rotate every stored credential (re-create API keys, webhook
-     secrets, connector tokens) and re-encrypt under a new key.
-   - Run `uv run modulo rotate-credentials` to attempt re-encryption with
-     a new key. Credentials that were encrypted under the old key will need
-     to be manually re-entered via the admin UI or CLI.
+     secrets, connector tokens) and re-enter them under the new key via the
+     admin UI.
    - Checkpoint blobs encrypted with the old key are **unrecoverable**
      unless you have a backup (see §4).
 4. **Always store a backup copy of `FERNET_KEY`** in a separate vault,
@@ -149,9 +143,8 @@ NEW_FERNET_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Ferne
 
 # Update environment and restart for SECRET_KEY
 export SECRET_KEY="$NEW_SECRET_KEY"
-# FERNET_KEY rotation requires credential re-encryption
+# FERNET_KEY rotation requires re-entering stored credentials under the new key
 export FERNET_KEY="$NEW_FERNET_KEY"
-uv run modulo rotate-credentials
 ```
 
 ---
@@ -213,22 +206,12 @@ When troubleshooting a configuration issue that prevents login (broken SSO,
 corrupt admin user settings, rate-limit self-lockout), you can bypass auth
 locally.
 
-### 5.1 Local CLI Access
+### 5.1 Local Access
 
-The `modulo` CLI runs as the application user and can perform admin actions
-without bearer token authentication when executed on the server:
-
-```bash
-# Check health and configuration
-uv run modulo health --full
-
-# List users (requires DB access, not API auth)
-uv run modulo users list
-
-# List and manage sessions
-uv run modulo sessions list
-uv run modulo sessions revoke --all
-```
+The `modulo` CLI only exposes `backup` and `restore` (see §4). Emergency
+admin actions (password reset, token creation) require direct database
+access as described in §2 and below — there is no `modulo users` or
+`modulo sessions` command.
 
 ### 5.2 Create a Temporary Admin API Token
 
@@ -263,26 +246,21 @@ curl -H "Authorization: Bearer <token>" https://modulo.example.com/api/v1/admin/
 - Delete the token after use: `DELETE FROM api_tokens WHERE name = 'emergency-bypass-token';`
 - Audit the action in the admin bypass log (see §6).
 
-### 5.3 Disable Rate Limiting Temporarily
+### 5.3 Rate-Limit Self-Lockout
 
-If rate limiting is blocking your own admin access:
+If rate limiting is blocking your own admin access, wait for the rate-limit
+window to expire or restart services to reset in-memory counters. Rate
+limits are configured via the admin settings API; there is no
+`RATE_LIMIT_DEFAULT` environment variable.
 
-```bash
-# Set an extreme limit or disable via environment (restart required)
-export RATE_LIMIT_DEFAULT=1000000/minute
-
-# Or bypass Redis rate limiter by connecting without Redis
-# (falls back to in-memory which resets per-process)
-```
-
-> ⚠️ Do not disable rate limiting in production without also restricting
+> ⚠️ Do not bypass rate limiting in production without also restricting
 > network access (e.g., allowlisting admin IPs at the reverse proxy).
 
 ### 5.4 When NOT to Bypass Auth
 
 | Situation | Do NOT | Do this instead |
 |-----------|--------|-----------------|
-| User reports they cannot log in | Create a DB-level token for them | Reset their password via CLI (`uv run modulo users reset-password`) |
+| User reports they cannot log in | Create a DB-level token for them | Reset their password via the procedure in §2 |
 | SSO provider is down | Create permanent bypass tokens | Switch to local admin account or wait for SSO recovery |
 | You are investigating a security incident | Bypass auth in a way that masks your actions | Use a dedicated audit account, log every command |
 | Pipelines are running | Modify user credentials mid-run | Cancel pipelines first, then reset credentials |

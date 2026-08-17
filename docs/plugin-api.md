@@ -83,7 +83,7 @@ def build_connector(self, type_id: str, config: dict, creds: dict) -> ConnectorB
 def build_model_backend(self, provider: str, model_id: str, api_key: str, **params) -> ModelBackendBase
 ```
 
-Look up a registered builder by type ID or provider name and call it with the given arguments. Raises `KeyError` if no builder is registered for the given key.
+Look up a registered builder by type ID or provider name and call it with the given arguments. Raises `PluginNotFoundError` (a `KeyError` subclass) if no builder is registered for the given key.
 
 #### Manual registration (in-tree)
 
