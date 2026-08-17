@@ -1545,3 +1545,23 @@ Rules:
 - Run `uv run mypy <changed-file>` on EVERY file you touch in a complexity refactor BEFORE pushing - do not rely on CI to catch it. The refactor changes signatures and moves code, so type-check the whole file, not just the diff.
 - Prefer explicit type arguments on extracted helpers: `dict[str, Any]`, `list[Any]`, `set[str]`, `tuple[Any, int]`. If the helper's parameter type is genuinely heterogeneous, use `Any` explicitly rather than a bare generic.
 - This applies to ANY refactor that extracts helpers or changes signatures (complexity, DRY, dead-code removal), not just S3776.
+
+### 14. Large refactors: pre-specify the decomposition, don't ask the model to design it open-ended
+
+From the FAR-281 cognitive-complexity sweep (2026-08-16/17): sub-agents repeatedly FAILED to decompose the large functions in `mcp_server.py` (a 5000-line file) when asked to do it open-ended — they degenerated into infinite "let me call the tool" loops and never completed. The same model succeeded reliably once the decomposition was PRE-SPECIFIED.
+
+The failure was NOT a capability problem (AI is excellent at extracting functions) — it was task-size + prompt-design:
+- **Context saturation**: a 5000-line file + long function bodies fills the context window, and the model loses tool-calling discipline (starts emitting prose instead of tool calls).
+- **Open-ended decomposition is where the model wanders**: "refactor this complex function" leaves the model to both design AND implement, which is too much open-ended work in one shot.
+
+The fix that worked (used to decompose 18 functions, incl. a complexity-149 `update_trigger`):
+1. **One function per Worker** — never batch multiple large functions into one sub-agent task.
+2. **Pre-specify the helper boundaries**: read the function yourself, identify the exact helper names, signatures, and what code each extracts, and hand that to the model as a spec. The model IMPLEMENTS the extraction; it does NOT design it.
+3. **Give the target shape**: show the model what the refactored function should look like after all extractions (a thin orchestrator calling the helpers).
+4. **One helper at a time, commit after each**: extract Helper 1, verify (syntax + mypy + tests), commit; then Helper 2, etc. Never extract multiple helpers before committing.
+5. **Explicit mypy/vulture checklist**: bare generics (`dict` -> `dict[str, Any]`), async helpers must be `async def`, `UUID | None` narrowing with `assert`, no `@mcp.tool` decorators on helpers, keep imports inside helpers.
+
+Rules:
+- For ANY large refactor (complexity, DRY, dead-code removal, extracting a god-function), pre-specify the decomposition rather than asking the model to design it. The model's strength is implementing a well-specified extraction, not open-endedly designing one under context pressure.
+- If a sub-agent degenerates into "let me call the tool" loops, STOP and re-scope: shrink to one function, pre-specify the helpers, and retry. Do not keep re-spawning with the same open-ended prompt.
+- This pairs with lesson 13 (mypy strict): every extracted helper is new code that must satisfy mypy strict — run mypy on the whole file after each extraction.
