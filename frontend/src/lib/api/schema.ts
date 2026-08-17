@@ -6410,6 +6410,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/feedback/proposals/{record_id}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Publish Eval Proposal
+         * @description Publish an eval-gap proposal as a live eval definition (PRD §8.20 ¶Eval suite growth #3).
+         *
+         *     A human reviews/edits the proposed eval (name, eval_type, config) and
+         *     publishes it. Publishing creates an ``EvalDefinition`` scoped to the
+         *     feedback record's pipeline and producing node — because run-time eval
+         *     execution and gap detection load definitions by ``pipeline_id`` at run
+         *     time, the published eval is immediately active for future runs of that
+         *     pipeline — then resolves the proposal record (status -> ``resolved``).
+         */
+        post: operations["publish_eval_proposal_api_v1_feedback_proposals__record_id__publish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/feedback/{record_id}": {
         parameters: {
             query?: never;
@@ -12359,6 +12386,19 @@ export interface components {
         ProposeGuardrailConfigRequest: {
             /** Config Yaml */
             config_yaml: string;
+        };
+        /** PublishEvalProposalRequest */
+        PublishEvalProposalRequest: {
+            /** Name */
+            name: string;
+            /** Eval Type */
+            eval_type: string;
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            };
+            /** Node Id */
+            node_id?: string | null;
         };
         /** PublishRequestV2 */
         PublishRequestV2: {
@@ -30555,6 +30595,45 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_eval_proposal_api_v1_feedback_proposals__record_id__publish_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublishEvalProposalRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };

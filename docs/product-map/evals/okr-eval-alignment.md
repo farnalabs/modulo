@@ -112,6 +112,11 @@ Mapping eval suites to organisational OKRs so teams can track quality targets ov
 
 ## QA History
 
+### 2026-08-15 — Coverage-completion (FAR-232/233, partial-evals-b)
+- **Verified**: every unchecked behaviour in this entry maps to a genuine infrastructure/feature gap, not unimplemented-but-should-exist code. Re-checked against PRD §8.17 — the PRD's Eval System section does NOT describe OKR alignment, aggregation, breach notification, or a suite DB entity, so none of the unchecked items are PRD-required missing behaviour; they are post-PRD product features. No code changes.
+- **Confirmed gaps (kept `[ ]`)**: suite creation with pass_threshold/target_date/owner fields and OKR-ID tagging (no suite DB entity — `suite_id` is a free-form string on `eval_definitions`), cross-suite aggregation + aggregate endpoint flag, `target_date` persistence (Pydantic-only on `OkrSuite`), breach notification event + payload + per-suite fan-out, scheduled quality-report OKR summary, org-with-no-suites empty response, large-OKR aggregation pagination, OKR dashboard surfacing, and the two BDD scenarios that depend on those gaps.
+- **No tests added** — all existing `track_okr_progress`/`alert_on_breach`/endpoint behaviours are already unit-tested (55+ tests). Status: partial (all remaining unchecked items are infrastructure/feature gaps, not code correctness).
+
 ### 2026-08-15 — Coverage-completion round 2 (dist partial-evals-d)
 - **Verified** every remaining unchecked behaviour against code + tests. All unchecked items are genuine infrastructure/feature gaps that require a DB migration and/or a notifier/dashboard — none are backend-only fixes within this worktree's scope:
   - **Suite-to-OKR mapping** (suite `pass_threshold`/`target_date`/`owner` columns, an OKR identifier column, multi-suite OKR aggregation, aggregate flag) — `eval_definitions` has no OKR column and no dedicated suite DB entity; `OkrSuite.target_date`/owner are Pydantic-only. An OKR-level rollup endpoint (`?okr_id=...` or `aggregate=true`) is not implemented.

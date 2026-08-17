@@ -19,10 +19,10 @@ Admin bypass is the **last resort** for these scenarios:
 
 | Scenario | When to use |
 |----------|-------------|
-| **Emergency recovery** | A pipeline run is stuck in an unrecoverable state (e.g., LangGraph runtime bug, corrupt checkpoint blob) and the `/api/runs/:id/reset` endpoint fails |
+| **Emergency recovery** | A pipeline run is stuck in an unrecoverable state (e.g., LangGraph runtime bug, corrupt checkpoint blob); `POST /api/v1/runs/{id}/cancel` cannot recover it |
 | **Manual intervention** | A checkpoint must be patched mid-run to unblock an agent loop, or a missing checkpoint must be injected because of a prior crash |
 | **Audit investigation** | Tracing agent inputs/outputs across a failed run when application-level logs are insufficient |
-| **Key rotation recovery** | Blobs must be re-encrypted after `FERNET_KEY` rotation when the automated `rotate-credentials` command cannot reach all records |
+| **Key rotation recovery** | Blobs must be re-encrypted after `FERNET_KEY` rotation when `modulo restore --previous-fernet-key` cannot reach all credentials |
 
 > ⚠️ **Bypass breaks audit chain invariants.** Every procedure in this guide
 > manually updates the database without application-level validation. Always
@@ -431,7 +431,7 @@ COMMIT;
 > hold transaction locks. Run during a maintenance window or against a
 > replica. Test on a copy before running against production.
 
-If the automated `rotate-credentials` command cannot reach all rows (e.g.,
+If `modulo restore --previous-fernet-key` cannot reach all rows (e.g.,
 after a partial migration), re-encrypt in bulk:
 
 ```python
@@ -621,7 +621,6 @@ pg_restore -d "$DATABASE_URL" /tmp/pre-bypass-*.dump
 | Topic | Document |
 |-------|----------|
 | Fernet key rotation | `docs/security/secret-management.md` §How to Rotate Secrets |
-| Checkpoint encryption architecture | `docs/security/checkpoint-encryption.md` |
 | Backup and restore | `docs/operations/backup.md` |
 | Audit log chain verification | `docs/deployment-security.md` §6.1 |
 | Self-hosted admin operations | `docs/operations/self-hosted-admin.md` |
