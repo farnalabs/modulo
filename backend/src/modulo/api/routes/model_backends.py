@@ -36,6 +36,8 @@ from modulo.db.crud.model_backend import (
     update_model_backend,
 )
 from modulo.db.models.model_backend import ModelBackend
+from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.model_backends.base import HEALTH_CHECK_TIMEOUT
 from modulo.settings import Settings, get_settings
@@ -184,6 +186,41 @@ def _audit_safe_backend_fields(updates: dict[str, Any]) -> dict[str, Any]:
         else:
             safe[key] = value
     return safe
+
+
+async def _list_snapshots_referencing_backend(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    backend_id: uuid.UUID,
+) -> list[dict[str, Any]]:
+    """Return ``{snapshot_id, pipeline_id}`` for every org snapshot whose
+    ``model_backend_pins_json`` references ``backend_id`` and that is tied to a
+    non-terminal run.
+
+    PRD §8.1 deletion protection — a backend referenced by a PipelineSnapshot
+    associated with a non-terminal run cannot be hard-deleted (the run may
+    still need the pinned backend, e.g. after a HITL pause/resume). Snapshots
+    referenced only by terminal runs impose no such constraint. Pins are a JSON
+    column with no relational FK, so the org's snapshots are scanned in Python
+    for a ``model_backend_id`` match, mirroring ``list_backends_referencing_fallback``.
+    """
+    target = str(backend_id)
+    stmt = (
+        select(PipelineSnapshot)
+        .join(Run, Run.snapshot_id == PipelineSnapshot.id)
+        .where(
+            PipelineSnapshot.organisation_id == org_id,
+            Run.status.not_in(TERMINAL_STATUSES),
+        )
+    )
+    matches: list[dict[str, Any]] = []
+    rows = (await session.execute(stmt)).scalars()
+    for snap in rows:
+        pins = snap.model_backend_pins_json or []
+        if any(str(pin.get("model_backend_id")) == target for pin in pins):
+            matches.append({"snapshot_id": snap.id, "pipeline_id": snap.pipeline_id})
+    return matches
 
 
 class ModelBackendCreate(TeamVisibilityMixin):
@@ -809,6 +846,23 @@ async def delete_model_backend_endpoint(
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=(f"Cannot delete model backend: it is referenced as a fallback by backend(s): {names}"),
+                )
+            # PRD §8.1 deletion protection: a backend pinned by a PipelineSnapshot
+            # associated with a non-terminal run cannot be hard-deleted — the
+            # in-flight run may still resolve the pinned backend (e.g. after a
+            # HITL pause/resume). Terminal-run snapshots impose no constraint.
+            non_terminal = await _list_snapshots_referencing_backend(
+                session, org_id=principal.organisation_id, backend_id=backend_id
+            )
+            if non_terminal:
+                snapshot_ids = ", ".join(sorted(str(r["snapshot_id"]) for r in non_terminal))
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "Cannot delete model backend: it is pinned by a PipelineSnapshot associated with a "
+                        f"non-terminal run (snapshot(s): {snapshot_ids}). Wait for the runs to finish before "
+                        "hard-deleting the backend."
+                    ),
                 )
             # Capture the entity details BEFORE the delete so the audit event can
             # survive the row (a post-delete read would return nothing).

@@ -14,8 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.core.pipeline_engine.executor import (
     PipelineExecutor,
     RunNotFoundError,
+    _failure_event_matches,
     _graph_contains_sandbox_agent,
     _node_output_stall_reason,
+    _retry_after_policy,
     _seed_state,
 )
 from modulo.otel_bridge import trace_id_for_thread
@@ -2420,3 +2422,51 @@ async def test_execute_returns_terminal_run_without_retry_task(terminal_status: 
     assert result is terminal_run
     assert result.status == terminal_status
     create_task.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# FAR-296 Phase 2 — never-retryable script-mode terminal codes
+# ---------------------------------------------------------------------------
+
+
+def test_retry_after_policy_never_retries_script_mode_terminal_codes():
+    """A ``failure`` retry_policy must NEVER retry script-mode terminal codes.
+
+    Once a script-mode node's process started (fencing lease claimed), any
+    fault is exactly-once — re-dispatching could double-execute a side effect.
+    Both the canonical dotted code and the raw exception-class spelling are
+    excluded at the run level (``_retry_after_policy``).
+    """
+    policy = {"on": ["failure"], "max_retries": 3}
+    for code in (
+        "script.failed",
+        "script.invalid_output",
+        "script.side_effect_unknown",
+        "script.session_lost",
+        "ScriptFailedError",
+        "ScriptInvalidOutputError",
+        "ScriptSideEffectUnknownError",
+        "script.schema_failed",
+        "script.no_output",
+    ):
+        assert _retry_after_policy(policy, "failed", code) is None, code
+
+
+def test_retry_after_policy_still_retries_retryable_sandbox_failure():
+    """A retryable sandbox-infra failure (pre-claim / LLM mode) still retries."""
+    policy = {"on": ["failure"], "max_retries": 2}
+    assert _retry_after_policy(policy, "failed", "sandbox.no_output_json") == 2
+    assert _retry_after_policy(policy, "failed", "SandboxNodeFailedError") == 2
+
+
+def test_failure_event_matches_excludes_never_retryable_script_codes():
+    """The ``failure`` event matcher excludes script-mode terminal codes."""
+    for code, mapped in [
+        ("script.failed", "script.failed"),
+        ("ScriptFailedError", "script.failed"),
+        ("script.side_effect_unknown", "script.side_effect_unknown"),
+        ("ScriptSideEffectUnknownError", "script.side_effect_unknown"),
+        ("script.schema_failed", "contract.schema"),
+        ("script.no_output", "contract.no_output"),
+    ]:
+        assert _failure_event_matches({"failure"}, "failed", code, mapped, None) is False, (code, mapped)

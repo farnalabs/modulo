@@ -244,22 +244,28 @@ def _sanitize_cost_breakdown(breakdown: Any) -> list[dict[str, Any]]:
     for entry in breakdown:
         if not isinstance(entry, dict):
             continue
-        out: dict[str, Any] = {}
-        for key, value in entry.items():
-            if key not in _MCP_BREAKDOWN_KEYS:
-                continue
-            if key == "basis":
-                out[key] = _sanitize_mcp_basis_value(value)
-            elif isinstance(value, str):
-                out[key] = _sanitize_mcp_string(value)
-            elif isinstance(value, bool) or value is None:
-                out[key] = value
-            elif isinstance(value, (int, float)):
-                out[key] = _clamp_mcp_number(value)
-            else:
-                out[key] = _sanitize_mcp_string(str(value))
+        out = _sanitize_cost_breakdown_entry(entry)
         sanitized.append(out)
     return sanitized
+
+
+def _sanitize_cost_breakdown_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    """Sanitize a single cost-breakdown entry (key-filtering + type-dispatch)."""
+    out: dict[str, Any] = {}
+    for key, value in entry.items():
+        if key not in _MCP_BREAKDOWN_KEYS:
+            continue
+        if key == "basis":
+            out[key] = _sanitize_mcp_basis_value(value)
+        elif isinstance(value, str):
+            out[key] = _sanitize_mcp_string(value)
+        elif isinstance(value, bool) or value is None:
+            out[key] = value
+        elif isinstance(value, (int, float)):
+            out[key] = _clamp_mcp_number(value)
+        else:
+            out[key] = _sanitize_mcp_string(str(value))
+    return out
 
 
 _MCP_COST_ROLLUP_ZERO = Decimal("0.000000")
@@ -718,6 +724,302 @@ async def validate_current_auth() -> bool:
         return False
 
 
+def _extract_bearer_token(request: Request) -> tuple[str | None, Response | None]:
+    """Extract the Bearer token from the Authorization header.
+
+    Returns ``(token, None)`` on success or ``(None, error_response)`` when the
+    header is missing or not a Bearer token.
+    """
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return None, Response(
+            '{"error":"unauthorized","detail":"Bearer token required"}',
+            status_code=401,
+            media_type=_CT_APPLICATION_JSON,
+        )
+    token = auth_header[len("Bearer ") :].strip()
+    return token, None
+
+
+async def _authenticate_api_key(
+    request: Request,
+    token: str,
+) -> tuple[bool, Response | None]:
+    """Authenticate an API-key bearer token (``mk_`` prefix).
+
+    Sets the ``_ctx_*`` contextvars and ``request.scope["auth_principal"]`` on
+    success. Returns ``(True, None)`` when the key authenticated (the caller
+    should proceed to ``call_next``) or ``(False, error_response)`` on failure.
+    """
+    try:
+        # org_api_keys has RLS enabled (migration 0005, _STRICT_RLS) and
+        # the key's org is unknown until the record is read — a plain
+        # lookup in an empty org context would be filtered out by RLS
+        # and reject every valid key. On Postgres the runtime app role
+        # is RLS-subject (a non-owner DML-granted role), so the org is
+        # resolved through a SECURITY DEFINER function owned by the
+        # migration role rather than SET row_security TO OFF (which
+        # only bypasses RLS for owners and raises for a regular role).
+        # On generic backends there is no RLS, so a plain prefix scan
+        # works. Then re-validate inside the org context before
+        # trusting the key.
+        from sqlalchemy import select, text
+
+        from modulo.auth.api_key import _MK_PREFIX, _PREFIX_LEN
+        from modulo.db.models.api_key import OrgApiKey
+        from modulo.db.rls import _ensure_active_transaction
+
+        prefix = token[len(_MK_PREFIX) :][:_PREFIX_LEN]
+        factory = _get_session_factory()
+        async with factory() as s, s.begin():
+            dialect = await _ensure_active_transaction(s)
+            if dialect == "postgresql":
+                org_id = (
+                    await s.execute(
+                        text("SELECT public.lookup_api_key_org(:prefix)"),
+                        {"prefix": prefix},
+                    )
+                ).scalar_one_or_none()
+            else:
+                key_record = (
+                    await s.execute(
+                        select(OrgApiKey).where(
+                            OrgApiKey.lookup_prefix == prefix,
+                            OrgApiKey.revoked_at.is_(None),
+                        )
+                    )
+                ).scalar_one_or_none()
+                org_id = key_record.organisation_id if key_record is not None else None
+        if org_id is None:
+            raise ApiKeyInvalidError()
+
+        # Now re-validate within the correct RLS context.
+        async with _session(org_id) as s:
+            key = await validate_api_key(s, token, org_id=org_id)
+            # ADR 017 DECISION 4 — live role-cap on EVERY MCP call. The
+            # stored key.role is the minted role; the effective role is
+            # min(minted, live). A demoted operator's key degrades to
+            # the live role on the next call (never persisted — the ORM
+            # flushes last_used_at, so mutating key.role here would
+            # permanently store the demotion). An owner removed from
+            # the org (no live membership) makes the key die (401).
+            live_role = await resolve_role_from_membership(
+                s,
+                str(key.account_id),
+                str(key.organisation_id),
+            )
+            clamped = _clamp_role(key.role, live_role)
+            if not clamped:
+                _record_api_key_role_cap(
+                    minted_role=key.role,
+                    effective_role="",
+                    org_id=key.organisation_id,
+                    degraded=False,
+                    key_id=key.id,
+                )
+                raise ApiKeyInvalidError()
+            if clamped != key.role:
+                _record_api_key_role_cap(
+                    minted_role=key.role,
+                    effective_role=clamped,
+                    org_id=key.organisation_id,
+                    degraded=True,
+                    key_id=key.id,
+                )
+        org_id = key.organisation_id
+        _ctx_org_id.set(org_id)
+        _ctx_role.set(clamped)
+        _ctx_key_id.set(key.id)
+        _ctx_team_id.set(key.team_id)
+        _ctx_user_id.set(key.account_id)
+        _ctx_auth_token.set(token)
+        _ctx_auth_type.set("api_key")
+        request.scope["auth_principal"] = {
+            "type": "api_key",
+            "org_id": str(org_id),
+            "prefix": token[3:11],
+        }
+    except ApiKeyInvalidError:
+        return False, Response(
+            '{"error":"unauthorized","detail":"Invalid or revoked API key"}',
+            status_code=401,
+            media_type=_CT_APPLICATION_JSON,
+        )
+    except (SQLAlchemyError, OperationalError, TimeoutError):
+        _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
+        return False, Response(
+            _JSON_AUTH_DB_UNAVAILABLE,
+            status_code=503,
+            media_type=_CT_APPLICATION_JSON,
+        )
+    return True, None
+
+
+async def _authenticate_oauth_jwt(
+    request: Request,
+    token: str,
+    settings: Any,
+) -> tuple[bool, Response | None, Any]:
+    """Authenticate an OAuth access token (JWT), falling back to a regular JWT.
+
+    Returns ``(handled, error_response, claims)``:
+
+    * ``(True, None, None)`` — a regular JWT (Remy) fully authenticated; the
+      caller should ``call_next`` and return.
+    * ``(False, None, claims)`` — an OAuth access token decoded successfully;
+      the caller continues to the token-family check with ``claims``.
+    * ``(False, error_response, None)`` — authentication failed.
+
+    Sets the ``_ctx_*`` contextvars and ``request.scope["auth_principal"]`` for
+    the regular-JWT fallback path. The OAuth claims path defers context-setting
+    until after the token-family and scope checks (in the caller).
+    """
+    try:
+        claims = decode_oauth_access_token(token, settings.secret_key)
+    except JWTError:
+        # Fall back to regular JWT access token (used by Remy MCP tool calls).
+        try:
+            from modulo.auth.jwt import decode_principal
+
+            principal = decode_principal(token, settings.secret_key)
+        except JWTError:
+            return (
+                False,
+                Response(
+                    '{"error":"unauthorized","detail":"Invalid or expired access token"}',
+                    status_code=401,
+                    media_type=_CT_APPLICATION_JSON,
+                ),
+                None,
+            )
+        if principal.organisation_id is None:
+            return (
+                False,
+                Response(
+                    _JSON_FORBIDDEN_ORG_MEMBERSHIP,
+                    status_code=403,
+                    media_type=_CT_APPLICATION_JSON,
+                ),
+                None,
+            )
+        # ADR 017: no claim-less default-up. A None role claim fails closed,
+        # and the LIVE role is re-read from org_memberships so a demoted or
+        # removed member loses access on the very next request.
+        if principal.org_role is None:
+            return (
+                False,
+                Response(
+                    '{"error":"forbidden","detail":"No org role claim on token"}',
+                    status_code=403,
+                    media_type=_CT_APPLICATION_JSON,
+                ),
+                None,
+            )
+        try:
+            async with _session(principal.organisation_id) as s:
+                live_role = await resolve_role_from_membership(
+                    s,
+                    str(principal.account_id),
+                    str(principal.organisation_id),
+                )
+        except (SQLAlchemyError, OperationalError, TimeoutError):
+            _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
+            return (
+                False,
+                Response(
+                    _JSON_AUTH_DB_UNAVAILABLE,
+                    status_code=503,
+                    media_type=_CT_APPLICATION_JSON,
+                ),
+                None,
+            )
+        if live_role is None:
+            return (
+                False,
+                Response(
+                    _JSON_FORBIDDEN_ORG_MEMBERSHIP,
+                    status_code=403,
+                    media_type=_CT_APPLICATION_JSON,
+                ),
+                None,
+            )
+        _ctx_org_id.set(principal.organisation_id)
+        _ctx_role.set(live_role)
+        _ctx_key_id.set(uuid.UUID(int=0))
+        _ctx_user_id.set(principal.account_id)
+        _ctx_auth_token.set(token)
+        _ctx_auth_type.set("oauth")
+        _ctx_team_id.set(None)  # user tokens carry no team boundary
+        request.scope["auth_principal"] = {
+            "type": "user",
+            "org_id": str(principal.organisation_id) if principal.organisation_id else "",
+            "user_id": str(principal.account_id) if principal.account_id else "",
+        }
+        return True, None, None
+    return False, None, claims
+
+
+async def _verify_oauth_token_family(
+    request: Request,
+    token: str,
+    claims: Any,
+    settings: Any,
+) -> Response | None:
+    """Return an error response if the OAuth token family is blacklisted.
+
+    Returns ``None`` when the family is valid (the caller should continue), or
+    the appropriate error ``Response`` otherwise.
+    """
+    try:
+        async with _session(claims.organisation_id) as s:
+            valid = await check_oauth_token_family_valid(
+                s,
+                family_id=claims.token_family,
+                client_id=claims.client_id,
+                org_id=claims.organisation_id,
+            )
+            if not valid:
+                return Response(
+                    '{"error":"unauthorized","detail":"Token family revoked"}',
+                    status_code=401,
+                    media_type=_CT_APPLICATION_JSON,
+                )
+    except (SQLAlchemyError, OperationalError, TimeoutError):
+        _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
+        return Response(
+            _JSON_AUTH_DB_UNAVAILABLE,
+            status_code=503,
+            media_type=_CT_APPLICATION_JSON,
+        )
+    except Exception:
+        _log.exception("OAuth token family check failed")
+        return Response(
+            '{"error":"unauthorized","detail":"Token validation failed"}',
+            status_code=401,
+            media_type=_CT_APPLICATION_JSON,
+        )
+    return None
+
+
+async def _dispatch_unauth_paths(
+    request: Request,
+    call_next: Callable[[Request], Awaitable[Response]],
+) -> Response | None:
+    """Return the response when the path is served unauthenticated, else None.
+
+    These endpoints manage their own auth (health checks, and the OAuth protocol
+    endpoints which authenticate via client_id + client_secret).
+    """
+    clean = request.url.path.rstrip("/")
+    if clean in ("/mcp/healthz", "/healthz"):
+        resp: Response = await call_next(request)
+        return resp
+    if clean in ("/mcp/oauth/authorize", "/mcp/oauth/token", "/mcp/oauth/refresh"):
+        resp2: Response = await call_next(request)
+        return resp2
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Auth middleware
 # ---------------------------------------------------------------------------
@@ -732,230 +1034,37 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
-        # Allow unauthenticated access to the health check endpoint.
-        clean = request.url.path.rstrip("/")
-        if clean in ("/mcp/healthz", "/healthz"):
-            resp: Response = await call_next(request)
-            return resp
+        unauth = await _dispatch_unauth_paths(request, call_next)
+        if unauth is not None:
+            return unauth
 
-        # Allow unauthenticated access to the OAuth protocol endpoints.
-        # These endpoints manage their own auth via client_id + client_secret.
-        if clean in ("/mcp/oauth/authorize", "/mcp/oauth/token", "/mcp/oauth/refresh"):
-            resp2: Response = await call_next(request)
-            return resp2
-
-        auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer "):
-            return Response(
-                '{"error":"unauthorized","detail":"Bearer token required"}',
-                status_code=401,
-                media_type=_CT_APPLICATION_JSON,
-            )
-        token = auth_header[len("Bearer ") :].strip()
+        token, auth_err = _extract_bearer_token(request)
+        if auth_err is not None:
+            return auth_err
+        assert token is not None
 
         # Try API key first (backwards compatible).
         if token.startswith("mk_"):
-            try:
-                # org_api_keys has RLS enabled (migration 0005, _STRICT_RLS) and
-                # the key's org is unknown until the record is read — a plain
-                # lookup in an empty org context would be filtered out by RLS
-                # and reject every valid key. On Postgres the runtime app role
-                # is RLS-subject (a non-owner DML-granted role), so the org is
-                # resolved through a SECURITY DEFINER function owned by the
-                # migration role rather than SET row_security TO OFF (which
-                # only bypasses RLS for owners and raises for a regular role).
-                # On generic backends there is no RLS, so a plain prefix scan
-                # works. Then re-validate inside the org context before
-                # trusting the key.
-                from sqlalchemy import select, text
-
-                from modulo.auth.api_key import _MK_PREFIX, _PREFIX_LEN
-                from modulo.db.models.api_key import OrgApiKey
-                from modulo.db.rls import _ensure_active_transaction
-
-                prefix = token[len(_MK_PREFIX) :][:_PREFIX_LEN]
-                factory = _get_session_factory()
-                async with factory() as s, s.begin():
-                    dialect = await _ensure_active_transaction(s)
-                    if dialect == "postgresql":
-                        org_id = (
-                            await s.execute(
-                                text("SELECT public.lookup_api_key_org(:prefix)"),
-                                {"prefix": prefix},
-                            )
-                        ).scalar_one_or_none()
-                    else:
-                        key_record = (
-                            await s.execute(
-                                select(OrgApiKey).where(
-                                    OrgApiKey.lookup_prefix == prefix,
-                                    OrgApiKey.revoked_at.is_(None),
-                                )
-                            )
-                        ).scalar_one_or_none()
-                        org_id = key_record.organisation_id if key_record is not None else None
-                if org_id is None:
-                    raise ApiKeyInvalidError()
-
-                # Now re-validate within the correct RLS context.
-                async with _session(org_id) as s:
-                    key = await validate_api_key(s, token, org_id=org_id)
-                    # ADR 017 DECISION 4 — live role-cap on EVERY MCP call. The
-                    # stored key.role is the minted role; the effective role is
-                    # min(minted, live). A demoted operator's key degrades to
-                    # the live role on the next call (never persisted — the ORM
-                    # flushes last_used_at, so mutating key.role here would
-                    # permanently store the demotion). An owner removed from
-                    # the org (no live membership) makes the key die (401).
-                    live_role = await resolve_role_from_membership(
-                        s,
-                        str(key.account_id),
-                        str(key.organisation_id),
-                    )
-                    clamped = _clamp_role(key.role, live_role)
-                    if not clamped:
-                        _record_api_key_role_cap(
-                            minted_role=key.role,
-                            effective_role="",
-                            org_id=key.organisation_id,
-                            degraded=False,
-                            key_id=key.id,
-                        )
-                        raise ApiKeyInvalidError()
-                    if clamped != key.role:
-                        _record_api_key_role_cap(
-                            minted_role=key.role,
-                            effective_role=clamped,
-                            org_id=key.organisation_id,
-                            degraded=True,
-                            key_id=key.id,
-                        )
-                org_id = key.organisation_id
-                _ctx_org_id.set(org_id)
-                _ctx_role.set(clamped)
-                _ctx_key_id.set(key.id)
-                _ctx_team_id.set(key.team_id)
-                _ctx_user_id.set(key.account_id)
-                _ctx_auth_token.set(token)
-                _ctx_auth_type.set("api_key")
-                request.scope["auth_principal"] = {
-                    "type": "api_key",
-                    "org_id": str(org_id),
-                    "prefix": token[3:11],
-                }
-            except ApiKeyInvalidError:
-                return Response(
-                    '{"error":"unauthorized","detail":"Invalid or revoked API key"}',
-                    status_code=401,
-                    media_type=_CT_APPLICATION_JSON,
-                )
-            except (SQLAlchemyError, OperationalError, TimeoutError):
-                _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
-                return Response(
-                    _JSON_AUTH_DB_UNAVAILABLE,
-                    status_code=503,
-                    media_type=_CT_APPLICATION_JSON,
-                )
-            await _set_authz_enforce(org_id)
-            resp3: Response = await call_next(request)
-            return resp3
+            handled, api_err = await _authenticate_api_key(request, token)
+            if api_err is not None:
+                return api_err
+            if handled:
+                await _set_authz_enforce(_ctx_org_id.get())
+                return await call_next(request)
 
         # Try OAuth access token (JWT).
         settings = get_settings()
-        try:
-            claims = decode_oauth_access_token(token, settings.secret_key)
-        except JWTError:
-            # Fall back to regular JWT access token (used by Remy MCP tool calls).
-            try:
-                from modulo.auth.jwt import decode_principal
-
-                principal = decode_principal(token, settings.secret_key)
-            except JWTError:
-                return Response(
-                    '{"error":"unauthorized","detail":"Invalid or expired access token"}',
-                    status_code=401,
-                    media_type=_CT_APPLICATION_JSON,
-                )
-            if principal.organisation_id is None:
-                return Response(
-                    _JSON_FORBIDDEN_ORG_MEMBERSHIP,
-                    status_code=403,
-                    media_type=_CT_APPLICATION_JSON,
-                )
-            # ADR 017: no claim-less default-up. A None role claim fails closed,
-            # and the LIVE role is re-read from org_memberships so a demoted or
-            # removed member loses access on the very next request.
-            if principal.org_role is None:
-                return Response(
-                    '{"error":"forbidden","detail":"No org role claim on token"}',
-                    status_code=403,
-                    media_type=_CT_APPLICATION_JSON,
-                )
-            try:
-                async with _session(principal.organisation_id) as s:
-                    live_role = await resolve_role_from_membership(
-                        s,
-                        str(principal.account_id),
-                        str(principal.organisation_id),
-                    )
-            except (SQLAlchemyError, OperationalError, TimeoutError):
-                _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
-                return Response(
-                    _JSON_AUTH_DB_UNAVAILABLE,
-                    status_code=503,
-                    media_type=_CT_APPLICATION_JSON,
-                )
-            if live_role is None:
-                return Response(
-                    _JSON_FORBIDDEN_ORG_MEMBERSHIP,
-                    status_code=403,
-                    media_type=_CT_APPLICATION_JSON,
-                )
-            _ctx_org_id.set(principal.organisation_id)
-            _ctx_role.set(live_role)
-            _ctx_key_id.set(uuid.UUID(int=0))
-            _ctx_user_id.set(principal.account_id)
-            _ctx_auth_token.set(token)
-            _ctx_auth_type.set("oauth")
-            _ctx_team_id.set(None)  # user tokens carry no team boundary
-            request.scope["auth_principal"] = {
-                "type": "user",
-                "org_id": str(principal.organisation_id) if principal.organisation_id else "",
-                "user_id": str(principal.account_id) if principal.account_id else "",
-            }
-            await _set_authz_enforce(principal.organisation_id)
-            resp4: Response = await call_next(request)
-            return resp4
+        handled2, oauth_err, claims = await _authenticate_oauth_jwt(request, token, settings)
+        if oauth_err is not None:
+            return oauth_err
+        if handled2:
+            await _set_authz_enforce(_ctx_org_id.get())
+            return await call_next(request)
 
         # Verify token family is not blacklisted.
-        try:
-            async with _session(claims.organisation_id) as s:
-                valid = await check_oauth_token_family_valid(
-                    s,
-                    family_id=claims.token_family,
-                    client_id=claims.client_id,
-                    org_id=claims.organisation_id,
-                )
-                if not valid:
-                    return Response(
-                        '{"error":"unauthorized","detail":"Token family revoked"}',
-                        status_code=401,
-                        media_type=_CT_APPLICATION_JSON,
-                    )
-        except (SQLAlchemyError, OperationalError, TimeoutError):
-            _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
-            return Response(
-                _JSON_AUTH_DB_UNAVAILABLE,
-                status_code=503,
-                media_type=_CT_APPLICATION_JSON,
-            )
-        except Exception:
-            _log.exception("OAuth token family check failed")
-            return Response(
-                '{"error":"unauthorized","detail":"Token validation failed"}',
-                status_code=401,
-                media_type=_CT_APPLICATION_JSON,
-            )
+        family_err = await _verify_oauth_token_family(request, token, claims, settings)
+        if family_err is not None:
+            return family_err
 
         # Resolve role from scopes (highest scope wins) — ADR 017: the scope
         # grant is then CLAMPED to the account's LIVE org role so a demoted
@@ -1256,6 +1365,126 @@ def _analytics_deep_link(result: dict[str, Any], params: AnalyticsParams) -> str
     return "/analytics?" + urlencode(parts)
 
 
+async def _require_analytics_feature(org_id: uuid.UUID, settings: Any) -> dict[str, Any] | None:
+    from modulo.core.feature_flags import resolve_plan_context
+    from modulo.db.crud.organisation import get_organisation
+
+    async with _session(org_id) as s:
+        org = await get_organisation(s, org_id)
+    async with _session(org_id) as s:
+        plan_ctx = await resolve_plan_context(settings, s, org)
+    if not plan_ctx.feature_enabled("analytics_page"):
+        return {"error": "feature_required", "detail": "analytics_page is not available on your plan"}
+    return None
+
+
+def _parse_analytics_params(
+    dimension: str | None,
+    group_by: str,
+    auto_granularity: bool,
+    trigger_type: str | None,
+    status: str | None,
+    pipeline_id: list[str] | None,
+    folder_id: str | None,
+    error_code: str | None,
+    date_from: str | None,
+    date_to: str | None,
+    limit: int,
+) -> tuple[AnalyticsParams | None, dict[str, Any] | None]:
+    try:
+        dim = AnalyticsDimension(dimension) if dimension is not None else None
+        grp = AnalyticsGroupBy(group_by)
+        tt = AnalyticsTriggerType(trigger_type) if trigger_type is not None else None
+        st = AnalyticsStatus(status) if status is not None else None
+    except ValueError:
+        return None, {
+            "error": "invalid_params",
+            "detail": f"invalid enum value (dimension={dimension!r} group_by={group_by!r})",
+        }
+
+    pids: tuple[uuid.UUID, ...] = ()
+    if pipeline_id:
+        try:
+            pids = tuple(uuid.UUID(p) for p in pipeline_id)
+        except ValueError:
+            return None, {"error": "invalid_params", "detail": "pipeline_id entries must be valid UUIDs"}
+
+    fid: uuid.UUID | None = None
+    if folder_id is not None:
+        try:
+            fid = uuid.UUID(folder_id)
+        except ValueError:
+            return None, {"error": "invalid_params", "detail": f"Invalid folder_id UUID: {folder_id}"}
+
+    params = AnalyticsParams(
+        group_by=grp,
+        auto_granularity=auto_granularity,
+        dimension=dim,
+        trigger_type=tt,
+        status=st,
+        pipeline_ids=pids,
+        team_id=_ctx_team_id_val(),
+        error_code=error_code,
+        folder_id=fid,
+        date_from=_parse_mcp_datetime(date_from, "date_from") if date_from is not None else None,
+        date_to=_parse_mcp_datetime(date_to, "date_to") if date_to is not None else None,
+        limit=max(1, min(limit, 1000)),
+    )
+    return params, None
+
+
+def _parse_analytics_concurrency_params(
+    group_by: str,
+    auto_granularity: bool,
+    trigger_type: str | None,
+    status: str | None,
+    pipeline_id: list[str] | None,
+    folder_id: str | None,
+    date_from: str | None,
+    date_to: str | None,
+    limit: int,
+) -> tuple[AnalyticsParams | None, dict[str, Any] | None]:
+    try:
+        grp = AnalyticsGroupBy(group_by)
+        tt = AnalyticsTriggerType(trigger_type) if trigger_type is not None else None
+        st = AnalyticsStatus(status) if status is not None else None
+    except ValueError:
+        return None, {
+            "error": "invalid_params",
+            "detail": f"invalid enum value (group_by={group_by!r})",
+        }
+
+    pids: tuple[uuid.UUID, ...] = ()
+    if pipeline_id:
+        try:
+            pids = tuple(uuid.UUID(p) for p in pipeline_id)
+        except ValueError:
+            return None, {"error": "invalid_params", "detail": "pipeline_id entries must be valid UUIDs"}
+
+    fid: uuid.UUID | None = None
+    if folder_id is not None:
+        try:
+            fid = uuid.UUID(folder_id)
+        except ValueError:
+            return None, {"error": "invalid_params", "detail": f"Invalid folder_id UUID: {folder_id}"}
+
+    params = AnalyticsParams(
+        group_by=grp,
+        auto_granularity=auto_granularity,
+        dimension=None,
+        trigger_type=tt,
+        status=st,
+        pipeline_ids=pids,
+        team_id=_ctx_team_id_val(),
+        error_code=None,
+        folder_id=fid,
+        date_from=_parse_mcp_datetime(date_from, "date_from") if date_from is not None else None,
+        date_to=_parse_mcp_datetime(date_to, "date_to") if date_to is not None else None,
+        limit=max(1, min(limit, 1000)),
+    )
+    return params, None
+
+
 @mcp.tool(
     name="query_analytics",
     description=(
@@ -1291,56 +1520,27 @@ async def query_analytics(
         org_id = _ctx_org_id_val()
         settings = get_settings()
 
-        # analytics_page feature gate — mirror the REST route's require_feature.
-        from modulo.core.feature_flags import resolve_plan_context
-        from modulo.db.crud.organisation import get_organisation
+        feat_err = await _require_analytics_feature(org_id, settings)
+        if feat_err:
+            return feat_err
 
-        async with _session(org_id) as s:
-            org = await get_organisation(s, org_id)
-        async with _session(org_id) as s:
-            plan_ctx = await resolve_plan_context(settings, s, org)
-        if not plan_ctx.feature_enabled("analytics_page"):
-            return {"error": "feature_required", "detail": "analytics_page is not available on your plan"}
-
-        try:
-            dim = AnalyticsDimension(dimension) if dimension is not None else None
-            grp = AnalyticsGroupBy(group_by)
-            tt = AnalyticsTriggerType(trigger_type) if trigger_type is not None else None
-            st = AnalyticsStatus(status) if status is not None else None
-        except ValueError:
-            return {
-                "error": "invalid_params",
-                "detail": f"invalid enum value (dimension={dimension!r} group_by={group_by!r})",
-            }
-
-        pids: tuple[uuid.UUID, ...] = ()
-        if pipeline_id:
-            try:
-                pids = tuple(uuid.UUID(p) for p in pipeline_id)
-            except ValueError:
-                return {"error": "invalid_params", "detail": "pipeline_id entries must be valid UUIDs"}
-
-        fid: uuid.UUID | None = None
-        if folder_id is not None:
-            try:
-                fid = uuid.UUID(folder_id)
-            except ValueError:
-                return {"error": "invalid_params", "detail": f"Invalid folder_id UUID: {folder_id}"}
-
-        params = AnalyticsParams(
-            group_by=grp,
-            auto_granularity=auto_granularity,
-            dimension=dim,
-            trigger_type=tt,
-            status=st,
-            pipeline_ids=pids,
-            team_id=_ctx_team_id_val(),
-            error_code=error_code,
-            folder_id=fid,
-            date_from=_parse_mcp_datetime(date_from, "date_from") if date_from is not None else None,
-            date_to=_parse_mcp_datetime(date_to, "date_to") if date_to is not None else None,
-            limit=max(1, min(limit, 1000)),
+        params, p_err = _parse_analytics_params(
+            dimension,
+            group_by,
+            auto_granularity,
+            trigger_type,
+            status,
+            pipeline_id,
+            folder_id,
+            error_code,
+            date_from,
+            date_to,
+            limit,
         )
+        if p_err:
+            return p_err
+        assert params is not None
+
         result = await run_analytics_query(
             org_id=org_id,
             params=params,
@@ -1405,55 +1605,25 @@ async def query_analytics_concurrency(
         org_id = _ctx_org_id_val()
         settings = get_settings()
 
-        # analytics_page feature gate — mirror the REST route's require_feature.
-        from modulo.core.feature_flags import resolve_plan_context
-        from modulo.db.crud.organisation import get_organisation
+        feat_err = await _require_analytics_feature(org_id, settings)
+        if feat_err:
+            return feat_err
 
-        async with _session(org_id) as s:
-            org = await get_organisation(s, org_id)
-        async with _session(org_id) as s:
-            plan_ctx = await resolve_plan_context(settings, s, org)
-        if not plan_ctx.feature_enabled("analytics_page"):
-            return {"error": "feature_required", "detail": "analytics_page is not available on your plan"}
-
-        try:
-            grp = AnalyticsGroupBy(group_by)
-            tt = AnalyticsTriggerType(trigger_type) if trigger_type is not None else None
-            st = AnalyticsStatus(status) if status is not None else None
-        except ValueError:
-            return {
-                "error": "invalid_params",
-                "detail": f"invalid enum value (group_by={group_by!r})",
-            }
-
-        pids: tuple[uuid.UUID, ...] = ()
-        if pipeline_id:
-            try:
-                pids = tuple(uuid.UUID(p) for p in pipeline_id)
-            except ValueError:
-                return {"error": "invalid_params", "detail": "pipeline_id entries must be valid UUIDs"}
-
-        fid: uuid.UUID | None = None
-        if folder_id is not None:
-            try:
-                fid = uuid.UUID(folder_id)
-            except ValueError:
-                return {"error": "invalid_params", "detail": f"Invalid folder_id UUID: {folder_id}"}
-
-        params = AnalyticsParams(
-            group_by=grp,
-            auto_granularity=auto_granularity,
-            dimension=None,
-            trigger_type=tt,
-            status=st,
-            pipeline_ids=pids,
-            team_id=_ctx_team_id_val(),
-            error_code=None,
-            folder_id=fid,
-            date_from=_parse_mcp_datetime(date_from, "date_from") if date_from is not None else None,
-            date_to=_parse_mcp_datetime(date_to, "date_to") if date_to is not None else None,
-            limit=max(1, min(limit, 1000)),
+        params, p_err = _parse_analytics_concurrency_params(
+            group_by,
+            auto_granularity,
+            trigger_type,
+            status,
+            pipeline_id,
+            folder_id,
+            date_from,
+            date_to,
+            limit,
         )
+        if p_err:
+            return p_err
+        assert params is not None
+
         return await run_concurrency_query(
             org_id=org_id,
             params=params,
@@ -1636,17 +1806,10 @@ async def update_pipeline_graph(
         # FAR-296 mode-aware sandbox_agent gate — the SAME shared helper the
         # Pydantic model, node runner, and GraphValidator use, applied to the
         # raw node dicts so this gate agrees with save-time and run-time
-        # validation even if the Pydantic surface is bypassed. Imported from the
-        # lightweight sandbox_mode module (no LangGraph) to keep the API layer
-        # import-linter-clean.
-        from modulo.core.pipeline_engine.sandbox_mode import _validate_sandbox_mode_config
-
-        for node in nodes:
-            if node.get("node_type") == "sandbox_agent":
-                try:
-                    _validate_sandbox_mode_config(node)
-                except ValueError as exc:
-                    return {"error": "validation_failed", "field": "nodes", "detail": str(exc)}
+        # validation even if the Pydantic surface is bypassed.
+        sandbox_err = _validate_sandbox_nodes(nodes)
+        if sandbox_err:
+            return sandbox_err
 
         try:
             async with _session(org_id) as s:
@@ -1714,6 +1877,25 @@ async def update_pipeline_graph(
     except Exception:
         _log.exception("update_pipeline_graph failed")
         return _tool_error("Failed to update pipeline graph")
+
+
+def _validate_sandbox_nodes(nodes: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Mode-aware sandbox_agent gate over raw node dicts.
+
+    Applies the same shared validation helper the Pydantic model, node runner,
+    and GraphValidator use. Imported from the lightweight sandbox_mode module
+    (no LangGraph) to keep the API layer import-linter-clean. Returns None if
+    all sandbox_agent nodes validate, otherwise the error dict.
+    """
+    from modulo.core.pipeline_engine.sandbox_mode import _validate_sandbox_mode_config
+
+    for node in nodes:
+        if node.get("node_type") == "sandbox_agent":
+            try:
+                _validate_sandbox_mode_config(node)
+            except ValueError as exc:
+                return {"error": "validation_failed", "field": "nodes", "detail": str(exc)}
+    return None
 
 
 def _apply_node_connector_binding(
@@ -1825,6 +2007,57 @@ async def bind_connector_to_node(
         return _tool_error("Failed to bind connector to node")
 
 
+def _trigger_pipeline_validate_id(pipeline_id: str) -> tuple[uuid.UUID | None, dict[str, Any] | None]:
+    try:
+        pid = uuid.UUID(pipeline_id)
+    except ValueError:
+        return None, {
+            "error": "invalid_id",
+            "field": "pipeline_id",
+            "detail": f"Invalid UUID format: {pipeline_id}",
+        }
+    return pid, None
+
+
+async def _create_manual_run(
+    s: AsyncSession,
+    org_id: uuid.UUID,
+    pid: uuid.UUID,
+    pipeline_id: str,
+    payload: dict[str, Any],
+) -> tuple[uuid.UUID | None, str | None, dict[str, Any] | None]:
+    from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
+    from modulo.db.crud.run import create_run
+
+    uid = _ctx_user_id_val()
+    pipeline = await get_pipeline(s, pid)
+    if pipeline is None:
+        return None, None, {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+    if _team_scoped_key_mismatch(pipeline.owner_team_id):
+        return None, None, _team_scope_error("pipeline", pipeline_id)
+    snapshot = await create_snapshot_from_live_graph(s, pipeline_id=pid, account_id=uid)
+    if snapshot is None:
+        return None, None, {"error": "snapshot_failed", "pipeline_id": pipeline_id}
+    if not snapshot.graph_json or not snapshot.graph_json.get("nodes"):
+        return (
+            None,
+            None,
+            {
+                "error": "validation_failed",
+                "detail": "Pipeline graph has no nodes — cannot trigger run",
+            },
+        )
+    run = await create_run(
+        s,
+        org_id=org_id,
+        pipeline_id=pid,
+        snapshot_id=snapshot.id,
+        trigger_type="manual",
+        input_payload=payload,
+    )
+    return run.id, run.langgraph_thread_id, None
+
+
 @mcp.tool(description="Fire a pipeline run and return immediately with run_id. Poll get_run_status to track progress.")
 @_RETRY_DB
 async def trigger_pipeline(
@@ -1841,41 +2074,18 @@ async def trigger_pipeline(
                 extra={"client_key": _trigger_pipeline_client_key()},
             )
             return {"error": "rate_limited", "detail": "Rate limit exceeded for trigger_pipeline (60/min)"}
-        from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
-        from modulo.db.crud.run import create_run
-
         org_id = _ctx_org_id_val()
-        try:
-            pid = uuid.UUID(pipeline_id)
-        except ValueError:
-            return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
+        pid, id_err = _trigger_pipeline_validate_id(pipeline_id)
+        if id_err:
+            return id_err
+        assert pid is not None
         payload = input_payload or {}
 
         async with _session(org_id) as s:
-            pipeline = await get_pipeline(s, pid)
-            if pipeline is None:
-                return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
-            if _team_scoped_key_mismatch(pipeline.owner_team_id):
-                return _team_scope_error("pipeline", pipeline_id)
-            uid = _ctx_user_id_val()
-            snapshot = await create_snapshot_from_live_graph(s, pipeline_id=pid, account_id=uid)
-            if snapshot is None:
-                return {"error": "snapshot_failed", "pipeline_id": pipeline_id}
-            if not snapshot.graph_json or not snapshot.graph_json.get("nodes"):
-                return {
-                    "error": "validation_failed",
-                    "detail": "Pipeline graph has no nodes — cannot trigger run",
-                }
-            run = await create_run(
-                s,
-                org_id=org_id,
-                pipeline_id=pid,
-                snapshot_id=snapshot.id,
-                trigger_type="manual",
-                input_payload=payload,
-            )
-            run_id = run.id
-            thread_id = run.langgraph_thread_id
+            run_id, thread_id, run_err = await _create_manual_run(s, org_id, pid, pipeline_id, payload)
+        if run_err:
+            return run_err
+        assert run_id is not None
 
         await dispatch_run(str(run_id), str(org_id), queue="runs")
 
@@ -1902,6 +2112,94 @@ async def trigger_pipeline(
         return _tool_error("Failed to trigger pipeline")
 
 
+async def _load_run_for_status(s: AsyncSession, org_id: uuid.UUID, rid: uuid.UUID, run_id: str) -> Any | None:
+    run = await get_run(s, rid)
+    if run is None:
+        return None
+    # The run carries its own owner_team_id (snapshot at creation) — that
+    # is the source of truth, not the pipeline's current team assignment.
+    # Legacy runs with a NULL stamp fall back to the pipeline owner.
+    run_owner_team_id = await _run_owner_team_id(s, run)
+    if _team_scoped_key_mismatch(run_owner_team_id):
+        return _TEAM_SCOPE_ERROR
+    return run
+
+
+def _run_status_base(run: Run) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "run_id": str(run.id),
+        "pipeline_id": str(run.pipeline_id),
+        "status": run.status,
+        "trigger_type": run.trigger_type,
+        "created_at": run.created_at.isoformat(),
+    }
+    if run.started_at:
+        result["started_at"] = run.started_at.isoformat()
+    if run.completed_at:
+        result["completed_at"] = run.completed_at.isoformat()
+    if run.error_code:
+        result["error_code"] = map_legacy_code(run.error_code)
+    if run.error_detail is not None:
+        _, error_detail = present_error(run.error_code, run.error_detail, limit=5000)
+        result["error_detail"] = error_detail
+    return result
+
+
+def _run_status_detail(run: Run) -> dict[str, Any]:
+    from modulo.api.routes.runs import _clamp_node_token_usage_union
+
+    token_usage = _clamp_node_token_usage_union(run.node_token_usage or {})
+    outputs_json = run.outputs_json or {}
+    telemetry_json = run.node_telemetry_json
+    if not isinstance(telemetry_json, dict):
+        telemetry_json = {}
+    node_ids: set[str] = set()
+    node_ids.update(token_usage.keys())
+    node_ids.update(outputs_json.keys())
+    node_ids.update(telemetry_json.keys())
+    nodes: list[dict[str, Any]] = []
+    for nid in sorted(node_ids):
+        nodes.append(_run_status_node(nid, token_usage, outputs_json, telemetry_json))
+    result: dict[str, Any] = {"nodes": nodes}
+    if run.cost_breakdown is not None:
+        result["cost_breakdown"] = _sanitize_cost_breakdown(run.cost_breakdown)
+    return result
+
+
+def _run_status_node(
+    nid: str,
+    token_usage: dict[str, Any],
+    outputs_json: dict[str, Any],
+    telemetry_json: dict[str, Any],
+) -> dict[str, Any]:
+    """Aggregate a single node's usage/status into its run-status dict entry."""
+    usage = token_usage.get(nid, {})
+    if not isinstance(usage, dict):
+        usage = {}
+    t_in = usage.get("input_tokens") or 0
+    t_out = usage.get("output_tokens") or 0
+    if nid in outputs_json:
+        status = "completed"
+    elif nid in telemetry_json:
+        tel_entry = telemetry_json[nid]
+        tel_status = tel_entry.get("status") if isinstance(tel_entry, dict) else None
+        status = "failed" if tel_status == "failed" else "processed"
+    else:
+        status = "processed"
+    node: dict[str, Any] = {
+        "node_id": nid,
+        "status": status,
+        "input_tokens": t_in,
+        "output_tokens": t_out,
+        "total_tokens": usage.get("total_tokens") or (t_in + t_out),
+        "cost_usd": usage.get("cost_usd", 0),
+        "has_output": nid in outputs_json or nid in telemetry_json,
+    }
+    if usage.get("model_cost_display_usd") is not None:
+        node["model_cost_display_usd"] = usage["model_cost_display_usd"]
+    return node
+
+
 @mcp.tool(description="Get current run status. Pass detail=true for per-node breakdown.")
 @_RETRY_DB
 async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
@@ -1914,73 +2212,14 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
         except ValueError:
             return {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
         async with _session(org_id) as s:
-            run = await get_run(s, rid)
+            run = await _load_run_for_status(s, org_id, rid, run_id)
+            if run is _TEAM_SCOPE_ERROR:
+                return _team_scope_error("run", run_id)
             if run is None:
                 return {"error": "run_not_found", "run_id": run_id}
-            # The run carries its own owner_team_id (snapshot at creation) — that
-            # is the source of truth, not the pipeline's current team assignment.
-            # Legacy runs with a NULL stamp fall back to the pipeline owner.
-            run_owner_team_id = await _run_owner_team_id(s, run)
-        if _team_scoped_key_mismatch(run_owner_team_id):
-            return _team_scope_error("run", run_id)
-        result: dict[str, Any] = {
-            "run_id": str(run.id),
-            "pipeline_id": str(run.pipeline_id),
-            "status": run.status,
-            "trigger_type": run.trigger_type,
-            "created_at": run.created_at.isoformat(),
-        }
-        if run.started_at:
-            result["started_at"] = run.started_at.isoformat()
-        if run.completed_at:
-            result["completed_at"] = run.completed_at.isoformat()
-        if run.error_code:
-            result["error_code"] = map_legacy_code(run.error_code)
-        if run.error_detail is not None:
-            _, error_detail = present_error(run.error_code, run.error_detail, limit=5000)
-            result["error_detail"] = error_detail
+        result = _run_status_base(run)
         if detail:
-            from modulo.api.routes.runs import _clamp_node_token_usage_union
-
-            token_usage = _clamp_node_token_usage_union(run.node_token_usage or {})
-            outputs_json = run.outputs_json or {}
-            telemetry_json = run.node_telemetry_json
-            if not isinstance(telemetry_json, dict):
-                telemetry_json = {}
-            node_ids: set[str] = set()
-            node_ids.update(token_usage.keys())
-            node_ids.update(outputs_json.keys())
-            node_ids.update(telemetry_json.keys())
-            nodes: list[dict[str, Any]] = []
-            for nid in sorted(node_ids):
-                usage = token_usage.get(nid, {})
-                if not isinstance(usage, dict):
-                    usage = {}
-                t_in = usage.get("input_tokens") or 0
-                t_out = usage.get("output_tokens") or 0
-                if nid in outputs_json:
-                    status = "completed"
-                elif nid in telemetry_json:
-                    tel_entry = telemetry_json[nid]
-                    tel_status = tel_entry.get("status") if isinstance(tel_entry, dict) else None
-                    status = "failed" if tel_status == "failed" else "processed"
-                else:
-                    status = "processed"
-                node: dict[str, Any] = {
-                    "node_id": nid,
-                    "status": status,
-                    "input_tokens": t_in,
-                    "output_tokens": t_out,
-                    "total_tokens": usage.get("total_tokens") or (t_in + t_out),
-                    "cost_usd": usage.get("cost_usd", 0),
-                    "has_output": nid in outputs_json or nid in telemetry_json,
-                }
-                if usage.get("model_cost_display_usd") is not None:
-                    node["model_cost_display_usd"] = usage["model_cost_display_usd"]
-                nodes.append(node)
-            result["nodes"] = nodes
-            if run.cost_breakdown is not None:
-                result["cost_breakdown"] = _sanitize_cost_breakdown(run.cost_breakdown)
+            result.update(_run_status_detail(run))
         return result
     except ProgrammingError:
         _log.exception("get_run_status failed")
@@ -2287,6 +2526,170 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
         return _tool_error("Failed to list pending HITL gates")
 
 
+_TEAM_SCOPE_ERROR = object()
+
+
+def _parse_hitl_action(
+    run_id: str,
+    action: str,
+    claim_token: str | None,
+    output: dict[str, Any] | None,
+) -> tuple[uuid.UUID | None, dict[str, Any] | None]:
+    """Parse and validate the HITL action request.
+
+    Returns ``(rid, None)`` on success, or ``(None, error_dict)`` on the first
+    validation failure.
+    """
+    try:
+        rid = uuid.UUID(run_id)
+    except ValueError:
+        return None, {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
+
+    if action not in ("claim", "approve", "reject", "deliver_manual"):
+        return None, {"error": "invalid_action", "detail": "action must be claim, approve, reject, or deliver_manual"}
+
+    if action == "approve" and claim_token is None:
+        return None, {"error": "claim_token_required", "detail": "approve requires claim_token"}
+    if action == "reject" and claim_token is None:
+        return None, {"error": "claim_token_required", "detail": "reject requires claim_token"}
+    if action == "deliver_manual" and claim_token is None:
+        return None, {"error": "claim_token_required", "detail": "deliver_manual requires claim_token"}
+    if action == "deliver_manual" and output is None:
+        return None, {"error": "output_required", "detail": "deliver_manual requires output dict"}
+
+    return rid, None
+
+
+async def _load_hitl_run(
+    s: AsyncSession,
+    org_id: uuid.UUID,
+    rid: uuid.UUID,
+    run_id: str,
+    gate_id: str,
+) -> Any | None:
+    """Load the HITL gate's run, enforcing the team boundary.
+
+    Returns the run ORM object on success, ``_TEAM_SCOPE_ERROR`` when a
+    team-scoped key must not act on the run, or ``None`` when the run is not
+    found.
+    """
+    run = await get_run(s, rid)
+    if run is None:
+        return None
+    if _team_scoped_key_mismatch(await _run_owner_team_id(s, run)):
+        return _TEAM_SCOPE_ERROR
+    return run
+
+
+async def _check_human_only_gate(
+    s: AsyncSession,
+    org_id: uuid.UUID,
+    rid: uuid.UUID,
+    gate_id: str,
+) -> dict[str, Any] | None:
+    """Return an error dict when the gate is human_only, else ``None``.
+
+    Only called for the ``approve`` action: a ``human_only`` gate can only be
+    approved by a browser-authenticated human, never by an API key.
+    """
+    from sqlalchemy import select
+
+    gate_row = (
+        await s.execute(
+            select(HitlClaim).where(
+                HitlClaim.run_id == rid,
+                HitlClaim.gate_id == gate_id,
+                HitlClaim.organisation_id == org_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if gate_row is not None:
+        edge = (
+            (
+                await s.execute(
+                    select(PipelineEdge).where(
+                        PipelineEdge.pipeline_id == gate_row.pipeline_id,
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if edge and edge.hitl_gate_config and edge.hitl_gate_config.get("human_only", False):
+            return {"error": "human_only_gate", "detail": "human_only gate requires browser auth"}
+    return None
+
+
+async def _dispatch_hitl_action(
+    mgr: HITLManager,
+    s: AsyncSession,
+    action: str,
+    rid: uuid.UUID,
+    gate_id: str,
+    org_id: uuid.UUID,
+    key_id: uuid.UUID,
+    claim_token: str | None,
+    output: dict[str, Any] | None,
+    reason: str | None,
+) -> dict[str, Any]:
+    """Dispatch a validated HITL action to the manager and return the success dict.
+
+    Raises the domain exceptions (GateNotFoundError, NotTeamMemberError, etc.)
+    which the caller maps to error responses.
+    """
+    if action == "claim":
+        gate = await mgr.claim(s, run_id=rid, gate_id=gate_id, org_id=org_id, claimant_id=key_id)
+        return {
+            "status": "claimed",
+            "claim_token": gate.claim_token,
+            "expires_at": gate.expires_at.isoformat() if gate.expires_at else None,
+        }
+    if action == "approve":
+        await mgr.approve(s, run_id=rid, gate_id=gate_id, org_id=org_id, claim_token=claim_token or "")
+        return {"status": "approved", "gate_id": gate_id}
+    if action == "deliver_manual":
+        await mgr.deliver_manual(
+            s,
+            run_id=rid,
+            gate_id=gate_id,
+            org_id=org_id,
+            claim_token=claim_token or "",
+            output=output or {},
+            actor_id=key_id,
+        )
+        return {"status": "delivered_manual", "gate_id": gate_id}
+    await mgr.reject(
+        s,
+        run_id=rid,
+        gate_id=gate_id,
+        org_id=org_id,
+        claim_token=claim_token or "",
+        actor_id=key_id,
+        reason=reason,
+    )
+    return {"status": "rejected", "gate_id": gate_id}
+
+
+def _hitl_error_response(exc: BaseException, run_id: str, gate_id: str) -> dict[str, Any]:
+    if isinstance(exc, GateNotFoundError):
+        return {"error": "gate_not_found", "run_id": run_id, "gate_id": gate_id}
+    if isinstance(exc, NotTeamMemberError):
+        return {"error": "not_team_member", "detail": "You are not a member of the team required by this gate"}
+    if isinstance(exc, AlreadyClaimedError):
+        return {"error": "already_claimed", "detail": "Gate is already held by another client"}
+    if isinstance(exc, ClaimTokenInvalidError):
+        return {"error": "claim_token_invalid"}
+    if isinstance(exc, ClaimTokenExpiredError):
+        return {"error": "claim_token_expired", "detail": "Re-claim the gate"}
+    if isinstance(exc, GateAlreadyDecidedError):
+        return {"error": "already_decided", "detail": "Gate already has a final decision"}
+    if isinstance(exc, ProgrammingError):
+        _log.exception("review_hitl failed")
+        return {"error": "migration_required", "detail": "DB migration required. Run alembic upgrade head."}
+    _log.exception("review_hitl failed")
+    return _tool_error("Failed to process HITL action")
+
+
 @mcp.tool(
     description=(
         "Unified HITL gate action: claim, approve, reject, or deliver_manual. "
@@ -2308,121 +2711,53 @@ async def review_hitl(
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
 
-    from sqlalchemy import select
-
     org_id = _ctx_org_id_val()
     key_id = _ctx_key_id.get(uuid.UUID("00000000-0000-0000-0000-000000000002"))
-    try:
-        rid = uuid.UUID(run_id)
-    except ValueError:
-        return {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
     mgr = HITLManager()
 
-    if action not in ("claim", "approve", "reject", "deliver_manual"):
-        return {"error": "invalid_action", "detail": "action must be claim, approve, reject, or deliver_manual"}
+    rid, parse_err = _parse_hitl_action(run_id, action, claim_token, output)
+    if parse_err:
+        return parse_err
+    assert rid is not None
 
     try:
         check_tool_scope(_ctx_role_val(), "review_hitl", action=action)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
 
-    if action == "approve" and claim_token is None:
-        return {"error": "claim_token_required", "detail": "approve requires claim_token"}
-    if action == "reject" and claim_token is None:
-        return {"error": "claim_token_required", "detail": "reject requires claim_token"}
-    if action == "deliver_manual" and claim_token is None:
-        return {"error": "claim_token_required", "detail": "deliver_manual requires claim_token"}
-    if action == "deliver_manual" and output is None:
-        return {"error": "output_required", "detail": "deliver_manual requires output dict"}
-
     try:
         async with _session(org_id) as s:
-            # Team boundary: a team-scoped key must not act on a run owned by
-            # another team, even when the gate itself is org-level
-            # (required_team_id IS NULL). The run's effective owner is the
-            # source of truth with pipeline fallback for pre-stamp runs.
-            run = await get_run(s, rid)
+            run = await _load_hitl_run(s, org_id, rid, run_id, gate_id)
+            if run is _TEAM_SCOPE_ERROR:
+                return _team_scope_error("run", run_id)
             if run is None:
                 return {"error": "gate_not_found", "run_id": run_id, "gate_id": gate_id}
-            if _team_scoped_key_mismatch(await _run_owner_team_id(s, run)):
-                return _team_scope_error("run", run_id)
 
-            # Check human_only for approve action
             if action == "approve":
-                gate_row = (
-                    await s.execute(
-                        select(HitlClaim).where(
-                            HitlClaim.run_id == rid,
-                            HitlClaim.gate_id == gate_id,
-                            HitlClaim.organisation_id == org_id,
-                        )
-                    )
-                ).scalar_one_or_none()
-                if gate_row is not None:
-                    edge = (
-                        (
-                            await s.execute(
-                                select(PipelineEdge).where(
-                                    PipelineEdge.pipeline_id == gate_row.pipeline_id,
-                                )
-                            )
-                        )
-                        .scalars()
-                        .first()
-                    )
-                    if edge and edge.hitl_gate_config and edge.hitl_gate_config.get("human_only", False):
-                        return {"error": "human_only_gate", "detail": "human_only gate requires browser auth"}
+                human_only_err = await _check_human_only_gate(s, org_id, rid, gate_id)
+                if human_only_err:
+                    return human_only_err
 
             try:
-                if action == "claim":
-                    gate = await mgr.claim(s, run_id=rid, gate_id=gate_id, org_id=org_id, claimant_id=key_id)
-                    return {
-                        "status": "claimed",
-                        "claim_token": gate.claim_token,
-                        "expires_at": gate.expires_at.isoformat() if gate.expires_at else None,
-                    }
-                if action == "approve":
-                    await mgr.approve(s, run_id=rid, gate_id=gate_id, org_id=org_id, claim_token=claim_token or "")
-                    return {"status": "approved", "gate_id": gate_id}
-                if action == "deliver_manual":
-                    await mgr.deliver_manual(
-                        s,
-                        run_id=rid,
-                        gate_id=gate_id,
-                        org_id=org_id,
-                        claim_token=claim_token or "",
-                        output=output or {},
-                        actor_id=key_id,
-                    )
-                    return {"status": "delivered_manual", "gate_id": gate_id}
-                await mgr.reject(
-                    s,
-                    run_id=rid,
-                    gate_id=gate_id,
-                    org_id=org_id,
-                    claim_token=claim_token or "",
-                    actor_id=key_id,
-                    reason=reason,
+                return await _dispatch_hitl_action(
+                    mgr, s, action, rid, gate_id, org_id, key_id, claim_token, output, reason
                 )
-                return {"status": "rejected", "gate_id": gate_id}
-            except GateNotFoundError:
-                return {"error": "gate_not_found", "run_id": run_id, "gate_id": gate_id}
-            except NotTeamMemberError:
-                return {"error": "not_team_member", "detail": "You are not a member of the team required by this gate"}
-            except AlreadyClaimedError:
-                return {"error": "already_claimed", "detail": "Gate is already held by another client"}
-            except ClaimTokenInvalidError:
-                return {"error": "claim_token_invalid"}
-            except ClaimTokenExpiredError:
-                return {"error": "claim_token_expired", "detail": "Re-claim the gate"}
-            except GateAlreadyDecidedError:
-                return {"error": "already_decided", "detail": "Gate already has a final decision"}
-            except ProgrammingError:
-                _log.exception("review_hitl failed")
-                return {"error": "migration_required", "detail": "DB migration required. Run alembic upgrade head."}
-            except Exception:
-                _log.exception("review_hitl failed")
-                return _tool_error("Failed to process HITL action")
+            except GateNotFoundError as exc:
+                return _hitl_error_response(exc, run_id, gate_id)
+            except NotTeamMemberError as exc:
+                return _hitl_error_response(exc, run_id, gate_id)
+            except AlreadyClaimedError as exc:
+                return _hitl_error_response(exc, run_id, gate_id)
+            except ClaimTokenInvalidError as exc:
+                return _hitl_error_response(exc, run_id, gate_id)
+            except ClaimTokenExpiredError as exc:
+                return _hitl_error_response(exc, run_id, gate_id)
+            except GateAlreadyDecidedError as exc:
+                return _hitl_error_response(exc, run_id, gate_id)
+            except ProgrammingError as exc:
+                return _hitl_error_response(exc, run_id, gate_id)
+            except Exception as exc:
+                return _hitl_error_response(exc, run_id, gate_id)
     except OperationalError:
         raise
     except Exception:
@@ -2530,6 +2865,156 @@ async def search_library(
         return _tool_error("Failed to search library")
 
 
+async def _apply_trigger_event_trigger_filter(
+    s: AsyncSession,
+    q: Any,
+    key_team_id: uuid.UUID | None,
+    trigger_id: str | None,
+) -> tuple[Any, dict[str, Any] | None]:
+    from sqlalchemy import select
+
+    from modulo.db.models.trigger import Trigger
+    from modulo.db.models.trigger_event import TriggerEvent
+
+    if trigger_id is None:
+        return q, None
+    try:
+        tid = uuid.UUID(trigger_id)
+    except ValueError:
+        return q, {
+            "error": "invalid_id",
+            "field": "trigger_id",
+            "detail": f"Invalid UUID format: {trigger_id}",
+        }
+    q = q.where(TriggerEvent.trigger_id == tid)
+    if key_team_id is not None:
+        # A team-scoped key must not read events for another
+        # team's trigger even when no pipeline filter is given.
+        # Fail closed: a soft-deleted or otherwise-unresolvable
+        # trigger is treated as out of the key's team boundary too
+        # (matching ``list_triggers``, which filters
+        # ``Trigger.deleted_at.is_(None)``), so a deleted cross-team
+        # trigger cannot fall through to an unfiltered listing.
+        trigger = (
+            await s.execute(
+                select(Trigger).where(
+                    Trigger.id == tid,
+                    Trigger.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if trigger is None:
+            return q, _team_scope_error("trigger", str(tid))
+        if _team_scoped_key_mismatch(await _pipeline_owner_team_id(s, trigger.pipeline_id)):
+            return q, _team_scope_error("pipeline", str(trigger.pipeline_id))
+    return q, None
+
+
+async def _build_trigger_event_query(
+    s: AsyncSession,
+    org_id: uuid.UUID,
+    key_team_id: uuid.UUID | None,
+    trigger_id: str | None,
+    pipeline_id: str | None,
+) -> tuple[Any, dict[str, Any] | None]:
+    from sqlalchemy import select
+
+    from modulo.db.models.pipeline import Pipeline as _Pipeline
+    from modulo.db.models.trigger import Trigger
+    from modulo.db.models.trigger_event import TriggerEvent
+
+    q = select(TriggerEvent).where(TriggerEvent.organisation_id == org_id)
+    joined = False
+
+    q, trigger_filter_err = await _apply_trigger_event_trigger_filter(s, q, key_team_id, trigger_id)
+    if trigger_filter_err:
+        return None, trigger_filter_err
+
+    if pipeline_id is not None:
+        try:
+            pid = uuid.UUID(pipeline_id)
+        except ValueError:
+            return None, {
+                "error": "invalid_id",
+                "field": "pipeline_id",
+                "detail": f"Invalid UUID format: {pipeline_id}",
+            }
+        if key_team_id is not None:
+            owner_team_id = await _pipeline_owner_team_id(s, pid)
+            if _team_scoped_key_mismatch(owner_team_id):
+                return None, _team_scope_error("pipeline", str(pid))
+        if not joined:
+            q = q.join(Trigger, TriggerEvent.trigger_id == Trigger.id)
+            q = q.join(_Pipeline, Trigger.pipeline_id == _Pipeline.id)
+            joined = True
+        q = q.where(
+            Trigger.pipeline_id == pid,
+            _Pipeline.deleted_at.is_(None),
+        )
+
+    if key_team_id is not None:
+        # A team-scoped key only sees events whose trigger's pipeline
+        # is org-level or owned by its own team — the same boundary
+        # ``list_triggers`` applies.
+        from modulo.db.crud.team_scope import team_scope_clause
+
+        if not joined:
+            q = q.join(Trigger, TriggerEvent.trigger_id == Trigger.id)
+            q = q.join(_Pipeline, Trigger.pipeline_id == _Pipeline.id)
+            joined = True
+        q = q.where(team_scope_clause(_Pipeline.owner_team_id, key_team_id))
+
+    return q, None
+
+
+async def _paginate_trigger_events(
+    s: AsyncSession,
+    q: Any,
+    cursor: str | None,
+    lim: int,
+) -> tuple[list[Any], str | None, bool]:
+    from modulo.db.crud.pagination import CursorPaginator
+    from modulo.db.models.trigger_event import TriggerEvent
+
+    if cursor is not None:
+        paginator = CursorPaginator(sort_field="created_at", sort_dir="desc")
+        cp = await paginator.paginate(
+            s,
+            q,
+            cursor=cursor,
+            limit=lim,
+            model=TriggerEvent,
+            compute_total=False,
+        )
+        items = cp.items
+        next_cursor = cp.next_cursor
+        has_more = cp.has_more
+    else:
+        q = q.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc())
+        rows = list((await s.execute(q.limit(lim + 1))).scalars().all())
+        has_more = len(rows) > lim
+        items = rows[:lim]
+        next_cursor = None
+        if has_more:
+            last = items[-1]
+            next_cursor = CursorPaginator.encode_cursor(last.created_at, last.id)
+    return items, next_cursor, has_more
+
+
+def _trigger_event_payloads(items: list[Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": str(e.id),
+            "trigger_id": str(e.trigger_id),
+            "trigger_type": e.trigger_type,
+            "validation_result": e.validation_result,
+            "created_at": e.created_at.isoformat() if e.created_at else None,
+            "run_id": str(e.run_id) if e.run_id else None,
+        }
+        for e in items
+    ]
+
+
 @mcp.tool(
     name="list_trigger_events",
     description=(
@@ -2551,121 +3036,19 @@ async def list_trigger_events(
         check_tool_scope(_ctx_role_val(), "list_trigger_events")
         from sqlalchemy import func, select
 
-        from modulo.db.crud.pagination import CursorPaginator
-        from modulo.db.models.pipeline import Pipeline as _Pipeline
-        from modulo.db.models.trigger import Trigger
-        from modulo.db.models.trigger_event import TriggerEvent
-
         org_id = _ctx_org_id_val()
         lim = max(1, min(limit, 100))
 
         async with _session(org_id) as s:
             key_team_id = _ctx_team_id_val()
-            q = select(TriggerEvent).where(TriggerEvent.organisation_id == org_id)
-            joined = False
-
-            if trigger_id is not None:
-                try:
-                    tid = uuid.UUID(trigger_id)
-                except ValueError:
-                    return {
-                        "error": "invalid_id",
-                        "field": "trigger_id",
-                        "detail": f"Invalid UUID format: {trigger_id}",
-                    }
-                q = q.where(TriggerEvent.trigger_id == tid)
-                if key_team_id is not None:
-                    # A team-scoped key must not read events for another
-                    # team's trigger even when no pipeline filter is given.
-                    # Fail closed: a soft-deleted or otherwise-unresolvable
-                    # trigger is treated as out of the key's team boundary too
-                    # (matching ``list_triggers``, which filters
-                    # ``Trigger.deleted_at.is_(None)``), so a deleted cross-team
-                    # trigger cannot fall through to an unfiltered listing.
-                    trigger = (
-                        await s.execute(
-                            select(Trigger).where(
-                                Trigger.id == tid,
-                                Trigger.deleted_at.is_(None),
-                            )
-                        )
-                    ).scalar_one_or_none()
-                    if trigger is None:
-                        return _team_scope_error("trigger", str(tid))
-                    if _team_scoped_key_mismatch(await _pipeline_owner_team_id(s, trigger.pipeline_id)):
-                        return _team_scope_error("pipeline", str(trigger.pipeline_id))
-
-            if pipeline_id is not None:
-                try:
-                    pid = uuid.UUID(pipeline_id)
-                except ValueError:
-                    return {
-                        "error": "invalid_id",
-                        "field": "pipeline_id",
-                        "detail": f"Invalid UUID format: {pipeline_id}",
-                    }
-                if key_team_id is not None:
-                    owner_team_id = await _pipeline_owner_team_id(s, pid)
-                    if _team_scoped_key_mismatch(owner_team_id):
-                        return _team_scope_error("pipeline", str(pid))
-                if not joined:
-                    q = q.join(Trigger, TriggerEvent.trigger_id == Trigger.id)
-                    q = q.join(_Pipeline, Trigger.pipeline_id == _Pipeline.id)
-                    joined = True
-                q = q.where(
-                    Trigger.pipeline_id == pid,
-                    _Pipeline.deleted_at.is_(None),
-                )
-
-            if key_team_id is not None:
-                # A team-scoped key only sees events whose trigger's pipeline
-                # is org-level or owned by its own team — the same boundary
-                # ``list_triggers`` applies.
-                from modulo.db.crud.team_scope import team_scope_clause
-
-                if not joined:
-                    q = q.join(Trigger, TriggerEvent.trigger_id == Trigger.id)
-                    q = q.join(_Pipeline, Trigger.pipeline_id == _Pipeline.id)
-                    joined = True
-                q = q.where(team_scope_clause(_Pipeline.owner_team_id, key_team_id))
-
+            q, q_err = await _build_trigger_event_query(s, org_id, key_team_id, trigger_id, pipeline_id)
+            if q_err:
+                return q_err
             total = (await s.execute(select(func.count()).select_from(q.subquery()))).scalar_one_or_none() or 0
-
-            if cursor is not None:
-                paginator = CursorPaginator(sort_field="created_at", sort_dir="desc")
-                cp = await paginator.paginate(
-                    s,
-                    q,
-                    cursor=cursor,
-                    limit=lim,
-                    model=TriggerEvent,
-                    compute_total=False,
-                )
-                items = cp.items
-                next_cursor = cp.next_cursor
-                has_more = cp.has_more
-            else:
-                q = q.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc())
-                rows = list((await s.execute(q.limit(lim + 1))).scalars().all())
-                has_more = len(rows) > lim
-                items = rows[:lim]
-                next_cursor = None
-                if has_more:
-                    last = items[-1]
-                    next_cursor = CursorPaginator.encode_cursor(last.created_at, last.id)
+            items, next_cursor, has_more = await _paginate_trigger_events(s, q, cursor, lim)
 
         return {
-            "data": [
-                {
-                    "id": str(e.id),
-                    "trigger_id": str(e.trigger_id),
-                    "trigger_type": e.trigger_type,
-                    "validation_result": e.validation_result,
-                    "created_at": e.created_at.isoformat() if e.created_at else None,
-                    "run_id": str(e.run_id) if e.run_id else None,
-                }
-                for e in items
-            ],
+            "data": _trigger_event_payloads(items),
             "total": total,
             "next_cursor": next_cursor,
             "has_more": has_more,
@@ -2874,6 +3257,94 @@ async def create_connector(
         return _tool_error("Failed to create connector")
 
 
+def _validate_trigger_create_inputs(
+    pipeline_id: str,
+    max_concurrent_runs: int,
+    daily_spend_limit: float | None,
+) -> tuple[uuid.UUID | None, dict[str, Any] | None]:
+    try:
+        pid = uuid.UUID(pipeline_id)
+    except ValueError:
+        return None, {
+            "error": "invalid_id",
+            "field": "pipeline_id",
+            "detail": f"Invalid UUID format: {pipeline_id}",
+        }
+    if max_concurrent_runs < 1:
+        return None, {"error": "validation", "field": "max_concurrent_runs", "detail": "must be >= 1"}
+    if daily_spend_limit is not None and daily_spend_limit < 0:
+        return None, {"error": "validation", "field": "daily_spend_limit", "detail": "must be >= 0"}
+    return pid, None
+
+
+async def _validate_ongoing_trigger_create(
+    s: AsyncSession,
+    pid: uuid.UUID,
+    trigger_type: str,
+    max_concurrent_runs: int,
+    daily_spend_limit: float | None,
+    config_json: dict[str, Any] | None,
+) -> tuple[datetime | None, dict[str, Any] | None]:
+    if trigger_type != "ongoing":
+        return None, None
+    # FAR-158: identical guards to the REST create surface.
+    from fastapi import HTTPException
+
+    from modulo.core.trigger_validation import validate_ongoing_config
+    from modulo.db.models.pipeline import Pipeline
+
+    pipeline = await s.get(Pipeline, pid)
+    pipeline_cap = pipeline.max_concurrent_runs if pipeline is not None else 0
+    try:
+        validate_ongoing_config(
+            trigger_type,
+            max_concurrent_runs=max_concurrent_runs,
+            daily_spend_limit=Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else None,
+            config_json=config_json,
+            pipeline_max_concurrent_runs=pipeline_cap,
+        )
+    except HTTPException as exc:
+        return None, {"error": "validation", "detail": str(exc.detail)}
+    return datetime.now(UTC), None
+
+
+def _build_trigger_record(
+    org_id: uuid.UUID,
+    pid: uuid.UUID,
+    trigger_type: str,
+    active: bool,
+    max_concurrent_runs: int,
+    daily_spend_limit: float | None,
+    config_json: dict[str, Any] | None,
+    account_id: uuid.UUID,
+    next_fire_at: datetime | None,
+    cron_expression: str | None,
+) -> tuple[Any, dict[str, Any] | None]:
+    from modulo.db.models.trigger import Trigger
+
+    trigger = Trigger(
+        organisation_id=org_id,
+        pipeline_id=pid,
+        trigger_type=trigger_type,
+        active=active,
+        max_concurrent_runs=max_concurrent_runs,
+        daily_spend_limit=Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else None,
+        config_json=config_json or {},
+        account_id=account_id,
+        next_fire_at=next_fire_at,
+        # FAR-190: creation anchors the no-delivery streak epoch (the
+        # streak boundary) so pre-existing history can never count.
+        streak_epoch=datetime.now(UTC),
+    )
+    if cron_expression:
+        trigger.cron_expression = cron_expression
+        error = validate_cron_expression(cron_expression)
+        if error:
+            return trigger, {"error": "invalid_cron", "detail": error}
+        trigger.next_fire_at = compute_next_fire(cron_expression, timezone=trigger.cron_timezone or "UTC")
+    return trigger, None
+
+
 @mcp.tool(description="Create a new trigger for a pipeline.")
 @_RETRY_DB
 async def create_trigger(
@@ -2885,8 +3356,6 @@ async def create_trigger(
     max_concurrent_runs: int = 1,
     daily_spend_limit: float | None = None,
 ) -> dict[str, Any]:
-    from datetime import UTC
-
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
@@ -2894,64 +3363,34 @@ async def create_trigger(
 
         org_id = _ctx_org_id_val()
         account_id = _ctx_user_id_val()
-        try:
-            pid = uuid.UUID(pipeline_id)
-        except ValueError:
-            return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
-
-        if max_concurrent_runs < 1:
-            return {"error": "validation", "field": "max_concurrent_runs", "detail": "must be >= 1"}
-        if daily_spend_limit is not None and daily_spend_limit < 0:
-            return {"error": "validation", "field": "daily_spend_limit", "detail": "must be >= 0"}
-
-        from modulo.core.trigger_validation import validate_ongoing_config
-        from modulo.db.models.pipeline import Pipeline
-        from modulo.db.models.trigger import Trigger
+        pid, input_err = _validate_trigger_create_inputs(pipeline_id, max_concurrent_runs, daily_spend_limit)
+        if input_err:
+            return input_err
+        assert pid is not None
 
         async with _session(org_id) as s:
             owner_team_id = await _pipeline_owner_team_id(s, pid)
             if _team_scoped_key_mismatch(owner_team_id):
                 return _team_scope_error("pipeline", pipeline_id)
-            next_fire_at = None
-            if trigger_type == "ongoing":
-                # FAR-158: identical guards to the REST create surface.
-                from datetime import UTC
-
-                from fastapi import HTTPException
-
-                pipeline = await s.get(Pipeline, pid)
-                pipeline_cap = pipeline.max_concurrent_runs if pipeline is not None else 0
-                try:
-                    validate_ongoing_config(
-                        trigger_type,
-                        max_concurrent_runs=max_concurrent_runs,
-                        daily_spend_limit=Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else None,
-                        config_json=config_json,
-                        pipeline_max_concurrent_runs=pipeline_cap,
-                    )
-                except HTTPException as exc:
-                    return {"error": "validation", "detail": str(exc.detail)}
-                next_fire_at = datetime.now(UTC)
-            trigger = Trigger(
-                organisation_id=org_id,
-                pipeline_id=pid,
-                trigger_type=trigger_type,
-                active=active,
-                max_concurrent_runs=max_concurrent_runs,
-                daily_spend_limit=Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else None,
-                config_json=config_json or {},
-                account_id=account_id,
-                next_fire_at=next_fire_at,
-                # FAR-190: creation anchors the no-delivery streak epoch (the
-                # streak boundary) so pre-existing history can never count.
-                streak_epoch=datetime.now(UTC),
+            next_fire_at, ongoing_err = await _validate_ongoing_trigger_create(
+                s, pid, trigger_type, max_concurrent_runs, daily_spend_limit, config_json
             )
-            if cron_expression:
-                trigger.cron_expression = cron_expression
-                error = validate_cron_expression(cron_expression)
-                if error:
-                    return {"error": "invalid_cron", "detail": error}
-                trigger.next_fire_at = compute_next_fire(cron_expression, timezone=trigger.cron_timezone or "UTC")
+            if ongoing_err:
+                return ongoing_err
+            trigger, build_err = _build_trigger_record(
+                org_id,
+                pid,
+                trigger_type,
+                active,
+                max_concurrent_runs,
+                daily_spend_limit,
+                config_json,
+                account_id,
+                next_fire_at,
+                cron_expression,
+            )
+            if build_err:
+                return build_err
             s.add(trigger)
             await s.flush()
             # FAR-251 — surface the created trigger's streak_status exactly as
@@ -3070,9 +3509,6 @@ def _validate_trigger_update_inputs(
     return tid, None
 
 
-_TEAM_SCOPE_ERROR: object = object()
-
-
 async def _load_trigger_for_update(s: AsyncSession, org_id: uuid.UUID, tid: uuid.UUID) -> Any | None:
     """Load the trigger row for update; None if not found, _TEAM_SCOPE_ERROR if team-scope mismatch."""
     from sqlalchemy import select
@@ -3092,6 +3528,44 @@ async def _load_trigger_for_update(s: AsyncSession, org_id: uuid.UUID, tid: uuid
     return trigger
 
 
+async def _validate_ongoing_config_change(
+    s: AsyncSession,
+    trigger: Any,
+    max_concurrent_runs: int | None,
+    daily_spend_limit: float | None,
+    config_json: dict[str, Any] | None,
+    active: bool | None,
+) -> dict[str, Any] | None:
+    """Validate an ongoing trigger's config change; returns None if valid or an error dict."""
+    from fastapi import HTTPException
+
+    from modulo.core.trigger_validation import validate_ongoing_config
+    from modulo.db.models.pipeline import Pipeline
+
+    ongoing_fields_changing = any(x is not None for x in [max_concurrent_runs, config_json, active]) or (
+        daily_spend_limit is not None
+    )
+    if not ongoing_fields_changing:
+        return None
+    pipeline = await s.get(Pipeline, trigger.pipeline_id)
+    pipeline_cap = pipeline.max_concurrent_runs if pipeline is not None else 0
+    try:
+        validate_ongoing_config(
+            trigger.trigger_type,
+            max_concurrent_runs=(
+                max_concurrent_runs if max_concurrent_runs is not None else trigger.max_concurrent_runs
+            ),
+            daily_spend_limit=(Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else None)
+            if daily_spend_limit is not None
+            else trigger.daily_spend_limit,
+            config_json=(config_json if config_json is not None else trigger.config_json),
+            pipeline_max_concurrent_runs=pipeline_cap,
+        )
+    except HTTPException as exc:
+        return {"error": "validation", "detail": str(exc.detail)}
+    return None
+
+
 async def _validate_ongoing_trigger_update(
     s: AsyncSession,
     trigger: Any,
@@ -3102,11 +3576,6 @@ async def _validate_ongoing_trigger_update(
     clear_daily_spend_limit: bool,
 ) -> tuple[bool, dict[str, Any] | None]:
     """FAR-158 ongoing guards (identical to REST PUT); returns (scan_interval_changed, error)."""
-    from fastapi import HTTPException
-
-    from modulo.core.trigger_validation import validate_ongoing_config
-    from modulo.db.models.pipeline import Pipeline
-
     ongoing_scan_interval_changed = False
     if trigger.trigger_type == "ongoing":
         if clear_daily_spend_limit:
@@ -3114,26 +3583,11 @@ async def _validate_ongoing_trigger_update(
                 "error": "validation",
                 "detail": "ongoing triggers require daily_spend_limit; clearing it is not allowed",
             }
-        ongoing_fields_changing = any(x is not None for x in [max_concurrent_runs, config_json, active]) or (
-            daily_spend_limit is not None
+        cfg_err = await _validate_ongoing_config_change(
+            s, trigger, max_concurrent_runs, daily_spend_limit, config_json, active
         )
-        if ongoing_fields_changing:
-            pipeline = await s.get(Pipeline, trigger.pipeline_id)
-            pipeline_cap = pipeline.max_concurrent_runs if pipeline is not None else 0
-            try:
-                validate_ongoing_config(
-                    trigger.trigger_type,
-                    max_concurrent_runs=(
-                        max_concurrent_runs if max_concurrent_runs is not None else trigger.max_concurrent_runs
-                    ),
-                    daily_spend_limit=(Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else None)
-                    if daily_spend_limit is not None
-                    else trigger.daily_spend_limit,
-                    config_json=(config_json if config_json is not None else trigger.config_json),
-                    pipeline_max_concurrent_runs=pipeline_cap,
-                )
-            except HTTPException as exc:
-                return False, {"error": "validation", "detail": str(exc.detail)}
+        if cfg_err:
+            return False, cfg_err
         if config_json is not None:
             old_scan = int((trigger.config_json or {}).get("scan_interval_seconds") or 60)
             new_scan = int(config_json.get("scan_interval_seconds") or 60)
@@ -3158,6 +3612,25 @@ def _validate_cron_update(
             return None, {"error": "invalid_cron", "detail": error}
         next_fire_at = compute_next_fire(expr, timezone=tz)
     return next_fire_at, None
+
+
+def _merge_trigger_config_json(trigger: Any, config_json: dict[str, Any] | None) -> None:
+    if config_json is None:
+        return
+    # MERGE into the existing blob — never wholesale replace.
+    current_cfg = trigger.config_json or {}
+    merged_cfg = dict(current_cfg)
+    for k, v in config_json.items():
+        if isinstance(v, str) and v == SENSITIVE_VALUE_MASK:
+            # A masked placeholder must never clobber the stored secret
+            # (read-modify-write round-trip guard). Keep the existing value.
+            continue
+        if v is None:
+            # Explicit null clears the key; a missing key leaves it intact.
+            merged_cfg.pop(k, None)
+        else:
+            merged_cfg[k] = v
+    trigger.config_json = merged_cfg
 
 
 async def _apply_trigger_field_updates(
@@ -3186,21 +3659,7 @@ async def _apply_trigger_field_updates(
         trigger.daily_spend_limit = None
     elif daily_spend_limit is not None:
         trigger.daily_spend_limit = Decimal(str(daily_spend_limit))
-    if config_json is not None:
-        # MERGE into the existing blob — never wholesale replace.
-        current_cfg = trigger.config_json or {}
-        merged_cfg = dict(current_cfg)
-        for k, v in config_json.items():
-            if isinstance(v, str) and v == SENSITIVE_VALUE_MASK:
-                # A masked placeholder must never clobber the stored secret
-                # (read-modify-write round-trip guard). Keep the existing value.
-                continue
-            if v is None:
-                # Explicit null clears the key; a missing key leaves it intact.
-                merged_cfg.pop(k, None)
-            else:
-                merged_cfg[k] = v
-        trigger.config_json = merged_cfg
+    _merge_trigger_config_json(trigger, config_json)
     if cron_expression is not None:
         trigger.cron_expression = cron_expression
     if cron_timezone is not None:
@@ -5374,39 +5833,49 @@ async def _oauth_authorize(request: Request) -> JSONResponse | RedirectResponse:
     return redirect
 
 
-async def _oauth_token(request: Request) -> JSONResponse:
-    """POST /mcp/oauth/token — exchange code for access token.
+async def _parse_oauth_form(request: Request) -> tuple[dict[str, str] | None, JSONResponse | None]:
+    """Parse an RFC 6749 request body into a string dict.
 
-    RFC 6749 wire format: form-urlencoded bodies (``request.form()``) with JSON
-    bodies accepted for backwards compatibility; anything else is
-    ``invalid_request``. The PKCE ``code_verifier`` is required and verified
-    against the stored S256 challenge (RFC 7636 §4.5/§4.6). ``client_secret``
-    may arrive in the form body OR an HTTP Basic Authorization header. The
-    consenting account's LIVE org role is re-verified against the granted
-    scopes — a demoted account is denied a token (ADR 017).
+    Accepts form-urlencoded (``request.form()``) and JSON bodies for backwards
+    compatibility; anything else is ``invalid_request``. Returns
+    ``(params, error)`` — exactly one is non-None.
     """
     content_type = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
     if content_type == "application/x-www-form-urlencoded":
         form = await request.form()
         params: dict[str, str] = {k: (str(v) if v is not None else "") for k, v in form.items()}
-    elif content_type == _CT_APPLICATION_JSON:
+        return params, None
+    if content_type == _CT_APPLICATION_JSON:
         try:
             body = await request.json()
         except json.JSONDecodeError:
-            return JSONResponse(
+            return None, JSONResponse(
                 {"error": "invalid_request", "detail": "Request body must be JSON"},
                 status_code=400,
             )
         params = {k: str(v) if v is not None else "" for k, v in body.items()}
-    else:
-        return JSONResponse(
-            {"error": "invalid_request", "detail": "Content-Type must be application/x-www-form-urlencoded"},
-            status_code=400,
-        )
+        return params, None
+    return None, JSONResponse(
+        {"error": "invalid_request", "detail": "Content-Type must be application/x-www-form-urlencoded"},
+        status_code=400,
+    )
 
+
+def _extract_oauth_client_credentials(
+    request: Request, params: dict[str, str]
+) -> tuple[dict[str, str], JSONResponse | None]:
+    """Extract and validate the client credentials for an authorization-code grant.
+
+    Validates ``grant_type`` is ``authorization_code`` and reads
+    ``code``/``redirect_uri``/``client_id``/``code_verifier``/``client_secret``
+    from the body, falling back to an HTTP Basic Authorization header for
+    ``client_secret``/``client_id`` (RFC 6749 §2.3.1). Returns
+    ``(creds, error)`` where ``creds`` has the six keys — exactly one of the
+    tuple is non-None only on error.
+    """
     grant_type = params.get("grant_type", "")
     if grant_type != "authorization_code":
-        return JSONResponse(
+        return {}, JSONResponse(
             {"error": "unsupported_grant_type"},
             status_code=400,
         )
@@ -5430,26 +5899,142 @@ async def _oauth_token(request: Request) -> JSONResponse:
             if not client_id:
                 client_id = basic_id
         except Exception:
-            return JSONResponse(
+            return {}, JSONResponse(
                 {"error": "invalid_request", "detail": "Malformed Basic Authorization header"},
                 status_code=400,
             )
 
     if not code or not redirect_uri or not client_id or not client_secret:
-        return JSONResponse(
+        return {}, JSONResponse(
             {"error": "invalid_request", "detail": "Missing required parameters"},
             status_code=400,
         )
 
+    return (
+        {
+            "grant_type": grant_type,
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "client_id": client_id,
+            "code_verifier": code_verifier,
+            "client_secret": client_secret,
+        },
+        None,
+    )
+
+
+async def _exchange_authorization_code(
+    creds: dict[str, str], settings: Any
+) -> tuple[dict[str, Any] | None, JSONResponse | None]:
+    """Exchange an authorization code for an access/refresh token pair.
+
+    Runs the OAuth token exchange steps inside a DB transaction: validate the
+    client secret, set RLS org context, consume the authorization code (PKCE
+    verified inside), re-verify the consenting account's LIVE role against the
+    granted scopes (ADR 017), create a token family, and mint the token pair.
+    Returns ``(response_dict, error)`` — ``response_dict`` is the success body
+    on success; OAuth/DB exceptions propagate to the caller's ``try/except``.
+    """
     from modulo.auth.oauth import (
-        InvalidClientError,
-        InvalidGrantError,
         consume_authorization_code,
         create_oauth_access_token,
         create_oauth_refresh_token,
         create_oauth_token_family,
         validate_client_secret,
         verify_live_role_covers_scopes,
+    )
+
+    session_factory = _get_session_factory()
+    async with session_factory() as s, s.begin():
+        # Step 1: Validate client credentials to discover org_id.
+        client = await validate_client_secret(s, creds["client_id"], creds["client_secret"])
+
+        # Step 2: Set RLS context for the client's org.
+        await set_rls_org(s, client.organisation_id)
+
+        # Step 3: Consume the authorization code (PKCE verified inside).
+        auth_code = await consume_authorization_code(
+            s,
+            code=creds["code"],
+            client_id=creds["client_id"],
+            redirect_uri=creds["redirect_uri"],
+            client_secret=creds["client_secret"],
+            code_verifier=creds["code_verifier"],
+        )
+
+        # Step 4: The consenting account's LIVE role must still cover the
+        # granted scopes — a demoted/removed account is denied (ADR 017).
+        await verify_live_role_covers_scopes(
+            s,
+            account_id=auth_code.account_id,
+            org_id=client.organisation_id,
+            scopes=auth_code.scopes.split(),
+        )
+
+        # Step 5: Create a new token family.
+        family_id, sequence = await create_oauth_token_family(
+            s,
+            client_id=creds["client_id"],
+            org_id=client.organisation_id,
+        )
+
+        scopes_list = auth_code.scopes.split()
+        access_token = create_oauth_access_token(
+            creds["client_id"],
+            settings.secret_key,
+            organisation_id=str(client.organisation_id),
+            account_id=str(auth_code.account_id),
+            scopes=scopes_list,
+            token_family=family_id,
+            token_sequence=sequence,
+        )
+        refresh_token = create_oauth_refresh_token(
+            creds["client_id"],
+            settings.secret_key,
+            organisation_id=str(client.organisation_id),
+            account_id=str(auth_code.account_id),
+            scopes=scopes_list,
+            token_family=family_id,
+            token_sequence=sequence,
+        )
+
+    return (
+        {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "Bearer",  # nosec B105 - RFC 6750 token_type label, not a credential
+            "expires_in": 3600,
+            "scope": " ".join(scopes_list),
+        },
+        None,
+    )
+
+
+async def _oauth_token(request: Request) -> JSONResponse:
+    """POST /mcp/oauth/token — exchange code for access token.
+
+    RFC 6749 wire format: form-urlencoded bodies (``request.form()``) with JSON
+    bodies accepted for backwards compatibility; anything else is
+    ``invalid_request``. The PKCE ``code_verifier`` is required and verified
+    against the stored S256 challenge (RFC 7636 §4.5/§4.6). ``client_secret``
+    may arrive in the form body OR an HTTP Basic Authorization header. The
+    consenting account's LIVE org role is re-verified against the granted
+    scopes — a demoted account is denied a token (ADR 017).
+    """
+    params, parse_err = await _parse_oauth_form(request)
+    if parse_err:
+        return parse_err
+    assert params is not None
+
+    creds, cred_err = _extract_oauth_client_credentials(request, params)
+    if cred_err:
+        return cred_err
+
+    client_id = creds["client_id"]
+
+    from modulo.auth.oauth import (
+        InvalidClientError,
+        InvalidGrantError,
     )
 
     settings = get_settings()
@@ -5460,69 +6045,11 @@ async def _oauth_token(request: Request) -> JSONResponse:
         )
 
     try:
-        session_factory = _get_session_factory()
-        async with session_factory() as s, s.begin():
-            # Step 1: Validate client credentials to discover org_id.
-            client = await validate_client_secret(s, client_id, client_secret)
-
-            # Step 2: Set RLS context for the client's org.
-            await set_rls_org(s, client.organisation_id)
-
-            # Step 3: Consume the authorization code (PKCE verified inside).
-            auth_code = await consume_authorization_code(
-                s,
-                code=code,
-                client_id=client_id,
-                redirect_uri=redirect_uri,
-                client_secret=client_secret,
-                code_verifier=code_verifier,
-            )
-
-            # Step 4: The consenting account's LIVE role must still cover the
-            # granted scopes — a demoted/removed account is denied (ADR 017).
-            await verify_live_role_covers_scopes(
-                s,
-                account_id=auth_code.account_id,
-                org_id=client.organisation_id,
-                scopes=auth_code.scopes.split(),
-            )
-
-            # Step 5: Create a new token family.
-            family_id, sequence = await create_oauth_token_family(
-                s,
-                client_id=client_id,
-                org_id=client.organisation_id,
-            )
-
-            scopes_list = auth_code.scopes.split()
-            access_token = create_oauth_access_token(
-                client_id,
-                settings.secret_key,
-                organisation_id=str(client.organisation_id),
-                account_id=str(auth_code.account_id),
-                scopes=scopes_list,
-                token_family=family_id,
-                token_sequence=sequence,
-            )
-            refresh_token = create_oauth_refresh_token(
-                client_id,
-                settings.secret_key,
-                organisation_id=str(client.organisation_id),
-                account_id=str(auth_code.account_id),
-                scopes=scopes_list,
-                token_family=family_id,
-                token_sequence=sequence,
-            )
-
-        return JSONResponse(
-            {
-                "access_token": access_token,
-                "refresh_token": refresh_token,
-                "token_type": "Bearer",  # nosec B105 - RFC 6750 token_type label, not a credential
-                "expires_in": 3600,
-                "scope": " ".join(scopes_list),
-            }
-        )
+        token_resp, token_err = await _exchange_authorization_code(creds, settings)
+        if token_err:
+            return token_err
+        assert token_resp is not None
+        return JSONResponse(token_resp)
     except (InvalidGrantError, InvalidClientError):
         return JSONResponse(
             {"error": "invalid_grant", "detail": "Authorization code exchange failed"},
@@ -5559,38 +6086,20 @@ async def _oauth_token(request: Request) -> JSONResponse:
         )
 
 
-async def _oauth_refresh(request: Request) -> JSONResponse:
-    """POST /mcp/oauth/refresh — exchange refresh token for new access token.
+def _extract_oauth_refresh_credentials(
+    request: Request, params: dict[str, str]
+) -> tuple[dict[str, str], JSONResponse | None]:
+    """Extract and validate the client credentials for a refresh-token grant.
 
-    Form-urlencoded per RFC 6749 with JSON compat, mirroring ``_oauth_token``.
-    Re-verifies the client secret (body or Basic auth) and the consenting
-    account's LIVE org role against the token's scopes — if the account was
-    demoted (or removed) since the token was issued, the refresh is DENIED
-    (ADR 017 demote-then-refresh). The refresh token is rotated: a new pair is
-    issued with an incremented sequence, invalidating the old refresh token.
+    Validates ``grant_type`` is ``refresh_token`` and reads
+    ``refresh_token``/``client_id``/``client_secret`` from the body, falling
+    back to an HTTP Basic Authorization header for the client secret/ID
+    (RFC 6749 §2.3.1). Returns ``(creds, error)`` — exactly one is non-None on
+    error.
     """
-    content_type = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
-    if content_type == "application/x-www-form-urlencoded":
-        form = await request.form()
-        params: dict[str, str] = {k: (str(v) if v is not None else "") for k, v in form.items()}
-    elif content_type == _CT_APPLICATION_JSON:
-        try:
-            body = await request.json()
-        except json.JSONDecodeError:
-            return JSONResponse(
-                {"error": "invalid_request", "detail": "Request body must be JSON"},
-                status_code=400,
-            )
-        params = {k: str(v) if v is not None else "" for k, v in body.items()}
-    else:
-        return JSONResponse(
-            {"error": "invalid_request", "detail": "Content-Type must be application/x-www-form-urlencoded"},
-            status_code=400,
-        )
-
     grant_type = params.get("grant_type", "")
     if grant_type != "refresh_token":
-        return JSONResponse(
+        return {}, JSONResponse(
             {"error": "unsupported_grant_type"},
             status_code=400,
         )
@@ -5611,74 +6120,128 @@ async def _oauth_refresh(request: Request) -> JSONResponse:
             if not client_id:
                 client_id = basic_id
         except Exception:
-            return JSONResponse(
+            return {}, JSONResponse(
                 {"error": "invalid_request", "detail": "Malformed Basic Authorization header"},
                 status_code=400,
             )
 
     if not refresh_token_value or not client_id or not client_secret:
-        return JSONResponse(
+        return {}, JSONResponse(
             {"error": "invalid_request", "detail": "refresh_token, client_id and client_secret are required"},
             status_code=400,
         )
 
+    return (
+        {
+            "grant_type": grant_type,
+            "refresh_token": refresh_token_value,
+            "client_id": client_id,
+            "client_secret": client_secret,
+        },
+        None,
+    )
+
+
+async def _exchange_refresh_token(
+    creds: dict[str, str], settings: Any
+) -> tuple[dict[str, Any] | None, JSONResponse | None]:
+    """Rotate a refresh token into a new access/refresh token pair.
+
+    Validates the client secret, sets RLS org context, decodes the refresh
+    token, re-verifies the consenting account's LIVE role still covers the
+    token's scopes (ADR 017), then issues a new pair with an incremented
+    sequence — invalidating the old refresh token. Returns
+    ``(response_dict, error)``; OAuth/DB exceptions propagate to the caller.
+    """
+    from modulo.auth.oauth import (
+        create_oauth_access_token,
+        create_oauth_refresh_token,
+        decode_oauth_refresh_token,
+        validate_client_secret,
+        verify_live_role_covers_scopes,
+    )
+
+    session_factory = _get_session_factory()
+    async with session_factory() as s, s.begin():
+        client = await validate_client_secret(s, creds["client_id"], creds["client_secret"])
+        await set_rls_org(s, client.organisation_id)
+
+        claims = decode_oauth_refresh_token(creds["refresh_token"], settings.secret_key)
+
+        # ADR 017: the consenting account's LIVE role must still cover the
+        # scopes — a demoted/removed account is denied a fresh token.
+        await verify_live_role_covers_scopes(
+            s,
+            account_id=claims.account_id,
+            org_id=claims.organisation_id,
+            scopes=claims.scopes,
+        )
+
+        new_sequence = claims.token_sequence + 1
+        new_access_token = create_oauth_access_token(
+            claims.client_id,
+            settings.secret_key,
+            organisation_id=str(claims.organisation_id),
+            account_id=str(claims.account_id),
+            scopes=claims.scopes,
+            token_family=claims.token_family,
+            token_sequence=new_sequence,
+        )
+        new_refresh_token = create_oauth_refresh_token(
+            claims.client_id,
+            settings.secret_key,
+            organisation_id=str(claims.organisation_id),
+            account_id=str(claims.account_id),
+            scopes=claims.scopes,
+            token_family=claims.token_family,
+            token_sequence=new_sequence,
+        )
+
+    return (
+        {
+            "access_token": new_access_token,
+            "refresh_token": new_refresh_token,
+            "token_type": "Bearer",  # nosec B105 - RFC 6750 token_type label, not a credential
+            "expires_in": 3600,
+            "scope": " ".join(claims.scopes),
+        },
+        None,
+    )
+
+
+async def _oauth_refresh(request: Request) -> JSONResponse:
+    """POST /mcp/oauth/refresh — exchange refresh token for new access token.
+
+    Form-urlencoded per RFC 6749 with JSON compat, mirroring ``_oauth_token``.
+    Re-verifies the client secret (body or Basic auth) and the consenting
+    account's LIVE org role against the token's scopes — if the account was
+    demoted (or removed) since the token was issued, the refresh is DENIED
+    (ADR 017 demote-then-refresh). The refresh token is rotated: a new pair is
+    issued with an incremented sequence, invalidating the old refresh token.
+    """
+    params, parse_err = await _parse_oauth_form(request)
+    if parse_err:
+        return parse_err
+    assert params is not None
+
+    creds, cred_err = _extract_oauth_refresh_credentials(request, params)
+    if cred_err:
+        return cred_err
+
+    client_id = creds["client_id"]
+
+    from modulo.auth.oauth import (
+        InvalidClientError,
+        InvalidGrantError,
+    )
+
     settings = get_settings()
     try:
-        from modulo.auth.oauth import (
-            InvalidClientError,
-            InvalidGrantError,
-            create_oauth_access_token,
-            create_oauth_refresh_token,
-            decode_oauth_refresh_token,
-            validate_client_secret,
-            verify_live_role_covers_scopes,
-        )
-
-        session_factory = _get_session_factory()
-        async with session_factory() as s, s.begin():
-            client = await validate_client_secret(s, client_id, client_secret)
-            await set_rls_org(s, client.organisation_id)
-
-            claims = decode_oauth_refresh_token(refresh_token_value, settings.secret_key)
-
-            # ADR 017: the consenting account's LIVE role must still cover the
-            # scopes — a demoted/removed account is denied a fresh token.
-            await verify_live_role_covers_scopes(
-                s,
-                account_id=claims.account_id,
-                org_id=claims.organisation_id,
-                scopes=claims.scopes,
-            )
-
-            new_sequence = claims.token_sequence + 1
-            new_access_token = create_oauth_access_token(
-                claims.client_id,
-                settings.secret_key,
-                organisation_id=str(claims.organisation_id),
-                account_id=str(claims.account_id),
-                scopes=claims.scopes,
-                token_family=claims.token_family,
-                token_sequence=new_sequence,
-            )
-            new_refresh_token = create_oauth_refresh_token(
-                claims.client_id,
-                settings.secret_key,
-                organisation_id=str(claims.organisation_id),
-                account_id=str(claims.account_id),
-                scopes=claims.scopes,
-                token_family=claims.token_family,
-                token_sequence=new_sequence,
-            )
-
-        return JSONResponse(
-            {
-                "access_token": new_access_token,
-                "refresh_token": new_refresh_token,
-                "token_type": "Bearer",  # nosec B105 - RFC 6750 token_type label, not a credential
-                "expires_in": 3600,
-                "scope": " ".join(claims.scopes),
-            }
-        )
+        token_resp, token_err = await _exchange_refresh_token(creds, settings)
+        if token_err:
+            return token_err
+        assert token_resp is not None
+        return JSONResponse(token_resp)
     except (InvalidGrantError, InvalidClientError):
         return JSONResponse(
             {"error": "invalid_grant", "detail": "Refresh token exchange failed"},

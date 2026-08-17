@@ -396,6 +396,44 @@ class TestListEvalDefinitions:
         assert resp.status_code == 200
         assert resp.json()["total"] == 1
 
+    def test_list_filter_by_eval_type(self, admin_client: TestClient) -> None:
+        """The guardrail management view lists bound guardrails by filtering the
+        eval-definitions list on eval_type='guardrail' (FAR-223 PR D)."""
+        mock_session = _make_mock_session()
+        captured_stmts: list[MagicMock] = []
+
+        async def _capturing_execute(stmt: MagicMock, *args: object, **kwargs: object) -> MagicMock:
+            captured_stmts.append(stmt)
+            idx = len(captured_stmts)
+            if idx <= 4:
+                return _make_result() if idx == 1 else _make_result(scalar_value=None)
+            if idx == 5:
+                return _make_result(scalar_value=1)
+            return _make_result(all_value=[_make_eval_def(name="Guardrail 1")])
+
+        mock_session.execute = _capturing_execute
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        resp = admin_client.get(f"{self.URL}?eval_type=guardrail")
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 1
+
+        # The count + list queries must both carry the eval_type filter.
+        eval_selects = [
+            stmt for stmt in captured_stmts if isinstance(stmt, Select) and "eval_definitions" in str(stmt.compile())
+        ]
+        assert len(eval_selects) == 2, f"expected count + list queries, got {len(eval_selects)}"
+        for stmt in eval_selects:
+            where_sql = str(stmt.whereclause) if stmt.whereclause is not None else ""
+            assert "eval_type" in where_sql, "eval list query is not filtered by eval_type"
+
+    def test_list_rejects_invalid_eval_type(self, admin_client: TestClient) -> None:
+        resp = admin_client.get(f"{self.URL}?eval_type=not_a_real_type")
+        assert resp.status_code == 422
+
     def test_list_unauthorized(self, unauth_client: TestClient) -> None:
         resp = unauth_client.get(self.URL)
         assert resp.status_code in (401, 403)

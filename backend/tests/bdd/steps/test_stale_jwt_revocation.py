@@ -87,7 +87,7 @@ def run_awaiting_gate(run_name: str, gate_id: str, team_name: str, ctx) -> None:
     ctx["gates"][gate_id] = {"id": gate_id, "required_team_id": team_id}
 
 
-@when(parsers.parse('I revoke sessions for user "{username}"'))
+@when(parsers.parse('I revoke user "{username}"\'s session'))
 def revoke_user_session(username: str, ctx) -> None:
     ctx["tokens_valid"] = False
 
@@ -122,7 +122,7 @@ def user_uses_old_jwt(username: str, request) -> None:
     request.node._resp = resp
 
 
-@when(parsers.parse('I change user "{username}" role from "{old_role}" to "{new_role}"'))
+@when(parsers.parse('I change user "{username}"\'s role from "{old_role}" to "{new_role}"'))
 def change_user_role(username: str, old_role: str, new_role: str, ctx) -> None:
     if username in ctx["memberships"]:
         ctx["memberships"][username]["role"] = new_role

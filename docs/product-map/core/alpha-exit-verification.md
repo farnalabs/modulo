@@ -95,6 +95,8 @@ status: partial
 
 ## QA History
 
+- 2026-08-15 (distribute partial-model-backends, round 3): Audit pass. The unchecked items here are (a) human sign-off items (three non-author walkers, named users demonstrating HITL claim/review, builder-name/pipeline/run documentation, verifier sign-offs) that cannot be machine-checked from this repo — they require real human demonstrations and documented evidence; and (b) CI-workflow items (container startup, migrations-before-tests, BDD annotations, report artifact, `skip_bdd` input, cleanup-on-failure, failure-continuation) that live in the verification CI workflow, not in this delivery's allowlist. None are affected by the model-backend deletion-protection change. No tests deleted or disabled. Status: partial.
+
 ### Index 163 (2026-07-04)
 - **MAJOR fix**: Added `-SkipBDD` switch parameter to verify-alpha-exit.ps1 so the CI workflow can avoid duplicate test execution
 - **MAJOR fix**: CI workflow now passes `skip_bdd` input to verification script, preventing re-running BDD tests that CI already executed (lines 134-140)

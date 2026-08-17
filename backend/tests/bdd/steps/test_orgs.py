@@ -84,13 +84,16 @@ def user_is_active(username: str, ctx):
 
 @when(parsers.parse('I add user "{username}" to team "{team_name}" with role "{role}"'))
 def add_user_to_team(request, username: str, team_name: str, role: str, client, ctx):
+    from tests.bdd.conftest import _active_client
+
+    active = _active_client(request, client)
 
     team_id = ctx.get("team_id", str(uuid.uuid4()))
     target_user_id = ctx.get("target_user_id", str(uuid.uuid4()))
     membership_id = uuid.uuid4()
 
     # Check if caller is a viewer (simulated auth)
-    if ctx.get("org_role") == "viewer":
+    if getattr(request.node, "_viewer_auth", False):
         request.node._resp = MagicMock()
         request.node._resp.status_code = 403
         request.node._resp.json = lambda: {"detail": "Insufficient permissions"}
@@ -118,12 +121,19 @@ def add_user_to_team(request, username: str, team_name: str, role: str, client, 
         mock_membership.created_at = datetime.now(UTC)
         mock_add.return_value = mock_membership
 
-        with patch(
-            "modulo.api.routes.teams.get_user_by_id_org",
-            new_callable=AsyncMock,
-            return_value=MagicMock(org_role=ctx.get("target_user_role", "operator")),
+        with (
+            patch(
+                "modulo.db.crud.account.get_account_by_id",
+                new_callable=AsyncMock,
+                return_value=MagicMock(id=uuid.UUID(target_user_id)),
+            ),
+            patch(
+                "modulo.db.crud.org_membership.get_membership_by_account_and_org",
+                new_callable=AsyncMock,
+                return_value=MagicMock(role=ctx.get("target_user_role", "operator")),
+            ),
         ):
-            resp = client.post(
+            resp = active.post(
                 f"/api/v1/teams/{team_id}/members",
                 json={"user_id": target_user_id, "role": role},
             )
@@ -160,6 +170,7 @@ def deactivate_user(request, username: str, client, ctx):
     mock_account.email = f"{username}@example.com"
     mock_account.display_name = username
     mock_account.active = True
+    mock_account.is_break_glass = False
     mock_account.auth_provider = "email"
     mock_account.created_at = datetime.now(UTC)
     mock_account.last_login = datetime.now(UTC)
@@ -174,12 +185,12 @@ def deactivate_user(request, username: str, client, ctx):
             return_value=mock_account,
         ),
         patch(
-            "modulo.api.routes.admin.list_families_for_account",
+            "modulo.api.routes.admin.get_membership_by_account_and_org",
             new_callable=AsyncMock,
-            return_value=[],
+            return_value=mock_org_membership,
         ),
         patch(
-            "modulo.api.routes.admin.blacklist_family",
+            "modulo.api.routes.admin.assert_not_last_admin",
             new_callable=AsyncMock,
         ),
         patch(
@@ -189,10 +200,6 @@ def deactivate_user(request, username: str, client, ctx):
         ),
         patch(
             "modulo.api.routes.admin.remove_team_member",
-            new_callable=AsyncMock,
-        ),
-        patch(
-            "modulo.api.routes.admin.revoke_api_key",
             new_callable=AsyncMock,
         ),
         patch(

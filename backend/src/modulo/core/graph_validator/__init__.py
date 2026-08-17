@@ -400,16 +400,16 @@ def _check_sandbox_template(node: dict[str, Any], nid: str, result: ValidationRe
 
 
 def _check_sandbox_timeout(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
-    """Sandbox check 3: timeout_seconds bounds (60-3600)."""
+    """Sandbox check 3: timeout_seconds bounds (60-604800)."""
     timeout = node.get("timeout_seconds")
     if timeout is None:
         return
     try:
         t = int(timeout) if not isinstance(timeout, int) else timeout
-        if t < 60 or t > 3600:
+        if t < 60 or t > 604800:
             result.warning(
                 "SANDBOX_TIMEOUT_BOUNDS",
-                f"Sandbox agent node '{nid}' timeout_seconds={t} is outside recommended range 60-3600s",
+                f"Sandbox agent node '{nid}' timeout_seconds={t} is outside recommended range 60-604800s",
                 node_id=nid,
             )
     except (ValueError, TypeError):
@@ -1917,7 +1917,7 @@ class GraphValidator:
         1. agent_command (llm mode) / script_command (script mode) is non-empty,
            per the shared mode-aware validator (FAR-296).
         2. template_id is set.
-        3. timeout_seconds within bounds (60-3600) if set.
+        3. timeout_seconds within bounds (60-604800) if set.
         4. context_files source paths start with /.
         5. env_vars keys avoid reserved prefixes.
         6. output_schema_json has valid JSON Schema structure if present.

@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._safe_page import safe_records_list as _safe_records_list
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -120,7 +121,7 @@ class GiteaConnector(ConnectorBase):
                 case "repos":
                     r = await client.get("/user/repos", params={"limit": q.limit})
                     r.raise_for_status()
-                    data: list[dict[str, Any]] = r.json()
+                    data = _safe_records_list(r.json())
                     return ConnectorResult(records=data, total=len(data))
                 case "file":
                     owner_repo = q.filters["repo"]
@@ -144,7 +145,7 @@ class GiteaConnector(ConnectorBase):
                         params={"state": state, "limit": q.limit},
                     )
                     r.raise_for_status()
-                    prs: list[dict[str, Any]] = r.json()
+                    prs = _safe_records_list(r.json())
                     return ConnectorResult(records=prs, total=len(prs))
                 case "issues":
                     owner_repo = q.filters["repo"]
@@ -154,7 +155,7 @@ class GiteaConnector(ConnectorBase):
                         params={"state": state, "limit": q.limit},
                     )
                     r.raise_for_status()
-                    issues: list[dict[str, Any]] = r.json()
+                    issues = _safe_records_list(r.json())
                     return ConnectorResult(records=issues, total=len(issues))
                 case _:
                     raise ValueError(f"Unsupported Gitea resource: {q.resource!r}")

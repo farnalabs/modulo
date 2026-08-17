@@ -19,18 +19,21 @@ Design invariants (binding, from plan-review-iterate):
     (``regex`` / ``pii`` / ``llm_judge``) MUST differ from the fired guardrail's
     detection family (guardrails only use ``regex``/``json_schema``). Never two
     LLM-judges from the same backend.
-4.  **Convergence check** — prior states are fingerprinted; a previously-seen
-    state escalates to HITL immediately (no oscillation burn). Within the
-    retry loop the corrected input is unchanged across attempts, so retries
-    strip prior input fingerprints (a repeated input is not itself
-    oscillation) while a repeated produced OUTPUT still converges. Divergent
-    states that never repeat are bounded by the single retry budget
+4.  **Convergence check (strictly-worse ordering enforced)** — prior states
+    are fingerprinted AND carry a persisted per-state violation metric; a
+    previously-seen input/output state escalates to HITL immediately (no
+    oscillation burn). A STRICTLY-WORSE state — the current state's violation
+    severity exceeds every recorded prior state's severity (e.g. a corrected
+    output that now violates more bound guardrails than any previously seen
+    state) — ALSO escalates to HITL immediately, without burning the retry
+    budget. Within the retry loop the corrected input is unchanged across
+    attempts, so retries strip prior input fingerprints and input violation
+    metrics (a repeated input is not itself oscillation) while a repeated
+    produced OUTPUT (or a repeated output violation metric) still converges.
+    An EQUAL-or-better state allows a fresh attempt. Divergent states that
+    never repeat and never worsen are still bounded by the single retry budget
     (``max_attempts``): exhaustion escalates ``budget_exhausted`` to HITL, so
-    no correction sequence can run unbounded. (A monotone "strictly-worse"
-    ordering over states is NOT separately enforced: with no persisted
-    violation metric and no caller feeding a corrected output back as a new
-    input, the previously-seen fingerprint path plus the bounded budget are
-    the operative fail-closed convergence guards.)
+    no correction sequence can run unbounded.
 5.  **redact+correct HARD-BLOCKED** — a correction definition bound to a
     redaction-action guardrail is rejected at definition validation
     (exfiltration channel for the exact data redaction protects).
@@ -319,6 +322,59 @@ def fingerprint_state(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def compute_violation_metric(
+    payload: Mapping[str, Any],
+    guardrails: Sequence[EvalDefinition],
+) -> dict[str, Any]:
+    """Compute a comparable per-state violation metric for *payload*.
+
+    Returns ``{"severity": <int>, "detail_fingerprint": <str>}`` where
+    ``severity`` is the number of distinct bound *guardrails* that fire on
+    *payload* (0 = clean, higher = worse) and ``detail_fingerprint`` captures
+    the specific set of violated guardrails so two different violation sets
+    at the same count are distinguishable. The metric is persisted with each
+    recorded correction state so the convergence check can compare the current
+    state's severity against the recorded prior states.
+
+    The metric NEVER raises on the corruption it guards: a guardrail-evaluation
+    failure counts as a violation (fail closed) so a strictly-worse state can
+    never slip past the convergence check because the metric itself errored.
+    """
+    from modulo.core.guardrails import _interpret_violation, _resolve_detection, evaluate_guardrails
+
+    guardrails = list(guardrails)
+    if not guardrails:
+        return {"severity": 0, "detail_fingerprint": ""}
+    engine = EvalEngine()
+    try:
+        results = evaluate_guardrails(engine, guardrails, dict(payload), raise_on_block=False)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("guardrails.correction.violation_metric_failed")
+        return {"severity": len(guardrails), "detail_fingerprint": "<metric_failed>"}
+    violated: list[str] = []
+    for result, guardrail in zip(results, guardrails, strict=True):
+        detection_type, _ = _resolve_detection(guardrail)
+        if _interpret_violation(detection_type, result):
+            violated.append(guardrail.name or str(guardrail.id))
+    violated.sort()
+    return {"severity": len(violated), "detail_fingerprint": fingerprint_state({"violated": violated})}
+
+
+def _is_strictly_worse(current: Mapping[str, Any], prior: Mapping[str, Any]) -> bool:
+    """True when *current*'s violation severity strictly exceeds *prior*'s.
+
+    Equal severity (including equal severity with a different violation set) is
+    NOT strictly worse — it is "equal-or-better" and allows a fresh attempt, so
+    a still-violating retry that produces a different (but equally severe)
+    violation keeps its retry budget rather than converging early.
+    """
+    current_severity = int(current.get("severity") or 0)
+    prior_severity = int(prior.get("severity") or 0)
+    return current_severity > prior_severity
+
+
 def build_idempotency_key(
     *,
     org_id: uuid.UUID,
@@ -388,19 +444,21 @@ def convergence_verdict(
     redacted_input: Mapping[str, Any],
     produced_output: Mapping[str, Any] | None,
     prior_states: Sequence[Mapping[str, Any]],
+    current_violation_metric: Mapping[str, Any] | None = None,
 ) -> CorrectionVerdict | None:
-    """Return ``converged`` when the state has previously been seen.
+    """Return ``converged`` when the state has previously been seen OR is
+    strictly-worse than any recorded prior state.
 
     A produced output or redacted input whose fingerprint already appears in
     *prior_states* is a previously-seen (oscillating) state -> HITL, no
-    oscillation burn. ``None`` means the state is fresh and the correction may
-    proceed.
+    oscillation burn. A *current_violation_metric* whose severity strictly
+    exceeds every recorded prior state's persisted ``violation_metric``
+    severity is a STRICTLY-WORSE state -> HITL immediately (no budget burn) —
+    e.g. a corrected output that now violates more bound guardrails than any
+    previously seen state. ``None`` means the state is fresh and NOT strictly
+    worse; the correction may proceed with a fresh attempt.
 
-    Strictly-worse divergent sequences (new-but-worse states that never
-    repeat) are bounded by the correction's ``max_attempts`` budget: exhaustion
-    escalates ``budget_exhausted`` to HITL, so convergence never requires an
-    unbounded run. See module docstring invariant 4 for why a "strictly-worse"
-    ordering is not separately enforced.
+    See module docstring invariant 4 for the enforced strictly-worse ordering.
     """
     candidates: list[str] = [fingerprint_state(redacted_input)]
     if produced_output is not None:
@@ -413,6 +471,17 @@ def convergence_verdict(
             value = state.get(key)
             if isinstance(value, str):
                 seen.add(value)
+        if current_violation_metric is not None:
+            # The current state is strictly-worse than ANY recorded prior
+            # state's violation metric -> HITL immediately (no budget burn).
+            # ``violation_metric`` is the canonical key; the
+            # ``input_violation_metric`` / ``output_violation_metric`` keys are
+            # the persisted split used by the retry loop (input stripped on
+            # retries, output preserved).
+            for metric_key in ("violation_metric", "input_violation_metric", "output_violation_metric"):
+                prior_metric = state.get(metric_key)
+                if isinstance(prior_metric, dict) and _is_strictly_worse(current_violation_metric, prior_metric):
+                    return CorrectionVerdict.CONVERGED
     for candidate in candidates:
         if candidate in seen:
             return CorrectionVerdict.CONVERGED
@@ -695,6 +764,7 @@ async def run_single_node_correction(
     attempt: int = 1,
     revalidation_config: dict[str, Any] | None = None,
     judge_callable: LLMJudgeCallable | None = None,
+    bound_guardrails: Sequence[EvalDefinition] | None = None,
 ) -> CorrectionOutcome:
     """Run ONE bounded single-node correction and return its verdict.
 
@@ -703,8 +773,10 @@ async def run_single_node_correction(
          hard-block + different-family).
       2. Pre-redact the violating node input via the embedded pattern set.
       3. Convergence check against recorded prior states — a previously-seen
-         state escalates immediately (no oscillation burn). Divergent states
-         are bounded by ``max_attempts`` (``budget_exhausted`` -> HITL).
+         OR STRICTLY-WORSE state escalates immediately (no oscillation burn,
+         no budget burn). Equal-or-better states proceed; divergent states that
+         never repeat are bounded by ``max_attempts`` (``budget_exhausted`` ->
+         HITL).
       4. Run the RESTRICTED backend with the strict output schema; parse +
          schema-validate the produced output.
       5. Re-validate the produced output with the DIFFERENT-FAMILY detector.
@@ -715,8 +787,12 @@ async def run_single_node_correction(
     violates a bound guardrail is surfaced by the caller's
     ``correction_violated`` check — this engine never silently accepts it.
 
-    ``attempt`` > 1 is a retry within the single retry budget. The caller owns
-    persistence of ``outcome.state`` (idempotency key + prior fingerprints).
+    ``bound_guardrails`` are the guardrails bound to the node/pipeline; they
+    are used to compute the per-state violation metric (number of distinct
+    bound guardrails violated) that the convergence check compares for the
+    strictly-worse ordering. ``attempt`` > 1 is a retry within the single retry
+    budget. The caller owns persistence of ``outcome.state`` (idempotency key +
+    prior fingerprints + violation metrics).
     """
     correction.validate_guardrail_binding(guardrail)
 
@@ -730,18 +806,24 @@ async def run_single_node_correction(
         redacted_input=redacted_input,
     )
     resolved_family = CorrectionDetectorFamily(correction.revalidation_detector_family)
+    bound_guardrails = list(bound_guardrails or [])
+    input_metric = compute_violation_metric(redacted_input, bound_guardrails)
 
     converged = convergence_verdict(
         redacted_input=redacted_input,
         produced_output=None,
         prior_states=list(prior_states or []),
+        current_violation_metric=input_metric,
     )
     if converged is not None:
         return CorrectionOutcome(
             verdict=converged,
-            detail="convergence check: previously-seen input state, escalating to HITL (no oscillation burn)",
+            detail=(
+                "convergence check: previously-seen or strictly-worse input state, "
+                "escalating to HITL (no oscillation burn / no budget burn)"
+            ),
             needs_human_review=True,
-            state=_build_state(idem_key, redacted_input, None, attempt),
+            state=_build_state(idem_key, redacted_input, None, attempt, input_violation_metric=input_metric),
         )
 
     try:
@@ -758,7 +840,7 @@ async def run_single_node_correction(
             verdict=CorrectionVerdict.LM_ERROR,
             detail=f"correction backend error: {type(exc).__name__}",
             needs_human_review=True,
-            state=_build_state(idem_key, redacted_input, None, attempt),
+            state=_build_state(idem_key, redacted_input, None, attempt, input_violation_metric=input_metric),
         )
 
     try:
@@ -769,29 +851,43 @@ async def run_single_node_correction(
             verdict=CorrectionVerdict.STILL_VIOLATING,
             detail=str(exc),
             needs_human_review=True,
-            state=_build_state(idem_key, redacted_input, None, attempt),
+            state=_build_state(idem_key, redacted_input, None, attempt, input_violation_metric=input_metric),
         )
 
     # Redact the produced output BEFORE persistence (never persisted raw).
     produced_redacted = redact_payload(produced, correction.input_redaction_patterns)
+    output_metric = compute_violation_metric(produced_redacted, bound_guardrails)
 
     # Convergence on the PRODUCED OUTPUT: a retry that reproduces a previously
     # seen output is oscillation -> HITL immediately (no oscillation burn),
     # even when the corrected input is unchanged across retries (the retry loop
     # strips input fingerprints from prior states so the same input does not
-    # spuriously converge on its own repeat).
+    # spuriously converge on its own repeat). A produced output whose violation
+    # severity is STRICTLY WORSE than every recorded prior state -> HITL
+    # immediately (no budget burn).
     repeated = convergence_verdict(
         redacted_input=redacted_input,
         produced_output=produced_redacted,
         prior_states=list(prior_states or []),
+        current_violation_metric=output_metric,
     )
     if repeated is not None:
         return CorrectionOutcome(
             verdict=repeated,
-            detail="convergence check: previously-seen produced output, escalating to HITL (no oscillation burn)",
+            detail=(
+                "convergence check: previously-seen or strictly-worse produced output, "
+                "escalating to HITL (no oscillation burn / no budget burn)"
+            ),
             produced_output=produced_redacted,
             needs_human_review=True,
-            state=_build_state(idem_key, redacted_input, produced_redacted, attempt),
+            state=_build_state(
+                idem_key,
+                redacted_input,
+                produced_redacted,
+                attempt,
+                input_violation_metric=input_metric,
+                output_violation_metric=output_metric,
+            ),
         )
 
     revalidation = await _run_different_family_revalidation(
@@ -810,7 +906,14 @@ async def run_single_node_correction(
             produced_output=produced_redacted,
             revalidation_result=revalidation,
             needs_human_review=True,
-            state=_build_state(idem_key, redacted_input, produced_redacted, attempt),
+            state=_build_state(
+                idem_key,
+                redacted_input,
+                produced_redacted,
+                attempt,
+                input_violation_metric=input_metric,
+                output_violation_metric=output_metric,
+            ),
         )
 
     # The corrected output is continuing-suspicious: never auto-clear the
@@ -822,7 +925,14 @@ async def run_single_node_correction(
         produced_output=produced_redacted,
         revalidation_result=revalidation,
         needs_human_review=False,
-        state=_build_state(idem_key, redacted_input, produced_redacted, attempt),
+        state=_build_state(
+            idem_key,
+            redacted_input,
+            produced_redacted,
+            attempt,
+            input_violation_metric=input_metric,
+            output_violation_metric=output_metric,
+        ),
     )
 
 
@@ -880,23 +990,33 @@ def _build_state(
     redacted_input: Mapping[str, Any],
     produced_output: Mapping[str, Any] | None,
     attempt: int,
+    input_violation_metric: Mapping[str, Any] | None = None,
+    output_violation_metric: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the persisted correction state (idempotency + convergence data).
 
     The ``produced_output`` (already redacted) is persisted IN the state so
     ``resume_interrupted_correction`` can re-validate it without re-running the
-    LM. A caller persisting just ``outcome.state`` gets a resumable record; a
-    state WITHOUT ``produced_output`` (e.g. an LM error / parse failure) resumes
-    as ``correction_interrupted`` ("no recorded produced output").
+    LM. The per-state violation metric (``input_violation_metric`` /
+    ``output_violation_metric``) is persisted so the next attempt's convergence
+    check can compare current severity against the recorded prior states
+    (strictly-worse ordering). A caller persisting just ``outcome.state`` gets a
+    resumable record; a state WITHOUT ``produced_output`` (e.g. an LM error /
+    parse failure) resumes as ``correction_interrupted`` ("no recorded produced
+    output").
     """
     state: dict[str, Any] = {
         "idempotency_key": idempotency_key,
         "input_fingerprint": fingerprint_state(redacted_input),
         "attempt": int(attempt),
     }
+    if input_violation_metric is not None:
+        state["input_violation_metric"] = dict(input_violation_metric)
     if produced_output is not None:
         state["output_fingerprint"] = fingerprint_state(produced_output)
         state["produced_output"] = dict(produced_output)
+        if output_violation_metric is not None:
+            state["output_violation_metric"] = dict(output_violation_metric)
     return state
 
 
@@ -950,6 +1070,7 @@ async def dispatch_single_node_correction(
     attempt: int = 1,
     revalidation_config: dict[str, Any] | None = None,
     judge_callable: LLMJudgeCallable | None = None,
+    bound_guardrails: Sequence[EvalDefinition] | None = None,
 ) -> CorrectionOutcome:
     """Executor-facing single-node correction dispatch (reject→correction edge).
 
@@ -957,7 +1078,8 @@ async def dispatch_single_node_correction(
     budget-exhausted verdict as ``BUDGET_EXHAUSTED`` (terminal HITL) when the
     retry budget is consumed, and otherwise returns the raw outcome. The caller
     (executor block seam / HITL reject handler) persists the redacted output
-    and escalates on any persistent violation.
+    and escalates on any persistent violation. ``bound_guardrails`` feed the
+    strictly-worse convergence metric (see :func:`run_single_node_correction`).
     """
     outcome = await run_single_node_correction(
         correction=correction,
@@ -970,6 +1092,7 @@ async def dispatch_single_node_correction(
         attempt=attempt,
         revalidation_config=revalidation_config,
         judge_callable=judge_callable,
+        bound_guardrails=bound_guardrails,
     )
     if outcome.verdict == CorrectionVerdict.STILL_VIOLATING and attempt >= correction.max_attempts:
         return CorrectionOutcome(
@@ -1076,6 +1199,7 @@ __all__ = [
     "build_idempotency_key",
     "check_corrected_output_violates_guardrails",
     "claim_correction_slot",
+    "compute_violation_metric",
     "convergence_verdict",
     "dispatch_single_node_correction",
     "fingerprint_state",

@@ -190,17 +190,18 @@ def acs_valid_response(request: Any, ctx: dict[str, Any], client: Any) -> None:
 
     with (
         patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch,
-        patch(
-            "modulo.auth.sso.ModuloSamlAuth.process_response",
-            return_value={
-                "name_id": email,
-                "attributes": {"email": [email], "displayName": [name]},
-            },
-        ),
+        patch("modulo.auth.sso.ModuloSamlAuth") as mock_handler,
         patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
         patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
     ):
         mock_fetch.return_value = _SAMPLE_IDP_METADATA
+        mock_handler.return_value.process_response.return_value = {
+            "name_id": email,
+            "attributes": {
+                "email": [email],
+                "displayName": [name],
+            },
+        }
 
         if ctx.get("is_new_user", True):
             user_mock = MagicMock()
@@ -238,8 +239,14 @@ def acs_valid_response(request: Any, ctx: dict[str, Any], client: Any) -> None:
 @when("the SAML ACS endpoint receives a malformed SAMLResponse")
 def acs_malformed_response(request: Any, ctx: dict[str, Any], client: Any) -> None:
     _setup_saml_client()
-    with patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch:
+    from modulo.auth.saml_handler import SamlAuthError
+
+    with (
+        patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch,
+        patch("modulo.auth.sso.ModuloSamlAuth") as mock_handler,
+    ):
         mock_fetch.return_value = _SAMPLE_IDP_METADATA
+        mock_handler.return_value.process_response.side_effect = SamlAuthError("SAML Assertion is malformed or invalid")
         resp = client.post(
             "/api/v1/auth/saml/acs",
             data={"SAMLResponse": base64.b64encode(b"<bad/>").decode()},
@@ -265,19 +272,21 @@ def acs_with_groups(groups: str, request: Any, ctx: dict[str, Any], client: Any)
 
     with (
         patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch,
-        patch(
-            "modulo.auth.sso.ModuloSamlAuth.process_response",
-            return_value={
-                "name_id": email,
-                "attributes": {"email": [email], "displayName": [name], "groups": group_list},
-            },
-        ),
+        patch("modulo.auth.sso.ModuloSamlAuth") as mock_handler,
         patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
         patch("modulo.auth.sso._lookup_provider_by_entity_id", new_callable=AsyncMock) as mock_lookup,
         patch("modulo.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,
         patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
     ):
         mock_fetch.return_value = _SAMPLE_IDP_METADATA
+        mock_handler.return_value.process_response.return_value = {
+            "name_id": email,
+            "attributes": {
+                "email": [email],
+                "displayName": [name],
+                "groups": group_list,
+            },
+        }
 
         user_mock = MagicMock()
         user_mock.email = email
@@ -358,10 +367,9 @@ def no_duplicate_account(ctx: dict[str, Any]) -> None:
     assert mock_jit is not None, "No mock_jit reference found in context"
     mock_jit.assert_awaited_once()
     returned = mock_jit.return_value
-    user = returned[0] if isinstance(returned, tuple) else returned
-    assert user.email == ctx.get("expected_email", ""), (
-        f"Expected returning user {ctx.get('expected_email')}, got {user.email}"
-        f"Expected returning user {ctx.get('expected_email')}, got {user.email}"
+    account = returned[0] if isinstance(returned, tuple) else returned
+    assert account.email == ctx.get("expected_email", ""), (
+        f"Expected returning user {ctx.get('expected_email')}, got {account.email}"
     )
 
 

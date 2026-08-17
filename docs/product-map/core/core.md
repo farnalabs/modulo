@@ -144,6 +144,8 @@ Existing SDLC onboarding: teams can map their current process (even manual steps
 
 ## QA History
 
+- 2026-08-15 (distribute partial-model-backends, round 3): Audit pass on this catch-all entry. The unchecked behaviours here are the onboarding-wizard feature (7-step flow, connect-tools/inference/schema/library/wire/steps, lazy-loading, error/empty states) plus a set of onboarding-state-file robustness gaps (corrupted state file, TOCTOU race, step-marking when not first run, source-tree-relative path, missing auth tests, ProgrammingError only on `select_template`). None are affected by this session's model-backend deletion-protection change; the onboarding wizard and its backend state file are a separate feature area not in this delivery's allowlist, so they remain unchecked and undocumented as new gaps — already listed in-line. No tests deleted or disabled. Status: partial.
+
 ### 2026-07-12 — Round 3 improve-architecture
 
 **Fixes applied:**

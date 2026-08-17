@@ -103,6 +103,7 @@ _NEEDS_HUMAN_CODES: frozenset[str] = frozenset({"harness.gate_creation_failed"})
 _SOURCE_ERROR_CLASSES: frozenset[str] = frozenset(
     {
         "sandbox",
+        "script",
         "harness",
         "node",
         "connector",

@@ -13,6 +13,12 @@ def _bdd_auth_admin() -> None:
     """No-op — fixture handles this."""
 
 
+@given("I am authenticated as a non-admin user")
+def _bdd_auth_non_admin(request) -> None:
+    """Flag scenario for a non-admin (viewer) client."""
+    request.node._non_admin = True
+
+
 @given("I am not authenticated")
 def _bdd_not_authenticated(request) -> None:
     """Flag scenario for unauth client."""
@@ -20,9 +26,13 @@ def _bdd_not_authenticated(request) -> None:
 
 
 @when("I request GET /api/v1/admin/audit/export")
-def _bdd_get_export(client: TestClient, unauth_client: TestClient, request) -> None:
+def _bdd_get_export(client: TestClient, unauth_client: TestClient, viewer_client: TestClient, request) -> None:
     if getattr(request.node, "_unauth", False):
         resp = unauth_client.get("/api/v1/admin/audit/export")
+        request.node._resp = resp
+        return
+    if getattr(request.node, "_non_admin", False):
+        resp = viewer_client.get("/api/v1/admin/audit/export")
         request.node._resp = resp
         return
     with (
@@ -89,7 +99,7 @@ def _bdd_check_export_fields(request) -> None:
 @then(parsers.parse("the export endpoint receives event_type filter {expected}"))
 def _bdd_check_export_filter(request, expected: str) -> None:
     _, kwargs = request.node._mock_export.call_args
-    assert kwargs.get("event_type") == expected
+    assert kwargs.get("event_type") == expected.strip('"')
 
 
 @then("the verify response contains event_count field")

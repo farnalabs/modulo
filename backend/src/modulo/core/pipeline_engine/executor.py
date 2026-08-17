@@ -22,6 +22,7 @@ Does NOT handle WebSocket fan-out, HITL claim/approve/reject, or webhook trigger
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import os
@@ -45,6 +46,7 @@ from modulo.core.audit_logger import append_audit_event
 from modulo.core.cost_controller.finalize import derive_node_type_map, finalize_cost
 from modulo.core.eval_engine import (
     EvalBlockedError,
+    EvalEngine,
     EvalSuiteBlockedError,
     SuiteEvalResult,
     evaluate_suite,
@@ -288,6 +290,40 @@ def _timeout_event_matches(event_set: set[Any], code: str, mapped: str) -> bool:
     )
 
 
+# FAR-296 Phase 2: never-retryable script-mode terminal codes. Once a script-mode
+# node's script PROCESS has started (fencing lease claimed), a fault can never be
+# retried — re-dispatching could double-execute a side-effecting script. These
+# MUST be excluded from EVERY retry path (run-level ``_retry_after_policy`` AND
+# node-level A-series fenced reset).
+#
+# This set holds ONLY the script-mode CANONICAL codes. The shared contract codes
+# ``contract.schema`` / ``contract.no_output`` (canonicalized from the raw
+# ``script.schema_failed`` / ``script.no_output`` spellings) are DELIBERATELY NOT
+# listed here: they are also produced by NON-script paths (LLM-mode agent output
+# schema validation, manual-node resume, any node's output rejection), and
+# ``_failure_event_matches`` applies this set unconditionally — blacklisting the
+# shared targets would silently disable ``failure``-policy retries for ALL node
+# types. Script-mode coverage is preserved via the raw spellings in
+# ``_NEVER_RETRYABLE_SCRIPT_RAW`` below.
+_NEVER_RETRYABLE_SCRIPT_CODES: frozenset[str] = frozenset(
+    {
+        "script.failed",
+        "script.invalid_output",
+        "script.side_effect_unknown",
+        "script.session_lost",
+    }
+)
+_NEVER_RETRYABLE_SCRIPT_RAW: frozenset[str] = frozenset(
+    {
+        "ScriptFailedError",
+        "ScriptInvalidOutputError",
+        "ScriptSideEffectUnknownError",
+        "script.schema_failed",
+        "script.no_output",
+    }
+)
+
+
 def _failure_event_matches(
     event_set: set[Any],
     final_status: str,
@@ -298,17 +334,24 @@ def _failure_event_matches(
     """``failure`` event matches a failed outcome, excluding hang deaths.
 
     A sandbox-agent HANG death terminalizes as ``node_cancelled`` + "likely
-    hung" in ``error_detail`` — re-dispatching would burn a full node timeout
+    hung" in ``error_detail`` �?" re-dispatching would burn a full node timeout
     with zero recovery probability, so it is excluded from ``"failure"`` retries.
     """
     if (
         "failure" not in event_set
         or final_status != "failed"
-        # Timeout is a distinct event — a "failure"-only policy must not retry
+        # Timeout is a distinct event �?" a "failure"-only policy must not retry
         # a timeout outcome, and a stall is not a generic failure.
         or code in ("node_timeout", "TimeoutError", "executor_stalled")
         or mapped in ("node.timeout", "node.runaway", "agent.stall")
     ):
+        return False
+    # FAR-296 Phase 2: never-retryable script-mode terminal codes are excluded
+    # from ``failure`` retries regardless of the policy — re-dispatching a
+    # script-mode node whose process started could double-execute a side effect.
+    # This covers both the canonical mapped code and the raw exception-class
+    # spelling the generic catch publishes.
+    if mapped in _NEVER_RETRYABLE_SCRIPT_CODES or code in _NEVER_RETRYABLE_SCRIPT_RAW:
         return False
     # FAR-136 Gap 2: exclude sandbox-agent hang deaths.
     is_cancel = code == "node_cancelled" or mapped == "node.cancelled"
@@ -450,6 +493,93 @@ def _sandbox_agent_for_snapshot(snapshot_id: uuid.UUID, graph_json: dict[str, An
         _SANDBOX_AGENT_CACHE.clear()
     _SANDBOX_AGENT_CACHE[key] = result
     return result
+
+
+def _graph_has_script_mode(graph_json: dict[str, Any] | None) -> bool:
+    """True when the graph contains a ``sandbox_agent`` node in ``mode="script"``.
+
+    FAR-296 Phase 2: the fencing lease + stage-split contract apply ONLY to
+    script-mode nodes. Any script-mode sandbox node in the graph means a retry
+    of this run must first prove no script process could still be alive (the
+    lease probe) before a requeue.
+    """
+    if not isinstance(graph_json, dict):
+        return False
+    for node in graph_json.get("nodes", []) or []:
+        if not isinstance(node, dict):
+            continue
+        if (
+            str(node.get("node_type", "")).strip() == "sandbox_agent"
+            and str(node.get("mode") or "").strip() == "script"
+        ):
+            return True
+    return False
+
+
+async def _script_lease_probe_ok(
+    session_factory: Callable[..., Any] | None,
+    run_id: str,
+    org_id: Any,
+    claim_token: str | None,
+) -> bool:
+    """FAR-296 Phase 2 stale-claim probe: is it SAFE to requeue this run?
+
+    Reads ``runs.sandbox_dispatch_state`` for a live ``script_executing`` lease
+    (execution claimed, completion marker pending) that belongs to THIS claim.
+    A stale lease means a script PROCESS could still have been alive — requeue
+    is forbidden (exactly-once). Returns True (safe to requeue) when:
+      - no session factory / claim / org (fail-open to the normal path), or
+      - the dispatch state carries NO ``script_executing`` lease (no process
+        could have been alive for this claim).
+    Returns False (DO NOT requeue) only when a live script lease exists.
+    NEVER auto-retries a stale claim — the caller escalates to needs-human.
+    """
+    if session_factory is None or not claim_token:
+        return True
+    org_uuid: uuid.UUID | None = None
+    try:
+        org_uuid = uuid.UUID(str(org_id)) if org_id else None
+    except (TypeError, ValueError):
+        org_uuid = None
+    if org_uuid is None:
+        return True
+    try:
+        from sqlalchemy import text as _sql_text
+
+        from modulo.db.rls import set_rls_org
+
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, org_uuid)
+            row = (
+                await session.execute(
+                    _sql_text(
+                        "SELECT sandbox_dispatch_state FROM runs WHERE id=:rid "
+                        "AND organisation_id=:oid AND claim_token=:tok"
+                    ),
+                    {"rid": run_id, "oid": str(org_uuid), "tok": claim_token},
+                )
+            ).fetchone()
+            if row is None:
+                return True
+            raw = row[0]
+            if not raw:
+                return True
+            try:
+                state = json.loads(raw)
+            except (TypeError, ValueError):
+                return True
+            return not (isinstance(state, dict) and state.get("state") == "script_executing")
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "script.lease_probe_failed",
+            extra={"run_id": str(run_id), "exc_type": "probe"},
+            exc_info=True,
+        )
+        # Fail-closed on a probe error: a script-mode run whose lease we cannot
+        # read is NEVER requeued (a hidden live process would double-execute).
+        return False
 
 
 def _node_output_stall_reason(node_output: Any) -> str | None:
@@ -1042,6 +1172,79 @@ class PipelineExecutor:
                 )
         return eval_defs_by_node
 
+    async def _run_post_node_evals(
+        self,
+        node_id: str,
+        envelope: dict[str, Any],
+        eval_definitions_by_node: dict[str, list[EvalDefDTO]],
+        run_id: uuid.UUID,
+        org_id: uuid.UUID | None,
+    ) -> None:
+        """FAR-305: run node-scoped evals for a completed node (standalone path).
+
+        This is the non-HITL counterpart to ``make_hitl_gate_fn``'s
+        eval-before-interrupt: it evaluates each of the node's eval definitions
+        against the node's *inner* output dict (``envelope["output"]`` — the
+        agent's actual ``output.json`` content, matching what the HITL gate
+        evaluates against state) and persists the results to the ``eval_results``
+        table so post-run suite-level threshold checks can read them.
+
+        If a ``block`` eval fails, ``EvalBlockedError`` propagates to
+        ``_stream_graph``'s existing handler, transitioning the run to
+        ``eval_failed`` with ``error_code="eval_blocked"``.
+        """
+        eval_defs = eval_definitions_by_node.get(node_id)
+        if not eval_defs:
+            return
+        # The captured ``output`` is the envelope ``{"artifacts": [...],
+        # "output": {...}}``. Validate the INNER output dict (what the agent
+        # produced), falling back to the whole envelope if it isn't a dict.
+        inner_output = envelope.get("output")
+        if not isinstance(inner_output, dict):
+            inner_output = envelope
+
+        engine = EvalEngine()
+        results: dict[str, EngineEvalResult] = {}
+        for eval_def in eval_defs:
+            eval_result = engine.evaluate(inner_output, eval_def, run_id=run_id)
+            results[eval_def.name] = eval_result
+            _log.info(
+                "post_node_eval.result",
+                extra={
+                    "node_id": node_id,
+                    "eval_name": eval_def.name,
+                    "eval_id": str(eval_def.id),
+                    "passed": eval_result.passed,
+                    "score": eval_result.score,
+                    "detail": eval_result.detail,
+                },
+            )
+
+        # Persist eval results to the eval_results table so post-run
+        # suite-level threshold checks can read them.
+        if self._session_factory is not None and org_id is not None:
+            try:
+                async with self._session_factory() as session, session.begin():
+                    await set_rls_org(session, org_id)
+                    for eval_def in eval_defs:
+                        eval_result = results[eval_def.name]
+                        node_uuid: uuid.UUID | None = uuid.UUID(eval_def.node_id) if eval_def.node_id else None
+                        session.add(
+                            EvalResult(
+                                organisation_id=org_id,
+                                run_id=run_id,
+                                node_id=node_uuid,
+                                eval_id=eval_def.id,
+                                passed=eval_result.passed,
+                                score=eval_result.score,
+                                detail=eval_result.detail,
+                            )
+                        )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception("post_node_eval.persist_failed", extra={"node_id": node_id})
+
     async def _init_model_backend_hub(self, org_id: uuid.UUID) -> ModelBackendHub | None:
         """Load active model backends for the org and initialise ModelBackendHub.
 
@@ -1142,6 +1345,62 @@ class PipelineExecutor:
                 await _teardown_hub(hub)
             hub = None
         return hub
+
+    async def _compensate_blocked_run_best_effort(
+        self,
+        *,
+        org_id: uuid.UUID,
+        run_id: uuid.UUID,
+        executed_nodes: dict[str, Any],
+    ) -> None:
+        """Run-termination compensation for a guardrail-blocked mid-run terminalization (FAR-291).
+
+        A run whose earlier nodes performed connector side effects (pushed a PR,
+        flipped a Linear status) before a later node's output was
+        guardrail-blocked must have those side effects compensated. Invoked from
+        ``_finalize_run_after_stream`` AFTER the terminal status write
+        (``finalize_cost``), so both the ``execute()`` and ``resume()`` paths
+        share this single wiring point.
+
+        Uses its OWN fresh session (``set_rls_org`` inside ``session.begin``)
+        and a FRESH connector hub for the compensation window — it never touches
+        the claim_token-fenced ``finalize_cost`` transaction, and the hub
+        teardown cannot interfere with the run's own hub lifecycle. Best-effort
+        + failure-isolated (guard-the-guard): every raise is logged here and
+        never propagates into terminalization.
+        """
+        hub: Any | None = None
+        try:
+            hub = await self._init_connector_hub(org_id)
+            # The compensation + summary write commit INSIDE this session
+            # transaction (so the blocked_partial summary is durable) BEFORE
+            # the hub is torn down. If teardown failed inside the transaction
+            # block it would roll the summary back with it — guard-the-guard:
+            # teardown must never lose an already-committed compensation.
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                run = await get_run(session, run_id)
+                if run is None:
+                    _log.warning("guardrails.compensation.run_not_found run=%s", run_id)
+                    return
+                from modulo.core.guardrails.compensation import compensate_blocked_run
+
+                await compensate_blocked_run(
+                    session,
+                    run,
+                    guardrail_block=run.error_detail or "",
+                    connector_hub=hub,
+                    executed_nodes=executed_nodes,
+                    blocking_eval_name="",
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("guardrails.compensation.error run=%s", run_id)
+        finally:
+            if hub is not None:
+                await _teardown_hub(hub)
+            set_connector_hub(None)
 
     def _check_db_cancellation(
         self,
@@ -1419,7 +1678,7 @@ class PipelineExecutor:
 
             # Load eval definitions while session is active.
             eval_rows = await self._load_eval_defs_for_pipeline(session, run.pipeline_id)
-            self._build_eval_defs_by_node(eval_rows, org_id, run.pipeline_id)
+            eval_defs_by_node = self._build_eval_defs_by_node(eval_rows, org_id, run.pipeline_id)
 
         pipeline_id = run.pipeline_id
         snapshot_id = run.snapshot_id
@@ -1515,6 +1774,7 @@ class PipelineExecutor:
                     completed_node_outputs=completed_node_outputs,
                     guard=guard,
                     node_token_budgets=node_token_budgets,
+                    eval_definitions_by_node=eval_defs_by_node,
                 )
         except RuntimeError as exc:
             if "checkpointer" in str(exc):
@@ -1635,6 +1895,20 @@ class PipelineExecutor:
                     raise
                 except Exception:
                     _log.exception("work_intact.write_failed", extra={"run_id": str(run_id)})
+
+        # FAR-291: run-termination compensation for a guardrail-blocked
+        # MID-RUN terminalization. The terminal status write (finalize_cost
+        # above) has already landed; a run whose earlier nodes pushed a PR /
+        # flipped a Linear status before a later node's output was
+        # guardrail-blocked now gets those side effects compensated. Best-effort
+        # + failure-isolated (guard-the-guard): a compensation failure never
+        # crashes terminalization. Uses its own fresh session + hub.
+        if final_status == "eval_failed" and error_code == "eval_blocked":
+            await self._compensate_blocked_run_best_effort(
+                org_id=org_id,
+                run_id=run_id,
+                executed_nodes=completed_node_outputs,
+            )
 
         # Fetch the final run in a fresh session — finalize_cost's ledger block
         # may have aborted the transaction in the whole-tx-abort reduced-escape
@@ -1878,6 +2152,7 @@ class PipelineExecutor:
                         completed_node_outputs=completed_node_outputs,
                         guard=guard,
                         node_token_budgets=node_token_budgets,
+                        eval_definitions_by_node=eval_defs_by_node,
                     )
             else:
                 final_status, error_code, error_detail, node_token_usage = await self._stream_graph(
@@ -1892,6 +2167,7 @@ class PipelineExecutor:
                     completed_node_outputs=completed_node_outputs,
                     guard=guard,
                     node_token_budgets=node_token_budgets,
+                    eval_definitions_by_node=eval_defs_by_node,
                 )
         except asyncio.CancelledError:
             raise
@@ -1955,6 +2231,34 @@ class PipelineExecutor:
             # keyed on it, so a None node_id (plain NodeCancelledError) can
             # never suppress.
             _gated_node_id = exc.node_id if isinstance(exc, SandboxNodeFailedError) else None
+            # FAR-296 Phase 2: before ANY requeue of a script-mode run, prove no
+            # script process could still be alive (stale-claim lease probe).
+            # A stale ``script_executing`` lease means a script may have run —
+            # requeue is forbidden (exactly-once). Only when the probe proves no
+            # live lease does the run stay eligible for the fenced reset below.
+            # NOTE: the probe is computed BEFORE the gate/retry chain below so
+            # the idempotency gate stays the FIRST branch (it must suppress the
+            # pending-reset when a delivery marker is present), and so the
+            # pending-reset branch remains reachable for BOTH script-mode and
+            # non-script-mode graphs (a stale lease simply disqualifies it).
+            script_lease_ok = True
+            if _graph_has_script_mode(graph_json):
+                try:
+                    script_lease_ok = await _script_lease_probe_ok(
+                        self._session_factory, str(run_id), org_id, self._claim_token
+                    )
+                except Exception:
+                    _log.warning(
+                        "script.lease_probe_eval_failed",
+                        extra={"run_id": str(run_id)},
+                        exc_info=True,
+                    )
+                    script_lease_ok = False
+                if not script_lease_ok:
+                    _log.warning(
+                        "script.lease_probe.blocked_requeue",
+                        extra={"run_id": str(run_id), "reason": "stale script_executing lease"},
+                    )
             if gate_ok and _gated_node_id is not None:
                 _log.warning(
                     "pipeline.idempotency_gate.suppressed_retry",
@@ -1969,7 +2273,7 @@ class PipelineExecutor:
                 # below — fall through to the existing finalization with
                 # final_status="complete". run_completed is published after the
                 # eval-skip point (below), while the broker is still open.
-            elif node_attempt_count < retries and not superseded and not stalled:
+            elif node_attempt_count < retries and not superseded and not stalled and script_lease_ok:
                 # Fenced pending-reset: a conditional UPDATE guarded by OUR
                 # captured claim token + status='running' so a superseded
                 # original cannot demote the successor's running row, a stalled
@@ -2032,22 +2336,34 @@ class PipelineExecutor:
                 # surfaces truncate to 200 by design. A 500-char write cap cut
                 # the stderr + log tails entirely for large-output failures.
                 final_status = "failed"
-                error_code = "node_cancelled"
-                if isinstance(exc, NodeCancelledError):
+                if not script_lease_ok:
+                    # FAR-296 Phase 2: a stale script_executing lease blocked the
+                    # requeue — a script process may have run, so the side-effect
+                    # state is unknown. Terminal (never retried) with the
+                    # needs-human ``script.side_effect_unknown`` code.
+                    error_code = "script.side_effect_unknown"
                     error_detail = _sanitize_detail(
-                        "Sandbox node cancelled (transient) after retries exhausted: " + str(exc), limit=5000
+                        "Script-mode sandbox has an unresolved execution claim (side effect unknown); "
+                        "not retried — needs human review: " + str(exc),
+                        limit=5000,
                     )
                 else:
-                    # SandboxNodeFailedError: the FAR-197 no-output diagnostic
-                    # is a fully bounded message designed to survive this
-                    # surface in full — keep the limit at the sanitizer/column
-                    # cap (5000), not the 500 used for the short
-                    # NodeCancelledError string, or the kill-reason log tail
-                    # would be the first thing truncated (FAR-197 review).
-                    error_detail = _sanitize_detail(
-                        "Sandbox node failed (transient) after retries exhausted: " + str(exc), limit=5000
-                    )
-                broker.publish("run_failed", {"error": "node_cancelled", "detail": error_detail})
+                    error_code = "node_cancelled"
+                    if isinstance(exc, NodeCancelledError):
+                        error_detail = _sanitize_detail(
+                            "Sandbox node cancelled (transient) after retries exhausted: " + str(exc), limit=5000
+                        )
+                    else:
+                        # SandboxNodeFailedError: the FAR-197 no-output diagnostic
+                        # is a fully bounded message designed to survive this
+                        # surface in full — keep the limit at the sanitizer/column
+                        # cap (5000), not the 500 used for the short
+                        # NodeCancelledError string, or the kill-reason log tail
+                        # would be the first thing truncated (FAR-197 review).
+                        error_detail = _sanitize_detail(
+                            "Sandbox node failed (transient) after retries exhausted: " + str(exc), limit=5000
+                        )
+                broker.publish("run_failed", {"error": error_code, "detail": error_detail})
         except Exception as exc:
             import traceback
 
@@ -2089,7 +2405,27 @@ class PipelineExecutor:
             # 1 retry, 2 attempts. ``< retry_budget`` would have yielded N
             # total attempts (N-1 retries), contradicting the API's
             # "max_retries means retries" contract.
-            if node_attempt_count <= retry_budget and not superseded:
+            # FAR-296 Phase 2: before ANY requeue of a script-mode run, prove
+            # no script process could still be alive (stale-claim lease probe).
+            script_retry_probe_ok = True
+            if _graph_has_script_mode(graph_json):
+                try:
+                    script_retry_probe_ok = await _script_lease_probe_ok(
+                        self._session_factory, str(run_id), org_id, self._claim_token
+                    )
+                except Exception:
+                    _log.warning(
+                        "script.lease_probe_eval_failed_retry_policy",
+                        extra={"run_id": str(run_id)},
+                        exc_info=True,
+                    )
+                    script_retry_probe_ok = False
+                if not script_retry_probe_ok:
+                    _log.warning(
+                        "script.lease_probe.blocked_retry_policy",
+                        extra={"run_id": str(run_id), "reason": "stale script_executing lease"},
+                    )
+            if node_attempt_count <= retry_budget and not superseded and script_retry_probe_ok:
                 _log.warning(
                     "pipeline.retry_policy",
                     extra={
@@ -2137,6 +2473,24 @@ class PipelineExecutor:
                 # function of the attempt number — covered by unit tests.
                 await asyncio.sleep(_retry_backoff_seconds(node_attempt_count))
                 raise RunRetryPolicyError(final_status, retry_budget)
+            if not script_retry_probe_ok:
+                # FAR-296 Phase 2: the lease probe blocked the requeue — a
+                # script process may have run with unknown side-effect state.
+                # Terminal-fail with ``script.side_effect_unknown`` (never
+                # retried) so the run reaches a needs-human state instead of
+                # silently looping or being left stuck in ``running``.
+                _log.warning(
+                    "script.lease_probe.terminal_side_effect_unknown",
+                    extra={"run_id": str(run_id), "error_code": "script.side_effect_unknown"},
+                )
+                final_status = "failed"
+                error_code = "script.side_effect_unknown"
+                error_detail = _sanitize_detail(
+                    "Script-mode sandbox has an unresolved execution claim (side effect unknown); "
+                    "not retried — needs human review.",
+                    limit=5000,
+                )
+                broker.publish("run_failed", {"error": "script.side_effect_unknown", "detail": error_detail})
 
         try:
             # (The eval_blocked audit for this run is recorded in
@@ -2485,6 +2839,7 @@ class PipelineExecutor:
         completed_node_outputs: dict[str, Any] | None = None,
         guard: RunawayGuard | None = None,
         node_token_budgets: dict[str, int] | None = None,
+        eval_definitions_by_node: dict[str, list[EvalDefDTO]] | None = None,
     ) -> tuple[str, str | None, str | None, dict[str, Any] | None]:
         """Stream graph execution, mapping events to broker publishes.
 
@@ -2600,6 +2955,26 @@ class PipelineExecutor:
                                         stamped["otel_trace_id"] = run_trace_id
                                     output = stamped
                                 completed_node_outputs[name] = output
+                                # FAR-305: standalone post-node eval path — run any
+                                # node-scoped evals for this node against its inner
+                                # output dict. This is independent of HITL gates:
+                                # a plain node (no gate) now gets its node-scoped
+                                # evals evaluated too. If a ``block`` eval fails,
+                                # ``EvalBlockedError`` propagates and the existing
+                                # ``except EvalBlockedError`` below transitions the
+                                # run to ``eval_failed`` with ``error_code="eval_blocked"``.
+                                # NOTE: if this node ALSO feeds a HITL gate with
+                                # eval-before-interrupt, the evals run twice (once
+                                # here post-node, once in the gate) — acceptable for
+                                # now, the gate's eval is a separate node.
+                                if eval_definitions_by_node:
+                                    await self._run_post_node_evals(
+                                        name,
+                                        output,
+                                        eval_definitions_by_node,
+                                        run_id,
+                                        org_id,
+                                    )
                                 stall_reason = _node_output_stall_reason(output)
                                 if stall_reason:
                                     stalled_node_reason = stall_reason
