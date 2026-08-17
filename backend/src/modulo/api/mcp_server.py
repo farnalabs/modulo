@@ -4625,12 +4625,46 @@ async def resource_pipeline_snapshots(pipeline_id: str) -> str:
     return f"Snapshots for pipeline {pipeline_id} ({len(snapshots)}):\n" + "\n".join(lines)
 
 
+def _render_snapshot_node_line(n: dict[str, Any]) -> str:
+    """Render a single node summary line for MCP resource output."""
+    nid = n.get("id", "?")
+    ntype = n.get("node_type", "?")
+    agent_id = n.get("agent_id", "")
+    agent_cmd = n.get("agent_command", "(required)")
+    prompt_preview = (n.get("prompt_template", "") or "")[:80].replace("\n", " ")
+    line = f"  - {nid} (type={ntype}, agent={agent_id}, command={agent_cmd})\n"
+    if prompt_preview:
+        line += f"    prompt: {prompt_preview}...\n"
+    return line
+
+
+def _render_snapshot_node_details(nodes: list[dict[str, Any]]) -> str:
+    """Render the full node JSON plus prompt/command previews."""
+    result = ""
+    for n in nodes:
+        safe = {k: v for k, v in n.items() if k not in ("agent_prompt", "agent_command")}
+        result += json.dumps(safe, indent=2, default=str)[:2000] + "\n"
+        ap = n.get("agent_prompt")
+        if ap is None:
+            ap = ""
+        if ap:
+            result += f"    agent_prompt: {ap[:200].replace(chr(10), ' ')}...\n"
+        ac = n.get("agent_command", "") or ""
+        if ac:
+            result += f"    agent_command: {ac[:200].replace(chr(10), ' ')}...\n"
+        cf = n.get("context_files", {}) or {}
+        for cfp, cfc in cf.items():
+            result += f"    context_file {cfp}: {len(str(cfc))} bytes\n"
+        tid = n.get("template_id", "")
+        if tid:
+            result += f"    template_id: {tid}\n"
+    return result
+
+
 @mcp.resource("modulo://pipelines/{pipeline_id}/snapshots/{snapshot_id}")
 async def resource_pipeline_snapshot_detail(pipeline_id: str, snapshot_id: str) -> str:
     if not await validate_current_auth():
         return _MSG_ERROR_TOKEN_REVOKED
-    import json
-
     from modulo.db.crud.pipeline_snapshot_versioning import get_snapshot_detail
 
     org_id = _ctx_org_id_val()
@@ -4652,36 +4686,12 @@ async def resource_pipeline_snapshot_detail(pipeline_id: str, snapshot_id: str) 
     edges = snap.graph_json.get("edges", [])
     result = f"Snapshot {snapshot_id} (v{snap.snapshot_version}) for pipeline {pipeline_id}\n"
     result += f"Nodes ({len(nodes)}):\n"
-    for n in nodes:
-        nid = n.get("id", "?")
-        ntype = n.get("node_type", "?")
-        agent_id = n.get("agent_id", "")
-        agent_cmd = n.get("agent_command", "(required)")
-        prompt_preview = (n.get("prompt_template", "") or "")[:80].replace("\n", " ")
-        result += f"  - {nid} (type={ntype}, agent={agent_id}, command={agent_cmd})\n"
-        if prompt_preview:
-            result += f"    prompt: {prompt_preview}...\n"
+    result += "".join(_render_snapshot_node_line(n) for n in nodes)
     result += f"Edges ({len(edges)}):\n"
     for e in edges:
         result += f"  - {e.get('id', '?')}: {e.get('source', '?')} -> {e.get('target', '?')} ({e.get('type', '?')})\n"
     result += "  Full node JSON:\n"
-    for n in nodes:
-        safe = {k: v for k, v in n.items() if k not in ("agent_prompt", "agent_command")}
-        result += json.dumps(safe, indent=2, default=str)[:2000] + "\n"
-        ap = n.get("agent_prompt")
-        if ap is None:
-            ap = ""
-        if ap:
-            result += f"    agent_prompt: {ap[:200].replace(chr(10), ' ')}...\n"
-        ac = n.get("agent_command", "") or ""
-        if ac:
-            result += f"    agent_command: {ac[:200].replace(chr(10), ' ')}...\n"
-        cf = n.get("context_files", {}) or {}
-        for cfp, cfc in cf.items():
-            result += f"    context_file {cfp}: {len(str(cfc))} bytes\n"
-        tid = n.get("template_id", "")
-        if tid:
-            result += f"    template_id: {tid}\n"
+    result += _render_snapshot_node_details(nodes)
     result += f"Connector bindings: {json.dumps(snap.connector_bindings_json, indent=2)}\n"
     return result
 
