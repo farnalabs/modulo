@@ -136,7 +136,7 @@ Existing SDLC onboarding: teams can map their current process (even manual steps
 - **PRD 8.16 5-step path not fully integrated:** The onboarding wizard implements a simplified version. Steps 4 (library browse filtered by abstract_name) and step 5 (wire agents) are generic rather than specifically guided by inferred schema shape. No schema-inferred abstract_name is used to filter library recommendations.
 - **Backend step data simplified:** PRD 8.16 mentions Notion/Confluence as document-store connectors in addition to Jira/Linear/GitHub; `connect_tools` step data only lists GitHub, Jira, Linear.
 - **No persona feature file:** Alice persona scenarios (`@goal-alice-onboard-sdlc`, `@goal-alice-replace-step`) exist in the persona doc but have no corresponding Gherkin scenarios or step definitions.
-- **Demo pipeline + first-run walkthrough (Phase 5, item 25):** `MODULO_DEMO_MODE` and pre-loaded `prd-to-requirements` demo not yet built per the delivery tracker.
+- **Demo pipeline + first-run walkthrough (Phase 5, item 25):** removed/descoped (FAR-308). The pre-loaded `prd-to-requirements` demo and the demo mode env var are no longer built or delivered.
 - **No E2E test** covering the full connect→infer→review→library→wire→run flow.
 - **No frontend component smoke test** for OnboardingWizard.vue.
 - **test_sdlc_onboarding.py is mocking-only:** BDD step definitions use MagicMock responses rather than real API calls, so scenarios validate UI logic but not true HTTP contract.
