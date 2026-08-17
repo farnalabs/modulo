@@ -4471,6 +4471,73 @@ async def list_housekeeping(limit: int = 100) -> dict[str, Any]:
         return _tool_error("Failed to list housekeeping candidates")
 
 
+def _group_housekeeping_items(items: list[dict[str, str]], errors: list[dict[str, str]]) -> dict[str, list[str]]:
+    """Group items by entity_type, collecting malformed items into *errors*."""
+    grouped: dict[str, list[str]] = {}
+    for item in items:
+        et = item.get("entity_type", "")
+        eid = item.get("id", "")
+        if not et or not eid:
+            errors.append({"error": "item missing entity_type or id", "item": str(item)})
+            continue
+        grouped.setdefault(et, []).append(eid)
+    return grouped
+
+
+async def _delete_housekeeping_entity(s: AsyncSession, model_cls: Any, eid: str, org_id: uuid.UUID) -> bool:
+    """Delete a single entity by id under a savepoint. Returns True if deleted."""
+    from sqlalchemy import select as _sa_select
+
+    stmt = _sa_select(model_cls).where(
+        model_cls.id == eid,
+        model_cls.organisation_id == org_id,
+    )
+    obj = (await s.execute(stmt)).scalar_one_or_none()
+    if obj is not None:
+        await s.delete(obj)
+        return True
+    return False
+
+
+async def _delete_housekeeping_group(
+    s: AsyncSession,
+    entity_type: str,
+    ids: list[str],
+    model_cls: Any,
+    org_id: uuid.UUID,
+    errors: list[dict[str, str]],
+) -> int:
+    """Delete each id in *ids* under a savepoint. Returns the number deleted."""
+    deleted_count = 0
+    for eid in ids:
+        try:
+            async with s.begin_nested():
+                if await _delete_housekeeping_entity(s, model_cls, eid, org_id):
+                    deleted_count += 1
+        except IntegrityError:
+            _log.warning("IntegrityError cleaning up %s %s", entity_type, eid)
+            errors.append({"id": eid, "entity_type": entity_type, "error": "Foreign key constraint violation"})
+    return deleted_count
+
+
+async def _delete_housekeeping_groups(
+    s: AsyncSession,
+    grouped: dict[str, list[str]],
+    hk_entity_map: Mapping[str, Any],
+    org_id: uuid.UUID,
+    errors: list[dict[str, str]],
+) -> int:
+    """Delete all grouped housekeeping items. Returns the total deleted count."""
+    deleted_count = 0
+    for entity_type, ids in grouped.items():
+        model_cls = hk_entity_map.get(entity_type)
+        if model_cls is None:
+            errors.append({"entity_type": entity_type, "error": f"Unknown entity type: {entity_type}"})
+            continue
+        deleted_count += await _delete_housekeeping_group(s, entity_type, ids, model_cls, org_id, errors)
+    return deleted_count
+
+
 @mcp.tool(
     description="Delete housekeeping cleanup candidates. "
     "Accepts a list of items with id and entity_type. "
@@ -4487,43 +4554,12 @@ async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
         from modulo.core.housekeeping import ENTITY_MODEL_MAP as HK_ENTITY_MAP
 
         org_id = _ctx_org_id_val()
-        deleted_count = 0
         errors: list[dict[str, str]] = []
 
-        grouped: dict[str, list[str]] = {}
-        for item in items:
-            et = item.get("entity_type", "")
-            eid = item.get("id", "")
-            if not et or not eid:
-                errors.append({"error": "item missing entity_type or id", "item": str(item)})
-                continue
-            grouped.setdefault(et, []).append(eid)
+        grouped = _group_housekeeping_items(items, errors)
 
         async with _session(org_id) as s:
-            for entity_type, ids in grouped.items():
-                model_cls = HK_ENTITY_MAP.get(entity_type)
-                if model_cls is None:
-                    errors.append({"entity_type": entity_type, "error": f"Unknown entity type: {entity_type}"})
-                    continue
-
-                for eid in ids:
-                    try:
-                        async with s.begin_nested():
-                            from sqlalchemy import select as _sa_select
-
-                            stmt = _sa_select(model_cls).where(  # type: ignore[var-annotated]
-                                model_cls.id == eid,  # type: ignore[attr-defined]
-                                model_cls.organisation_id == org_id,  # type: ignore[attr-defined]
-                            )
-                            obj = (await s.execute(stmt)).scalar_one_or_none()
-                            if obj is not None:
-                                await s.delete(obj)
-                                deleted_count += 1
-                    except IntegrityError:
-                        _log.warning("IntegrityError cleaning up %s %s", entity_type, eid)
-                        errors.append(
-                            {"id": eid, "entity_type": entity_type, "error": "Foreign key constraint violation"}
-                        )
+            deleted_count = await _delete_housekeeping_groups(s, grouped, HK_ENTITY_MAP, org_id, errors)
 
         return {"deleted_count": deleted_count, "errors": errors}
     except MCPAuthorizationError as exc:
