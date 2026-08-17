@@ -9,8 +9,8 @@ from httpx import ASGITransport, AsyncClient
 
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.db.models.organisation import Organisation
 
 ORG_ID = uuid4()
@@ -91,6 +91,30 @@ def client_system_admin(mock_session):
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_db_session] = lambda: mock_session
     app.dependency_overrides[get_current_user] = lambda: SYSTEM_ADMIN_PRINCIPAL
+    transport = ASGITransport(app=app)
+    client = AsyncClient(transport=transport, base_url="http://test")
+    yield client
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def client_tenant_member(mock_session):
+    """Test client authenticated as an org member (not necessarily admin).
+
+    Overrides ``get_current_tenant_user`` (the org-scoped dependency used by
+    the org read surface) so any org member can exercise the kill-switch read.
+    """
+    tenant = TenantPrincipal(
+        username="member@test",
+        organisation_id=ORG_ID,
+        account_id=uuid4(),
+        org_role="viewer",
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    app.dependency_overrides[get_db_session] = lambda: mock_session
+    app.dependency_overrides[get_current_tenant_user] = lambda: tenant
     transport = ASGITransport(app=app)
     client = AsyncClient(transport=transport, base_url="http://test")
     yield client
@@ -358,3 +382,104 @@ async def test_create_org_user_invalid_role(client_system_admin):
         },
     )
     assert resp.status_code == 422
+
+
+# -- Org-scoped guardrails kill-switch read (non-admins) -------------------
+
+
+@pytest.mark.anyio
+async def test_org_member_reads_guardrails_kill_switch(client_tenant_member, mock_session):
+    """Any org member (non-admin) can read the org's kill-switch state."""
+    import modulo.api.routes.org_settings as org_settings
+
+    original_get_org = org_settings.get_organisation
+
+    async def fake_get_org(session, org_id):
+        return Organisation(
+            id=org_id,
+            name="Test Org",
+            slug="test-org",
+            status="active",
+            guardrails_kill_switch=True,
+            guardrails_kill_switch_at=datetime.now(UTC),
+        )
+
+    org_settings.get_organisation = fake_get_org
+    try:
+        resp = await client_tenant_member.get("/api/v1/org/settings/guardrails/kill-switch")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data["enabled"] is True
+        assert data["enabled_at"] is not None
+    finally:
+        org_settings.get_organisation = original_get_org
+
+
+@pytest.mark.anyio
+async def test_org_member_reads_kill_switch_off(client_tenant_member, mock_session):
+    """A non-admin org member sees the kill-switch OFF state too."""
+    import modulo.api.routes.org_settings as org_settings
+
+    original_get_org = org_settings.get_organisation
+
+    async def fake_get_org(session, org_id):
+        return Organisation(
+            id=org_id,
+            name="Test Org",
+            slug="test-org",
+            status="active",
+            guardrails_kill_switch=False,
+            guardrails_kill_switch_at=None,
+        )
+
+    org_settings.get_organisation = fake_get_org
+    try:
+        resp = await client_tenant_member.get("/api/v1/org/settings/guardrails/kill-switch")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data["enabled"] is False
+        assert data["enabled_at"] is None
+    finally:
+        org_settings.get_organisation = original_get_org
+
+
+@pytest.mark.anyio
+async def test_org_member_read_is_org_scoped(client_tenant_member, mock_session):
+    """The read uses the caller's OWN organisation id, never an arbitrary one.
+
+    The org-scoped route reads via the authenticated tenant's organisation_id
+    (mirroring the org_settings precedent), so a caller cannot target another
+    org's kill-switch state.
+    """
+    import modulo.api.routes.org_settings as org_settings
+
+    captured: list = []
+    original_set_rls = org_settings.set_rls_org
+
+    async def fake_set_rls(session, org_id):
+        captured.append(org_id)
+        await original_set_rls(session, org_id)
+
+    original_get_org = org_settings.get_organisation
+
+    async def fake_get_org(session, org_id):
+        captured.append(org_id)
+        return Organisation(
+            id=org_id,
+            name="Test Org",
+            slug="test-org",
+            status="active",
+            guardrails_kill_switch=True,
+            guardrails_kill_switch_at=datetime.now(UTC),
+        )
+
+    org_settings.set_rls_org = fake_set_rls
+    org_settings.get_organisation = fake_get_org
+    try:
+        resp = await client_tenant_member.get("/api/v1/org/settings/guardrails/kill-switch")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        # Every DB read is scoped to the authenticated caller's organisation.
+        assert captured and all(oid == ORG_ID for oid in captured), f"Not org-scoped: {captured}"
+    finally:
+        org_settings.set_rls_org = original_set_rls
+        org_settings.get_organisation = original_get_org
