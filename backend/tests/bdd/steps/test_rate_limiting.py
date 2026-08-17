@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from collections.abc import Generator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -18,7 +19,7 @@ from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware
-from modulo.core.rate_limiter import RateLimiterRegistry
+from modulo.core.rate_limiter import RateLimiterRegistry, RateLimitRule
 from modulo.settings import Settings
 
 # ---------------------------------------------------------------------------
@@ -46,6 +47,23 @@ _PATH_LIMITS: dict[str, int] = {
 @pytest.fixture
 def ctx() -> dict[str, Any]:
     return {}
+
+
+@pytest.fixture(autouse=True)
+def _restore_ratelimit_rules() -> Generator[None, None, None]:
+    """Restore the class-level rate-limit rules after every scenario.
+
+    Scenario steps mutate ``RateLimitMiddleware.RULES`` via ``set_rules``
+    (``when_put_new_rules`` / ``when_put_empty_rules``). The class variable is
+    shared process-wide: if a scenario leaves it pointing at raw dicts or fails
+    before its own restore runs, every later request through the middleware in
+    the same pytest process crashes with ``AttributeError`` and returns 500
+    (observed as a ~110-test cascade in the full BDD suite). Snapshotting here
+    and always restoring guarantees the shared state can never be poisoned.
+    """
+    saved = list(RateLimitMiddleware.RULES)
+    yield
+    RateLimitMiddleware.set_rules(list(saved))
 
 
 # ---------------------------------------------------------------------------
@@ -322,7 +340,11 @@ def when_put_new_rules(
 
     @app.put("/api/v1/admin/rate-limits")
     async def _admin_put() -> dict[str, Any]:
-        RateLimitMiddleware.set_rules(new_rules)
+        updated_rules = [
+            RateLimitRule(path_prefix=r["path_prefix"], max_requests=r["max_requests"], window_s=r["window_s"])
+            for r in new_rules
+        ]
+        RateLimitMiddleware.set_rules(updated_rules)
         return {"rules": new_rules}
 
     with TestClient(app) as client:

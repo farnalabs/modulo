@@ -50,23 +50,25 @@ def _make_mock_team(**overrides: Any) -> MagicMock:
 
 
 @given(parsers.parse('a team "{team_name}" already exists'))
-def team_already_exists(team_name: str, ctx) -> None:
-    ctx["teams"][team_name] = _make_mock_team(name=team_name)
+def team_already_exists(team_name: str, request) -> None:
+    from tests.bdd.conftest import _mock_team, _shared_state
+
+    _shared_state(request)["teams"][team_name] = _mock_team(team_name)
 
 
 @when(parsers.parse('I delete team "{team_name}"'))
-def delete_team(team_name: str, request, ctx, client=None) -> None:
+def delete_team(team_name: str, request, client=None) -> None:
     from unittest.mock import AsyncMock, patch
 
-    from tests.bdd.conftest import _active_client, _store_response
+    from tests.bdd.conftest import _active_client, _shared_state, _store_response
 
-    team = ctx.get("teams", {}).get(team_name)
+    team = _shared_state(request)["teams"].get(team_name)
     if team is None:
         with patch("modulo.api.routes.teams.delete_team", new_callable=AsyncMock, return_value=False):
             resp = _active_client(request, client).delete(f"/api/v1/teams/{uuid.uuid4()}")
-        _store_response(request, ctx, resp)
+        _store_response(request, {}, resp)
         return
 
     with patch("modulo.api.routes.teams.delete_team", new_callable=AsyncMock, return_value=True):
         resp = _active_client(request, client).delete(f"/api/v1/teams/{team.id}")
-    _store_response(request, ctx, resp)
+    _store_response(request, {}, resp)

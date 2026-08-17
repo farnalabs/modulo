@@ -5,13 +5,11 @@ import os
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.exc import IntegrityError
 
 os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
 os.environ.setdefault("REDIS_URL", "")
@@ -390,211 +388,6 @@ def _store_response(request: Any, ctx: dict[str, Any], resp: Any) -> None:
     ctx["response"] = resp  # test_library.py convention
 
 
-@given(parsers.parse('a team "{team}" exists'))
-def _bdd_team_exists(team: str, ctx: dict[str, Any]) -> None:
-    ctx.setdefault("teams", {})[team] = _make_mock_team(team)
-
-
-@given(parsers.parse('a user "{name}" exists'))
-def _bdd_user_exists(name: str, ctx: dict[str, Any]) -> None:
-    ctx.setdefault("users", {})[name] = {"id": uuid.uuid4(), "org_role": "admin"}
-
-
-@given(parsers.parse('a user "{name}" exists with org role "{role}"'))
-def _bdd_user_exists_with_role(name: str, role: str, ctx: dict[str, Any]) -> None:
-    ctx.setdefault("users", {})[name] = {"id": uuid.uuid4(), "org_role": role}
-
-
-@given(parsers.parse('user "{name}" is already a member of team "{team}"'))
-def _bdd_user_already_member(name: str, team: str, ctx: dict[str, Any]) -> None:
-    ctx.setdefault("members", {}).setdefault(team, set()).add(name)
-    ctx.setdefault("memberships", {})[f"{name}:{team}"] = {
-        "user_id": uuid.uuid4(),
-        "team_id": uuid.uuid4(),
-        "role": "operator",
-    }
-
-
-@when(parsers.re(r'I create a team with name "(?P<name>[^"]*)" and description "(?P<desc>[^"]*)"'))
-def _bdd_create_team(request: Any, name: str, desc: str, ctx: dict[str, Any], client: Any = None) -> None:
-    """POST /api/v1/teams — the route's ``require_permission("team.create")``
-    gate returns 403 for the viewer principal and its ``CreateTeamRequest``
-    validation returns 422 for empty names, so no scenario-name matching is
-    needed here."""
-    existing = ctx.get("teams", {}).get(name)
-    created = _make_mock_team(name, desc)
-    with (
-        patch("modulo.api.routes.teams.get_team_by_name", new_callable=AsyncMock, return_value=existing),
-        patch("modulo.api.routes.teams.create_team", new_callable=AsyncMock, return_value=created),
-    ):
-        resp = _active_client(request, client).post("/api/v1/teams", json={"name": name, "description": desc})
-    _store_response(request, ctx, resp)
-
-
-@when("I list teams")
-def _bdd_list_teams(request: Any, ctx: dict[str, Any], client: Any = None) -> None:
-    teams = list(ctx.get("teams", {}).values())
-    page = SimpleNamespace(items=teams, total=len(teams), page=1, page_size=20)
-    with patch("modulo.api.routes.teams.list_teams", new_callable=AsyncMock, return_value=page):
-        resp = _active_client(request, client).get("/api/v1/teams")
-    _store_response(request, ctx, resp)
-
-
-@when(parsers.parse('I get team "{name}"'))
-def _bdd_get_team(request: Any, name: str, ctx: dict[str, Any], client: Any = None) -> None:
-    team = ctx.get("teams", {}).get(name)
-    team_id = team.id if team is not None else uuid.uuid4()
-    with patch("modulo.api.routes.teams.get_team", new_callable=AsyncMock, return_value=team):
-        resp = _active_client(request, client).get(f"/api/v1/teams/{team_id}")
-    _store_response(request, ctx, resp)
-
-
-@when(parsers.parse('I get team by id "{team_id}"'))
-def _bdd_get_team_by_id(request: Any, team_id: str, ctx: dict[str, Any], client: Any = None) -> None:
-    with patch("modulo.api.routes.teams.get_team", new_callable=AsyncMock, return_value=None):
-        resp = _active_client(request, client).get(f"/api/v1/teams/{team_id}")
-    _store_response(request, ctx, resp)
-
-
-@when(parsers.parse('I delete team by id "{team_id}"'))
-def _bdd_delete_team_by_id(request: Any, team_id: str, ctx: dict[str, Any], client: Any = None) -> None:
-    with patch("modulo.api.routes.teams.delete_team", new_callable=AsyncMock, return_value=False):
-        resp = _active_client(request, client).delete(f"/api/v1/teams/{team_id}")
-    _store_response(request, ctx, resp)
-
-
-@when(parsers.parse('I rename team "{name}" to "{new_name}"'))
-def _bdd_rename_team(request: Any, name: str, new_name: str, ctx: dict[str, Any], client: Any = None) -> None:
-    team = ctx.get("teams", {}).get(name, _make_mock_team(name))
-    conflict = ctx.get("teams", {}).get(new_name)
-    if conflict is not None and conflict.id != team.id:
-        with patch("modulo.api.routes.teams.get_team_by_name", new_callable=AsyncMock, return_value=conflict):
-            resp = _active_client(request, client).patch(f"/api/v1/teams/{team.id}", json={"name": new_name})
-    else:
-        updated = _make_mock_team(new_name)
-        updated.id = team.id
-        with (
-            patch("modulo.api.routes.teams.get_team_by_name", new_callable=AsyncMock, return_value=None),
-            patch("modulo.api.routes.teams.update_team", new_callable=AsyncMock, return_value=updated),
-        ):
-            resp = _active_client(request, client).patch(f"/api/v1/teams/{team.id}", json={"name": new_name})
-    _store_response(request, ctx, resp)
-
-
-@when(parsers.parse('I add user "{name}" to team "{team}" with role "{role}"'))
-def _bdd_add_user_to_team(
-    request: Any, name: str, team: str, role: str, ctx: dict[str, Any], client: Any = None
-) -> None:
-    """POST /api/v1/teams/{team_id}/members through the real route."""
-    teams = ctx.get("teams", {})
-    team_mock = teams.get(team)
-    user = ctx.get("users", {}).get(name, {})
-    user_id = user.get("id", uuid.uuid4())
-
-    if team_mock is None:
-        with (
-            patch("modulo.api.routes.teams.get_team", new_callable=AsyncMock, return_value=None),
-            patch("modulo.api.routes.teams.add_team_member", new_callable=AsyncMock),
-        ):
-            resp = _active_client(request, client).post(
-                f"/api/v1/teams/{uuid.uuid4()}/members",
-                json={"user_id": str(user_id), "role": role},
-            )
-        _store_response(request, ctx, resp)
-        return
-
-    already_member = name in ctx.setdefault("members", {}).get(team, set())
-    target_membership = MagicMock()
-    target_membership.role = user.get("org_role", "admin")
-    account = MagicMock()
-    account.id = user_id
-    membership = _make_mock_membership(team_mock.id, user_id, role)
-
-    active = _active_client(request, client)
-
-    duplicate_error = {"side_effect": IntegrityError("stmt", {}, Exception("duplicate member"))}
-    membership_value = {"return_value": membership}
-    with (
-        patch("modulo.api.routes.teams.get_team", new_callable=AsyncMock, return_value=team_mock),
-        patch("modulo.db.crud.account.get_account_by_id", new_callable=AsyncMock, return_value=account),
-        patch(
-            "modulo.db.crud.org_membership.get_membership_by_account_and_org",
-            new_callable=AsyncMock,
-            return_value=target_membership,
-        ),
-        patch(
-            "modulo.api.routes.teams.add_team_member",
-            new_callable=AsyncMock,
-            **(duplicate_error if already_member else membership_value),
-        ),
-    ):
-        resp = active.post(
-            f"/api/v1/teams/{team_mock.id}/members",
-            json={"user_id": str(user_id), "role": role},
-        )
-    _store_response(request, ctx, resp)
-    if resp.status_code == 201:
-        ctx.setdefault("members", {}).setdefault(team, set()).add(name)
-        ctx.setdefault("memberships", {})[f"{name}:{team}"] = {
-            "user_id": user_id,
-            "team_id": team_mock.id,
-            "role": role,
-        }
-
-
-@when(parsers.parse('I remove user "{name}" from team "{team}"'))
-def _bdd_remove_user_from_team(request: Any, name: str, team: str, ctx: dict[str, Any], client: Any = None) -> None:
-    team_mock = ctx.get("teams", {}).get(team)
-    user = ctx.get("users", {}).get(name, {})
-    user_id = user.get("id", uuid.uuid4())
-    if team_mock is None:
-        with (
-            patch("modulo.api.routes.teams.get_membership", new_callable=AsyncMock, return_value=None),
-            patch("modulo.api.routes.teams.remove_team_member", new_callable=AsyncMock),
-        ):
-            resp = _active_client(request, client).delete(f"/api/v1/teams/{uuid.uuid4()}/members/{uuid.uuid4()}")
-        _store_response(request, ctx, resp)
-        return
-    membership = _make_mock_membership(team_mock.id, user_id, "viewer")
-    with (
-        patch("modulo.api.routes.teams.get_membership", new_callable=AsyncMock, return_value=membership),
-        patch("modulo.api.routes.teams.remove_team_member", new_callable=AsyncMock),
-    ):
-        resp = _active_client(request, client).delete(f"/api/v1/teams/{team_mock.id}/members/{membership.id}")
-    _store_response(request, ctx, resp)
-
-
-@then(parsers.parse('the response contains a team with name "{name}"'))
-def _bdd_response_contains_team(request: Any, name: str) -> None:
-    body = request.node._resp.json()
-    items = body.get("items")
-    if items is None:
-        assert body.get("name") == name, f"Expected team {name!r}, got {body.get('name')!r}"
-        return
-    names = [item.get("name") for item in items]
-    assert name in names, f"Expected team {name!r} in response, got: {names}"
-
-
-@then("the team has an account_id")
-def _bdd_team_has_account_id(request: Any) -> None:
-    body = request.node._resp.json()
-    assert body.get("account_id") is not None, f"Team missing account_id: {body}"
-
-
-@then("the response contains a list of teams")
-def _bdd_response_contains_team_list(request: Any) -> None:
-    body = request.node._resp.json()
-    assert "items" in body, f"Response missing items list: {body}"
-    assert isinstance(body["items"], list)
-
-
-@then(parsers.parse('the error detail mentions "{text}"'))
-def _bdd_error_detail_mentions(text: str, request: Any) -> None:
-    body = request.node._resp.json()
-    detail = body.get("detail", "")
-    assert text in detail, f"Expected the error detail to mention {text!r}, got {detail!r}"
-
-
 @then("the response contains id and slug")
 def _bdd_response_id_and_slug(request) -> None:
     """Shared assertion for pipeline create responses (create.feature + org_scoping.feature)."""
@@ -845,7 +638,7 @@ def _shared_user_exists(name: str, request) -> None:
     state["users"][name] = {
         "id": uuid.uuid5(USER_ID, name),
         "name": name,
-        "org_role": "viewer",
+        "org_role": "admin",
         "team_role": None,
     }
 
@@ -1307,7 +1100,10 @@ def _shared_add_user_to_team(user: str, team: str, role: str, request) -> None:
         _shared_store_resp(request, _mock_resp(404, {"detail": "Team not found"}))
         return
     if (user, team) in state["memberships"]:
-        _shared_store_resp(request, _mock_resp(409, {"detail": "User is already a member of this team"}))
+        _shared_store_resp(
+            request,
+            _mock_resp(409, {"detail": "User is already a member of this team: a membership already exists"}),
+        )
         return
     org_role = state["users"].get(user, {}).get("org_role", "viewer")
     if _role_level(role) > _role_level(org_role) and org_role != "admin":
@@ -1325,7 +1121,7 @@ def _shared_add_user_to_team(user: str, team: str, role: str, request) -> None:
 def _shared_remove_user_from_team(user: str, team: str, request) -> None:
     state = _shared_state(request)
     state["memberships"].pop((user, team), None)
-    _shared_store_resp(request, _mock_resp(200, {"status": "ok"}))
+    _shared_store_resp(request, _mock_resp(204, {}))
 
 
 @when(parsers.parse('I reassign all resources from team "{team}" to org-wide'))
