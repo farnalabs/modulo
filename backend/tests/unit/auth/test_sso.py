@@ -846,18 +846,18 @@ class TestSamlProcessResponse:
         )
         encoded = base64.b64encode(xml.encode()).decode()
 
-        _validate_saml_response_destination(encoded, acs)
+        assert _validate_saml_response_destination(encoded, acs) is None
 
     def test_destination_absent_accepted(self) -> None:
         from modulo.auth.sso import _validate_saml_response_destination
 
         encoded = base64.b64encode(self.SAML_RESPONSE_XML.encode()).decode()
-        _validate_saml_response_destination(encoded, "https://app.example.com/api/v1/auth/saml/acs")
+        assert _validate_saml_response_destination(encoded, "https://app.example.com/api/v1/auth/saml/acs") is None
 
     def test_destination_garbled_response_skipped(self) -> None:
         from modulo.auth.sso import _validate_saml_response_destination
 
-        _validate_saml_response_destination("!!not-base64!!", "https://app.example.com/acs")
+        assert _validate_saml_response_destination("!!not-base64!!", "https://app.example.com/acs") is None
 
     async def test_saml_process_response_rejects_destination_mismatch(self) -> None:
         from modulo.auth.sso import saml_process_response
