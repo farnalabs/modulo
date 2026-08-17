@@ -64,39 +64,39 @@ Group-to-team mapping from OIDC/SAML identity provider group claims to Modulo te
 - [x] PUT group mappings returns 422 for invalid mapping format
 - [x] OIDC callback returns 401 when ID token validation fails
 - [x] SAML ACS returns 401 when SAML response validation fails (signature, expiry, destination)
-- [x] IdP unreachable during callback raises ValueError → 400/401, no degraded mode
+- [x] IdP unreachable during callback raises ValueError â†’ 400/401, no degraded mode
 - [x] SSO provider lookup by `client_id` returns 404 if provider not found
-- [x] ProgrammingError caught → 501 on all DB-accessing handlers (admin routes + OIDC/SAML callback routes)
+- [x] ProgrammingError caught â†’ 501 on all DB-accessing handlers (admin routes + OIDC/SAML callback routes)
 
 ### Resilience
 - [x] External IdP HTTP failures (discovery, token exchange, metadata fetch) caught and wrapped as ValueError
 - [x] XML parse failures (SAML response, IdP metadata) caught and wrapped as ValueError
-- [x] DB unavailable → ProgrammingError caught at route level → 501 Not Implemented
-- [x] SQLAlchemy errors → caught at route level → 503 Service Unavailable
-- [x] Audit event logging failures are non-fatal (caught with log warning) — does not block SSO flow
+- [x] DB unavailable â†’ ProgrammingError caught at route level â†’ 501 Not Implemented
+- [x] SQLAlchemy errors â†’ caught at route level â†’ 503 Service Unavailable
+- [x] Audit event logging failures are non-fatal (caught with log warning) â€” does not block SSO flow
 - [x] Invalid group mapping entries (bad team_id UUID, missing keys) logged and skipped, not fatal
-- [x] SAML clock skew detected and logged (5-minute tolerance) — does not block authentication
+- [x] SAML clock skew detected and logged (5-minute tolerance) â€” does not block authentication
 
 ### Edge Cases
 - [x] OIDC token with no `email` claim falls back to `sub` claim
 - [x] OIDC token with neither `email` nor `sub` raises error
 - [x] SAML response with no email attribute falls back to NameID
 - [x] SAML response with no email or NameID raises error
-- [x] OIDC provider with null/empty client_id — `_lookup_provider_by_client_id` may return None silently
-- [x] SAML response with malformed base64/base64 padding → caught
-- [x] SAML response with invalid XML → caught (defusedxml)
-- [x] Duplicate SSO provider names per org → caught via `with_for_update()` + ValueError
-- [x] OIDC `groups` claim is not a list → coerced to `[]` (groups mapping silently skipped)
-- [x] SAML groups attribute with leading/trailing whitespace → stripped via `.strip()`
+- [x] OIDC provider with null/empty client_id â€” `_lookup_provider_by_client_id` may return None silently
+- [x] SAML response with malformed base64/base64 padding â†’ caught
+- [x] SAML response with invalid XML â†’ caught (defusedxml)
+- [x] Duplicate SSO provider names per org â†’ caught via `with_for_update()` + ValueError
+- [x] OIDC `groups` claim is not a list â†’ coerced to `[]` (groups mapping silently skipped)
+- [x] SAML groups attribute with leading/trailing whitespace â†’ stripped via `.strip()`
 
 ## Known Gaps
 
-- SSO provider lookup during OIDC callback uses `client_id` — no fallback if provider has empty/null `client_id`
-- `MODULO_OIDC_PROVIDERS` env var approach deprecated in favour of DB-backed admin UI — migration layer may lose group mapping config
+- SSO provider lookup during OIDC callback uses `client_id` â€” no fallback if provider has empty/null `client_id`
+- `MODULO_OIDC_PROVIDERS` env var approach deprecated in favour of DB-backed admin UI â€” migration layer may lose group mapping config
 - No integration tests exist for the full OIDC/SAML group mapping flow (only unit tests with mocked sessions)
-- OIDC callback does not have a `try/except` for `_lookup_provider_by_client_id` or `apply_group_mappings` — a ProgrammingError from within these would propagate to the route handler's ProgrammingError catch, but a non-SQL error (e.g. ValueError from bad UUID in group_mappings) would surface as 401 instead of a more specific error
-- `oidc_get_authorize_url` and `saml_get_auth_url` handle IdP unreachable as ValueError → 400, but the frontend receives no structured error — the user sees a generic "Bad Request" page
-- SAML clock skew detection logs a warning but does not expose this to the frontend — admins troubleshooting failed logins see no clock skew indicator
-- `apply_group_mappings` silently skips mappings with invalid `team_id` UUID (logs a warning only) — no feedback to the admin who configured the mapping
-- No frontend view exists for configuring group mappings — only accessible via API/MCP
-- OIDC `groups` claim type coercion (`not isinstance(raw_groups, list) → raw_groups = []`) silently discards non-list values — an IdP sending groups as a comma-separated string loses the data entirely
+- OIDC callback does not have a `try/except` for `_lookup_provider_by_client_id` or `apply_group_mappings` â€” a ProgrammingError from within these would propagate to the route handler's ProgrammingError catch, but a non-SQL error (e.g. ValueError from bad UUID in group_mappings) would surface as 401 instead of a more specific error
+- `oidc_get_authorize_url` and `saml_get_auth_url` handle IdP unreachable as ValueError â†’ 400, but the frontend receives no structured error â€” the user sees a generic "Bad Request" page
+- SAML clock skew detection logs a warning but does not expose this to the frontend â€” admins troubleshooting failed logins see no clock skew indicator
+- `apply_group_mappings` silently skips mappings with invalid `team_id` UUID (logs a warning only) â€” no feedback to the admin who configured the mapping
+- No frontend view exists for configuring group mappings â€” only accessible via API/MCP
+- OIDC `groups` claim type coercion (`not isinstance(raw_groups, list) â†’ raw_groups = []`) silently discards non-list values â€” an IdP sending groups as a comma-separated string loses the data entirely
