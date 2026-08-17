@@ -504,6 +504,52 @@ def _check_sandbox_output_schema(node: dict[str, Any], nid: str, result: Validat
         )
 
 
+_SANDBOX_EGRESS_POLICIES = frozenset({"default", "deny_all"})
+_SANDBOX_RESOURCE_LIMIT_KEYS = frozenset(
+    {"cpu_count", "memory_mb", "disk_mb", "max_processes", "max_fds", "max_sockets"}
+)
+
+
+def _check_sandbox_egress(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
+    """Sandbox check 9: egress_policy must be None / "default" / "deny_all" (FAR-296)."""
+    egress_policy = node.get("egress_policy")
+    if egress_policy is None:
+        return
+    if not isinstance(egress_policy, str) or egress_policy not in _SANDBOX_EGRESS_POLICIES:
+        result.error(
+            "SANDBOX_EGRESS_POLICY_INVALID",
+            f"Sandbox agent node '{nid}' egress_policy {egress_policy!r} is invalid — "
+            "expected None, 'default' or 'deny_all'",
+            node_id=nid,
+        )
+
+
+def _check_sandbox_resource_limits(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
+    """Sandbox check 10: resource_limits keys must be a known subset (FAR-296, fail-closed).
+
+    Unknown keys are a hard ERROR — never silently dropped, because a typo
+    would otherwise disable a limit the operator intended to enforce.
+    """
+    resource_limits = node.get("resource_limits")
+    if resource_limits is None:
+        return
+    if not isinstance(resource_limits, dict):
+        result.error(
+            "SANDBOX_RESOURCE_LIMITS_INVALID",
+            f"Sandbox agent node '{nid}' resource_limits must be an object",
+            node_id=nid,
+        )
+        return
+    unknown = set(resource_limits) - _SANDBOX_RESOURCE_LIMIT_KEYS
+    if unknown:
+        result.error(
+            "SANDBOX_RESOURCE_LIMITS_UNKNOWN_KEY",
+            f"Sandbox agent node '{nid}' resource_limits contains unknown keys "
+            f"{sorted(unknown)} — allowed keys are {sorted(_SANDBOX_RESOURCE_LIMIT_KEYS)}",
+            node_id=nid,
+        )
+
+
 def _check_sandbox_loop_intercept(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
     """Sandbox check 8: loop_intercept config shape (FAR-211).
 
@@ -1937,6 +1983,8 @@ class GraphValidator:
             _check_sandbox_env_vars(node, nid, _reserved_env_prefixes, result)
             _check_sandbox_output_schema(node, nid, result)
             _check_sandbox_loop_intercept(node, nid, result)
+            _check_sandbox_egress(node, nid, result)
+            _check_sandbox_resource_limits(node, nid, result)
 
     # ------------------------------------------------------------------
     # Pipeline retry_policy

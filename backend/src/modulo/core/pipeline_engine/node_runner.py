@@ -2062,6 +2062,29 @@ def make_sandbox_agent_fn(
     sandbox_mode, agent_command, _sandbox_mode_config = _validate_sandbox_mode_config(node_def)
     agent_prompt_template: str = str(_sandbox_mode_config.get("agent_prompt") or "")
     template_id: str = node_def.get("template_id", "opencode")
+    # FAR-296 Phase 3: egress control + resource-limit config surface. The
+    # shared validators (sandbox_mode) have already rejected any unknown
+    # egress_policy / resource_limits keys at save-time AND here at run-time.
+    egress_policy: str | None = node_def.get("egress_policy")
+    resource_limits: dict[str, Any] | None = node_def.get("resource_limits")
+    # FAR-296 Phase 3: script mode that REQUESTS enforcement (egress denial or
+    # resource limits) requires a REMOTE E2B provider (the E2B API key) because
+    # local providers have no egress/resource enforcement point — deny_all /
+    # resource_limits would silently no-op. Fail closed ONLY when enforcement is
+    # actually requested; a plain script-mode node with no egress/resource config
+    # runs fine on any provider (there is nothing to enforce). This keeps the
+    # refusal scoped to exactly the security concern it guards.
+    if (
+        sandbox_mode == "script"
+        and (egress_policy == "deny_all" or resource_limits)
+        and not (os.environ.get("MODULO_E2B_API_KEY") or os.environ.get("E2B_API_KEY"))
+    ):
+        raise ValueError(
+            f"sandbox_agent node '{node_id}' mode='script' requests egress/resource "
+            "enforcement (egress_policy='deny_all' or resource_limits) which requires a "
+            "remote E2B provider (set MODULO_E2B_API_KEY or E2B_API_KEY) — local "
+            "providers have no egress or resource-limit enforcement point for script mode"
+        )
     output_schema_json: dict[str, Any] | None = node_def.get("output_schema_json")
     sandbox_timeout: int = node_def.get("timeout_seconds", 1200)
     stall_timeout_override: Any = node_def.get("stall_timeout_seconds")
@@ -2493,8 +2516,20 @@ def make_sandbox_agent_fn(
                 )
             dispatch_marker_set = True
 
+            # FAR-296 Phase 3: egress control + resource limits. deny_all maps
+            # to allow_internet_access=False; resource_limits is carried as
+            # sandbox metadata (e2b tags) so a server-side template/config can
+            # enforce them.
+            _metadata: dict[str, str] = {}
+            if resource_limits:
+                _metadata["resource_limits"] = json.dumps(resource_limits)
             sandbox = await asyncio.wait_for(
-                AsyncSandbox.create(template=template_id, timeout=sandbox_timeout),
+                AsyncSandbox.create(
+                    template=template_id,
+                    timeout=sandbox_timeout,
+                    allow_internet_access=(egress_policy != "deny_all"),
+                    metadata=_metadata or None,
+                ),
                 timeout=min(sandbox_timeout, 120),
             )
             assert sandbox is not None, "Sandbox was not created before use"
@@ -2729,11 +2764,19 @@ def make_sandbox_agent_fn(
                     "MODULO_PIPELINE_ID": pipeline_id,
                     "MODULO_ORG_ID": org_id,
                     "MODULO_INPUT_PAYLOAD": _input_json,
-                    "APP_MODULO_OPENCODE_API_KEY": os.environ.get("APP_MODULO_OPENCODE_API_KEY", ""),
-                    "GITHUB_TOKEN": os.environ.get("GITHUB_DOGFOOD_PAT_ALL", "")
-                    or os.environ.get("GITHUB_DOGFOOD_PAT_WR", "")
-                    or os.environ.get("GITHUB_TOKEN", ""),
                 }
+                if sandbox_mode != "script":
+                    # LLM mode injects the opencode API key + GitHub PAT for the
+                    # agent loop. Script mode does NOT auto-inject these
+                    # long-lived host credentials — a script only gets what the
+                    # pipeline explicitly passes via env_vars (credential
+                    # hygiene, FAR-296 Phase 3).
+                    sandbox_envs["APP_MODULO_OPENCODE_API_KEY"] = os.environ.get("APP_MODULO_OPENCODE_API_KEY", "")
+                    sandbox_envs["GITHUB_TOKEN"] = (
+                        os.environ.get("GITHUB_DOGFOOD_PAT_ALL", "")
+                        or os.environ.get("GITHUB_DOGFOOD_PAT_WR", "")
+                        or os.environ.get("GITHUB_TOKEN", "")
+                    )
                 sandbox_envs.update(env_vars_extra)
                 # FAR-296 Phase 2 fencing lease (script mode only): persist the
                 # execution claim IMMEDIATELY BEFORE the script process starts so

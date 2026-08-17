@@ -410,6 +410,12 @@ class PipelineGraphNode(BaseModel):
     agent_command: str | None = None
     agent_prompt: str | None = None
     script_command: str | None = None
+    # FAR-296 Phase 3: egress control + resource-limit config surface.
+    # egress_policy: "default" (internet allowed, e2b default) or "deny_all"
+    # (allow_internet_access=False). resource_limits: a known-subset dict carried
+    # as sandbox metadata so a server-side template/config can enforce them.
+    egress_policy: Literal["default", "deny_all"] | None = None
+    resource_limits: dict[str, Any] | None = None
     # FAR-228: opt-in idempotency gate for side-effecting sandbox nodes. When
     # non-empty, a FULL-LINE occurrence of this literal in the sandbox output
     # marks the run's delivery as done (raw-output marker ``delivery_done``),
@@ -454,9 +460,15 @@ class PipelineGraphNode(BaseModel):
             # MCP update_pipeline_graph, config linter) so save-time and run-time
             # agreement is guaranteed. Imported from the lightweight sandbox_mode
             # module (no LangGraph) to keep the API layer import-linter-clean.
-            from modulo.core.pipeline_engine.sandbox_mode import _validate_sandbox_mode_config
+            from modulo.core.pipeline_engine.sandbox_mode import (
+                _validate_sandbox_egress_config,
+                _validate_sandbox_mode_config,
+                _validate_sandbox_resource_limits_config,
+            )
 
             _validate_sandbox_mode_config(self.model_dump())
+            _validate_sandbox_egress_config(self.model_dump())
+            _validate_sandbox_resource_limits_config(self.model_dump())
             if not self.template_id:
                 raise ValueError("Sandbox agent nodes require a template_id (e.g. 'opencode')")
             self._validate_sandbox_env_vars()

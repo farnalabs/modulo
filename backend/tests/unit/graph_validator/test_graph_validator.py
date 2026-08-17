@@ -1253,3 +1253,53 @@ async def test_loop_intercept_empty_patterns_is_warning_not_error():
     assert result.is_valid
     assert any(i.code == "SANDBOX_LOOP_INTERCEPT_EMPTY_PATTERNS" for i in result.issues)
     assert not any(i.code == "SANDBOX_LOOP_INTERCEPT_MALFORMED" for i in result.issues)
+
+
+# ---------------------------------------------------------------------------
+# FAR-296 Phase 3a: egress policy + resource limits
+# ---------------------------------------------------------------------------
+
+
+async def test_sandbox_egress_valid_values_pass():
+    """Valid egress_policy values (None / default / deny_all) pass graph save."""
+    for policy in (None, "default", "deny_all"):
+        overrides = {} if policy is None else {"egress_policy": policy}
+        graph = {"nodes": [_sandbox_node(**overrides)], "edges": []}
+        result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+        assert result.is_valid
+        assert not any(i.code == "SANDBOX_EGRESS_POLICY_INVALID" for i in result.issues)
+
+
+async def test_sandbox_egress_invalid_value_is_error():
+    """An egress_policy outside default/deny_all is a hard error (fail-closed)."""
+    graph = {"nodes": [_sandbox_node(egress_policy="allow_all")], "edges": []}
+    result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+    assert not result.is_valid
+    assert any(i.code == "SANDBOX_EGRESS_POLICY_INVALID" for i in result.issues)
+
+
+async def test_sandbox_resource_limits_known_keys_pass():
+    """resource_limits with known keys passes graph save."""
+    graph = {
+        "nodes": [_sandbox_node(resource_limits={"cpu_count": 2, "memory_mb": 512})],
+        "edges": [],
+    }
+    result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+    assert result.is_valid
+    assert not any(i.code.startswith("SANDBOX_RESOURCE_LIMITS_") for i in result.issues)
+
+
+async def test_sandbox_resource_limits_unknown_key_is_error():
+    """An unknown resource_limits key is a hard error (fail-closed, never dropped)."""
+    graph = {"nodes": [_sandbox_node(resource_limits={"gpu": 1})], "edges": []}
+    result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+    assert not result.is_valid
+    assert any(i.code == "SANDBOX_RESOURCE_LIMITS_UNKNOWN_KEY" for i in result.issues)
+
+
+async def test_sandbox_resource_limits_non_dict_is_error():
+    """A non-dict resource_limits value is a hard error."""
+    graph = {"nodes": [_sandbox_node(resource_limits=[1, 2])], "edges": []}
+    result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+    assert not result.is_valid
+    assert any(i.code == "SANDBOX_RESOURCE_LIMITS_INVALID" for i in result.issues)
