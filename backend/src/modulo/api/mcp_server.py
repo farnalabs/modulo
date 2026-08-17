@@ -5755,6 +5755,93 @@ def _extract_oauth_client_credentials(
     )
 
 
+async def _exchange_authorization_code(
+    creds: dict[str, str], settings: Any
+) -> tuple[dict[str, Any] | None, JSONResponse | None]:
+    """Exchange an authorization code for an access/refresh token pair.
+
+    Runs the OAuth token exchange steps inside a DB transaction: validate the
+    client secret, set RLS org context, consume the authorization code (PKCE
+    verified inside), re-verify the consenting account's LIVE role against the
+    granted scopes (ADR 017), create a token family, and mint the token pair.
+    Returns ``(response_dict, error)`` — ``response_dict`` is the success body
+    on success; OAuth/DB exceptions propagate to the caller's ``try/except``.
+    """
+    from modulo.auth.oauth import (
+        consume_authorization_code,
+        create_oauth_access_token,
+        create_oauth_refresh_token,
+        create_oauth_token_family,
+        validate_client_secret,
+        verify_live_role_covers_scopes,
+    )
+
+    session_factory = _get_session_factory()
+    async with session_factory() as s, s.begin():
+        # Step 1: Validate client credentials to discover org_id.
+        client = await validate_client_secret(s, creds["client_id"], creds["client_secret"])
+
+        # Step 2: Set RLS context for the client's org.
+        await set_rls_org(s, client.organisation_id)
+
+        # Step 3: Consume the authorization code (PKCE verified inside).
+        auth_code = await consume_authorization_code(
+            s,
+            code=creds["code"],
+            client_id=creds["client_id"],
+            redirect_uri=creds["redirect_uri"],
+            client_secret=creds["client_secret"],
+            code_verifier=creds["code_verifier"],
+        )
+
+        # Step 4: The consenting account's LIVE role must still cover the
+        # granted scopes — a demoted/removed account is denied (ADR 017).
+        await verify_live_role_covers_scopes(
+            s,
+            account_id=auth_code.account_id,
+            org_id=client.organisation_id,
+            scopes=auth_code.scopes.split(),
+        )
+
+        # Step 5: Create a new token family.
+        family_id, sequence = await create_oauth_token_family(
+            s,
+            client_id=creds["client_id"],
+            org_id=client.organisation_id,
+        )
+
+        scopes_list = auth_code.scopes.split()
+        access_token = create_oauth_access_token(
+            creds["client_id"],
+            settings.secret_key,
+            organisation_id=str(client.organisation_id),
+            account_id=str(auth_code.account_id),
+            scopes=scopes_list,
+            token_family=family_id,
+            token_sequence=sequence,
+        )
+        refresh_token = create_oauth_refresh_token(
+            creds["client_id"],
+            settings.secret_key,
+            organisation_id=str(client.organisation_id),
+            account_id=str(auth_code.account_id),
+            scopes=scopes_list,
+            token_family=family_id,
+            token_sequence=sequence,
+        )
+
+    return (
+        {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "Bearer",  # nosec B105 - RFC 6750 token_type label, not a credential
+            "expires_in": 3600,
+            "scope": " ".join(scopes_list),
+        },
+        None,
+    )
+
+
 async def _oauth_token(request: Request) -> JSONResponse:
     """POST /mcp/oauth/token — exchange code for access token.
 
@@ -5775,21 +5862,11 @@ async def _oauth_token(request: Request) -> JSONResponse:
     if cred_err:
         return cred_err
 
-    code = creds["code"]
-    redirect_uri = creds["redirect_uri"]
     client_id = creds["client_id"]
-    code_verifier = creds["code_verifier"]
-    client_secret = creds["client_secret"]
 
     from modulo.auth.oauth import (
         InvalidClientError,
         InvalidGrantError,
-        consume_authorization_code,
-        create_oauth_access_token,
-        create_oauth_refresh_token,
-        create_oauth_token_family,
-        validate_client_secret,
-        verify_live_role_covers_scopes,
     )
 
     settings = get_settings()
@@ -5800,69 +5877,11 @@ async def _oauth_token(request: Request) -> JSONResponse:
         )
 
     try:
-        session_factory = _get_session_factory()
-        async with session_factory() as s, s.begin():
-            # Step 1: Validate client credentials to discover org_id.
-            client = await validate_client_secret(s, client_id, client_secret)
-
-            # Step 2: Set RLS context for the client's org.
-            await set_rls_org(s, client.organisation_id)
-
-            # Step 3: Consume the authorization code (PKCE verified inside).
-            auth_code = await consume_authorization_code(
-                s,
-                code=code,
-                client_id=client_id,
-                redirect_uri=redirect_uri,
-                client_secret=client_secret,
-                code_verifier=code_verifier,
-            )
-
-            # Step 4: The consenting account's LIVE role must still cover the
-            # granted scopes — a demoted/removed account is denied (ADR 017).
-            await verify_live_role_covers_scopes(
-                s,
-                account_id=auth_code.account_id,
-                org_id=client.organisation_id,
-                scopes=auth_code.scopes.split(),
-            )
-
-            # Step 5: Create a new token family.
-            family_id, sequence = await create_oauth_token_family(
-                s,
-                client_id=client_id,
-                org_id=client.organisation_id,
-            )
-
-            scopes_list = auth_code.scopes.split()
-            access_token = create_oauth_access_token(
-                client_id,
-                settings.secret_key,
-                organisation_id=str(client.organisation_id),
-                account_id=str(auth_code.account_id),
-                scopes=scopes_list,
-                token_family=family_id,
-                token_sequence=sequence,
-            )
-            refresh_token = create_oauth_refresh_token(
-                client_id,
-                settings.secret_key,
-                organisation_id=str(client.organisation_id),
-                account_id=str(auth_code.account_id),
-                scopes=scopes_list,
-                token_family=family_id,
-                token_sequence=sequence,
-            )
-
-        return JSONResponse(
-            {
-                "access_token": access_token,
-                "refresh_token": refresh_token,
-                "token_type": "Bearer",  # nosec B105 - RFC 6750 token_type label, not a credential
-                "expires_in": 3600,
-                "scope": " ".join(scopes_list),
-            }
-        )
+        token_resp, token_err = await _exchange_authorization_code(creds, settings)
+        if token_err:
+            return token_err
+        assert token_resp is not None
+        return JSONResponse(token_resp)
     except (InvalidGrantError, InvalidClientError):
         return JSONResponse(
             {"error": "invalid_grant", "detail": "Authorization code exchange failed"},
