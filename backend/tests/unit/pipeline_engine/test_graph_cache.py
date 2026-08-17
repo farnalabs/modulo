@@ -480,6 +480,41 @@ def test_gate_kickback_router_falls_back_to_normal_without_decision():
     assert router({"some_key": "value"}) == "normal_target"
 
 
+def test_gate_kickback_router_routes_rejection_to_correction_target():
+    """FAR-210 reject→correction edge: a rejection routes to correction_target
+    (not the plain reject target) and stamps the _correction_pending marker."""
+    router = _make_gate_kickback_router(
+        "normal_target",
+        "reject_target",
+        correction_target="correction_node",
+    )
+    state: dict[str, Any] = {"_hitl_decision": {"action": "rejected"}}
+    assert router(state) == "correction_node"
+    assert state["_correction_pending"] == "correction_node"
+
+
+def test_gate_kickback_router_without_correction_target_kicks_back_to_reject():
+    """Back-compat: without correction_target, a rejection still kicks back to
+    reject_target and stamps no correction marker (T1's recover_node override
+    stays the break-glass path)."""
+    router = _make_gate_kickback_router("normal_target", "reject_target")
+    state: dict[str, Any] = {"_hitl_decision": {"action": "rejected"}}
+    assert router(state) == "reject_target"
+    assert "_correction_pending" not in state
+
+
+def test_gate_kickback_router_approval_ignores_correction_target():
+    """Approval (and absence of a decision) still route to normal_target even
+    when a correction_target is configured — only a rejection is diverted."""
+    router = _make_gate_kickback_router(
+        "normal_target",
+        "reject_target",
+        correction_target="correction_node",
+    )
+    assert router({"_hitl_decision": {"action": "approved"}}) == "normal_target"
+    assert router({}) == "normal_target"
+
+
 # ---------------------------------------------------------------------------
 # Kick-back graph compilation — structural tests
 # ---------------------------------------------------------------------------
@@ -502,6 +537,36 @@ def test_gate_with_reject_target_compiles():
                     "label": "Review",
                     "description": "Gate",
                     "reject_target": "kickback_target",
+                    "claim_expiry_minutes": 60,
+                    "human_only": False,
+                },
+            },
+        ],
+    }
+    compiled = build_graph_from_json(graph)
+    assert compiled is not None
+
+
+def test_gate_with_correction_target_compiles():
+    """A gate whose hitl_gate_config declares correction_target compiles and the
+    correction node is registered as a reachable target (reject→correction edge)."""
+    graph: dict[str, Any] = {
+        "nodes": [
+            {"id": "source", "role": None},
+            {"id": "target", "role": None},
+            {"id": "kickback_target", "role": None},
+            {"id": "correction_node", "role": None},
+        ],
+        "edges": [
+            {
+                "source": "source",
+                "target": "target",
+                "type": "normal",
+                "hitl_gate_config": {
+                    "label": "Review",
+                    "description": "Gate",
+                    "reject_target": "kickback_target",
+                    "correction_target": "correction_node",
                     "claim_expiry_minutes": 60,
                     "human_only": False,
                 },

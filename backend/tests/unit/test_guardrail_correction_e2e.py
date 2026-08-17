@@ -460,3 +460,73 @@ async def test_e2e_resume_revalidates_produced_output():
     )
     assert outcome["result"]["verdict"] == CorrectionVerdict.RESOLVED.value
     assert outcome["record"].feedback_status == "resolved"
+
+
+# ---------------------------------------------------------------------------
+# Redact+correct HARD-BLOCK through the real FeedbackManager path (fail-closed
+# before the LM ever runs — an exfiltration channel for the data redaction
+# protects).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_e2e_redact_correct_hard_blocked_before_lm():
+    from modulo.core.guardrails.correction import RedactCorrectBlockedError
+
+    guardrail = _guardrail(action="redact")
+    correction = _correction()
+
+    class _ShouldNeverRun:
+        async def invoke(self, messages: list[Any], **kwargs: Any) -> Any:
+            raise AssertionError("LM must NOT run for a redact+correct binding")
+
+    with pytest.raises(RedactCorrectBlockedError, match="HARD-BLOCKED"):
+        await _run_scenario(
+            backend=_ShouldNeverRun(),
+            correction=correction,
+            guardrail=guardrail,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Resume with an exhausted budget + still-violating produced output records
+# correction_interrupted and escalates the record (never re-runs the LM).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_e2e_resume_budget_exhausted_records_interrupted():
+    from modulo.core.guardrails.correction import build_idempotency_key
+
+    guardrail = _guardrail()
+    correction = _correction(max_attempts=1)
+    redacted = redact_payload({"body": "secret: hunter2"}, correction.input_redaction_patterns)
+    idem_key = build_idempotency_key(
+        org_id=_ORG,
+        run_id=_RUN,
+        node_id="node_a",
+        correction_id=correction.id,
+        redacted_input=redacted,
+    )
+    prior_state = {
+        "idempotency_key": idem_key,
+        "attempt": 1,
+        "input_fingerprint": fingerprint_state(redacted),
+        "produced_output": {"body": "123456789012345678901"},
+    }
+
+    class _Boom:
+        async def invoke(self, messages: list[Any], **kwargs: Any) -> Any:
+            raise AssertionError("LM must NOT re-run on resume")
+
+    outcome = await _run_scenario(
+        backend=_Boom(),
+        correction=correction,
+        guardrail=guardrail,
+        prior_state=prior_state,
+    )
+    # attempt (1) >= max_attempts (1) and the re-validation of the recorded
+    # produced output still fails -> correction_interrupted, escalated.
+    assert outcome["result"]["verdict"] == CorrectionVerdict.INTERRUPTED.value
+    assert outcome["result"]["needs_human_review"] is True
+    assert outcome["record"].feedback_status == "escalated"
