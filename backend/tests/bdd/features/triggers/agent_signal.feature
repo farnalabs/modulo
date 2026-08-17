@@ -54,7 +54,7 @@ Feature: Agent Signal Triggers
   Scenario: Invalid snapshot_id in config
     Given pipeline "child-pipeline" has an agent_signal trigger with snapshot_id "not-a-uuid"
     When node "extract" completes in pipeline "pipeline-a"
-    Then a child run is created with a valid UUID snapshot_id
+    Then the signal is skipped with reason "invalid_snapshot_id"
 
   Scenario: TriggerEvent logged on all outcomes
     Given pipeline "child-pipeline" has an agent_signal trigger watching source pipeline "pipeline-a" node "extract"

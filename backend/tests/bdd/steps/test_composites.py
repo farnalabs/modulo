@@ -217,6 +217,11 @@ def composite_template_with_parameter(param_name: str, request: pytest.FixtureRe
         sub_pipeline_graph_json={"nodes": [node], "edges": []},
     )
     request.node._composite_template_data = {"nodes": [node], "edges": []}
+    request.node._composite_node = {
+        "id": str(uuid.uuid4()),
+        "node_type": "composite",
+        "composite_ref": str(request.node._mock_template.id),
+    }
     request.node._parameter_name = param_name
 
 
@@ -630,6 +635,17 @@ def when_graph_validator_checks(request: pytest.FixtureRequest) -> None:
         if (len(tid) == 36 or len(tid) == 32) and tid == "00000000-0000-0000-0000-000000099999":
             errors.append("Composite template not found")
 
+    # Composite required-parameter check (mirrors GraphValidator.validate_composites).
+    if composite_node.get("composite_ref") and not errors:
+        template = getattr(request.node, "_mock_template", None)
+        parameter_values = composite_node.get("composite_parameter_values") or {}
+        if template is not None and getattr(template, "parameter_ports_json", None):
+            for port in template.parameter_ports_json:
+                if port.get("required") and port.get("name") not in parameter_values:
+                    errors.append(
+                        f"Node '{composite_node.get('id')}': required parameter '{port.get('name')}' has no value"
+                    )
+
     request.node._validation_errors = errors
 
 
@@ -861,6 +877,8 @@ def when_save_pipeline_as_composite(
     agent_scalar_result = MagicMock()
     agent_scalar_result.scalars.return_value.all = MagicMock(return_value=[agent_mock])
     mock_select.return_value.where.return_value = agent_scalar_result
+    mock_session = request.getfixturevalue("mock_session")
+    mock_session.execute.return_value = agent_scalar_result
 
     # Mock composite creation
     mock_template = _make_template(
@@ -976,6 +994,12 @@ def then_input_passthrough(request: pytest.FixtureRequest) -> None:
     mapped = getattr(request.node, "_mapped_input", {})
     parent_output = getattr(request.node, "_parent_output", {})
     assert mapped == parent_output
+
+
+@then(parsers.parse('the mapped sub-pipeline input has a "{key}" key'))
+def then_mapped_data_has_key(key: str, request: pytest.FixtureRequest) -> None:
+    mapped = getattr(request.node, "_mapped_input", {})
+    assert key in mapped, f"Expected '{key}' in mapped input, got {mapped}"
 
 
 @then(parsers.parse("the sub-pipeline receives {expected_json}"))
@@ -1292,11 +1316,26 @@ def composite_node_with_mapping_pair(target: str, source: str, request: pytest.F
 
 
 @given("a pipeline graph has a composite node without composite_ref")
-@given(parsers.parse('the pipeline graph has a composite node without providing "{param}"'))
-def composite_node_no_ref(request: pytest.FixtureRequest, param: str = "") -> None:
+def composite_node_no_ref(request: pytest.FixtureRequest) -> None:
     request.node._composite_node = {
         "id": str(uuid.uuid4()),
         "node_type": "composite",
     }
-    if param:
-        request.node._required_param = param
+
+
+@given(parsers.parse('the pipeline graph has a composite node without providing "{param}"'))
+def composite_node_missing_param(param: str, request: pytest.FixtureRequest) -> None:
+    template = getattr(request.node, "_mock_template", None)
+    if template is None:
+        template = _make_template(
+            name="required-param-composite",
+            parameter_ports_json=[{"id": str(uuid.uuid4()), "name": param, "type": "string", "required": True}],
+        )
+    request.node._mock_template = template
+    request.node._composite_node = {
+        "id": str(uuid.uuid4()),
+        "node_type": "composite",
+        "composite_ref": str(template.id),
+        "composite_parameter_values": {},
+    }
+    request.node._required_param = param

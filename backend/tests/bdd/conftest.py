@@ -78,6 +78,10 @@ def make_mock_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    nested_cm = AsyncMock()
+    nested_cm.__aenter__ = AsyncMock(return_value=None)
+    nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=nested_cm)
     scalar_mock = MagicMock()
     scalar_mock.all = MagicMock(return_value=[])
     team_mock = MagicMock()
@@ -95,6 +99,7 @@ def make_mock_session() -> AsyncMock:
     hitl_result.scalar = MagicMock(return_value=0)
     hitl_result.scalars = MagicMock(return_value=scalar_mock)
     hitl_result.first = MagicMock(return_value=MagicMock())
+    hitl_result.all = MagicMock(return_value=[])
     session.execute.return_value = hitl_result
     session.scalar = AsyncMock(return_value=0)
     session.scalar_one = AsyncMock(return_value=0)

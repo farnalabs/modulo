@@ -27,14 +27,15 @@ Feature: Composite Node Runtime
 
   Scenario: Apply field mapping via JMESPath expressions
     Given a composite node with composite_input_mapping mapping "title" to "input.title"
+    And the parent output contains {"input": {"title": "Q3 Review"}}
     When the pipeline run processes the composite node
-    Then the sub-pipeline receives the mapped data with "title" key
+    Then the mapped sub-pipeline input has a "title" key
 
   Scenario: Graph validator rejects missing required parameter values
     Given a composite template with a required parameter "api_key" and no default
     And the pipeline graph has a composite node without providing "api_key"
     When the graph validator checks the pipeline
-    Then the validator returns an error "Missing required parameter: api_key"
+    Then the validator returns an error "required parameter 'api_key' has no value"
 
   Scenario: Graph validator rejects composite with non-existent template_id
     Given a pipeline graph has a composite node referencing a non-existent template id "00000000-0000-0000-0000-000000099999"

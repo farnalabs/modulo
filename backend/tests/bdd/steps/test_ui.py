@@ -510,6 +510,12 @@ def _two_nodes_on_canvas(page: Page) -> None:
     assert nodes.count() >= 2, "Expected at least 2 nodes on the canvas"
 
 
+@given("there is a node on the pipeline canvas")
+def _one_node_on_canvas(page: Page) -> None:
+    nodes = page.locator('[data-testid="canvas-node"]')
+    assert nodes.count() >= 1, "Expected at least 1 node on the canvas"
+
+
 @when("I drag an agent onto the canvas")
 def _drag_agent_onto_canvas(page: Page) -> None:
     agent = page.locator('[data-testid="agent-item"]').first
