@@ -52,6 +52,17 @@ class FeedbackRecordNotFoundError(FeedbackManagerError):
     """Raised when a FeedbackRecord is not found."""
 
 
+class FeedbackRecordRunNotFoundError(FeedbackManagerError):
+    """Raised when the original run referenced by a FeedbackRecord is not found.
+
+    Distinct from :class:`FeedbackRecordNotFoundError`: the record exists, but
+    the run it points at is gone. API routes map this to 404 while leaving the
+    base :class:`FeedbackManagerError` catch free for genuinely unexpected
+    subclasses (e.g. :class:`ValidationError`) rather than also collapsing them
+    to 404.
+    """
+
+
 class InvalidTransitionError(FeedbackManagerError):
     """Raised when a feedback status transition is not allowed."""
 
@@ -73,6 +84,14 @@ _VALID_STATUS_TRANSITIONS: dict[str, set[str]] = {
     "dismissed": set(),
 }
 
+# Statuses on which a single-node correction outcome may NEVER be written: the
+# human has already decided (``escalated`` -> HITL review, ``resolved``,
+# ``dismissed``). Re-entering one via the correction path would silently reverse
+# that decision, so dispatch/resume gates on non-terminal status and
+# ``_persist_correction_outcome`` fences its writes on the ``correcting``
+# pre-state (review FAR-210 finding 3).
+_CORRECTION_TERMINAL_STATUSES = frozenset({"resolved", "escalated", "dismissed"})
+
 
 def _rls(method: Callable[..., Any]) -> Callable[..., Any]:
     @functools.wraps(method)
@@ -80,6 +99,23 @@ def _rls(method: Callable[..., Any]) -> Callable[..., Any]:
         return await method(self, *args, **kwargs)
 
     return wrapper
+
+
+def _prior_states_for_retry(prior_states: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return prior states with ``input_fingerprint`` stripped for retry attempts.
+
+    Within the single-node correction's retry loop the corrected INPUT is
+    unchanged across attempts, so a prior state's own ``input_fingerprint``
+    would match on every retry and spuriously converge the correction before
+    the fresh LM attempt runs. Output fingerprints are preserved so a repeated
+    produced output (genuine oscillation) still converges.
+    """
+    stripped: list[dict[str, Any]] = []
+    for state in prior_states:
+        entry = dict(state)
+        entry.pop("input_fingerprint", None)
+        stripped.append(entry)
+    return stripped
 
 
 class FeedbackManager:
@@ -417,7 +453,9 @@ class FeedbackManager:
 
         original_run = await get_run(self._session, record.run_id)
         if original_run is None:
-            raise FeedbackManagerError(f"Original run {record.run_id} not found for FeedbackRecord {record_id}")
+            raise FeedbackRecordRunNotFoundError(
+                f"Original run {record.run_id} not found for FeedbackRecord {record_id}"
+            )
 
         feedback_correction: dict[str, Any] = {
             "rejection_reason": record.rejection_reason,
@@ -451,6 +489,355 @@ class FeedbackManager:
             record.run_id,
         )
         return new_run.id
+
+    @_rls
+    async def run_single_node_correction(
+        self,
+        *,
+        record_id: UUID,
+        guardrail: Any,
+        correction: Any,
+        node_input: dict[str, Any],
+        backend: Any,
+        bound_guardrails: list[Any] | None = None,
+        revalidation_config: dict[str, Any] | None = None,
+        judge_callable: Callable[..., Any] | None = None,
+    ) -> dict[str, Any]:
+        """FAR-210 T2b: run the single-node correction path (NOT spawn_correction_run).
+
+        This is the genuinely-new bounded single-node correction. It never
+        re-runs the pipeline (unlike :meth:`spawn_correction_run`) — it runs
+        the RESTRICTED correction backend over the pre-redacted violating node
+        input, re-validates the produced output with a DIFFERENT-FAMILY
+        detector, records the idempotency key + prior fingerprints on the
+        FeedbackRecord, and escalates to HITL on any persistent violation.
+
+        Retry budget (MAJOR-6): a STILL_VIOLATING outcome issues a FRESH LM
+        attempt while attempts remain below ``max_attempts`` — never a
+        re-validation of the recorded output. Only budget exhaustion (or a
+        terminal verdict: converged / correction_violated / lm_error)
+        escalates. An interrupted correction re-dispatched with the same
+        idempotency key resumes by RE-VALIDATING the recorded output (never
+        re-running the LM), and falls through to a fresh attempt when the
+        recorded output is still violating and attempts remain.
+
+        Claim-time concurrency cap is enforced here (mirrors the sandbox-cap
+        pattern — a dispatch-time count would TOCTOU). The record currently
+        being corrected is excluded from the cap count so the first correction
+        never blocks itself. Dispatch/resume is gated on a NON-TERMINAL status:
+        a record the human has already decided on (``resolved``, ``escalated``,
+        ``dismissed``) raises ``InvalidTransitionError`` before any LM work,
+        and ``_persist_correction_outcome`` fences its status writes on
+        ``correcting`` so a concurrent decision is never reversed. Returns the
+        correction outcome dict.
+        """
+        from modulo.core.audit_logger import append_audit_event
+        from modulo.core.guardrails.correction import (
+            EVENT_CORRECTION_ATTEMPTED,
+            EVENT_CORRECTION_CAP_BLOCKED,
+            CorrectionCapExceededError,
+            CorrectionOutcome,
+            CorrectionVerdict,
+            build_idempotency_key,
+            claim_correction_slot,
+            redact_payload,
+            resume_interrupted_correction,
+        )
+        from modulo.core.guardrails.correction import (
+            dispatch_single_node_correction as _run_correction,
+        )
+
+        record = await self.get_feedback_record(record_id)
+        if record is None:
+            raise FeedbackRecordNotFoundError(f"FeedbackRecord {record_id} not found")
+
+        if record.feedback_status in _CORRECTION_TERMINAL_STATUSES:
+            # Finding 3 (review FAR-210): never run a correction on a record a
+            # human has already decided on. A terminal record (``resolved`` /
+            # ``escalated`` / ``dismissed``) re-entered via dispatch or resume
+            # would silently reverse that decision — fail fast instead of
+            # re-writing the status.
+            raise InvalidTransitionError(
+                f"FeedbackRecord {record_id} is in terminal status "
+                f"'{record.feedback_status}'; cannot run a single-node correction "
+                f"on a record a human has already decided on"
+            )
+
+        correction.validate_guardrail_binding(guardrail)
+        # FAR-210: the correction backend is RESTRICTED — it must not claim any
+        # vault/guardrail-config capability. Defensive: read the backend's
+        # declared capability surface (empty = restricted; a privileged backend
+        # would declare vault/guardrail_config access).
+        backend_capabilities = getattr(backend, "capabilities", ())
+        if not isinstance(backend_capabilities, (list, tuple, set)):
+            backend_capabilities = ()
+        correction.validate_restricted_backend(list(backend_capabilities))
+
+        redacted_input = redact_payload(node_input, correction.input_redaction_patterns)
+        idem_key = build_idempotency_key(
+            org_id=self._org_id,
+            run_id=record.run_id,
+            node_id=record.producing_node_id,
+            correction_id=correction.id,
+            redacted_input=redacted_input,
+        )
+        persisted_state = dict(record.correction_state or {})
+        prior_states: list[dict[str, Any]] = [persisted_state] if persisted_state else []
+        attempt = int(persisted_state.get("attempt") or 0)
+
+        outcome: CorrectionOutcome | None = None
+        if persisted_state.get("idempotency_key") == idem_key:
+            # Idempotent re-dispatch: RE-VALIDATE the recorded produced output
+            # (never re-run the LM for a resume). A still-violating recorded
+            # output with attempts remaining falls through to a fresh attempt.
+            outcome = await resume_interrupted_correction(
+                correction=correction,
+                guardrail=guardrail,
+                backend=backend,
+                state=persisted_state,
+                revalidation_config=revalidation_config,
+                judge_callable=judge_callable,
+            )
+            if outcome.verdict == CorrectionVerdict.STILL_VIOLATING and attempt < correction.max_attempts:
+                outcome = None
+
+        if outcome is None:
+            # Claim the org-wide concurrent-correction slot ONCE for this
+            # correction (the whole retry sequence holds one slot; the current
+            # record is excluded from the count).
+            admitted = await claim_correction_slot(
+                self._session,
+                org_id=self._org_id,
+                correction=correction,
+                exclude_record_id=record_id,
+            )
+            if not admitted:
+                await append_audit_event(
+                    self._session,
+                    org_id=self._org_id,
+                    event_type=EVENT_CORRECTION_CAP_BLOCKED,
+                    resource_type="feedback",
+                    resource_id=record_id,
+                    payload_json={"correction_id": correction.id, "reason": "org concurrent-correction cap reached"},
+                )
+                raise CorrectionCapExceededError(
+                    f"Correction {correction.id!r} blocked at claim time: org concurrent-correction cap reached"
+                )
+            while attempt < correction.max_attempts:
+                attempt += 1
+                await append_audit_event(
+                    self._session,
+                    org_id=self._org_id,
+                    event_type=EVENT_CORRECTION_ATTEMPTED,
+                    resource_type="feedback",
+                    resource_id=record_id,
+                    payload_json={
+                        "correction_id": correction.id,
+                        "guardrail_id": correction.guardrail_id,
+                        "node_id": record.producing_node_id,
+                        "attempt": attempt,
+                    },
+                )
+                # A retry re-runs the LM on the SAME redacted input, so its own
+                # prior input fingerprint must not spuriously converge it; only
+                # a repeated produced OUTPUT is oscillation.
+                retry_prior = _prior_states_for_retry(prior_states) if attempt > 1 else prior_states
+                outcome = await _run_correction(
+                    correction=correction,
+                    guardrail=guardrail,
+                    node_input=node_input,
+                    backend=backend,
+                    prior_states=retry_prior,
+                    idempotency_key=idem_key,
+                    attempt=attempt,
+                    revalidation_config=revalidation_config,
+                    judge_callable=judge_callable,
+                )
+                outcome.state["produced_output"] = outcome.produced_output
+                record.correction_state = outcome.state
+                prior_states.append(dict(outcome.state))
+                if outcome.verdict != CorrectionVerdict.STILL_VIOLATING:
+                    break
+            if outcome is None:
+                # The recorded state already consumed the whole budget and the
+                # idempotency key did not match (no resume) — terminal exhaustion.
+                outcome = CorrectionOutcome(
+                    verdict=CorrectionVerdict.BUDGET_EXHAUSTED,
+                    detail=(
+                        f"correction budget exhausted (recorded attempt {attempt} of "
+                        f"{correction.max_attempts}): no fresh attempt available"
+                    ),
+                    needs_human_review=True,
+                    state=dict(persisted_state),
+                )
+
+        outcome.state["produced_output"] = outcome.produced_output
+        record.correction_state = outcome.state
+
+        outcome = await self._apply_correction_violated_check(
+            outcome=outcome,
+            guardrail=guardrail,
+            correction=correction,
+            bound_guardrails=bound_guardrails or [],
+        )
+
+        await self._persist_correction_outcome(
+            record_id=record_id,
+            record=record,
+            guardrail=guardrail,
+            correction=correction,
+            outcome=outcome,
+        )
+        await self._session.flush()
+        return {
+            "verdict": outcome.verdict.value,
+            "detail": outcome.detail,
+            "needs_human_review": outcome.needs_human_review,
+        }
+
+    async def _apply_correction_violated_check(
+        self,
+        *,
+        outcome: Any,
+        guardrail: Any,
+        correction: Any,
+        bound_guardrails: list[Any],
+    ) -> Any:
+        """Escalate ``correction_violated`` when the corrected output violates a bound guardrail.
+
+        The corrected output is CONTINUING-SUSPICIOUS — a produced output that
+        itself violates a (different) bound guardrail is never silently
+        accepted. Only a RESOLVED outcome is checked (already-violating /
+        errored outcomes are already escalated).
+        """
+        from modulo.core.guardrails.correction import (
+            CorrectionVerdict,
+            check_corrected_output_violates_guardrails,
+        )
+
+        if outcome.verdict != CorrectionVerdict.RESOLVED or outcome.produced_output is None:
+            return outcome
+        violator = await check_corrected_output_violates_guardrails(
+            corrected_output=outcome.produced_output,
+            guardrails=bound_guardrails,
+            exclude_name=guardrail.name,
+        )
+        if violator is not None:
+            from dataclasses import replace
+
+            return replace(
+                outcome,
+                verdict=CorrectionVerdict.CORRECTION_VIOLATED,
+                detail=f"correction_violated: corrected output violates bound guardrail {violator!r}",
+                needs_human_review=True,
+            )
+        return outcome
+
+    async def _persist_correction_outcome(
+        self,
+        *,
+        record_id: UUID,
+        record: Any,
+        guardrail: Any,
+        correction: Any,
+        outcome: Any,
+    ) -> None:
+        """Persist a single-node correction outcome on the FeedbackRecord.
+
+        RESOLVED transitions the record to ``resolved``; every other verdict
+        (still-violating, converged, budget-exhausted, lm-error, interrupted,
+        correction-violated) escalates to HITL (``escalated``) with a
+        machine-readable reason. The corrected output is continuing-suspicious
+        and redacted before persistence (the engine already redacted it).
+
+        Both status writes are FENCED on the record still being ``correcting``
+        (the correction path's expected pre-state, matching
+        ``run_post_correction_eval`` and ``_escalate_record``): an UPDATE whose
+        predicate matches no row means the status changed concurrently (e.g. a
+        human escalated the record while the correction ran) and raises
+        ``ConcurrentModificationError`` instead of silently reversing the
+        decision (review FAR-210 finding 3).
+        """
+        from modulo.core.audit_logger import append_audit_event
+        from modulo.core.guardrails.correction import (
+            EVENT_CORRECTION_ESCALATED,
+            EVENT_CORRECTION_RESOLVED,
+            EVENT_CORRECTION_VIOLATED,
+            CorrectionVerdict,
+        )
+
+        verdict = CorrectionVerdict(outcome.verdict)
+        if verdict == CorrectionVerdict.RESOLVED:
+            updated = (
+                await self._session.execute(
+                    update(FeedbackRecord)
+                    .where(
+                        FeedbackRecord.id == record_id,
+                        FeedbackRecord.organisation_id == self._org_id,
+                        FeedbackRecord.feedback_status == "correcting",
+                    )
+                    .values(feedback_status="resolved", needs_human_review=outcome.needs_human_review)
+                    .returning(FeedbackRecord)
+                )
+            ).scalar_one_or_none()
+            if updated is None:
+                raise ConcurrentModificationError(
+                    f"FeedbackRecord {record_id} status changed concurrently. "
+                    f"Expected 'correcting', failed to persist a RESOLVED correction outcome."
+                )
+            await append_audit_event(
+                self._session,
+                org_id=self._org_id,
+                event_type=EVENT_CORRECTION_RESOLVED,
+                resource_type="feedback",
+                resource_id=record_id,
+                payload_json={
+                    "correction_id": correction.id,
+                    "guardrail_id": correction.guardrail_id,
+                    "detail": (outcome.detail or "")[:500],
+                },
+            )
+            return
+        updated = (
+            await self._session.execute(
+                update(FeedbackRecord)
+                .where(
+                    FeedbackRecord.id == record_id,
+                    FeedbackRecord.organisation_id == self._org_id,
+                    FeedbackRecord.feedback_status == "correcting",
+                )
+                .values(feedback_status="escalated", needs_human_review=True)
+                .returning(FeedbackRecord)
+            )
+        ).scalar_one_or_none()
+        if updated is None:
+            raise ConcurrentModificationError(
+                f"FeedbackRecord {record_id} status changed concurrently. "
+                f"Expected 'correcting', failed to persist an escalated correction outcome."
+            )
+        violation_event = (
+            EVENT_CORRECTION_VIOLATED
+            if verdict == CorrectionVerdict.CORRECTION_VIOLATED
+            else EVENT_CORRECTION_ESCALATED
+        )
+        await append_audit_event(
+            self._session,
+            org_id=self._org_id,
+            event_type=violation_event,
+            resource_type="feedback",
+            resource_id=record_id,
+            payload_json={
+                "correction_id": correction.id,
+                "guardrail_id": correction.guardrail_id,
+                "verdict": verdict.value,
+                "detail": (outcome.detail or "")[:500],
+            },
+        )
+        logger.warning(
+            "Single-node correction escalated FeedbackRecord %s verdict=%s",
+            record_id,
+            verdict.value,
+        )
 
     @_rls
     async def _escalate_record(

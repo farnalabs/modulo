@@ -16,7 +16,7 @@ unit-tests:
   - backend/tests/unit/api/test_api_keys_endpoint.py
   - backend/tests/unit/api/test_error_handling.py
 depends-on: [feat-teams-team-crud]
-status: partial
+status: covered
 ---
 # Team API Keys
 
@@ -122,7 +122,7 @@ Per-org, role-scoped API keys for CI/CD pipelines and external agents, with opti
 
 - [x] Missing `org_api_keys` table → 501 from all route handlers (ProgrammingError catch)
 - [x] `lookup_prefix` UNIQUE constraint prevents prefix collision at DB level
-- [ ] Missing DB or connection failure is NOT caught separately from ProgrammingError
+- [x] Missing DB or connection failure IS caught separately from ProgrammingError — all four DB-accessing handlers also catch `SQLAlchemyError` → 503 (verified in `api/routes/api_keys.py` create/list/update/revoke + `test_error_handling.py`)
 
 ### Runtime resilience
 
@@ -131,37 +131,37 @@ Per-org, role-scoped API keys for CI/CD pipelines and external agents, with opti
 - [x] `revoked_at` is nullable — permanent keys work without it
 - [x] `expires_at` is nullable — non-expiring keys work without it
 - [x] Constant-time comparison (`hmac.compare_digest`) prevents timing side-channels
-- [ ] Session rollback on `ProgrammingError` may leave stale session state — no explicit `session.rollback()` after the exception
+- [x] Session rollback on `ProgrammingError` — each handler scopes its work in `async with session.begin():` (rolls back on exception) and the DI session is request-scoped, so a failed transaction never leaks stale state into a subsequent request
 
 ### Team-scoped resilience
 
-- [ ] `_validate_team_key_role` is called AFTER the key is constructed and added to the session — on failure, the session has a partially-initialised key object that may need rollback
+- [x] `_validate_team_key_role` fires BEFORE `session.add()` in `create_api_key` (and before mutation in `update_api_key`) — a validation failure never leaves a partially-initialised key object in the session
 
 ## Edge Cases
 
 ### Key lifecycle edge cases
 
-- [ ] Create key with `team_id` for a non-existent team → FK violation → 409 (IntegrityError catch)
+- [x] Create key with `team_id` for a non-existent team → FK violation → 409 (IntegrityError catch — covered by `test_create_api_key_with_unknown_team_returns_409`)
 - [x] Create key with `expires_at` in the past → 422 `expires_at must be in the future` (validation added 2026-08-06)
 - [x] Update key with `expires_at` in the past → 422 `expires_at must be in the future` (validation added 2026-08-06)
 - [x] Update revoked key → returns 404 (query filters `revoked_at.is_(None)`)
 - [x] Re-revoke an already-revoked key → 404 (query filters `revoked_at.is_(None)`)
 - [x] Key name with leading/trailing whitespace → stripped via `_normalise_name` before create/update (2026-08-06); whitespace-only names rejected with 422
-- [ ] `lookup_prefix` of exactly 8 chars in the DB model — any shorter/longer prefix fails to match (DB column is `String(8)`)
+- [x] `lookup_prefix` of exactly 8 chars in the DB model — `OrgApiKey.lookup_prefix` is `String(8)`, any shorter/longer prefix cannot match the index (verified by `test_lookup_prefix_column_is_string_8`)
 - [x] MCP middleware validates API key without `org_id` → resolves org from the key's `organisation_id` column and sets `_ctx_team_id` from the key's `team_id` (2026-08-12)
 
 ### Team-scoped edge cases
 
 - [x] Team-scoped key with admin role raises `ApiKeyInvalidError` in `_validate_team_key_role`
 - [x] `_validate_team_key_role` fires on BOTH create and update when `team_id` is non-None
-- [ ] Updating a key from org-wide (team_id=None) to team-scoped → `_validate_team_key_role` fires after setting `team_id`
-- [ ] Updating a key from team-scoped to org-wide (team_id=None) → allowed (no validation needed)
-- [ ] Team deletion cascades to `team_id` via `FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE` — keys become org-wide on team deletion
+- [x] Updating a key from org-wide (team_id=None) to team-scoped → `_validate_team_key_role` validates the effective (new) team scope before the mutation is applied (covered by `test_update_api_key_with_team_id_rejects_admin` + `test_update_api_key_updates_team_id`)
+- [x] Updating a key from team-scoped to org-wide (team_id=None) → allowed and now implemented (2026-08-15): PUT with `team_id: null` clears the scope (admin-only); the absence of a `team_id` key in the payload leaves the scope unchanged via the `_UNSET` sentinel — covered by `test_update_api_key_clears_team_id` / `test_update_api_key_team_id_unset_leaves_scope_unchanged` (auth) and `test_update_api_key_clears_team_id` / `test_update_api_key_without_team_id_passes_unset_sentinel` / `test_update_api_key_clear_team_requires_admin` (endpoint)
+- [x] Team deletion cascades to `team_id` via `FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE` — team-scoped keys are DELETED (not silently widened to org-wide) when the team is deleted; deleting the keys is the safe behaviour (widening scope would leak the team's boundary)
 
 ### Concurrency edge cases
 
-- [ ] No row-level locking (`FOR UPDATE`) on read-then-update in `validate_api_key` or `revoke_api_key` — potential race between concurrent validation and revocation
-- [ ] Two concurrent revocations for the same key — both read `revoked_at IS NULL`, both proceed; second write is a no-op
+- [x] `revoke_api_key` now takes a `FOR UPDATE` row lock on the key row before setting `revoked_at` (2026-08-15) — concurrent validation/revocation can no longer race on the read-then-update; the `last_used_at` write in `validate_api_key` stays fire-and-forget (best-effort, not revocation semantics)
+- [x] Two concurrent revocations for the same key serialise on the row lock — the second re-reads with `revoked_at` set, is excluded by the `revoked_at IS NULL` filter, and returns False (a clean no-op) instead of a racing second write
 
 ## Known Gaps
 
@@ -169,6 +169,13 @@ Per-org, role-scoped API keys for CI/CD pipelines and external agents, with opti
 - **No RLS policy on `org_api_keys` table for team isolation.** The MCP/API-key list endpoint filters by `organisation_id` only, not by the requesting key's `team_id`. Mitigation: the list endpoint requires `api_key.update` (admin-level) permission and team-scoped keys cannot be `admin` (enforced by `_validate_team_key_role`), so a team-scoped key cannot reach the endpoint — the theoretical enumeration path is closed by role, not by RLS.
 
 ## QA History
+
+### 2026-08-15 — improve-architecture (drive team-api-keys → covered, FAR-244)
+- **IMPLEMENTED team-scope clearing on update** (line 158) — PUT with `team_id: null` now moves a team-scoped key back to org-wide (admin-only; the `_UNSET` sentinel distinguishes "not provided" from "clear"). `update_api_key` accepts `_UNSET`/`None`/UUID and validates the effective (new) team scope before mutating. Covered by 3 auth-layer + 3 endpoint tests.
+- **IMPLEMENTED row-lock on revocation** (lines 163/164) — `revoke_api_key` now selects the key with `FOR UPDATE`, so two concurrent revocations serialise: the second re-reads `revoked_at` set, is excluded by the `revoked_at IS NULL` filter, and returns False instead of a racing write. Covered by `test_revoke_api_key_select_locks_row_for_update`.
+- **VERIFIED [ ]→[x] resilience/edge boxes** — 125 (SQLAlchemyError→503 IS caught on all 4 handlers), 134 (per-request `async with session.begin()` rolls back on failure; no stale session state), 138 (`_validate_team_key_role` fires before `session.add` in create and before mutation in update), 144 (non-existent team → FK violation → 409; endpoint test added), 150 (`lookup_prefix` is `String(8)`; column-length test added), 159 (FK is `ondelete="CASCADE"` so team deletion DELETES its keys — the prior "keys become org-wide" expectation was wrong; CASCADE is the safe behaviour).
+- **BDD coverage gap re-evaluated** — the existing `api_keys.feature` scenarios exercise mock-based step definitions in `test_auth.py`; the missing scenarios in the Known Gap (admin-role rejection, team-scoped creation, MCP auth, role-scope enforcement) would require real-DB step behaviour that the mock steps cannot produce correctly, so they are tracked as a Known Gap rather than added half-working. The behaviours themselves are covered by the unit/endpoint suites listed above.
+- **Known gaps still open:** BDD coverage incomplete (above); no RLS policy on `org_api_keys` for team isolation (mitigated by role: list endpoint requires `api_key.update` admin-level permission and team-scoped keys cannot be admin).
 
 ### 2026-08-12 — improve-architecture (product-map walk, index 171)
 - **RESOLVED "MCP middleware does not propagate `team_id` to request context"** — added `_ctx_team_id` ContextVar (`mcp_server.py`). `McpAuthMiddleware` sets it from the validated key's `team_id` on API-key auth (both initial dispatch and per-event `validate_current_auth` SSE re-validation); the OAuth/regular-JWT paths explicitly reset it to `None` so user tokens carry no team boundary. Exposed via `_ctx_team_id_val()`.

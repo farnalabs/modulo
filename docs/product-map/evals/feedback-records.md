@@ -169,6 +169,9 @@ Discovered from 1 completed delivery task.
 
 ## QA History
 
+### 2026-08-15 — sweep D (final verification pass)
+- Verified the 3 unchecked behaviours (pipeline-level default_feedback_handler, gate-level feedback_handler override, reject_routing_conflict) remain genuine gaps. PRD §8.20 (docs/prd.md:1905) explicitly documents that `default_feedback_handler` is a DB column not yet consumed at runtime, and that `hitl_gate_config` has no typed `feedback_handler` sub-field. `reject_routing_conflict` (PRD §8.20 reject_target note, docs/prd.md:1232) is not implemented — no validation rejects setting both `reject_target` and `feedback_handler` on the same gate because the gate config has no `feedback_handler` field to validate against. All three documented in Known Gaps. Status: partial (3 known gaps remain in this section).
+
 ### 2026-08-15 — improve-architecture (feedback audit events)
 - **RESOLVED the "No audit events recorded for FeedbackRecord status transitions" gap** (tracked in `evals/feedback-loop.md`). `api/routes/feedback.py` now dispatches `feedback.created` (create route) and `feedback.status_changed` (update-status + review routes) via a new `_append_feedback_audit_event()` helper — written in a fresh post-commit transaction with RLS re-established (SET LOCAL reverts on COMMIT) and failure-isolated so a broken append never fails the completed operation (api_keys/teams gold pattern).
 - `update_feedback_status` now fetches the record first for `old_status` (and returns a clean 404 for a missing record before `update_status`, previously an uncaught `FeedbackRecordNotFoundError` → 500).
@@ -203,6 +206,7 @@ Discovered from 1 completed delivery task.
 - No eval proposals editor/curation UI
 - Correction run does not route back through eval suite automatically (no run_post_correction_eval integration in run completion lifecycle; the method exists but is not called by the run completion lifecycle)
 - Pipeline-level default_feedback_handler not implemented (default_human hardcoded)
+- No gate-level feedback_handler override — the `hitl_gate_config` JSON column on pipeline edges has no typed `feedback_handler` sub-field (verified 2026-08-15, sweep D)
 - No reject_routing_conflict validation in pipeline editor
 - Library contribution (v2) not started
 - Website docs: no page exists at Website/modulo-website/src/docs/ for PRD §8.20 Feedback Records — create stub

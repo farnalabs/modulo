@@ -299,6 +299,19 @@ regression that silently weakens the suite:
   ``pytest.raises(X, func, *args)`` actually runs the check and is
   deliberately left alone; the ``with``-entered and decorator spellings are
   naturally excluded because they never appear as a bare expression statement
+- ``assert x == ANY`` / ``assert x != ANY`` against ``unittest.mock.ANY`` —
+  ``ANY.__eq__`` returns ``True`` for *any* value (that is what lets it match
+  an expected argument inside ``assert_called_with``/``assert_awaited_with``),
+  so ``== ANY`` is ALWAYS True and ``!= ANY`` is ALWAYS False regardless of
+  what the other operand evaluates to: an ``assert x == ANY`` is a silent
+  false green and ``assert x != ANY`` can never pass, both decided at source
+  time. ``ANY`` is only meaningful where a mock framework presides over the
+  comparison — pass it as the expected argument to a mock verification
+  (``mock.assert_called_with(ANY)``), never compare a value to it with
+  ``==``/``!=`` yourself. The membership twin is covered too: a list/tuple
+  literal that *contains* ``ANY`` (``[a, ANY]``) makes ``in`` always PASS and
+  ``not in`` always FAIL, because the element match short-circuits on
+  ``x == ANY``
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -4780,3 +4793,141 @@ def test_computed_wall_clock_sleep_lens_flags_computed_durations():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _computed_wall_clock_sleep_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _is_any_operand(node: ast.AST) -> bool:
+    """Return True for the two spellings of ``unittest.mock.ANY`` — the bare
+    imported name (``ANY``, the ``from unittest.mock import ANY`` form) and the
+    attribute-qualified path (``mock.ANY`` / ``unittest.mock.ANY``)."""
+    if isinstance(node, ast.Name) and node.id == "ANY":
+        return True
+    return isinstance(node, ast.Attribute) and node.attr == "ANY"
+
+
+def _any_equality_tautologies(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every assertion whose test
+    expression compares a value against ``unittest.mock.ANY``.
+
+    ``ANY.__eq__`` returns ``True`` for any value, so ``x == ANY`` is ALWAYS
+    True and ``x != ANY`` ALWAYS False — no matter what ``x`` evaluates to, an
+    ``assert x == ANY`` is a silent false green and ``assert x != ANY`` can
+    never pass, both decided at source time. The membership twin is covered
+    too: a list/tuple literal that *contains* ``ANY`` (``[a, ANY]``) makes
+    ``in`` always PASS and ``not in`` always FAIL, because the element match
+    short-circuits on the ``x == ANY`` that ANY is guaranteed to satisfy.
+    Dict literals are deliberately not considered for membership — dict ``in``
+    tests *keys*, which ANY never appears as, so the outcome still depends on
+    the code under test.
+    """
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        for sub in ast.walk(node.test):
+            if not isinstance(sub, ast.Compare) or len(sub.ops) != 1:
+                continue
+            op = sub.ops[0]
+            if isinstance(op, (ast.Eq, ast.NotEq)):
+                if not any(_is_any_operand(side) for side in (sub.left, *sub.comparators)):
+                    continue
+                verdict = "ALWAYS PASSES" if isinstance(op, ast.Eq) else "ALWAYS FAILS"
+                found.append(
+                    (
+                        sub.lineno,
+                        f"{ast.unparse(sub)} — compares a value against unittest.mock.ANY, whose "
+                        f"__eq__ always returns True, so this {verdict} regardless of the operand",
+                    )
+                )
+                continue
+            if not isinstance(op, (ast.In, ast.NotIn)):
+                continue
+            for comparator in sub.comparators:
+                if not isinstance(comparator, (ast.List, ast.Tuple)):
+                    continue
+                if not any(_is_any_operand(element) for element in comparator.elts):
+                    continue
+                verdict = "ALWAYS PASSES" if isinstance(op, ast.In) else "ALWAYS FAILS"
+                found.append(
+                    (
+                        sub.lineno,
+                        f"{ast.unparse(sub)} — tests membership in a container that holds "
+                        f"unittest.mock.ANY, which matches any value, so this {verdict}",
+                    )
+                )
+                break
+    return found
+
+
+def test_no_any_equality_comparisons():
+    """An ``assert`` that compares a value against ``unittest.mock.ANY`` is a
+    fixed-outcome assertion: ``ANY.__eq__`` returns ``True`` unconditionally
+    (that is what makes it match any expected argument inside
+    ``assert_called_with``/``assert_awaited_with``), so ``assert x == ANY`` is
+    a silent false green and ``assert x != ANY`` can never pass, no matter
+    what ``x`` evaluates to. ``ANY`` is only meaningful where a mock framework
+    presides over the comparison — pass it as the *expected* argument to a
+    mock verification (``mock.assert_called_with(ANY)``) — never compare it to
+    a value with ``==``/``!=`` yourself. The membership twin is covered too: a
+    list/tuple literal that contains ``ANY`` (``[a, ANY]``) makes ``in``
+    always PASS and ``not in`` always FAIL, because the element match
+    short-circuits on ``x == ANY``."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _any_equality_tautologies(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} assertion(s) comparing a value against unittest.mock.ANY.\n"
+        "ANY.__eq__ always returns True, so '== ANY' is always True and '!= ANY' is always "
+        "False — the assertion is decided at source time, never by the code under test. Pass "
+        "ANY as the expected argument to a mock verification "
+        "(mock.assert_called_with(ANY)); don't ==/!= against it.\n" + "\n".join(violations)
+    )
+
+
+def test_any_equality_lens_flags_fixed_outcomes():
+    """Synthetic positive/negative control for the ANY-equality lens: it must
+    flag ``==``/``!=`` against ``ANY`` in either operand position (bare name or
+    attribute-qualified) and ``in``/``not in`` against a list/tuple literal
+    that holds ANY (in either operand order), and ignore ``ANY`` passed as a
+    call argument (the legitimate mock-verification spelling), comparisons
+    over bound names and other values, membership against non-ANY containers,
+    dict membership (keys, not values), the ``=='ANY'`` string-literal spelling,
+    and the neighbouring lens shapes."""
+    positive_sources = [
+        "def test_foo():\n    assert result == ANY\n",
+        "def test_foo():\n    assert ANY == result\n",
+        "def test_foo():\n    assert result != ANY\n",
+        "def test_foo():\n    assert ANY != result\n",
+        "def test_foo():\n    assert result == mock.ANY\n",
+        "def test_foo():\n    assert result == unittest.mock.ANY\n",
+        "def test_foo():\n    assert result in [ANY, 'a']\n",
+        "def test_foo():\n    assert result not in ('a', ANY)\n",
+        "def test_foo():\n    assert result == ANY and ok\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _any_equality_tautologies(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    m.assert_called_with(ANY)\n",
+        "def test_foo():\n    m.assert_awaited_once_with(1, ANY)\n",
+        "def test_foo():\n    m.assert_has_calls([call(ANY)])\n",
+        "def test_foo():\n    assert result in [1, 2]\n",
+        "def test_foo():\n    assert result not in [1, 2]\n",
+        "def test_foo():\n    assert [ANY] in result\n",
+        "def test_foo():\n    assert [ANY] not in result\n",
+        "def test_foo():\n    assert result in {'k': ANY}\n",
+        "def test_foo():\n    assert result in some_list\n",
+        "def test_foo():\n    assert result == expected\n",
+        "def test_foo():\n    assert result is None\n",
+        "def test_foo():\n    assert 'ANY' in result\n",
+        "def test_foo():\n    assert result > ANY\n",
+        "def test_foo():\n    assert 'a' == 'b'\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _any_equality_tautologies(tree), f"lens should NOT flag:\n{source}"

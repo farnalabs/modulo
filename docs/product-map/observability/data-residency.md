@@ -60,7 +60,7 @@ configuration at every layer.
 - [x] `EnvironmentProfile.egress_policy` defaults to `null` (unrestricted)
 - [x] Egress policy can be set to `deny_all`, `allow_all`, or `allow_listed` (validated via regex)
 - [x] Invalid egress_policy value is rejected at the API layer with 422
-- [ ] Library primitives declare `required_environment_capabilities` (e.g. `egress:github.com`)
+- [x] Library primitives declare `required_environment_capabilities` (e.g. `egress:github.com`) — github-based agent templates in `core/library_service` (PR Review, GitHub Issue Sync) declare `required_environment_capabilities: ["egress:github.com"]`; the Agent model carries the column and graph-validator BDD covers capability matching (see Known Gaps for enforcement-level gaps)
 - [ ] Runtime provider enforces egress_policy on workspace creation
 - [ ] VPC deployment checklist verifies all egress is to known internal services only
 
@@ -105,7 +105,14 @@ configuration at every layer.
 - PRD §10.5 describes an anonymous startup ping (`MODULO_TELEMETRY`) that is not implemented — no code sends an anonymous ping on startup
 - Environment variable name mismatch: PRD §10.5 says `MODULO_TELEMETRY`, code uses `MODULO_TELEMETRY_ENABLED`
 - No integration test verifies null egress_policy defaults to `deny_all` at runtime (code in _build_workspace_spec treats null as deny_all, diverging from model default of null=unrestricted)
-- Library primitives declaring `required_environment_capabilities` is unimplemented
-- Runtime provider does not enforce egress_policy on workspace creation
+- Runtime provider does not enforce egress_policy on workspace creation (providers receive the spec field but do not consume it)
 - VPC deployment checklist for network egress audit does not exist
 - Google Fonts is loaded from fonts.googleapis.com CDN — not a data residency concern but noted for completeness
+
+## QA History
+
+### 2026-08-15 — coverage drive (product-map walk)
+
+- **Verified `[x]`: library primitives declare `required_environment_capabilities`.** The github-based agent templates in `core/library_service/__init__.py` (PR Review, GitHub Issue Sync, etc.) declare `required_environment_capabilities: ["egress:github.com"]`, the `Agent` model persists the column, and the graph-validator capability check + BDD (`environment_profiles.feature`) exercise capability matching. The stale Known Gap "Library primitives declaring required_environment_capabilities is unimplemented" was removed.
+- **Confirmed genuine gaps** (left unchecked): runtime provider does not consume `egress_policy` on workspace creation; no VPC deployment checklist; air-gapped deployment has no integration test; `docs/operations/network-egress.md` doesn't exist; multi-region remains deferred V3.
+- **Stale-gap corrections:** the telemetry opt-in flag is `MODULO_TELEMETRY_ENABLED` (default false) with a no-op provider and no data leaving the process without operator config — verified `[x]` behaviours unchanged; the env-name mismatch with PRD §10.5's `MODULO_TELEMETRY` is documented in Known Gaps.

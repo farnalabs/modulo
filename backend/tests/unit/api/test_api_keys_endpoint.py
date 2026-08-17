@@ -8,9 +8,11 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.auth.api_key import _UNSET
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
@@ -141,7 +143,7 @@ def test_create_api_key_emits_api_key_created_audit(client: TestClient) -> None:
         patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_test_key")),
         patch("modulo.api.routes.api_keys.set_rls_org"),
         patch("modulo.api.routes.api_keys.set_rls_user_context"),
-        patch("modulo.api.routes.api_keys.append_audit_event", new=audit),
+        patch("modulo.core.audit_logger.append_audit_event", new=audit),
     ):
         resp = client.post("/api/v1/api-keys", json={"name": "Test Key", "role": "operator"})
     assert resp.status_code == 201
@@ -166,7 +168,7 @@ def test_create_api_key_audit_failure_does_not_block_creation(client: TestClient
         patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_test_key")),
         patch("modulo.api.routes.api_keys.set_rls_org"),
         patch("modulo.api.routes.api_keys.set_rls_user_context"),
-        patch("modulo.api.routes.api_keys.append_audit_event", side_effect=_raise_audit),
+        patch("modulo.core.audit_logger.append_audit_event", side_effect=_raise_audit),
     ):
         resp = client.post("/api/v1/api-keys", json={"name": "Test Key", "role": "operator"})
     assert resp.status_code == 201
@@ -244,7 +246,7 @@ def test_revoke_api_key_emits_api_key_revoked_audit(client: TestClient) -> None:
         patch("modulo.api.routes.api_keys.revoke_api_key", return_value=True),
         patch("modulo.api.routes.api_keys.set_rls_org"),
         patch("modulo.api.routes.api_keys.set_rls_user_context"),
-        patch("modulo.api.routes.api_keys.append_audit_event", new=audit),
+        patch("modulo.core.audit_logger.append_audit_event", new=audit),
     ):
         resp = client.delete(f"/api/v1/api-keys/{_KEY_ID}")
     assert resp.status_code == 200
@@ -265,7 +267,7 @@ def test_revoke_api_key_not_found_does_not_emit_audit(client: TestClient) -> Non
         patch("modulo.api.routes.api_keys.revoke_api_key", return_value=False),
         patch("modulo.api.routes.api_keys.set_rls_org"),
         patch("modulo.api.routes.api_keys.set_rls_user_context"),
-        patch("modulo.api.routes.api_keys.append_audit_event", new=audit),
+        patch("modulo.core.audit_logger.append_audit_event", new=audit),
     ):
         resp = client.delete(f"/api/v1/api-keys/{uuid.uuid4()}")
     assert resp.status_code == 404
@@ -282,7 +284,7 @@ def test_revoke_api_key_audit_failure_does_not_fail_revocation(client: TestClien
         patch("modulo.api.routes.api_keys.revoke_api_key", return_value=True),
         patch("modulo.api.routes.api_keys.set_rls_org"),
         patch("modulo.api.routes.api_keys.set_rls_user_context"),
-        patch("modulo.api.routes.api_keys.append_audit_event", side_effect=_raise_audit),
+        patch("modulo.core.audit_logger.append_audit_event", side_effect=_raise_audit),
     ):
         resp = client.delete(f"/api/v1/api-keys/{_KEY_ID}")
     assert resp.status_code == 200
@@ -417,14 +419,18 @@ def test_create_api_key_calls_set_rls_user_context(client: TestClient) -> None:
         patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_key")),
         patch("modulo.api.routes.api_keys.set_rls_org") as mock_org,
         patch("modulo.api.routes.api_keys.set_rls_user_context") as mock_ctx,
+        patch("modulo.core.audit_logger.set_rls_org") as mock_audit_org,
+        patch("modulo.core.audit_logger.set_rls_user_context") as mock_audit_ctx,
     ):
         client.post("/api/v1/api-keys", json={"name": "k", "role": "operator"})
-    # set_rls_* is re-established in the fresh audit transaction (SET LOCAL
-    # reverts on COMMIT), so each helper is awaited twice: the main create tx
-    # and the api_key_created audit tx.
-    assert mock_org.await_count == 2
-    assert mock_ctx.await_count == 2
-    mock_ctx.assert_awaited_with(ANY, _USER_ID, "admin")
+    # The main create tx establishes RLS via the route-module helpers...
+    mock_org.assert_awaited_once()
+    mock_ctx.assert_awaited_once_with(ANY, _USER_ID, "admin")
+    # ...and the shared append_audit_event_isolated helper re-establishes RLS in
+    # the fresh api_key_created audit transaction (SET LOCAL reverts on COMMIT),
+    # so the audit-logger helpers are each awaited once with the same identity.
+    mock_audit_org.assert_awaited_once()
+    mock_audit_ctx.assert_awaited_once_with(ANY, _USER_ID, "admin")
 
 
 def test_list_api_keys_calls_set_rls_user_context(client: TestClient) -> None:
@@ -548,3 +554,84 @@ def test_update_api_key_strips_whitespace_name(client: TestClient) -> None:
         )
     assert resp.status_code == 200
     assert update.call_args.kwargs["name"] == "Trimmed"
+
+
+# ---------------------------------------------------------------------------
+# team_id transitions
+# ---------------------------------------------------------------------------
+
+
+def test_create_api_key_with_unknown_team_returns_409(client: TestClient) -> None:
+    """A team_id that references a non-existent team trips the FK and maps to 409."""
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    with (
+        patch(
+            "modulo.api.routes.api_keys.create_api_key",
+            side_effect=IntegrityError(
+                "stmt",
+                {},
+                Exception("insert or update on table 'org_api_keys' violates foreign key constraint"),
+            ),
+        ),
+        patch("modulo.api.routes.api_keys.resolve_plan_context", return_value=mock_plan),
+        patch("modulo.api.routes.api_keys.set_rls_org"),
+        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+    ):
+        resp = client.post(
+            "/api/v1/api-keys",
+            json={"name": "Team Key", "role": "operator", "team_id": str(uuid.uuid4())},
+        )
+    assert resp.status_code == 409
+
+
+def test_update_api_key_clears_team_id(client: TestClient) -> None:
+    """PUT with team_id=null moves a team-scoped key back to org-wide (admin)."""
+    key = _make_key()
+    key.name = "Widened Key"
+    key.team_id = None
+    with (
+        patch("modulo.api.routes.api_keys.update_api_key", return_value=key) as update,
+        patch("modulo.api.routes.api_keys.set_rls_org"),
+        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+    ):
+        resp = client.put(
+            f"/api/v1/api-keys/{_KEY_ID}",
+            json={"name": "Widened Key", "team_id": None},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["team_id"] is None
+    # The clear is signalled explicitly — update_api_key receives team_id=None,
+    # not the "not provided" sentinel.
+    assert update.call_args.kwargs["team_id"] is None
+
+
+def test_update_api_key_without_team_id_passes_unset_sentinel(client: TestClient) -> None:
+    """PUT without a team_id key must not disturb the existing team scope."""
+    key = _make_key()
+    key.name = "Scoped Key"
+    key.team_id = _TEAM_ID
+    with (
+        patch("modulo.api.routes.api_keys.update_api_key", return_value=key) as update,
+        patch("modulo.api.routes.api_keys.set_rls_org"),
+        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+    ):
+        resp = client.put(
+            f"/api/v1/api-keys/{_KEY_ID}",
+            json={"name": "Scoped Key"},
+        )
+    assert resp.status_code == 200
+    assert update.call_args.kwargs["team_id"] is _UNSET
+
+
+def test_update_api_key_clear_team_requires_admin(operator_client: TestClient) -> None:
+    """Clearing the team scope is an admin-only operation (same as setting it)."""
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    with patch("modulo.api.routes.api_keys.resolve_plan_context", return_value=mock_plan):
+        resp = operator_client.put(
+            f"/api/v1/api-keys/{_KEY_ID}",
+            json={"name": "k", "team_id": None},
+        )
+    assert resp.status_code == 403

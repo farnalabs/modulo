@@ -14,10 +14,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from modulo.core.pipeline_engine.error_codes import map_legacy_code
+from modulo.core.pipeline_engine.error_codes import is_retryable, map_legacy_code
 from modulo.core.pipeline_engine.executor import (
     PipelineExecutor,
     _node_output_agent_failure,
+    _node_output_sandbox_session_lost,
     _retry_after_policy,
 )
 
@@ -143,6 +144,30 @@ def test_node_output_agent_failure_ignores_non_failed_and_garbage():
     assert _node_output_agent_failure(None) is None
 
 
+def test_node_output_sandbox_session_lost_detects_marker():
+    """FAR-227: the session-lost marker (the E2B wrapper's fallback echo) is
+    detected and its summary surfaces as the reason."""
+    reason = _node_output_sandbox_session_lost(
+        {
+            "output": {
+                "status": "failed",
+                "summary": "No output from agent - session interrupted",
+                "sandbox_session_lost": True,
+            }
+        }
+    )
+    assert reason == "No output from agent - session interrupted"
+
+
+def test_node_output_sandbox_session_lost_ignores_ordinary_output():
+    """Ordinary node outputs (with or without an agent failure) never carry the
+    marker — the detector stays silent."""
+    assert _node_output_sandbox_session_lost({"output": {"status": "failed", "agent_status": "failed"}}) is None
+    assert _node_output_sandbox_session_lost({"output": {"status": "completed"}}) is None
+    assert _node_output_sandbox_session_lost("not-a-dict") is None
+    assert _node_output_sandbox_session_lost(None) is None
+
+
 # ---------------------------------------------------------------------------
 # A1 elevation in _stream_graph
 # ---------------------------------------------------------------------------
@@ -230,6 +255,111 @@ async def test_elevation_fail_open_on_settings_error(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# FAR-227 — fallback echo (dead opencode session) → sandbox.no_output_json
+# ---------------------------------------------------------------------------
+
+
+def _session_lost_event() -> dict[str, Any]:
+    """A captured node output carrying the FAR-227 session-lost marker — the
+    envelope node_runner stamps for the E2B wrapper's fallback echo."""
+    return {
+        "event": "on_chain_end",
+        "name": "node-a",
+        "data": {
+            "output": {
+                "output": {
+                    "status": "failed",
+                    "summary": "No output from agent - session interrupted",
+                    "sandbox_session_lost": True,
+                }
+            }
+        },
+    }
+
+
+async def test_fallback_echo_terminalizes_retryable_sandbox_no_output_json(elevation_enabled):
+    """FAR-227 prove-the-fix 1: a node whose output is the fallback echo (dead
+    session) terminalizes with error_code ``sandbox.no_output_json`` — NOT the
+    non-retryable ``agent.failed``. The run is failed (never complete), and the
+    summary survives as the failure detail."""
+    result, broker = await _run_stream_graph([_session_lost_event()])
+
+    final_status, error_code, error_detail, _node_token_usage = result
+    assert final_status == "failed"
+    assert error_code == "sandbox.no_output_json"
+    assert error_detail == "No output from agent - session interrupted"
+    assert (
+        "run_failed",
+        {"error": "sandbox.no_output_json", "detail": "No output from agent - session interrupted"},
+    ) in (_run_failed_publishes(broker))
+    # The classification is retryable — this is the whole point of the fix.
+    assert is_retryable("sandbox.no_output_json") is True
+    assert is_retryable("agent.failed") is False
+
+
+async def test_fallback_echo_takes_priority_over_elevation(elevation_enabled):
+    """When the marker is present, the session-lost routing wins even if the
+    node output ALSO carried a self-reported agent_status=failed (defence in
+    depth — node_runner already suppresses it, but the executor must not
+    elevate a dead session to agent.failed)."""
+    event = {
+        "event": "on_chain_end",
+        "name": "node-a",
+        "data": {
+            "output": {
+                "output": {
+                    "status": "failed",
+                    "agent_status": "failed",
+                    "summary": "No output from agent - session interrupted",
+                    "sandbox_session_lost": True,
+                }
+            }
+        },
+    }
+    result, _broker = await _run_stream_graph([event])
+
+    assert result[0] == "failed"
+    assert result[1] == "sandbox.no_output_json"
+
+
+async def test_genuine_verdict_stays_agent_failed(elevation_enabled):
+    """FAR-227 prove-the-fix 2 (control): a genuine agent verdict — the agent
+    WROTE output.json saying it failed — STILL terminalizes ``agent.failed``
+    (non-retryable). The fix must not over-broaden to real verdicts."""
+    result, broker = await _run_stream_graph([_agent_failed_event(summary="the task is impossible because X")])
+
+    final_status, error_code, error_detail, _node_token_usage = result
+    assert final_status == "failed"
+    assert error_code == "agent.failed"
+    assert error_detail == "the task is impossible because X"
+    assert ("run_failed", {"error": "agent.failed", "detail": "the task is impossible because X"}) in (
+        _run_failed_publishes(broker)
+    )
+    assert is_retryable("agent.failed") is False
+
+
+# ---------------------------------------------------------------------------
+# FAR-227 — retry flows through the existing _retry_after_policy machinery
+# ---------------------------------------------------------------------------
+
+
+def test_retry_after_policy_failure_retries_fallback_echo_code():
+    """FAR-227 prove-the-fix 3: with a pipeline retry_policy
+    ``{"on": ["failure"], "max_retries": 2}``, the fallback-echo terminal
+    outcome (error_code ``sandbox.no_output_json``) yields a retry budget of 2
+    via the existing ``_retry_after_policy`` machinery — budget/cap/backoff all
+    apply. The genuine-verdict outcome (``agent.failed``) is the control: it
+    matches the same "failure" event (existing semantics preserved), so the
+    distinguishing change is the error code itself — the fallback case now lands
+    on the retryable ``sandbox.no_output_json`` code."""
+    assert _retry_after_policy({"on": ["failure"], "max_retries": 2}, "failed", "sandbox.no_output_json") == 2
+    # Registry default classification differs — the sandbox code is retryable.
+    assert map_legacy_code("sandbox.no_output_json") == "sandbox.no_output_json"
+    assert is_retryable("sandbox.no_output_json") is True
+    assert is_retryable("agent.failed") is False
+
+
+# ---------------------------------------------------------------------------
 # _retry_after_policy — dotted codes + legacy aliases
 # ---------------------------------------------------------------------------
 
@@ -288,6 +418,21 @@ def test_work_intact_false_when_elevated_to_agent_failed():
         "failed",
         "agent.failed",
         {"node-a": {"output": {"status": "completed", "summary": "groomed 0/5"}}},
+        {"node-a"},
+    )
+    assert work_intact is False
+
+
+def test_work_intact_false_for_sandbox_no_output_json():
+    """FAR-227: a sandbox session-lost run (failed + sandbox.no_output_json) is
+    NOT complete — the agent produced no output at all (the E2B wrapper's
+    fallback echo), so the honest work verdict is False just like the A1
+    elevation."""
+    executor = _executor_instance()
+    work_intact = executor._compute_run_work_intact(
+        "failed",
+        "sandbox.no_output_json",
+        {"node-a": {"output": {"status": "failed", "summary": "No output from agent - session interrupted"}}},
         {"node-a"},
     )
     assert work_intact is False

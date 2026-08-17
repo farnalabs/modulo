@@ -31,7 +31,6 @@ export const options = {
 };
 
 let authToken = null;
-let createdPipelineIds = [];
 
 export function setup() {
   const loginRes = http.post(`${BASE_URL}/auth/login`, JSON.stringify({
@@ -93,7 +92,6 @@ export default function (data) {
       }
 
       pipelineId = JSON.parse(res.body).id;
-      createdPipelineIds.push(pipelineId);
     });
 
     if (!pipelineId) return;
@@ -170,8 +168,16 @@ export function teardown(data) {
     },
   };
 
-  // Clean up any pipelines that weren't deleted during the test
-  for (const id of createdPipelineIds) {
-    http.del(`${BASE_URL}/pipelines/${id}`, null, params);
+  // Module-level state set in default() is per-VU and never visible here, so
+  // re-query the API and delete any pipelines the test left behind. This also
+  // catches pipelines orphaned by an interrupted run.
+  const listRes = http.get(`${BASE_URL}/pipelines?page=1&page_size=100`, params);
+  if (listRes.status !== 200) return;
+
+  const pipelines = JSON.parse(listRes.body).items || [];
+  for (const p of pipelines) {
+    if (p.name && p.name.startsWith('perf-pipeline-')) {
+      http.del(`${BASE_URL}/pipelines/${p.id}`, null, params);
+    }
   }
 }

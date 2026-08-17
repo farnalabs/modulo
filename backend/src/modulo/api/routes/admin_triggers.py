@@ -10,11 +10,15 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.rls import set_rls_org
+
+_CODE_ADMIN_TRIGGERS_LIST_TRIGGER = "admin_triggers.list_trigger_events"
+
 
 _log = logging.getLogger(__name__)
 
@@ -76,13 +80,13 @@ async def list_trigger_events(
             q = q.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc()).limit(limit + 1)
             rows = (await session.execute(q)).scalars().all()
     except ProgrammingError:
-        _log.exception("admin_triggers.list_trigger_events")
+        _log.exception(_CODE_ADMIN_TRIGGERS_LIST_TRIGGER)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.exception("admin_triggers.list_trigger_events")
+        _log.exception(_CODE_ADMIN_TRIGGERS_LIST_TRIGGER)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
@@ -93,7 +97,7 @@ async def list_trigger_events(
         _log.exception("admin list_trigger_events failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     has_more = len(rows) > limit
@@ -133,13 +137,13 @@ async def list_trigger_events(
             )
             total = count_result.scalar() or 0
     except ProgrammingError:
-        _log.exception("admin_triggers.list_trigger_events")
+        _log.exception(_CODE_ADMIN_TRIGGERS_LIST_TRIGGER)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.exception("admin_triggers.list_trigger_events")
+        _log.exception(_CODE_ADMIN_TRIGGERS_LIST_TRIGGER)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
@@ -150,7 +154,7 @@ async def list_trigger_events(
         _log.exception("admin list_trigger_events count query failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
     return TriggerEventListResponse(

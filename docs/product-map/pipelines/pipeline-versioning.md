@@ -46,7 +46,7 @@ status: partial
 - [x] Pipeline is locked (`SELECT ... FOR UPDATE`) during snapshot creation to prevent concurrent graph replacement
 - [x] Active runs execute against their snapshot — live pipeline changes do not affect in-progress runs
 - [x] Runs started before a snapshot is replaced continue using the snapshot they were created with
-- [ ] UI displays a warning when a user edits a pipeline while a run is `awaiting_human`
+- [ ] UI displays a warning when a user edits a pipeline while a run is `awaiting_human` — VERIFIED 2026-08-15 (partial-small-b sweep): NOT implemented. `PipelineEditorView.vue` has no active-run check; it only offers snapshot selection/revert, never an edit warning (see Known Gaps)
 
 ### Snapshot Querying
 
@@ -108,6 +108,7 @@ status: partial
 - [x] 422 validation for snapshot input (pagination bounds, invalid UUID)
 
 ## QA History
+- **2026-08-15 (coverage sweep partial-small-b): Verified the single unchecked behaviour “UI displays a warning when a user edits a pipeline while a run is awaiting_human” is a genuine gap — `PipelineEditorView.vue` has no active-run/awaiting_human check before edit or revert; added to Known Gaps. All 51 checked behaviours verified against snapshot CRUD + versioning tests. 51/52 behaviours covered.**
 
 - 2026-07-08: Cross-cutting QA (index 335): Updated depends-on with actual feature dependencies (pipelines-core, agents, schemas-core, connectors-hub, model-backends). Verified all 5 known gaps remain valid and unchanged since July 2. Verified all error path behaviour checkboxes still match code (ProgrammingError→501, SQLAlchemyError→503, Exception→500 with logging — all covered by @handle_db_errors decorator plus explicit handler-level catches). Confirmed PRD field mapping `created_by`→`account_id` via `validation_alias`. Fixed ABTestModelsView.vue to wire snapshot tag display and show version number. All unchecked [ ] items still accurate. Status: partial (5 known gaps, 2 UI behaviours untracked).
 
@@ -120,4 +121,5 @@ status: partial
 - Missing UI behaviour specs for snapshot version display in pipeline history view
 - Missing deletion protection lifecycle: what happens to snapshots when a referenced schema version is deprecated?
 - No dedicated admin UI page for browsing snapshot history — version numbers only shown in revert-to-manual dialog
+- No UI warning when editing a pipeline while a run is `awaiting_human` — `PipelineEditorView.vue` has no active-run/awaiting_human check before letting a user edit or revert the pipeline graph (verified 2026-08-15)
 - ABTestModelsView version number display and snapshot tag wiring — fixed in 2026-07-08 QA (index 335)

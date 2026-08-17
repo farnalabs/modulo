@@ -19,6 +19,7 @@ class ProblemType(enum.StrEnum):
     FORBIDDEN = "forbidden"
     NOT_FOUND = "not_found"
     CONFLICT = "conflict"
+    GONE = "gone"
     METHOD_NOT_ALLOWED = "method_not_allowed"
     RATE_LIMITED = "rate_limited"
     FEATURE_REQUIRED = "feature_required"
@@ -37,6 +38,7 @@ _PROBLEM_METADATA: dict[ProblemType, dict[str, Any]] = {
     ProblemType.FORBIDDEN: {"status": 403, "title": "Forbidden"},
     ProblemType.NOT_FOUND: {"status": 404, "title": "Not Found"},
     ProblemType.CONFLICT: {"status": 409, "title": "Conflict"},
+    ProblemType.GONE: {"status": 410, "title": "Gone"},
     ProblemType.METHOD_NOT_ALLOWED: {"status": 405, "title": "Method Not Allowed"},
     ProblemType.RATE_LIMITED: {"status": 429, "title": "Rate Limited"},
     ProblemType.FEATURE_REQUIRED: {"status": 402, "title": "Feature Not Available"},
@@ -144,6 +146,7 @@ def problem_from_http_exception(
         404: ProblemType.NOT_FOUND,
         405: ProblemType.METHOD_NOT_ALLOWED,
         409: ProblemType.CONFLICT,
+        410: ProblemType.GONE,
         422: ProblemType.VALIDATION_ERROR,
         429: ProblemType.RATE_LIMITED,
         501: ProblemType.MIGRATION_REQUIRED,

@@ -6,7 +6,6 @@ import sys
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
-from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -141,9 +140,10 @@ def migrated_db_url(db_url: str) -> str:
     async def _provision_break_glass_roles() -> None:
         """Provision the break-glass DB roles BEFORE the migrations run.
 
-        0036 re-owns four tables to ``modulo_migrate`` and grants EXECUTE on
-        ``deactivate_break_glass`` to ``modulo_app``/``modulo_breakglass``, so
-        all three roles must exist before ``alembic upgrade heads``.
+        The reconciliation chain (0108_schema_org_identity) re-owns tables to
+        ``modulo_migrate`` and grants EXECUTE on ``deactivate_break_glass`` to
+        ``modulo_app``/``modulo_breakglass``, so all three roles must exist
+        before ``alembic upgrade heads``.
         """
         eng = create_async_engine(db_url)
         async with eng.connect() as conn:
@@ -182,54 +182,18 @@ def migrated_db_url(db_url: str) -> str:
         command.upgrade(config, "heads")
         asyncio.run(bootstrap_roles(db_url, app_url))
 
-    async def _existing_cols(conn: Any, table: str) -> set[str]:
-        result = await conn.execute(
-            text(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name = :tbl AND table_schema = 'public'",
-            ),
-            {"tbl": table},
-        )
-        return {row[0] for row in result.fetchall()}
-
     async def _patch_schema() -> None:
-        """Add ORM columns missing from migrations to make CRUD functions work."""
+        """Add the test-only schema surface the migrations don't cover.
+
+        The old ORM column hacks (pipelines.default_autonomy_level,
+        organisations.otel_config_json default, webhook_payloads
+        raw_body/raw_payload, run_daily_facts.telemetry_bytes) are gone — the
+        reconciliation chain (0006/0007/0008) now creates them. Only the
+        runtime-managed LangGraph checkpoint tables and the test-only FORCE RLS
+        remain.
+        """
         eng = create_async_engine(db_url)
         async with eng.connect() as conn:
-            # pipelines: missing default_autonomy_level
-            cols = await _existing_cols(conn, "pipelines")
-            if "default_autonomy_level" not in cols:
-                await conn.execute(
-                    text(
-                        "ALTER TABLE pipelines ADD COLUMN default_autonomy_level VARCHAR(30) DEFAULT 'manual_approval'",
-                    ),
-                )
-
-            # organisations: otel_config_json has no server default, causing NOT NULL
-            # violations on raw SQL INSERTs that don't include the column.
-            cols = await _existing_cols(conn, "organisations")
-            if "otel_config_json" in cols:
-                await conn.execute(
-                    text("ALTER TABLE organisations ALTER COLUMN otel_config_json SET DEFAULT '{}'::json"),
-                )
-
-            # webhook_payloads: ORM expects raw_body + raw_payload (migration has payload_ciphertext)
-            cols = await _existing_cols(conn, "webhook_payloads")
-            if "raw_body" not in cols:
-                await conn.execute(text("ALTER TABLE webhook_payloads ADD COLUMN raw_body BYTEA"))
-            if "raw_payload" not in cols:
-                await conn.execute(text("ALTER TABLE webhook_payloads ADD COLUMN raw_payload JSON"))
-            if "payload_ciphertext" in cols:
-                await conn.execute(text("ALTER TABLE webhook_payloads ALTER COLUMN payload_ciphertext DROP NOT NULL"))
-
-            # run_daily_facts: the analytics ORM maps telemetry_bytes (added with
-            # the analytics fact columns) but no migration creates it. A full
-            # PipelineExecutor.execute finalizes cost and writes a fact row, so
-            # the test DB must carry the column or every real execute test fails.
-            cols = await _existing_cols(conn, "run_daily_facts")
-            if "telemetry_bytes" not in cols:
-                await conn.execute(text("ALTER TABLE run_daily_facts ADD COLUMN telemetry_bytes BIGINT"))
-
             # LangGraph checkpoint tables — created at production startup by
             # ``ModuloPostgresSaver.setup()`` (main.py lifespan), not by any
             # Alembic migration. ``dispatcher_reconcile``'s nodeless-zombie
@@ -312,11 +276,11 @@ async def non_superuser_role(db_engine: AsyncEngine) -> str:
         await conn.execute(text(f'GRANT ALL ON ALL TABLES IN SCHEMA public TO "{role}"'))
         await conn.execute(text(f'GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO "{role}"'))
         await conn.execute(text(f'GRANT ALL ON ALL FUNCTIONS IN SCHEMA public TO "{role}"'))
-        # Grant DML on future tables. Migration round-trip tests (e.g.
-        # test_0074_migration_round_trip) downgrade the shared session-scoped DB
-        # below migration 0093 — which DROPS run_number_counters — then upgrade
-        # back to heads, RECREATING the table. ``GRANT ... ON ALL TABLES`` above
-        # only covers tables that exist at fixture setup, so the recreated table
+        # Grant DML on future tables. The reconciliation chain's guarded DDL
+        # recreates tables idempotently (e.g. run_number_counters) if the chain
+        # ever runs below a table's creation point, so the recreated table must
+        # keep the app role's privileges. ``GRANT ... ON ALL TABLES`` above
+        # only covers tables that exist at fixture setup, so a recreated table
         # loses the app role's privileges and trigger fire paths fail with
         # "permission denied for table run_number_counters". Default privileges
         # keep every future/recreated table granted to the role, mirroring the

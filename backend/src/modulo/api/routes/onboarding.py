@@ -25,6 +25,9 @@ from modulo.db.models.run import Run
 from modulo.db.models.schema import Schema
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
+_MSG_TRUTH_CLASSIFIER = "Truth Classifier"
+
+
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/onboarding", tags=["onboarding"])
@@ -336,7 +339,7 @@ async def seed_examples(
         truth_schema = await create_schema(
             session,
             org_id=principal.organisation_id,
-            name="Truth Classifier",
+            name=_MSG_TRUTH_CLASSIFIER,
             account_id=principal.account_id,
             description="Classifies statements as TRUE, FALSE, or UNDETERMINED.",
         )
@@ -396,7 +399,7 @@ async def seed_examples(
             agent = await create_agent(
                 session,
                 org_id=principal.organisation_id,
-                name="Truth Classifier",
+                name=_MSG_TRUTH_CLASSIFIER,
                 account_id=principal.account_id,
                 is_executable=True,
                 input_schema_id=statement_schema.id,
@@ -426,7 +429,7 @@ async def seed_examples(
                     "id": str(node_id),
                     "node_type": "agent",
                     "position": {"x": 250, "y": 200},
-                    "label": "Truth Classifier",
+                    "label": _MSG_TRUTH_CLASSIFIER,
                     "output_schema_id": str(truth_schema.id),
                     "agent_id": str(agent_id),
                     "connector_binding": None,

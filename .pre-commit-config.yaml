@@ -39,12 +39,6 @@
         language: system
         files: ^(\.github/workflows/ci\.yml|AGENTS\.md)$
         pass_filenames: false
-      - id: pre-commit-checks
-        name: pre-commit checks (Lessons Learned)
-        entry: powershell -NoProfile -File tools/run-pre-commit-checks.ps1
-        language: system
-        files: \.(vue|ts|py|ps1)$
-        pass_filenames: false
       - id: pester
         name: Pester 5 PowerShell tests
         entry: powershell -NoProfile -File tools/run-pester-tests.ps1
@@ -54,7 +48,7 @@
         stages: [pre-commit, manual]
       - id: check-migration-heads
         name: check migration number/revision collisions
-        entry: powershell -NoProfile -File tools/run-check-migration-heads.ps1
+        entry: powershell -NoProfile -File tools/check-migration-heads.ps1
         language: system
         files: ^backend/src/modulo/db/migrations/versions/.*\.py$
         pass_filenames: false

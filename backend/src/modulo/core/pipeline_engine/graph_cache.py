@@ -108,7 +108,17 @@ def _make_gate_kickback_router(
     normal_target: str,
     reject_target_str: str,
 ) -> Callable[[dict[str, Any]], str]:
-    """Build a router that kicks back to reject_target on HITL rejection."""
+    """Build a router that kicks back to reject_target on HITL rejection.
+
+    FAR-210 (reject→correction edge): a gate config MAY declare a
+    ``correction_target``, but the single-node correction node does not exist
+    in ``node_runner`` and no production code dispatches
+    ``FeedbackManager.run_single_node_correction`` from the graph path — so
+    routing a rejection to a ``correction_target`` would be dead routing state.
+    Until the seam is wired (tracked as a follow-up), a rejection always kicks
+    back to the plain reject target; T1's ``recover_node`` override stays the
+    break-glass path.
+    """
 
     def _router(state: dict[str, Any]) -> str:
         decision = state.get("_hitl_decision")
@@ -558,7 +568,10 @@ def build_graph_from_json(
 
                     if reject_target:
                         reject_target_str = str(reject_target)
-                        gate_router = _make_gate_kickback_router(target, reject_target_str)
+                        gate_router = _make_gate_kickback_router(
+                            target,
+                            reject_target_str,
+                        )
                         graph.add_conditional_edges(gate_id, gate_router)
                         target_ids.add(reject_target_str)
                     else:

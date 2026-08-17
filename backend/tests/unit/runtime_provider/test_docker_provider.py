@@ -242,6 +242,24 @@ async def test_create_workspace_propagates_container_failure(
     assert not provider._workspaces
 
 
+async def test_create_workspace_daemon_unreachable_raises_structured_error(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    """A ConnectionError from the Docker daemon surfaces as a structured 'daemon unreachable' error."""
+    mock_docker_client.containers.create.side_effect = ConnectionError("Cannot connect to the Docker daemon")
+
+    with pytest.raises(RuntimeError, match="Unable to reach the Docker daemon"):
+        await provider.create_workspace(
+            WorkspaceSpec(
+                environment_profile_id=uuid.uuid4(),
+                organisation_id=uuid.uuid4(),
+            )
+        )
+
+    assert not provider._workspaces
+
+
 # ------------------------------------------------------------------
 # exec_command
 # ------------------------------------------------------------------

@@ -19,6 +19,7 @@ code:
   - backend/src/modulo/core/pipeline_engine/executor.py
   - backend/src/modulo/core/pipeline_engine/recovery.py
   - backend/src/modulo/api/routes/teams.py
+  - backend/src/modulo/api/routes/model_backends.py
 unit-tests:
   - backend/tests/unit/audit_logger/test_audit_logger.py
   - backend/tests/unit/audit_logger/test_append_only.py
@@ -27,6 +28,7 @@ unit-tests:
   - backend/tests/unit/hitl_manager/test_hitl_manager.py
   - backend/tests/unit/api/test_api_keys_endpoint.py
   - backend/tests/unit/api/test_teams.py
+  - backend/tests/unit/api/test_model_backends_endpoint.py
 
 depends-on: [feat-core-db-abstraction-core]
 status: partial
@@ -105,7 +107,7 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 - [ ] `agent_prompt_changed` — agent_id, user_id, old_version, new_version
 - [ ] `user_permission_changed` — target_user_id, changed_by, old_role, new_role
 - [ ] `connector_credentials_updated` — connector_id, user_id
-- [ ] `model_backend_credentials_updated` — backend_id, user_id
+- [x] `model_backend_credentials_updated` — backend_id, user_id (dispatched under its exact PRD name from the model-backends update route when an `api_key` is supplied in the PATCH; backend id as `resource_id`; test: `test_update_model_backend_credentials_emits_prd_credentials_audit`)
 - [ ] `schema_version_deprecated` — schema_id, version, user_id
 - [x] `api_key_created` — key_id (not raw key), user_id
 - [x] `api_key_revoked` — key_id, revoked_by
@@ -152,6 +154,10 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 - [x] `team_member_role_changed` — team_id, user_id, old_role, new_role (dispatched from `teams.change_member_role_endpoint`, membership id as `resource_id`)
 - [x] `feedback.created` — run_id, gate_id, feedback_handler_type (dispatched from `feedback.create_feedback`, record id as `resource_id`)
 - [x] `feedback.status_changed` — old_status, new_status, action, run_id, gate_id, correction_run_id (dispatched from the feedback update-status and inbox-review routes, record id as `resource_id`; failure-isolated — a broken append never fails the transition)
+- [x] `model_backend.created` — name, provider, model_id, tier, fallback_backend_ids, has_credentials (dispatched from the model-backends create route, backend id as `resource_id`)
+- [x] `model_backend.updated` — backend_id, changed_fields (non-credential PATCH edits; dispatched from the model-backends update route)
+- [x] `model_backend.deleted` — name, provider, model_id, tier (entity details captured pre-delete; dispatched from the model-backends delete route, backend id as `resource_id`)
+- [x] `model_backend_credentials_updated` — backend_id, name, provider, model_id (PRD §8.12 exact name; dispatched from the model-backends update route when an `api_key` is supplied in the PATCH)
 
 ### Edge Cases
 
@@ -204,7 +210,7 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 - verify_chain limited to 10000 events by default — large orgs may need higher limit or batched verification
 - No event retention policy (events accumulate indefinitely)
 - No event schema versioning (payload structure could change between event types)
-- **PRD-vs-implementation divergence**: 8 of the 18 PRD-specified event types (`pipeline_changed`, `agent_prompt_changed`, `user_permission_changed`, `connector_credentials_updated`, `model_backend_credentials_updated`, `schema_version_deprecated`, `auth_event`, `team_membership_revoked`) are NOT dispatched. Production code uses dot-notation event types with a different naming convention/granularity. The other 10 are dispatched — 6 under their exact PRD names (`run_started`, `hitl_claimed`, `api_key_created`, `api_key_revoked`, `team_created`, `team_deleted`) and 4 under dot-notation equivalents that carry the same data (`hitl_approved`→`hitl.output_delivered`, `hitl_rejected`→`hitl.output_rejected`, `hitl_output_delivered`→`hitl.output_delivered`, `team_renamed`→`team_updated`), plus `resource_team_ownership_changed` under its exact PRD name. **[RESOLVED 2026-08-15]** — down from 14 undispatched.
+- **PRD-vs-implementation divergence**: 7 of the 18 PRD-specified event types (`pipeline_changed`, `agent_prompt_changed`, `user_permission_changed`, `connector_credentials_updated`, `schema_version_deprecated`, `auth_event`, `team_membership_revoked`) are NOT dispatched. Production code uses dot-notation event types with a different naming convention/granularity. The other 11 are dispatched — 7 under their exact PRD names (`run_started`, `hitl_claimed`, `api_key_created`, `api_key_revoked`, `team_created`, `team_deleted`, `model_backend_credentials_updated`) and 4 under dot-notation equivalents that carry the same data (`hitl_approved`→`hitl.output_delivered`, `hitl_rejected`→`hitl.output_rejected`, `hitl_output_delivered`→`hitl.output_delivered`, `team_renamed`→`team_updated`), plus `resource_team_ownership_changed` under its exact PRD name. **[RESOLVED 2026-08-15]** — down from 14 undispatched; **[2026-08-16]** `model_backend_credentials_updated` dispatched → 7 remaining.
 - ~~**No `run_started` event**: pipeline runs start without an audit event. The `run_started` PRD event is not dispatched anywhere.~~ **[RESOLVED 2026-08-15]** — dispatched from `PipelineExecutor._check_capacity` at the pending→running claim transition (fires once per run; resumes excluded).
 - ~~**No `hitl_claimed` audit event**: Claim acquisition is not recorded in the audit trail (`hitl.claim_expired` is dispatched, but the initial claim itself is not).~~ **[RESOLVED 2026-08-15]** — dispatched from `HITLManager.claim()` with run_id/gate_id/user_id/team_id/expiry_minutes.
 - ~~**No team CRUD audit events**: team creation, rename, deletion, membership changes, and role changes are not audited.~~ **[RESOLVED]** — team create/update/delete were already dispatched (`team_created`/`team_updated`/`team_deleted`); team membership add/remove/role-change are now dispatched too (`team_member_added`/`team_member_removed`/`team_member_role_changed` from the teams membership routes). Remaining divergence: the rename event fires as `team_updated` rather than PRD's `team_renamed`.
@@ -219,6 +225,16 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 - **8 unguarded audit dispatch calls fixed**: All previously uncovered dispatch calls now have error handling protection (expiry_job, recovery, sso_provider, admin team deletion, run_purge transaction scoping, rotation deadlock)
 
 ## QA History
+
+### 2026-08-16 — improve-architecture (model-backend CRUD audit events)
+**RESOLVED the "No audit events on CRUD operations" known gap** for model backends (`api/routes/model_backends.py`):
+- **`model_backend.created`** — dispatched from the create route after the write commits (fresh transaction, RLS re-established), payload `name`/`provider`/`model_id`/`tier`/`fallback_backend_ids`/`has_credentials`, backend id as `resource_id`.
+- **`model_backend.updated`** — dispatched from the update route for non-credential PATCH edits, payload `backend_id` + the changed non-credential fields (credentials excluded, UUIDs stringified).
+- **`model_backend_credentials_updated`** — the PRD §8.12 event, dispatched under its exact PRD name when a PATCH supplies an `api_key` (payload `backend_id`/`name`/`provider`/`model_id`; the raw key never appears in any payload).
+- **`model_backend.deleted`** — dispatched from the delete route with the entity details captured pre-delete (a post-delete read returns nothing); a 404 emits nothing.
+- All 4 dispatch sites follow the api_keys/teams gold pattern: fresh post-commit transaction with `set_rls_org` + `set_rls_user_context`, `asyncio.CancelledError: raise` + broad `except Exception` → logged `model_backends.audit_append_failed`, never failing the completed operation.
+- **Tests** — 9 new endpoint unit tests in `test_model_backends_endpoint.py` (create/update/credentials-rotation/delete emits + per-route audit-failure isolation + 404 no-emit + raw-key-never-leaks).
+- Updated product map: PRD `model_backend_credentials_updated` row `[ ]`→`[x]` (divergence count 8 → 7), 4 new implemented-event entries, `code:`/`unit-tests:` frontmatter.
 
 ### 2026-08-15 — dist/partial-core2 (behaviour verification)
 Marked 4 PRD event-type rows `[ ]`→`[x]` after verifying the dispatch sites and their tests:

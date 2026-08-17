@@ -13,7 +13,7 @@ code:
   - backend/src/modulo/api/routes/environment_profiles.py
   - backend/src/modulo/api/routes/environments.py
   - backend/src/modulo/core/graph_validator/__init__.py
-  - backend/src/modulo/db/migrations/versions/0013_add_local_provider_type.py
+  - backend/src/modulo/db/migrations/versions/0110_schema_pipeline_runtime.py
   - backend/src/modulo/connectors/shell/__init__.py
 unit-tests:
   - backend/tests/unit/core/runtime_provider/test_abc.py
@@ -193,7 +193,7 @@ Provided by existing tests: test_environment_capabilities.py
 - [x] Local exec_command FileNotFoundError returns ExecResult with exit_code=-1
 - [x] Local exec_command timeout returns ExecResult with exit_code=-1
 - [x] E2B exec_command returns ExecResult with exit_code=-1 on failure
-- [ ] E2B sandbox constructor failure — stack trace logged, lacks structured user-facing error
+- [x] E2B sandbox constructor failure — surfaces structured RuntimeError naming the template
 - [ ] Test SSE endpoint failure — broad Exception catch logs but returns generic message
 
 ### Edge Cases
@@ -211,9 +211,9 @@ Provided by existing tests: test_environment_capabilities.py
 - [x] Docker env entries with control characters filtered out
 - [x] Docker resource_limits memory_mb < 4 defaults to 512MB
 - [x] E2B exec_command with missing proc attributes handled gracefully
-- [ ] E2B sandbox timeout during provisioning — unhandled asyncio.TimeoutError in create_workspace
-- [ ] Docker client initialization failure (daemon unreachable) — unhandled ConnectionError
-- [ ] Local workspace tempdir creation failure (disk full) — unhandled OSError
+- [x] E2B sandbox timeout during provisioning — caught and surfaced as a structured RuntimeError
+- [x] Docker client initialization failure (daemon unreachable) — caught (ConnectionError/OSError) and surfaced as structured RuntimeError
+- [x] Local workspace tempdir creation failure (disk full) — caught (OSError) and surfaced as structured RuntimeError
 - [ ] Concurrent profile name collision under high insert volume — IntegrityError now caught → 409
 
 ### Resilience & Integration Robustness
@@ -233,6 +233,21 @@ Provided by existing tests: test_environment_capabilities.py
 - [ ] No provider health check / liveness probe
 
 ## QA History (index 162 — cross-cutting)
+
+### 2026-08-15 — Structured provider error handling (dist/partial-core3)
+
+**Implemented + tested:**
+- E2B `create_workspace`: sandbox constructor failure now raises a structured `RuntimeError` naming the template (previously a bare re-raise / stack-trace-only). Provisioning timeout (`asyncio.wait_for` → `TimeoutError`) now raises a structured `RuntimeError` (`"Timed out after Ns provisioning E2B sandbox..."`) instead of leaking the raw `TimeoutError`.
+- Docker `create_workspace`: `ConnectionError`/`OSError` from an unreachable daemon now raises a structured `RuntimeError` (`"Unable to reach the Docker daemon..."`) instead of a raw `ConnectionError`.
+- Local `create_workspace`: tempdir creation failure (`OSError`, e.g. disk full) now raises a structured `RuntimeError` naming the profile.
+
+**Tests added (prove-the-fix, one per path):**
+- `test_e2b.py`: `test_create_workspace_sandbox_constructor_failure_is_structured`, `test_create_workspace_provisioning_timeout_is_structured`
+- `test_docker_provider.py`: `test_create_workspace_daemon_unreachable_raises_structured_error`
+- `test_local.py`: `test_create_workspace_tempdir_failure_raises_structured_error`
+
+Flipped the four corresponding Edge Cases / Error Handling checkboxes `[ ]`→`[x]`.
+
 
 ### Findings fixed
 - Fixed CRITICAL: Added `SQLAlchemyError` catch → 503 to all 6 routes in environments.py (ProgrammingError → 501 was already there, but connection/deadlock failures propagated as raw 500)

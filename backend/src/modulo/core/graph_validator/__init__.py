@@ -85,6 +85,551 @@ def _string_or_default(value: object, default: str = "?") -> str:
     return default if value is None else str(value)
 
 
+def _check_list_type_mismatch(path: str, out_type: object, in_type: list[object]) -> list[str]:
+    """Input is a nullable type list: output must be a subset of the input types."""
+    if isinstance(out_type, list):
+        return [f"{path}: output type '{ot}' not in input types {in_type}" for ot in out_type if ot not in in_type]
+    if out_type not in in_type:
+        return [f"{path}: output type '{out_type}' not in input types {in_type}"]
+    return []
+
+
+def _check_nullable_type_mismatch(path: str, out_type: list[object], in_type: object) -> list[str]:
+    """Output is a nullable type list: each entry must be the input type (or null)."""
+    errors = [f"{path}: type mismatch '{ot}' -> '{in_type}'" for ot in out_type if ot not in ("null", in_type)]
+    if "null" in out_type and not (isinstance(in_type, list) and "null" in in_type):
+        errors.append(f"{path}: output allows null but input does not")
+    return errors
+
+
+def _check_additional_properties(
+    in_field: dict[str, Any],
+    out_field: dict[str, Any],
+    path: str,
+    errors: list[str],
+) -> None:
+    """When the input forbids extra properties, flag any output-only properties."""
+    in_addl = in_field.get("additionalProperties", True)
+    if in_addl is False:
+        out_props_raw = out_field.get("properties", {})
+        in_props_raw = in_field.get("properties", {})
+        out_props = set(out_props_raw.keys()) if isinstance(out_props_raw, dict) else set()
+        in_props = set(in_props_raw.keys()) if isinstance(in_props_raw, dict) else set()
+        extra = out_props - in_props
+        if extra:
+            errors.append(f"{path}: extra properties {extra} not allowed (additionalProperties: false)")
+
+
+def _check_parameter_node(
+    node: dict[str, Any],
+    schemas: dict[uuid.UUID, ParameterSchema],
+    sets: dict[uuid.UUID, ParameterSet],
+    result: ValidationResult,
+) -> None:
+    """Validate ONE agent node's parameter_schema_id / parameter_set_id references."""
+    node_id = _string_or_default(node.get("id"))
+    raw_schema_id = node.get("parameter_schema_id")
+    schema_id: uuid.UUID | None = None
+    if raw_schema_id is not None:
+        schema_id = try_parse_uuid(raw_schema_id)
+        if schema_id is None:
+            result.error(
+                "PARAMETER_SCHEMA_INVALID_ID",
+                f"Node '{node_id}': parameter_schema_id is not a valid UUID",
+                node_id=node_id,
+            )
+            return
+        schema = schemas.get(schema_id)
+        if schema is None:
+            result.error(
+                "PARAMETER_SCHEMA_NOT_FOUND",
+                f"Node '{node_id}': ParameterSchema '{schema_id}' not found",
+                node_id=node_id,
+            )
+            return
+
+    raw_set_id = node.get("parameter_set_id")
+    if raw_set_id is None:
+        return
+    set_id = try_parse_uuid(raw_set_id)
+    if set_id is None:
+        result.error(
+            "PARAMETER_SET_INVALID_ID",
+            f"Node '{node_id}': parameter_set_id is not a valid UUID",
+            node_id=node_id,
+        )
+        return
+    ps = sets.get(set_id)
+    if ps is None:
+        result.error(
+            "PARAMETER_SET_NOT_FOUND",
+            f"Node '{node_id}': ParameterSet '{set_id}' not found or belongs to a different org",
+            node_id=node_id,
+        )
+        return
+    # Check schema_version matches.
+    if raw_schema_id is not None:
+        schema_id = try_parse_uuid(raw_schema_id)
+        if schema_id is not None and schema_id != ps.parameter_schema_id:
+            result.error(
+                "PARAMETER_SET_SCHEMA_MISMATCH",
+                f"Node '{node_id}': ParameterSet '{set_id}' belongs to schema "
+                f"'{ps.parameter_schema_id}', not '{schema_id}'",
+                node_id=node_id,
+            )
+    # Check for schema drift: has the schema been updated since the set was created?
+    if schema_id is not None:
+        schema = schemas.get(schema_id)
+        if schema is not None and schema.version > ps.schema_version:
+            result.warning(
+                "PARAMETER_SCHEMA_DRIFT",
+                f"Node '{node_id}': ParameterSchema '{schema_id}' has been updated to "
+                f"version {schema.version} but ParameterSet '{set_id}' was created against "
+                f"version {ps.schema_version}. Consider updating the set.",
+                node_id=node_id,
+            )
+        # Composite schema drift (RFC §6.5): when schema defines params that the set doesn't have.
+        if schema is not None:
+            schema_param_names: set[str] = set()
+            for param in schema.parameters or []:
+                if isinstance(param, dict) and "name" in param:
+                    schema_param_names.add(param["name"])
+            set_param_names: set[str] = set(ps.values.keys()) if isinstance(ps.values, dict) else set()
+            missing_from_set = schema_param_names - set_param_names
+            if missing_from_set:
+                result.warning(
+                    "PARAMETER_SCHEMA_DRIFT_COMPOSITE",
+                    f"Node '{node_id}': ParameterSchema '{schema_id}' defines parameters "
+                    f"{missing_from_set} that are not present in ParameterSet '{set_id}'. "
+                    f"Default values will be used.",
+                    node_id=node_id,
+                )
+
+
+def _check_composite_node(
+    node: dict[str, Any],
+    node_ref_map: dict[str, uuid.UUID],
+    found: dict[uuid.UUID, CompositeTemplate],
+    validator: "GraphValidator",
+    result: ValidationResult,
+) -> None:
+    """Validate ONE composite node: template existence, ports, output validation."""
+    node_id = _string_or_default(node.get("id"))
+    if node.get("composite_ref") is None:
+        return
+    ref = node_ref_map.get(node_id)
+    if ref is None:
+        return
+    template = found.get(ref)
+    if template is None:
+        result.error(
+            "COMPOSITE_TEMPLATE_NOT_FOUND",
+            f"Node '{node_id}': CompositeTemplate '{ref}' not found",
+            node_id=node_id,
+        )
+        return
+
+    validator._check_composite_subgraph(template, node_id, result)
+
+    parameter_ports: list[dict[str, Any]] = template.parameter_ports_json or []
+    parameter_values: dict[str, Any] = node.get("composite_parameter_values") or {}
+    for port in parameter_ports:
+        if port.get("required") and port.get("name") not in parameter_values:
+            result.error(
+                "COMPOSITE_MISSING_PARAMETER",
+                f"Node '{node_id}': required parameter '{port.get('name')}' has no value",
+                node_id=node_id,
+            )
+
+    output_validation: dict[str, Any] = node.get("output_validation", {})
+    if output_validation:
+        validator._check_output_validation(node_id, output_validation, result)
+
+
+def _check_composite_sub_nodes(
+    template: CompositeTemplate,
+    node_id: str,
+    sub_nodes: list[Any],
+    result: ValidationResult,
+) -> set[str]:
+    """Validate a composite template's sub-nodes; returns the sub-node id set."""
+    sub_ids: set[str] = set()
+    for sub in sub_nodes:
+        if not isinstance(sub, dict):
+            result.error(
+                "COMPOSITE_SUBGRAPH_INVALID_NODE",
+                f"Node '{node_id}': CompositeTemplate '{template.id}' contains a non-dict sub-node",
+                node_id=node_id,
+            )
+            continue
+        sid = _string_or_default(sub.get("id"))
+        if sid in sub_ids:
+            result.error(
+                "COMPOSITE_SUBGRAPH_DUPLICATE_NODE_ID",
+                f"Node '{node_id}': CompositeTemplate '{template.id}' has duplicate sub-node id '{sid}'",
+                node_id=node_id,
+            )
+        sub_ids.add(sid)
+        node_type = sub.get("node_type", "agent")
+        if node_type not in ("agent", "manual", "composite", "sandbox_agent"):
+            result.error(
+                "COMPOSITE_SUBGRAPH_INVALID_TYPE",
+                f"Node '{node_id}': CompositeTemplate '{template.id}' sub-node '{sid}' has "
+                f"invalid node_type '{node_type}'",
+                node_id=node_id,
+            )
+        if node_type == "sandbox_agent":
+            _check_composite_sandbox_sub_node(template, node_id, sid, sub, result)
+    return sub_ids
+
+
+def _check_composite_sandbox_sub_node(
+    template: CompositeTemplate,
+    node_id: str,
+    sid: str,
+    sub: dict[str, Any],
+    result: ValidationResult,
+) -> None:
+    """Validate a sandbox_agent composite sub-node's command + template config."""
+    cmd = sub.get("agent_command", "")
+    if not cmd or not str(cmd).strip():
+        result.error(
+            "COMPOSITE_SUBGRAPH_SANDBOX_MISSING_COMMAND",
+            f"Node '{node_id}': CompositeTemplate '{template.id}' sub-node '{sid}' is missing required agent_command",
+            node_id=node_id,
+        )
+    if not sub.get("template_id"):
+        result.error(
+            "COMPOSITE_SUBGRAPH_SANDBOX_MISSING_TEMPLATE",
+            f"Node '{node_id}': CompositeTemplate '{template.id}' sub-node '{sid}' has no template_id",
+            node_id=node_id,
+        )
+
+
+def _check_composite_sub_edges(
+    template: CompositeTemplate,
+    node_id: str,
+    sub_ids: set[str],
+    sub_edges: list[Any],
+    result: ValidationResult,
+) -> None:
+    """Validate a composite template's sub-edge references + gate support."""
+    for edge in sub_edges:
+        if not isinstance(edge, dict):
+            result.error(
+                "COMPOSITE_SUBGRAPH_INVALID_EDGE",
+                f"Node '{node_id}': CompositeTemplate '{template.id}' contains a non-dict sub-edge",
+                node_id=node_id,
+            )
+            continue
+        if edge.get("hitl_gate_config"):
+            result.error(
+                "COMPOSITE_SUBGRAPH_GATE_UNSUPPORTED",
+                f"Node '{node_id}': CompositeTemplate '{template.id}' sub-edge carries a HITL gate "
+                f"config which is not supported in composite sub-pipelines (no HITL write path exists)",
+                node_id=node_id,
+            )
+        src = str(edge.get("source"))
+        tgt = str(edge.get("target"))
+        if src not in sub_ids:
+            result.error(
+                "COMPOSITE_SUBGRAPH_EDGE_BAD_SOURCE",
+                f"Node '{node_id}': CompositeTemplate '{template.id}' sub-edge references unknown source '{src}'",
+                node_id=node_id,
+            )
+        if tgt not in sub_ids:
+            result.error(
+                "COMPOSITE_SUBGRAPH_EDGE_BAD_TARGET",
+                f"Node '{node_id}': CompositeTemplate '{template.id}' sub-edge references unknown target '{tgt}'",
+                node_id=node_id,
+            )
+
+
+def _check_agent_capabilities(
+    agent: Agent,
+    profile: EnvironmentProfile,
+    profile_caps: set[str],
+    result: ValidationResult,
+) -> None:
+    """Flag an agent whose required capabilities are not declared by the profile."""
+    required: list[str] = agent.required_environment_capabilities or []
+    if not required:
+        return
+    missing = [c for c in required if c not in profile_caps]
+    if missing:
+        result.error(
+            "ENV_MISSING_CAPABILITIES",
+            f"Agent '{agent.name}' requires capabilities {missing} not declared by EnvironmentProfile '{profile.name}'",
+        )
+
+
+def _check_sandbox_command(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
+    """Sandbox check 1: agent_command must be non-empty."""
+    cmd = node.get("agent_command", "")
+    if not cmd or not str(cmd).strip():
+        result.error(
+            "SANDBOX_MISSING_COMMAND",
+            f"Sandbox agent node '{nid}' is missing required agent_command",
+            node_id=nid,
+        )
+
+
+def _check_sandbox_template(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
+    """Sandbox check 2: template_id must be set to a known-good sandbox template."""
+    template_id = node.get("template_id")
+    if not template_id:
+        result.warning(
+            "SANDBOX_MISSING_TEMPLATE",
+            f"Sandbox agent node '{nid}' has no template_id (expected 'opencode' or 'modulo-opencode')",
+            node_id=nid,
+        )
+    elif template_id not in _KNOWN_SANDBOX_TEMPLATES:
+        result.warning(
+            "SANDBOX_UNKNOWN_TEMPLATE",
+            f"Sandbox agent node '{nid}' template_id '{template_id}' is not a known-good sandbox "
+            "template (expected 'opencode' or 'modulo-opencode')",
+            node_id=nid,
+        )
+
+
+def _check_sandbox_timeout(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
+    """Sandbox check 3: timeout_seconds bounds (60-3600)."""
+    timeout = node.get("timeout_seconds")
+    if timeout is None:
+        return
+    try:
+        t = int(timeout) if not isinstance(timeout, int) else timeout
+        if t < 60 or t > 3600:
+            result.warning(
+                "SANDBOX_TIMEOUT_BOUNDS",
+                f"Sandbox agent node '{nid}' timeout_seconds={t} is outside recommended range 60-3600s",
+                node_id=nid,
+            )
+    except (ValueError, TypeError):
+        result.warning(
+            "SANDBOX_TIMEOUT_INVALID",
+            f"Sandbox agent node '{nid}' timeout_seconds is not a valid integer",
+            node_id=nid,
+        )
+
+
+def _check_sandbox_stall_timeout(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
+    """Sandbox check 7: stall_timeout_seconds must be positive and not exceed timeout_seconds."""
+    stall_timeout = node.get("stall_timeout_seconds")
+    if stall_timeout is None:
+        return
+    timeout = node.get("timeout_seconds")
+    try:
+        st = float(stall_timeout) if not isinstance(stall_timeout, (int, float)) else stall_timeout
+        if st <= 0:
+            result.warning(
+                "SANDBOX_STALL_TIMEOUT_INVALID",
+                f"Sandbox agent node '{nid}' stall_timeout_seconds={st} is not a positive number",
+                node_id=nid,
+            )
+        elif timeout is not None:
+            timeout_seconds = _as_int_or_none(timeout)
+            if timeout_seconds is not None and st > timeout_seconds:
+                result.warning(
+                    "SANDBOX_STALL_TIMEOUT_GT_TIMEOUT",
+                    f"Sandbox agent node '{nid}' stall_timeout_seconds={st} exceeds "
+                    f"timeout_seconds={timeout_seconds} — a stall timeout larger than the total "
+                    "timeout is pointless",
+                    node_id=nid,
+                )
+    except (ValueError, TypeError):
+        result.warning(
+            "SANDBOX_STALL_TIMEOUT_INVALID",
+            f"Sandbox agent node '{nid}' stall_timeout_seconds is not a valid number",
+            node_id=nid,
+        )
+
+
+def _as_int_or_none(value: Any) -> int | None:
+    try:
+        return int(value) if not isinstance(value, int) else value
+    except (ValueError, TypeError):
+        return None
+
+
+def _check_sandbox_context_files(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
+    """Sandbox check 4: context_files paths must be absolute."""
+    context_files = node.get("context_files")
+    if isinstance(context_files, dict):
+        for source_path in context_files:
+            if not source_path.startswith("/"):
+                result.warning(
+                    "SANDBOX_CONTEXT_PATH_RELATIVE",
+                    f"Sandbox agent node '{nid}' context_files source '{source_path}' "
+                    f"is not an absolute path (should start with /)",
+                    node_id=nid,
+                )
+
+
+def _check_sandbox_env_vars(
+    node: dict[str, Any],
+    nid: str,
+    reserved_prefixes: tuple[str, ...],
+    result: ValidationResult,
+) -> None:
+    """Sandbox check 5: env_vars must not use reserved prefixes."""
+    env_vars = node.get("env_vars")
+    if isinstance(env_vars, dict):
+        for key in env_vars:
+            for prefix in reserved_prefixes:
+                if key.startswith(prefix):
+                    result.warning(
+                        "SANDBOX_RESERVED_ENV_VAR",
+                        f"Sandbox agent node '{nid}' env var '{key}' uses reserved "
+                        f"prefix '{prefix}'. System-reserved env vars are set automatically.",
+                        node_id=nid,
+                    )
+
+
+def _check_sandbox_output_schema(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
+    """Sandbox check 6: output_schema_json basic structure."""
+    schema_json = node.get("output_schema_json")
+    if isinstance(schema_json, dict) and "type" not in schema_json and "$ref" not in schema_json:
+        result.warning(
+            "SANDBOX_SCHEMA_INCOMPLETE",
+            f"Sandbox agent node '{nid}' output_schema_json lacks 'type' or '$ref'",
+            node_id=nid,
+        )
+
+
+def _check_edge_references(
+    edges: list[dict[str, Any]],
+    node_ids: set[str],
+    result: ValidationResult,
+) -> None:
+    """Flag edges whose source/target are not graph nodes."""
+    for edge in edges:
+        src = _string_or_default(edge.get("source"))
+        tgt = _string_or_default(edge.get("target"))
+        if src not in node_ids:
+            result.error("TOPOLOGY_UNKNOWN_SOURCE", f"Edge source '{src}' is not a node")
+        if tgt not in node_ids:
+            result.error("TOPOLOGY_UNKNOWN_TARGET", f"Edge target '{tgt}' is not a node")
+
+
+def _check_loop_default_target(
+    edge: dict[str, Any],
+    source: str,
+    target: str,
+    node_ids: set[str],
+    result: ValidationResult,
+) -> None:
+    """Loop constraint 1: default_target must exist and reference a node."""
+    default_raw = edge.get("default_target")
+    if default_raw is None:
+        result.error(
+            "LOOP_MISSING_DEFAULT_TARGET",
+            f"Loop edge from '{source}' to '{target}' has no default_target",
+            node_id=source,
+        )
+        return
+    default_target = str(default_raw)
+    if default_target not in node_ids:
+        result.error(
+            "LOOP_DEFAULT_TARGET_NOT_FOUND",
+            f"Loop edge from '{source}' default_target '{default_target}' is not a node",
+            node_id=source,
+        )
+
+
+def _check_loop_max_iterations(edge: dict[str, Any], source: str, result: ValidationResult) -> None:
+    """Loop constraint 2: max_iterations must be a positive integer if set."""
+    max_it = edge.get("max_iterations")
+    if max_it is not None and (not isinstance(max_it, int) or isinstance(max_it, bool) or max_it < 0):
+        result.error(
+            "LOOP_INVALID_MAX_ITERATIONS",
+            f"Loop edge from '{source}' max_iterations must be a non-negative integer (got {max_it!r})",
+            node_id=source,
+        )
+
+
+def _check_loop_expression(edge: dict[str, Any], source: str, result: ValidationResult) -> None:
+    """Loop constraint 3: condition_expression must be valid JMESPath if set."""
+    expr: object = edge.get("condition_expression")
+    if isinstance(expr, str) and expr.strip():
+        try:
+            jmespath.compile(expr.strip())
+        except jmespath.exceptions.JMESPathError as exc:
+            result.error(
+                "LOOP_INVALID_EXPRESSION",
+                f"Loop edge from '{source}': invalid JMESPath expression: {exc}",
+                node_id=source,
+            )
+
+
+def _check_llm_routing_prompt(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
+    """LLM routing 1: routing_prompt must be non-empty."""
+    routing_prompt: object = node.get("routing_prompt")
+    if not isinstance(routing_prompt, str) or not routing_prompt.strip():
+        result.error(
+            "LLM_ROUTING_MISSING_PROMPT",
+            f"LLM routing node '{nid}' requires a non-empty routing_prompt",
+            node_id=nid,
+        )
+
+
+def _check_llm_routing_labels(
+    node: dict[str, Any],
+    edges: list[dict[str, Any]],
+    nid: str,
+    result: ValidationResult,
+) -> None:
+    """LLM routing 2: outgoing non-reject edges must have unique routing_labels."""
+    labels: list[str] = []
+    for edge in edges:
+        if _string_or_default(edge.get("source"), _string_or_default(edge.get("source_node_id"), "")) != nid:
+            continue
+        if edge.get("type", edge.get("edge_type", "")) == "reject":
+            continue
+        label: object = edge.get("routing_label")
+        if not label or not str(label).strip():
+            result.error(
+                "LLM_ROUTING_MISSING_LABEL",
+                f"Edge from LLM routing node '{nid}' is missing a routing_label",
+                node_id=nid,
+            )
+            continue
+        label_str = str(label)
+        if label_str in labels:
+            result.error(
+                "LLM_ROUTING_DUPLICATE_LABEL",
+                f"Edge from LLM routing node '{nid}' has duplicate routing_label '{label_str}'",
+                node_id=nid,
+            )
+        labels.append(label_str)
+
+
+def _check_llm_routing_default(
+    node: dict[str, Any],
+    nid: str,
+    node_ids: set[str],
+    result: ValidationResult,
+) -> None:
+    """LLM routing 3: default_target must exist and reference a valid node."""
+    default_raw = node.get("default_target")
+    if default_raw is None:
+        result.error(
+            "LLM_ROUTING_MISSING_DEFAULT",
+            f"LLM routing node '{nid}' requires a default_target",
+            node_id=nid,
+        )
+        return
+    default_target = str(default_raw)
+    if default_target not in node_ids:
+        result.error(
+            "LLM_ROUTING_DEFAULT_NOT_FOUND",
+            f"LLM routing node '{nid}' default_target '{default_target}' is not a node",
+            node_id=nid,
+        )
+
+    # ------------------------------------------------------------------
+
+
 class GraphValidator:
     """Validates a PipelineSnapshot's graph before save or execution."""
 
@@ -143,6 +688,7 @@ class GraphValidator:
         await self._check_composite_nodes(graph_json, session, result)
         await self._check_parameter_references(graph_json, session, result)
         self._check_guardrail_caps(guardrail_definitions or [], result)
+        self._check_guardrail_correction_bindings(guardrail_definitions or [], result)
 
         return result
 
@@ -271,13 +817,7 @@ class GraphValidator:
                 return
             node_ids.add(str(nid))
 
-        for edge in edges:
-            src = _string_or_default(edge.get("source"))
-            tgt = _string_or_default(edge.get("target"))
-            if src not in node_ids:
-                result.error("TOPOLOGY_UNKNOWN_SOURCE", f"Edge source '{src}' is not a node")
-            if tgt not in node_ids:
-                result.error("TOPOLOGY_UNKNOWN_TARGET", f"Edge target '{tgt}' is not a node")
+        _check_edge_references(edges, node_ids, result)
 
         if not result.is_valid:
             return
@@ -484,44 +1024,9 @@ class GraphValidator:
                 continue
             source = _string_or_default(edge.get("source"))
             target = _string_or_default(edge.get("target"))
-
-            # 1. default_target must exist.
-            default_raw = edge.get("default_target")
-            if default_raw is None:
-                result.error(
-                    "LOOP_MISSING_DEFAULT_TARGET",
-                    f"Loop edge from '{source}' to '{target}' has no default_target",
-                    node_id=source,
-                )
-            else:
-                default_target = str(default_raw)
-                if default_target not in node_ids:
-                    result.error(
-                        "LOOP_DEFAULT_TARGET_NOT_FOUND",
-                        f"Loop edge from '{source}' default_target '{default_target}' is not a node",
-                        node_id=source,
-                    )
-
-            # 2. max_iterations must be a positive integer if set.
-            max_it = edge.get("max_iterations")
-            if max_it is not None and (not isinstance(max_it, int) or isinstance(max_it, bool) or max_it < 0):
-                result.error(
-                    "LOOP_INVALID_MAX_ITERATIONS",
-                    f"Loop edge from '{source}' max_iterations must be a non-negative integer (got {max_it!r})",
-                    node_id=source,
-                )
-
-            # 3. condition_expression must be valid JMESPath if set.
-            expr: object = edge.get("condition_expression")
-            if isinstance(expr, str) and expr.strip():
-                try:
-                    jmespath.compile(expr.strip())
-                except jmespath.exceptions.JMESPathError as exc:
-                    result.error(
-                        "LOOP_INVALID_EXPRESSION",
-                        f"Loop edge from '{source}': invalid JMESPath expression: {exc}",
-                        node_id=source,
-                    )
+            _check_loop_default_target(edge, source, target, node_ids, result)
+            _check_loop_max_iterations(edge, source, result)
+            _check_loop_expression(edge, source, result)
 
     @staticmethod
     def _check_llm_routing(
@@ -543,59 +1048,10 @@ class GraphValidator:
             if node.get("routing_mode") != "llm":
                 continue
             nid = _string_or_default(node.get("id"))
+            _check_llm_routing_prompt(node, nid, result)
+            _check_llm_routing_labels(node, edges, nid, result)
+            _check_llm_routing_default(node, nid, node_ids, result)
 
-            # 1. routing_prompt must be non-empty.
-            routing_prompt: object = node.get("routing_prompt")
-            if not isinstance(routing_prompt, str) or not routing_prompt.strip():
-                result.error(
-                    "LLM_ROUTING_MISSING_PROMPT",
-                    f"LLM routing node '{nid}' requires a non-empty routing_prompt",
-                    node_id=nid,
-                )
-
-            # 2. Outgoing non-reject edges must have unique routing_labels.
-            labels: list[str] = []
-            for edge in edges:
-                if _string_or_default(edge.get("source"), _string_or_default(edge.get("source_node_id"), "")) != nid:
-                    continue
-                if edge.get("type", edge.get("edge_type", "")) == "reject":
-                    continue
-                label: object = edge.get("routing_label")
-                if not label or not str(label).strip():
-                    result.error(
-                        "LLM_ROUTING_MISSING_LABEL",
-                        f"Edge from LLM routing node '{nid}' is missing a routing_label",
-                        node_id=nid,
-                    )
-                    continue
-                label_str = str(label)
-                if label_str in labels:
-                    result.error(
-                        "LLM_ROUTING_DUPLICATE_LABEL",
-                        f"Edge from LLM routing node '{nid}' has duplicate routing_label '{label_str}'",
-                        node_id=nid,
-                    )
-                labels.append(label_str)
-
-            # 3. default_target must exist and reference a valid node.
-            #    Also used as the fallback target by _make_llm_router.
-            default_raw = node.get("default_target")
-            if default_raw is None:
-                result.error(
-                    "LLM_ROUTING_MISSING_DEFAULT",
-                    f"LLM routing node '{nid}' requires a default_target",
-                    node_id=nid,
-                )
-            else:
-                default_target = str(default_raw)
-                if default_target not in node_ids:
-                    result.error(
-                        "LLM_ROUTING_DEFAULT_NOT_FOUND",
-                        f"LLM routing node '{nid}' default_target '{default_target}' is not a node",
-                        node_id=nid,
-                    )
-
-    # ------------------------------------------------------------------
     # Schema compatibility
     # ------------------------------------------------------------------
 
@@ -740,22 +1196,11 @@ class GraphValidator:
 
         # Handle nullable (array of types)
         if isinstance(in_type, list):
-            if isinstance(out_type, list):
-                errors.extend(
-                    f"{path}: output type '{ot}' not in input types {in_type}" for ot in out_type if ot not in in_type
-                )
-            elif out_type not in in_type:
-                errors.append(f"{path}: output type '{out_type}' not in input types {in_type}")
+            errors.extend(_check_list_type_mismatch(path, out_type, in_type))
             return errors
 
         if isinstance(out_type, list):
-            has_null = "null" in out_type
-            accepts_null = isinstance(in_type, list) and "null" in in_type
-            errors.extend(
-                f"{path}: type mismatch '{ot}' -> '{in_type}'" for ot in out_type if ot not in ("null", in_type)
-            )
-            if has_null and not accepts_null:
-                errors.append(f"{path}: output allows null but input does not")
+            errors.extend(_check_nullable_type_mismatch(path, out_type, in_type))
             return errors
 
         if out_type and in_type and out_type != in_type:
@@ -764,15 +1209,7 @@ class GraphValidator:
                 errors.append(f"{path}: type mismatch '{out_type}' -> '{in_type}'")
 
         # Check additionalProperties
-        in_addl = in_field.get("additionalProperties", True)
-        if in_addl is False:
-            out_props_raw = out_field.get("properties", {})
-            in_props_raw = in_field.get("properties", {})
-            out_props = set(out_props_raw.keys()) if isinstance(out_props_raw, dict) else set()
-            in_props = set(in_props_raw.keys()) if isinstance(in_props_raw, dict) else set()
-            extra = out_props - in_props
-            if extra:
-                errors.append(f"{path}: extra properties {extra} not allowed (additionalProperties: false)")
+        _check_additional_properties(in_field, out_field, path, errors)
 
         # Check nested properties
         out_properties = out_field.get("properties", {})
@@ -1069,16 +1506,7 @@ class GraphValidator:
         profile_caps: set[str] = set(profile.capabilities_json or [])
 
         for agent in rows:
-            required: list[str] = agent.required_environment_capabilities or []
-            if not required:
-                continue
-            missing = [c for c in required if c not in profile_caps]
-            if missing:
-                result.error(
-                    "ENV_MISSING_CAPABILITIES",
-                    f"Agent '{agent.name}' requires capabilities {missing}"
-                    f" not declared by EnvironmentProfile '{profile.name}'",
-                )
+            _check_agent_capabilities(agent, profile, profile_caps, result)
 
     # ------------------------------------------------------------------
     # Node categories
@@ -1124,6 +1552,40 @@ class GraphValidator:
         violation = guardrail_cap_violation(definitions)
         if violation:
             result.error("GUARDRAIL_CAP_EXCEEDED", violation)
+
+    @staticmethod
+    def _check_guardrail_correction_bindings(
+        guardrail_rows: list[Any],
+        result: ValidationResult,
+    ) -> None:
+        """Reject a ``redact``-action guardrail that declares a ``correction`` block.
+
+        FAR-210: a correction on a redaction guardrail is an exfiltration
+        channel for the exact data redaction protects. The runtime
+        ``RedactCorrectBlockedError`` (``modulo.core.guardrails.correction``)
+        is the fail-closed backstop; this save-time check rejects the
+        mis-bound config at authoring time so it can never be saved onto a
+        redaction guardrail.
+        """
+        if not guardrail_rows:
+            return
+        from modulo.core.guardrails import GuardrailAction
+
+        for row in guardrail_rows:
+            config = getattr(row, "config_json", None)
+            if not isinstance(config, dict):
+                continue
+            if config.get("action") != GuardrailAction.REDACT.value:
+                continue
+            if not isinstance(config.get("correction"), dict):
+                continue
+            result.error(
+                "REDACT_CORRECT_BLOCKED",
+                f"Guardrail {row.name!r} declares a 'correction' block on a 'redact'-action "
+                "guardrail — a correction on a redaction guardrail is an exfiltration channel "
+                "for the exact data redaction protects. Remove the correction block or change "
+                "the guardrail action.",
+            )
 
     # ------------------------------------------------------------------
     # Composite nodes
@@ -1184,82 +1646,7 @@ class GraphValidator:
             sets = {s.id: s for s in set_rows}
 
         for node in nodes:
-            node_id = _string_or_default(node.get("id"))
-            raw_schema_id = node.get("parameter_schema_id")
-            schema_id: uuid.UUID | None = None
-            if raw_schema_id is not None:
-                schema_id = try_parse_uuid(raw_schema_id)
-                if schema_id is None:
-                    result.error(
-                        "PARAMETER_SCHEMA_INVALID_ID",
-                        f"Node '{node_id}': parameter_schema_id is not a valid UUID",
-                        node_id=node_id,
-                    )
-                    continue
-                schema = schemas.get(schema_id)
-                if schema is None:
-                    result.error(
-                        "PARAMETER_SCHEMA_NOT_FOUND",
-                        f"Node '{node_id}': ParameterSchema '{schema_id}' not found",
-                        node_id=node_id,
-                    )
-                    continue
-
-            raw_set_id = node.get("parameter_set_id")
-            if raw_set_id is not None:
-                set_id = try_parse_uuid(raw_set_id)
-                if set_id is None:
-                    result.error(
-                        "PARAMETER_SET_INVALID_ID",
-                        f"Node '{node_id}': parameter_set_id is not a valid UUID",
-                        node_id=node_id,
-                    )
-                    continue
-                ps = sets.get(set_id)
-                if ps is None:
-                    result.error(
-                        "PARAMETER_SET_NOT_FOUND",
-                        f"Node '{node_id}': ParameterSet '{set_id}' not found or belongs to a different org",
-                        node_id=node_id,
-                    )
-                    continue
-                # Check schema_version matches.
-                if raw_schema_id is not None:
-                    schema_id = try_parse_uuid(raw_schema_id)
-                    if schema_id is not None and schema_id != ps.parameter_schema_id:
-                        result.error(
-                            "PARAMETER_SET_SCHEMA_MISMATCH",
-                            f"Node '{node_id}': ParameterSet '{set_id}' belongs to schema "
-                            f"'{ps.parameter_schema_id}', not '{schema_id}'",
-                            node_id=node_id,
-                        )
-                # Check for schema drift: has the schema been updated since the set was created?
-                if schema_id is not None:
-                    schema = schemas.get(schema_id)
-                    if schema is not None and schema.version > ps.schema_version:
-                        result.warning(
-                            "PARAMETER_SCHEMA_DRIFT",
-                            f"Node '{node_id}': ParameterSchema '{schema_id}' has been updated to "
-                            f"version {schema.version} but ParameterSet '{set_id}' was created against "
-                            f"version {ps.schema_version}. Consider updating the set.",
-                            node_id=node_id,
-                        )
-                    # Composite schema drift (RFC §6.5): when schema defines params that the set doesn't have.
-                    if schema is not None:
-                        schema_param_names: set[str] = set()
-                        for param in schema.parameters or []:
-                            if isinstance(param, dict) and "name" in param:
-                                schema_param_names.add(param["name"])
-                        set_param_names: set[str] = set(ps.values.keys()) if isinstance(ps.values, dict) else set()
-                        missing_from_set = schema_param_names - set_param_names
-                        if missing_from_set:
-                            result.warning(
-                                "PARAMETER_SCHEMA_DRIFT_COMPOSITE",
-                                f"Node '{node_id}': ParameterSchema '{schema_id}' defines parameters "
-                                f"{missing_from_set} that are not present in ParameterSet '{set_id}'. "
-                                f"Default values will be used.",
-                                node_id=node_id,
-                            )
+            _check_parameter_node(node, schemas, sets, result)
 
     async def _check_composite_nodes(
         self,
@@ -1315,40 +1702,7 @@ class GraphValidator:
         found: dict[uuid.UUID, CompositeTemplate] = {r.id: r for r in rows}
 
         for node in composite_nodes:
-            node_id = _string_or_default(node.get("id"))
-            raw = node.get("composite_ref")
-            if raw is None:
-                continue
-
-            ref = node_ref_map.get(node_id)
-            if ref is None:
-                continue
-
-            template = found.get(ref)
-            if template is None:
-                result.error(
-                    "COMPOSITE_TEMPLATE_NOT_FOUND",
-                    f"Node '{node_id}': CompositeTemplate '{ref}' not found",
-                    node_id=node_id,
-                )
-                continue
-
-            self._check_composite_subgraph(template, node_id, result)
-
-            parameter_ports: list[dict[str, Any]] = template.parameter_ports_json or []
-            parameter_values: dict[str, Any] = node.get("composite_parameter_values") or {}
-
-            for port in parameter_ports:
-                if port.get("required") and port.get("name") not in parameter_values:
-                    result.error(
-                        "COMPOSITE_MISSING_PARAMETER",
-                        f"Node '{node_id}': required parameter '{port.get('name')}' has no value",
-                        node_id=node_id,
-                    )
-
-            output_validation: dict[str, Any] = node.get("output_validation", {})
-            if output_validation:
-                self._check_output_validation(node_id, output_validation, result)
+            _check_composite_node(node, node_ref_map, found, self, result)
 
     def _check_composite_subgraph(
         self,
@@ -1375,79 +1729,12 @@ class GraphValidator:
             )
             return
 
-        sub_ids: set[str] = set()
-        for sub in sub_nodes:
-            if not isinstance(sub, dict):
-                result.error(
-                    "COMPOSITE_SUBGRAPH_INVALID_NODE",
-                    f"Node '{node_id}': CompositeTemplate '{template.id}' contains a non-dict sub-node",
-                    node_id=node_id,
-                )
-                continue
-            sid = _string_or_default(sub.get("id"))
-            if sid in sub_ids:
-                result.error(
-                    "COMPOSITE_SUBGRAPH_DUPLICATE_NODE_ID",
-                    f"Node '{node_id}': CompositeTemplate '{template.id}' has duplicate sub-node id '{sid}'",
-                    node_id=node_id,
-                )
-            sub_ids.add(sid)
-            node_type = sub.get("node_type", "agent")
-            if node_type not in ("agent", "manual", "composite", "sandbox_agent"):
-                result.error(
-                    "COMPOSITE_SUBGRAPH_INVALID_TYPE",
-                    f"Node '{node_id}': CompositeTemplate '{template.id}' sub-node '{sid}' has "
-                    f"invalid node_type '{node_type}'",
-                    node_id=node_id,
-                )
-            if node_type == "sandbox_agent":
-                cmd = sub.get("agent_command", "")
-                if not cmd or not str(cmd).strip():
-                    result.error(
-                        "COMPOSITE_SUBGRAPH_SANDBOX_MISSING_COMMAND",
-                        f"Node '{node_id}': CompositeTemplate '{template.id}' sub-node '{sid}' "
-                        f"is missing required agent_command",
-                        node_id=node_id,
-                    )
-                if not sub.get("template_id"):
-                    result.error(
-                        "COMPOSITE_SUBGRAPH_SANDBOX_MISSING_TEMPLATE",
-                        f"Node '{node_id}': CompositeTemplate '{template.id}' sub-node '{sid}' has no template_id",
-                        node_id=node_id,
-                    )
+        sub_ids = _check_composite_sub_nodes(template, node_id, sub_nodes, result)
 
         sub_edges = graph.get("edges")
         if not isinstance(sub_edges, list):
             return
-        for edge in sub_edges:
-            if not isinstance(edge, dict):
-                result.error(
-                    "COMPOSITE_SUBGRAPH_INVALID_EDGE",
-                    f"Node '{node_id}': CompositeTemplate '{template.id}' contains a non-dict sub-edge",
-                    node_id=node_id,
-                )
-                continue
-            if edge.get("hitl_gate_config"):
-                result.error(
-                    "COMPOSITE_SUBGRAPH_GATE_UNSUPPORTED",
-                    f"Node '{node_id}': CompositeTemplate '{template.id}' sub-edge carries a HITL gate "
-                    f"config which is not supported in composite sub-pipelines (no HITL write path exists)",
-                    node_id=node_id,
-                )
-            src = str(edge.get("source"))
-            tgt = str(edge.get("target"))
-            if src not in sub_ids:
-                result.error(
-                    "COMPOSITE_SUBGRAPH_EDGE_BAD_SOURCE",
-                    f"Node '{node_id}': CompositeTemplate '{template.id}' sub-edge references unknown source '{src}'",
-                    node_id=node_id,
-                )
-            if tgt not in sub_ids:
-                result.error(
-                    "COMPOSITE_SUBGRAPH_EDGE_BAD_TARGET",
-                    f"Node '{node_id}': CompositeTemplate '{template.id}' sub-edge references unknown target '{tgt}'",
-                    node_id=node_id,
-                )
+        _check_composite_sub_edges(template, node_id, sub_ids, sub_edges, result)
 
     def _check_output_validation(
         self,
@@ -1585,114 +1872,13 @@ class GraphValidator:
             if node.get("node_type") != "sandbox_agent":
                 continue
             nid = _string_or_default(node.get("id"))
-
-            # 1. agent_command must be non-empty.
-            cmd = node.get("agent_command", "")
-            if not cmd or not str(cmd).strip():
-                result.error(
-                    "SANDBOX_MISSING_COMMAND",
-                    f"Sandbox agent node '{nid}' is missing required agent_command",
-                    node_id=nid,
-                )
-
-            # 2. template_id must be set to a known-good sandbox template.
-            template_id = node.get("template_id")
-            if not template_id:
-                result.warning(
-                    "SANDBOX_MISSING_TEMPLATE",
-                    f"Sandbox agent node '{nid}' has no template_id (expected 'opencode' or 'modulo-opencode')",
-                    node_id=nid,
-                )
-            elif template_id not in _KNOWN_SANDBOX_TEMPLATES:
-                result.warning(
-                    "SANDBOX_UNKNOWN_TEMPLATE",
-                    f"Sandbox agent node '{nid}' template_id '{template_id}' is not a known-good sandbox "
-                    "template (expected 'opencode' or 'modulo-opencode')",
-                    node_id=nid,
-                )
-
-            # 3. timeout_seconds bounds.
-            timeout = node.get("timeout_seconds")
-            if timeout is not None:
-                try:
-                    t = int(timeout) if not isinstance(timeout, int) else timeout
-                    if t < 60 or t > 3600:
-                        result.warning(
-                            "SANDBOX_TIMEOUT_BOUNDS",
-                            f"Sandbox agent node '{nid}' timeout_seconds={t} is outside recommended range 60-3600s",
-                            node_id=nid,
-                        )
-                except (ValueError, TypeError):
-                    result.warning(
-                        "SANDBOX_TIMEOUT_INVALID",
-                        f"Sandbox agent node '{nid}' timeout_seconds is not a valid integer",
-                        node_id=nid,
-                    )
-
-            # 7. stall_timeout_seconds sanity checks.
-            stall_timeout = node.get("stall_timeout_seconds")
-            if stall_timeout is not None:
-                try:
-                    st = float(stall_timeout) if not isinstance(stall_timeout, (int, float)) else stall_timeout
-                    if st <= 0:
-                        result.warning(
-                            "SANDBOX_STALL_TIMEOUT_INVALID",
-                            f"Sandbox agent node '{nid}' stall_timeout_seconds={st} is not a positive number",
-                            node_id=nid,
-                        )
-                    elif timeout is not None:
-                        try:
-                            timeout_seconds = int(timeout) if not isinstance(timeout, int) else timeout
-                        except (ValueError, TypeError):
-                            timeout_seconds = None
-                        if timeout_seconds is not None and st > timeout_seconds:
-                            result.warning(
-                                "SANDBOX_STALL_TIMEOUT_GT_TIMEOUT",
-                                f"Sandbox agent node '{nid}' stall_timeout_seconds={st} exceeds "
-                                f"timeout_seconds={timeout_seconds} — a stall timeout larger than the total "
-                                "timeout is pointless",
-                                node_id=nid,
-                            )
-                except (ValueError, TypeError):
-                    result.warning(
-                        "SANDBOX_STALL_TIMEOUT_INVALID",
-                        f"Sandbox agent node '{nid}' stall_timeout_seconds is not a valid number",
-                        node_id=nid,
-                    )
-
-            # 4. context_files paths must be absolute.
-            context_files = node.get("context_files")
-            if isinstance(context_files, dict):
-                for source_path in context_files:
-                    if not source_path.startswith("/"):
-                        result.warning(
-                            "SANDBOX_CONTEXT_PATH_RELATIVE",
-                            f"Sandbox agent node '{nid}' context_files source '{source_path}' "
-                            f"is not an absolute path (should start with /)",
-                            node_id=nid,
-                        )
-
-            # 5. env_vars must not use reserved prefixes.
-            env_vars = node.get("env_vars")
-            if isinstance(env_vars, dict):
-                for key in env_vars:
-                    for prefix in _reserved_env_prefixes:
-                        if key.startswith(prefix):
-                            result.warning(
-                                "SANDBOX_RESERVED_ENV_VAR",
-                                f"Sandbox agent node '{nid}' env var '{key}' uses reserved "
-                                f"prefix '{prefix}'. System-reserved env vars are set automatically.",
-                                node_id=nid,
-                            )
-
-            # 6. output_schema_json basic structure.
-            schema_json = node.get("output_schema_json")
-            if isinstance(schema_json, dict) and "type" not in schema_json and "$ref" not in schema_json:
-                result.warning(
-                    "SANDBOX_SCHEMA_INCOMPLETE",
-                    f"Sandbox agent node '{nid}' output_schema_json lacks 'type' or '$ref'",
-                    node_id=nid,
-                )
+            _check_sandbox_command(node, nid, result)
+            _check_sandbox_template(node, nid, result)
+            _check_sandbox_timeout(node, nid, result)
+            _check_sandbox_stall_timeout(node, nid, result)
+            _check_sandbox_context_files(node, nid, result)
+            _check_sandbox_env_vars(node, nid, _reserved_env_prefixes, result)
+            _check_sandbox_output_schema(node, nid, result)
 
     # ------------------------------------------------------------------
     # Pipeline retry_policy
@@ -1823,25 +2009,7 @@ class GraphValidator:
             if nid is not None:
                 nodes_by_id[str(nid)] = n
 
-        def _edge_type(edge: dict[str, Any]) -> str:
-            raw = edge.get("type") if edge.get("type") is not None else edge.get("edge_type")
-            return str(raw or "")
-
-        loop_sources: set[str] = set()
-        by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for e in edges:
-            etype = _edge_type(e)
-            if etype == "loop":
-                src = e.get("source", e.get("source_node_id"))
-                if src is not None:
-                    loop_sources.add(str(src))
-                continue
-            if etype in ("reject", "kickback"):
-                continue
-            src = e.get("source", e.get("source_node_id"))
-            if src is None:
-                continue
-            by_source[str(src)].append(e)
+        loop_sources, by_source = _collect_parallel_fanout_candidates(edges)
 
         for source, src_edges in by_source.items():
             src_node = nodes_by_id.get(source, {})
@@ -1860,32 +2028,13 @@ class GraphValidator:
             if len(normal) <= 1:
                 continue
 
-            target_nodes: list[dict[str, Any]] = []
-            for e in normal:
-                tgt = e.get("target", e.get("target_node_id"))
-                if tgt is not None:
-                    tnode = nodes_by_id.get(str(tgt))
-                    if tnode is not None:
-                        target_nodes.append(tnode)
-
-            setters = [t for t in target_nodes if t.get("role") == "context_setter"]
+            setters = _collect_context_setter_targets(normal, nodes_by_id)
             if len(setters) < 2:
                 continue
 
-            def _written_keys(node: dict[str, Any]) -> set[str] | None:
-                raw = node.get("run_context_writes")
-                if isinstance(raw, list) and raw:
-                    return {str(k) for k in raw}
-                return None
-
-            key_sets = [_written_keys(n) for n in setters]
-            if any(ks is None for ks in key_sets):
-                detail = "parallel branches are both context-setters (written keys unknown)"
-            else:
-                common = set.intersection(*(ks or set() for ks in key_sets))
-                if not common:
-                    continue
-                detail = f"parallel branches write the same run_context keys: {sorted(common)}"
+            detail = _parallel_write_detail(setters)
+            if detail is None:
+                continue
 
             result.warning(
                 "PARALLEL_RUN_CONTEXT_WRITE",
@@ -1894,3 +2043,66 @@ class GraphValidator:
                 "(the branch that completes last wins).",
                 node_id=source,
             )
+
+
+def _edge_type(edge: dict[str, Any]) -> str:
+    raw = edge.get("type") if edge.get("type") is not None else edge.get("edge_type")
+    return str(raw or "")
+
+
+def _collect_parallel_fanout_candidates(
+    edges: list[dict[str, Any]],
+) -> tuple[set[str], dict[str, list[dict[str, Any]]]]:
+    """Group normal outgoing edges by source; track loop-edge sources separately."""
+    loop_sources: set[str] = set()
+    by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for e in edges:
+        etype = _edge_type(e)
+        if etype == "loop":
+            src = e.get("source", e.get("source_node_id"))
+            if src is not None:
+                loop_sources.add(str(src))
+            continue
+        if etype in ("reject", "kickback"):
+            continue
+        src = e.get("source", e.get("source_node_id"))
+        if src is None:
+            continue
+        by_source[str(src)].append(e)
+    return loop_sources, by_source
+
+
+def _collect_context_setter_targets(
+    normal: list[dict[str, Any]],
+    nodes_by_id: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Resolve the normal-edge target nodes that are context-setters."""
+    target_nodes: list[dict[str, Any]] = []
+    for e in normal:
+        tgt = e.get("target", e.get("target_node_id"))
+        if tgt is not None:
+            tnode = nodes_by_id.get(str(tgt))
+            if tnode is not None:
+                target_nodes.append(tnode)
+    return [t for t in target_nodes if t.get("role") == "context_setter"]
+
+
+def _parallel_write_detail(setters: list[dict[str, Any]]) -> str | None:
+    """Describe the overlapping run_context keys for parallel setters.
+
+    Returns ``None`` when the setters' declared write keys are disjoint (safe
+    per-key merge — no warning).
+    """
+    key_sets: list[set[str] | None] = []
+    for n in setters:
+        raw = n.get("run_context_writes")
+        if isinstance(raw, list) and raw:
+            key_sets.append({str(k) for k in raw})
+        else:
+            key_sets.append(None)
+    if any(ks is None for ks in key_sets):
+        return "parallel branches are both context-setters (written keys unknown)"
+    common = set.intersection(*(ks or set() for ks in key_sets))
+    if not common:
+        return None
+    return f"parallel branches write the same run_context keys: {sorted(common)}"

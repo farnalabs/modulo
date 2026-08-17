@@ -18,6 +18,9 @@ from modulo.connectors.base import (
 
 _API_VERSION = "7.4"
 
+# Pagination query parameter name shared across list endpoints (S1192).
+_SKIP_TOKEN = "$skiptoken"
+
 
 class AzureKeyVaultConnector(ConnectorBase):
     def __init__(self, token: str, vault_url: str) -> None:
@@ -98,7 +101,7 @@ class AzureKeyVaultConnector(ConnectorBase):
         if q.limit:
             params["maxresults"] = q.limit
         if q.cursor:
-            params["$skiptoken"] = q.cursor
+            params[_SKIP_TOKEN] = q.cursor
         resp = await c.get("/secrets", params=params)
         resp.raise_for_status()
         body: object = resp.json()
@@ -124,7 +127,7 @@ class AzureKeyVaultConnector(ConnectorBase):
         if q.limit:
             params["maxresults"] = q.limit
         if q.cursor:
-            params["$skiptoken"] = q.cursor
+            params[_SKIP_TOKEN] = q.cursor
         resp = await c.get(f"/secrets/{name}/versions", params=params)
         resp.raise_for_status()
         body: object = resp.json()
@@ -150,7 +153,7 @@ class AzureKeyVaultConnector(ConnectorBase):
         if q.limit:
             params["maxresults"] = q.limit
         if q.cursor:
-            params["$skiptoken"] = q.cursor
+            params[_SKIP_TOKEN] = q.cursor
         resp = await c.get("/keys", params=params)
         resp.raise_for_status()
         body: object = resp.json()
@@ -173,7 +176,7 @@ class AzureKeyVaultConnector(ConnectorBase):
         if q.limit:
             params["maxresults"] = q.limit
         if q.cursor:
-            params["$skiptoken"] = q.cursor
+            params[_SKIP_TOKEN] = q.cursor
         resp = await c.get("/certificates", params=params)
         resp.raise_for_status()
         body: object = resp.json()

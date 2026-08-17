@@ -6,6 +6,7 @@ delivery-tasks:
   - task-nv5-schema-infer-endpoint
 bdd:
   - backend/tests/bdd/features/connectors/schema_inference.feature
+  - backend/tests/bdd/features/schemas/schema_inference.feature
 unit-tests:
   - backend/tests/unit/core/test_schema_inference.py
   - backend/tests/unit/core/test_schema_sanitize.py
@@ -53,6 +54,8 @@ LLM-assisted JSON Schema draft from sampled connector data. Entry point for SDLC
 - [x] Raise `ValueError` when samples contains non-dict items
 - [x] Accept nested object structures in samples
 - [x] Accept fields with mixed presence across records (not required)
+- [x] Flag top-level fields present in fewer than 10% of the sampled records as rarely-used (`flag_rare_fields`, deterministic sorted output)
+- [x] Instruct the model to exclude the rarely-used fields from the draft schema by default (system-prompt rule + message listing)
 - [x] Handle all-null records (fields omitted from schema)
 - [x] Reject non-serializable samples (circular refs etc.) → `SchemaInferenceError`
 
@@ -71,6 +74,7 @@ LLM-assisted JSON Schema draft from sampled connector data. Entry point for SDLC
 - [x] Instantiate `SchemaInferenceService` with first available model backend
 - [x] Handle inference failure → return 502 with "Schema inference failed"
 - [x] Return 200 with `definition_json`, `sample_count`, `suggestion_name`, `suggestion_description`
+- [x] Return `rare_fields` — the fields present in <10% of samples, excluded from the draft by default
 - [x] Include connector name in `suggestion_name` ("Inferred from {name}")
 - [x] Include connector name, resource, and sample count in `suggestion_description`
 
@@ -173,6 +177,7 @@ LLM-assisted JSON Schema draft from sampled connector data. Entry point for SDLC
 ## Edge Cases
 
 - [x] Empty samples list (0 records sent to LLM)
+- [x] Fields present in <10% of samples are flagged as rarely-used and excluded from the draft by default
 - [x] All-null records (fields omitted from schema by LLM)
 - [x] Mixed field presence across records (not required)
 - [x] Nested object structures in samples
@@ -217,7 +222,7 @@ LLM-assisted JSON Schema draft from sampled connector data. Entry point for SDLC
 ## Known Gaps — PRD 8.16 requirements not yet implemented
 
 - [ ] **Sampled record default (200)**: PRD says default 200 records, code caps at 50 in prompt builder, API default limit is 10, max is 100 — no sample count displayed in UI
-- [ ] **Rare-field exclusion**: PRD says fields appearing in <10% of samples should be flagged and excluded from draft — not implemented anywhere
+- [x] ~~**Rare-field exclusion**: PRD says fields appearing in <10% of samples should be flagged and excluded from draft — not implemented anywhere~~ **RESOLVED 2026-08-16**: new `flag_rare_fields()` in `schema_registry/inference.py` flags top-level fields present in fewer than 10% of the sampled records (deterministic sorted output; null values do not count as present; non-dict records ignored); `_build_infer_prompt` adds a system-prompt rule + a "Rarely-used fields" message note instructing the model to exclude them from the draft by default; `POST /api/v1/schemas/infer` now returns `rare_fields` in `SchemaInferResponse` so the operator sees what the draft excluded. Unit tests (`TestFlagRareFields` ×10 + 3 prompt tests in `test_schema_inference.py`), endpoint tests (`test_schema_infer_endpoint.py` — response-shape updated + rare-fields populated/empty cases), and a BDD scenario in `schemas/schema_inference.feature`. Regenerated `frontend/src/lib/api/schema.ts` (`rare_fields?: string[]`).
 - [ ] **`abstract_name` inference**: PRD says inferred `abstract_name` suggestion per resource type — not implemented; only static string "Inferred from {name}"
 - [x] ~~**SandboxedEnvironment for LLM prompt**: PRD requires `SandboxedEnvironment` with structural separators for prompt safety — not used~~ **RESOLVED 2026-08-12**: sample/example data is now scrubbed by `schema_registry/sanitize.py` (credential masking, control-char stripping, length/cardinality/depth bounds) and wrapped in `<<<SAMPLE_DATA>>>` structural separators; the system prompt explicitly declares the block untrusted input
 - [x] ~~**Sampled data not stored**~~ **RESOLVED 2026-08-15**: regression test added (`test_infer_schema_response_does_not_contain_or_persist_sample_records`) asserting the infer response carries no raw sample records and only the documented response keys; samples live in memory for the request and are never written to the DB
@@ -230,6 +235,8 @@ LLM-assisted JSON Schema draft from sampled connector data. Entry point for SDLC
 - [x] ~~**504 status mapped to 500**~~ **RESOLVED 2026-08-16**: added `ProblemType.GATEWAY_TIMEOUT` (status 504, title `Gateway Timeout`) plus the `504` lookup entry in `modulo/api/models/problem.py::problem_from_http_exception`, so the sampling-timeout path now surfaces as a structured `urn:problem:modulo:gateway_timeout` problem instead of a 500 (fixes the observability PUT timeout path too).
 
 ## QA History
+
+- 2026-08-16: improve-architecture (index 193): **RESOLVED the "Rare-field exclusion" known gap** (PRD §8.16 — fields present in <10% of samples must be flagged as rarely-used and excluded from the draft by default). `schema_registry/inference.py` gains `flag_rare_fields(records, *, threshold=0.10)`: flags top-level fields present in fewer than 10% of the sampled records (a null value does not count as present; non-dict records ignored; result sorted for determinism; invalid thresholds → ValueError). `_build_infer_prompt` now computes the flag set over the full sanitised sample set and (a) appends a system-prompt rule instructing the model to exclude rarely-used fields from the draft by default, and (b) lists them in the human message ("Rarely-used fields (present in fewer than 10% of the N samples; exclude from the draft by default): ...") — no note when nothing is rare. `POST /api/v1/schemas/infer` returns the flags in the new `SchemaInferResponse.rare_fields` field (backwards-compatible additive field; the sampling-connection and prompt-builders use the same 10% rule). Tests: 10 `TestFlagRareFields` unit cases + 3 prompt tests in `test_schema_inference.py` (rare note present/absent, system-prompt rule); `test_schema_infer_endpoint.py` response-shape contract updated for `rare_fields` + new populated/empty endpoint tests; new BDD scenario "Rarely-used fields are flagged in the response" in `schemas/schema_inference.feature` (1/11 presence → `story_points` flagged). Regenerated `frontend/src/lib/api/schema.ts` (`rare_fields?: string[]` on `SchemaInferResponse`). Updated product map (behaviours + edge case `[ ]`→`[x]`, `bdd:` frontmatter now lists both feature files, Known Gap → RESOLVED). Verification: 40/40 `test_schema_inference.py` + the `test_schema_infer_endpoint.py` response-contract + rare-field cases pass, ruff check + format clean, mypy --strict clean. Status: partial (sampled-record default 200, `abstract_name` inference, no DB-backed endpoint E2E, OnboardingWizard schema-step spec coverage remain).
 
 - 2026-08-16: improve-architecture (index 192): **RESOLVED the "504 status mapped to 500" cross-cutting known gap** (`api/models/problem.py`). `problem_from_http_exception` had no 504 mapping, so every plain `HTTPException(504)` surfaced as `internal_error`/500 — the `/schemas/infer` connector sampling timeout and the `/settings/observability` PUT DB timeout both lied about their status. Added `ProblemType.GATEWAY_TIMEOUT` (`urn:problem:modulo:gateway_timeout`, status 504, title `Gateway Timeout`) + `_PROBLEM_METADATA` entry + `504` lookup row. Tests: `test_problem.py` metadata matrix + status-mapping table updated; new `test_infer_schema_sampling_timeout_returns_504_problem` endpoint test (TimeoutError during `ConnectorHub.sample` → 504 problem body, not 500); `test_observability_routes.py::test_put_reraises_on_db_timeout` updated from the stale `500` assertion to the corrected 504 problem shape. Verification: 38/38 `test_problem.py` + 14/14 `test_schema_infer_endpoint.py` + 33/33 `test_observability_routes.py` + 206 focused api/models/schemas/exception-handler tests pass, ruff check + format clean.
 

@@ -1,6 +1,7 @@
 """Integration tests for break-glass deliverable (B) chunk 1 — enforcement.
 
-0037_break_glass_enforcement + the SQL-predicate deny, against a real
+The break-glass enforcement surface (reconciliation chain
+0110_schema_pipeline_runtime) + the SQL-predicate deny, against a real
 Postgres (testcontainers): the accounts UPDATE allow-list holds for
 ``modulo_app`` AND PUBLIC, ``modulo_breakglass`` has the three break-glass
 column grants only (no DELETE, no other UPDATE), and the deny predicate in

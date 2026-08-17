@@ -1,14 +1,20 @@
-"""BDD step definitions: Team creation."""
+"""BDD step definitions: Team creation.
+
+The shared team steps (``the response contains a team with name ...`` and the
+auth givens) live in conftest.py — the ancestor of every BDD module — so each
+step text is defined exactly once. This module keeps only the steps specific
+to team_create.feature and drives the real ``POST /api/v1/teams`` route.
+"""
 
 import contextlib
 import uuid
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from tests.bdd.conftest import make_settings
+from tests.bdd.conftest import _active_client, _store_response
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/teams/team_create.feature")
@@ -30,78 +36,51 @@ def patches():
             p.stop()
 
 
-@given(parsers.parse('I am authenticated as an admin in org "{org}"'))
-def auth_admin_in_org(org: str) -> None:
-    pass
-
-
-@given(parsers.parse('I am authenticated as a viewer in org "{org}"'))
-def auth_viewer_in_org(org: str, ctx) -> None:
-    ctx["org_role"] = "viewer"
-
-
 @given(parsers.parse('a team "{team_name}" already exists'))
 def team_already_exists(team_name: str, ctx) -> None:
     ctx["existing_team"] = team_name
 
 
-@when(parsers.parse('I POST /api/teams with name "{name}" and description "{description}"'))
-def create_team(name: str, description: str, request, ctx) -> None:
-    from modulo.api.main import app
-    from modulo.settings import get_settings
+def _make_mock_team(**overrides) -> MagicMock:
+    t = MagicMock()
+    t.id = overrides.get("id", uuid.uuid4())
+    t.organisation_id = ORG_ID
+    t.name = overrides.get("name", "test-team")
+    t.description = overrides.get("description")
+    t.account_id = uuid.uuid4()
+    t.created_at = datetime(2025, 1, 1, tzinfo=UTC)
+    t.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
+    return t
 
-    client = TestClient(app)
-    app.dependency_overrides[get_settings] = make_settings
 
-    org_role = ctx.get("org_role", "admin")
-
-    if org_role == "viewer":
-        resp = MagicMock()
-        resp.status_code = 403
-        resp.json = lambda: {"detail": "Insufficient permissions"}
-        request.node._resp = resp
-        return
-
+@when(parsers.re(r'I POST /api/teams with name "(?P<name>[^"]*)" and description "(?P<description>[^"]*)"'))
+def create_team(name: str, description: str, request, ctx, client=None) -> None:
+    """POST /api/v1/teams — the route's ``require_permission("team.create")``
+    gate returns 403 for the viewer principal, its ``CreateTeamRequest``
+    validation returns 422 for empty names, and a pre-existing team returns a
+    real 409 conflict."""
+    existing = None
     if ctx.get("existing_team") == name:
-        resp = MagicMock()
-        resp.status_code = 409
-        resp.json = lambda: {"detail": "Team name already taken"}
-        request.node._resp = resp
-        return
+        existing = _make_mock_team(name=name, id=uuid.uuid4())
 
-    if name == "":
-        resp = MagicMock()
-        resp.status_code = 422
-        resp.json = lambda: {"detail": [{"msg": "name must not be empty"}]}
-        request.node._resp = resp
-        return
+    created = _make_mock_team(name=name, description=description)
 
-    mock_team = {
-        "id": str(uuid.uuid4()),
-        "name": name,
-        "description": description,
-        "organisation_id": str(ORG_ID),
-        "created_by": str(uuid.uuid4()),
-        "created_at": "2025-01-01T00:00:00",
-        "member_count": 0,
-    }
-
-    with patch("modulo.api.routes.teams.create_team", new_callable=AsyncMock, return_value=mock_team):
-        resp = client.post("/api/v1/teams", json={"name": name, "description": description})
-        request.node._resp = resp
-
-
-@then(parsers.parse('the response contains a team with name "{name}"'))
-def response_has_team_name(name: str, request) -> None:
-    data = request.node._resp.json()
-    assert data["name"] == name, f"Expected name '{name}', got {data['name']}"
+    with (
+        patch("modulo.api.routes.teams.get_team_by_name", new_callable=AsyncMock, return_value=existing),
+        patch("modulo.api.routes.teams.create_team", new_callable=AsyncMock, return_value=created),
+    ):
+        resp = _active_client(request, client).post(
+            "/api/v1/teams",
+            json={"name": name, "description": description},
+        )
+    _store_response(request, ctx, resp)
 
 
 @then("the error indicates the team name is already taken")
 def error_team_name_taken(request) -> None:
     data = request.node._resp.json()
     detail = data.get("detail", "")
-    assert "already taken" in detail.lower(), f"Expected name conflict error, got {data}"
+    assert "already exists" in detail.lower(), f"Expected name conflict error, got {data}"
 
 
 @then("the response contains id, name, description, and created_at")

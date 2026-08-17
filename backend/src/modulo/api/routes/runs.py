@@ -17,6 +17,7 @@ from sqlalchemy.exc import TimeoutError as SA_TimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from tenacity import before_sleep_log, retry, retry_if_exception, stop_after_attempt, wait_exponential
 
+from modulo.api.constants import MSG_RESOURCE_ALREADY_EXISTS, MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import (
     _get_engine,
@@ -30,6 +31,7 @@ from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.dispatch import dispatch_run
 from modulo.core.exceptions import OrgDeletedError
+from modulo.core.guardrails import GuardrailSummary
 from modulo.core.line_diff import iter_line_diffs
 from modulo.core.node_output_split import node_return, node_telemetry
 from modulo.core.pipeline_engine.classify import REASON_DELIVERED_EMAIL, _any_marker_delivery_done
@@ -69,6 +71,22 @@ from modulo.db.rls import set_rls_org
 from modulo.otel_bridge import trace_id_for_thread
 from modulo.settings import Settings, get_settings
 
+_MSG_FEATURE_NOT_AVAILABLE_FEATURE = (
+    "Feature is not available. This feature requires a database update. Please contact support."
+)
+_CODE_ROUTE_DB_ERROR = "route.db_error"
+_MSG_DATABASE_TEMPORARILY_UNAVAILABLE = "Database temporarily unavailable."
+_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR = "pipeline_execution.unexpected_error"
+_MSG_RUN_NOT_FOUND = "Run not found"
+_CODE_RUN_OUTPUT = "run.output"
+_MASKED_PLACEHOLDER = "••••••"
+_CODE_RUNS_OBSERVE_RUN_NODE = "runs.observe_run_node"
+_DEFAULT_FLOAT_DISPLAY = "0.000000"
+_CODE_RUN_LIST = "run.list"
+_CODE_RUNS_TRIGGER_RUN = "runs.trigger_run"
+_CODE_RUNS_REVEAL_NODE_PROMPT = "runs.reveal_node_prompt"
+
+
 _log = logging.getLogger(__name__)
 
 _RETRY_TRANSIENT = retry(
@@ -86,7 +104,7 @@ router = APIRouter(prefix="/api/v1/runs", tags=["runs"])
 
 # Child-run cost rollup. `total_cost_usd` keeps its own-run semantics; the
 # aggregate is a derived display value and never mutates the stored field.
-_COST_ROLLUP_ZERO = Decimal("0.000000")
+_COST_ROLLUP_ZERO = Decimal(_DEFAULT_FLOAT_DISPLAY)
 _COST_ROLLUP_QUANTUM = Decimal("0.000001")
 
 
@@ -235,7 +253,7 @@ async def list_runs_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
-    user: TenantPrincipal = require_permission("run.list"),
+    user: TenantPrincipal = require_permission(_CODE_RUN_LIST),
 ) -> dict[str, Any]:
     try:
         return await _run_with_retry(
@@ -245,19 +263,19 @@ async def list_runs_endpoint(
         _log.exception("runs.list_runs_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         _log.exception("route.programming_error")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. This feature requires a database update. Please contact support.",
+            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
         ) from None
     except SQLAlchemyError:
-        _log.exception("route.db_error")
+        _log.exception(_CODE_ROUTE_DB_ERROR)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -265,7 +283,7 @@ async def list_runs_endpoint(
         _log.exception("runs_list.unexpected_error", extra={"type": type(exc).__name__})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
 
@@ -356,9 +374,9 @@ class RunResponse(BaseModel):
     # Child-run cost rollup. `total_cost_usd` stays own-run cost; these are
     # derived display fields (0.000000 when no children / all NULL) that never
     # touch the stored column.
-    child_runs_cost_usd: Decimal = Decimal("0.000000")
+    child_runs_cost_usd: Decimal = Decimal(_DEFAULT_FLOAT_DISPLAY)
     child_runs_count: int = 0
-    aggregate_cost_usd: Decimal = Decimal("0.000000")
+    aggregate_cost_usd: Decimal = Decimal(_DEFAULT_FLOAT_DISPLAY)
     created_at: datetime | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
@@ -370,6 +388,16 @@ class RunResponse(BaseModel):
     # distinguishable from an ordinary complete run.
     run_classification: dict[str, Any] | None = None
     gate_fired: bool = False
+    # FAR-213 blocked-partial summary — structured record of run-termination
+    # compensation for a guardrail-blocked run (executed nodes, per-node
+    # publish status, compensation outcomes). None for non-blocked / pre-column
+    # runs.
+    blocked_partial_summary: dict[str, Any] | None = None
+    # FAR-223 item 11 — per-run guardrail interception snapshot (bound /
+    # evaluated / passed / violated / observed / errored / redacted / skipped /
+    # expected_skips / unexpected_skips). NULL when the run had no guardrails
+    # bound, or on pre-migration runs.
+    guardrail_summary: dict[str, int] | None = None
 
 
 def _run_gate_fired(run: Any) -> bool:
@@ -390,6 +418,23 @@ def _run_gate_fired(run: Any) -> bool:
         return True
     markers = getattr(run, "raw_output_markers", None)
     return bool(_any_marker_delivery_done(markers))
+
+
+def _guardrail_summary_from_run(run: Any) -> dict[str, int] | None:
+    """Parse the persisted ``guardrail_summary_json`` for run detail (item 11).
+
+    Defensive like ``run_classification``: the JSON column could hold any JSON
+    value (or a MagicMock in tests) — a non-dict/malformed value degrades to
+    None, never a 500.
+    """
+    raw = getattr(run, "guardrail_summary_json", None)
+    if not isinstance(raw, dict) or not raw:
+        return None
+    try:
+        return GuardrailSummary.from_mapping(raw).to_dict()
+    except (TypeError, ValueError):
+        _log.warning("runs.guardrail_summary_invalid", extra={"run_id": str(getattr(run, "id", ""))})
+        return None
 
 
 def _build_run_response(
@@ -424,6 +469,9 @@ def _build_run_response(
     # None, never a 500. gate_fired is derived in _run_gate_fired (also guarded).
     run_classification = run.run_classification if isinstance(run.run_classification, dict) else None
 
+    # FAR-213: same defensive coercion for the blocked_partial_summary column.
+    blocked_partial_summary = run.blocked_partial_summary if isinstance(run.blocked_partial_summary, dict) else None
+
     return RunResponse(
         run_id=run.id,
         status=run.status,
@@ -447,6 +495,8 @@ def _build_run_response(
         completed_at=run.completed_at,
         run_classification=run_classification,
         gate_fired=_run_gate_fired(run),
+        blocked_partial_summary=blocked_partial_summary,
+        guardrail_summary=_guardrail_summary_from_run(run),
     )
 
 
@@ -564,27 +614,27 @@ async def trigger_run(
             )
             run_id = run.id
     except IntegrityError:
-        _log.exception("runs.trigger_run")
+        _log.exception(_CODE_RUNS_TRIGGER_RUN)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("runs.trigger_run")
+        _log.exception(_CODE_RUNS_TRIGGER_RUN)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. This feature requires a database update. Please contact support.",
+            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
         ) from None
 
     except SQLAlchemyError:
-        _log.warning("route.db_error", exc_info=True)
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
     except OrgDeletedError as exc:
-        _log.exception("runs.trigger_run")
+        _log.exception(_CODE_RUNS_TRIGGER_RUN)
         if exc.deleted:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -598,10 +648,10 @@ async def trigger_run(
     except HTTPException:
         raise
     except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     await dispatch_run(str(run_id), str(org_id), queue="runs")
 
@@ -618,7 +668,7 @@ async def trigger_run(
 async def get_run_stats_endpoint(
     period: str = Query(default="30d", pattern=r"^(7d|30d|90d)$"),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("run.list"),
+    principal: TenantPrincipal = require_permission(_CODE_RUN_LIST),
 ) -> dict[str, Any]:
     """Aggregated run stats for a period (7d|30d|90d)."""
     try:
@@ -629,23 +679,23 @@ async def get_run_stats_endpoint(
         _log.exception("runs.get_run_stats_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. This feature requires a database update. Please contact support.",
+            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
         ) from None
 
     except SQLAlchemyError:
-        _log.warning("route.db_error", exc_info=True)
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
     except HTTPException:
         raise
     except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
 
@@ -654,7 +704,7 @@ async def get_run_stats_endpoint(
 async def get_run_heatmap_endpoint(
     year: int = Query(default=2026, ge=2020, le=2100),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("run.list"),
+    principal: TenantPrincipal = require_permission(_CODE_RUN_LIST),
 ) -> list[dict[str, Any]]:
     """Run counts per day for the given year (calendar heatmap)."""
     try:
@@ -665,23 +715,23 @@ async def get_run_heatmap_endpoint(
         _log.exception("runs.get_run_heatmap_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. This feature requires a database update. Please contact support.",
+            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
         ) from None
 
     except SQLAlchemyError:
-        _log.warning("route.db_error", exc_info=True)
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
     except HTTPException:
         raise
     except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
 
@@ -699,34 +749,34 @@ async def get_run_status(
         _log.exception("runs.get_run_status")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
 
     except ProgrammingError:
         _log.exception("runs.get_run_status")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. This feature requires a database update. Please contact support.",
+            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
         ) from None
 
     except SQLAlchemyError:
-        _log.warning("route.db_error", exc_info=True)
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
     except RunNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Run not found",
+            detail=_MSG_RUN_NOT_FOUND,
         ) from None
     except HTTPException:
         raise
     except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
     return _build_run_response(run, child_cost, child_count, otlp_endpoint=otlp_endpoint)
@@ -748,7 +798,7 @@ async def cancel_run(
             run = await get_run(session, run_id)
 
             if run is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
 
             if run.status in TERMINAL_STATUSES:
                 raise HTTPException(
@@ -771,29 +821,29 @@ async def cancel_run(
         _log.exception("runs.cancel_run")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         _log.exception("runs.cancel_run")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. This feature requires a database update. Please contact support.",
+            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
         ) from None
 
     except SQLAlchemyError:
-        _log.warning("route.db_error", exc_info=True)
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
     except HTTPException:
         raise
     except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return {"status": "accepted"}
 
@@ -871,7 +921,7 @@ class FixtureExportResponse(BaseModel):
 async def get_run_io_endpoint(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("run.output"),
+    principal: TenantPrincipal = require_permission(_CODE_RUN_OUTPUT),
 ) -> RunIOResponse:
     """Return per-node IO for a completed run, plus generated fixture_map.
 
@@ -892,32 +942,32 @@ async def get_run_io_endpoint(
         _log.exception("runs.get_run_io_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         _log.exception("runs.get_run_io_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. This feature requires a database update. Please contact support.",
+            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
         ) from None
 
     except SQLAlchemyError:
-        _log.warning("route.db_error", exc_info=True)
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
     except HTTPException:
         raise
     except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if run is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
 
     outputs_json = run.outputs_json
     telemetry_json = run.node_telemetry_json
@@ -953,7 +1003,7 @@ async def get_run_io_endpoint(
 async def export_run_fixture(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("run.output"),
+    principal: TenantPrincipal = require_permission(_CODE_RUN_OUTPUT),
 ) -> FixtureExportResponse:
     """Export run IO data as a StubModelBackend-compatible fixture.
 
@@ -966,7 +1016,7 @@ async def export_run_fixture(
             await set_rls_org(session, principal.organisation_id)
             run = await get_run(session, run_id)
             if run is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
 
             from modulo.db.models.pipeline_snapshot import PipelineSnapshot as SnapModel
 
@@ -976,29 +1026,29 @@ async def export_run_fixture(
         _log.exception("runs.export_run_fixture")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         _log.exception("runs.export_run_fixture")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. This feature requires a database update. Please contact support.",
+            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
         ) from None
 
     except SQLAlchemyError:
-        _log.warning("route.db_error", exc_info=True)
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
     except HTTPException:
         raise
     except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     graph_json = snapshot.graph_json if snapshot else {}
 
@@ -1039,7 +1089,7 @@ async def export_run_fixture(
 async def get_run_workspace_lease(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("run.output"),
+    principal: TenantPrincipal = require_permission(_CODE_RUN_OUTPUT),
 ) -> dict[str, Any] | None:
     """Return the WorkspaceLease associated with a run, if any."""
     try:
@@ -1053,29 +1103,29 @@ async def get_run_workspace_lease(
         _log.exception("runs.get_run_workspace_lease")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         _log.exception("runs.get_run_workspace_lease")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. This feature requires a database update. Please contact support.",
+            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
         ) from None
 
     except SQLAlchemyError:
-        _log.warning("route.db_error", exc_info=True)
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
     except HTTPException:
         raise
     except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if lease is None:
         return None
@@ -1097,7 +1147,7 @@ async def get_run_workspace_lease(
 async def get_run_workspace_events(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("run.output"),
+    principal: TenantPrincipal = require_permission(_CODE_RUN_OUTPUT),
 ) -> list[dict[str, str]]:
     """Return workspace lifecycle events for a run as a timeline."""
     try:
@@ -1118,29 +1168,29 @@ async def get_run_workspace_events(
         _log.exception("runs.get_run_workspace_events")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         _log.exception("runs.get_run_workspace_events")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. This feature requires a database update. Please contact support.",
+            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
         ) from None
 
     except SQLAlchemyError:
-        _log.warning("route.db_error", exc_info=True)
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
     except HTTPException:
         raise
     except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return [
         {
@@ -1192,7 +1242,7 @@ async def get_run_node_output(
     run_id: uuid.UUID,
     node_id: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("run.output"),
+    principal: TenantPrincipal = require_permission(_CODE_RUN_OUTPUT),
 ) -> NodeOutputResponse:
     """Return a specific node's output from a completed pipeline run.
 
@@ -1214,32 +1264,32 @@ async def get_run_node_output(
         _log.exception("runs.get_run_node_output")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         _log.exception("runs.get_run_node_output")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. This feature requires a database update. Please contact support.",
+            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
         ) from None
 
     except SQLAlchemyError:
-        _log.warning("route.db_error", exc_info=True)
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
     except HTTPException:
         raise
     except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if run is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
 
     outputs = run.outputs_json or {}
     telemetry = run.node_telemetry_json or {}
@@ -1295,7 +1345,7 @@ async def get_run_events(
     try:
         run = await _run_with_retry(lambda: _do_get_run(factory, principal, run_id))
     except RunNotFoundError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found") from None
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND) from None
     broker = get_registry().get(run.id)
     events: list[RunEventItem] = []
     if broker is not None:
@@ -1328,7 +1378,7 @@ class ObserveNodeResponse(BaseModel):
 
 
 @router.post("/{run_id}/nodes/{node_id}/observe", response_model=ObserveNodeResponse)
-@handle_db_errors("runs.observe_run_node")
+@handle_db_errors(_CODE_RUNS_OBSERVE_RUN_NODE)
 async def observe_run_node(
     run_id: uuid.UUID,
     node_id: str,
@@ -1351,35 +1401,35 @@ async def observe_run_node(
             await set_rls_org(session, principal.organisation_id)
             run = await get_run(session, run_id)
     except IntegrityError:
-        _log.exception("runs.observe_run_node")
+        _log.exception(_CODE_RUNS_OBSERVE_RUN_NODE)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("runs.observe_run_node")
+        _log.exception(_CODE_RUNS_OBSERVE_RUN_NODE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. This feature requires a database update. Please contact support.",
+            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
         ) from None
 
     except SQLAlchemyError:
-        _log.warning("route.db_error", exc_info=True)
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
     except HTTPException:
         raise
     except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if run is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
 
     try:
         async with session.begin():
@@ -1392,32 +1442,32 @@ async def observe_run_node(
                 observed_by=principal.account_id,
             )
     except IntegrityError:
-        _log.exception("runs.observe_run_node")
+        _log.exception(_CODE_RUNS_OBSERVE_RUN_NODE)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("runs.observe_run_node")
+        _log.exception(_CODE_RUNS_OBSERVE_RUN_NODE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. This feature requires a database update. Please contact support.",
+            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
         ) from None
 
     except SQLAlchemyError:
-        _log.warning("route.db_error", exc_info=True)
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
     except HTTPException:
         raise
     except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return ObserveNodeResponse(
         run_id=run_id,
@@ -1497,29 +1547,29 @@ async def recover_run_node(
         _log.exception("runs.recover_run_node")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         _log.exception("runs.recover_run_node")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. This feature requires a database update. Please contact support.",
+            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
         ) from None
 
     except SQLAlchemyError:
-        _log.warning("route.db_error", exc_info=True)
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
     except HTTPException:
         raise
     except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     action = "skip" if req.input_data is None else "replay"
 
@@ -1637,29 +1687,29 @@ async def guardrail_override_run(
         _log.exception("runs.guardrail_override")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         _log.exception("runs.guardrail_override")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. This feature requires a database update. Please contact support.",
+            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
         ) from None
 
     except SQLAlchemyError:
-        _log.warning("route.db_error", exc_info=True)
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
     except HTTPException:
         raise
     except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
     # Re-dispatch the pending run from run start (execute_run). The blocked run
@@ -1709,12 +1759,12 @@ def _mask_prompt_text(text: str) -> str:
 
     masked = text
     patterns = [
-        (r'(api_key["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + "\u2022\u2022\u2022\u2022\u2022\u2022"),
-        (r'(secret["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + "\u2022\u2022\u2022\u2022\u2022\u2022"),
-        (r'(token["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + "\u2022\u2022\u2022\u2022\u2022\u2022"),
-        (r'(password["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + "\u2022\u2022\u2022\u2022\u2022\u2022"),
-        (r'(credential["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + "\u2022\u2022\u2022\u2022\u2022\u2022"),
-        (r'(passwd["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + "\u2022\u2022\u2022\u2022\u2022\u2022"),
+        (r'(api_key["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
+        (r'(secret["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
+        (r'(token["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
+        (r'(password["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
+        (r'(credential["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
+        (r'(passwd["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
     ]
     for pattern, replacement in patterns:
         masked = re.sub(pattern, replacement, masked, flags=re.IGNORECASE)
@@ -1848,12 +1898,12 @@ def _lookup_agent_for_node(
 
 
 @router.post("/{run_id}/nodes/{node_id}/prompt/reveal", response_model=PromptRevealResponse)
-@handle_db_errors("runs.reveal_node_prompt")
+@handle_db_errors(_CODE_RUNS_REVEAL_NODE_PROMPT)
 async def reveal_node_prompt(
     run_id: uuid.UUID,
     node_id: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("run.output"),
+    principal: TenantPrincipal = require_permission(_CODE_RUN_OUTPUT),
     settings: Settings = Depends(get_settings),
 ) -> PromptRevealResponse:
     """Reconstruct and reveal the exact prompt sent to the LLM for a node.
@@ -1868,7 +1918,7 @@ async def reveal_node_prompt(
             run = await get_run(session, run_id)
 
             if run is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
 
             # Load snapshot to get graph definition.
             snapshot_id = run.snapshot_id
@@ -1940,21 +1990,21 @@ async def reveal_node_prompt(
     except asyncio.CancelledError:
         raise
     except IntegrityError:
-        _log.exception("runs.reveal_node_prompt")
+        _log.exception(_CODE_RUNS_REVEAL_NODE_PROMPT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("runs.reveal_node_prompt")
+        _log.exception(_CODE_RUNS_REVEAL_NODE_PROMPT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. This feature requires a database update. Please contact support.",
+            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
         ) from None
     except HTTPException:
         raise
     except SQLAlchemyError as exc:
-        _log.exception("runs.reveal_node_prompt")
+        _log.exception(_CODE_RUNS_REVEAL_NODE_PROMPT)
         _log.warning("prompt_reveal.db_error", extra={"error": str(exc)[:200]})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2001,7 +2051,7 @@ class NodeOutputDiffResponse(BaseModel):
 async def diff_node_output(
     req: NodeOutputDiffRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("run.output"),
+    principal: TenantPrincipal = require_permission(_CODE_RUN_OUTPUT),
 ) -> NodeOutputDiffResponse:
     """Diff a specific node's output across two runs.
 
@@ -2018,30 +2068,30 @@ async def diff_node_output(
         _log.exception("runs.diff_node_output")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
 
     except ProgrammingError:
         _log.exception("runs.diff_node_output")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. This feature requires a database update. Please contact support.",
+            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
         ) from None
 
     except SQLAlchemyError:
-        _log.warning("route.db_error", exc_info=True)
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
     except HTTPException:
         raise
     except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if run_a is None:
         raise HTTPException(

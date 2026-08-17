@@ -1677,6 +1677,34 @@ export interface paths {
         patch: operations["update_team_endpoint_api_v1_teams__team_id__patch"];
         trace?: never;
     };
+    "/api/v1/teams/{team_id}/reassign-org": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reassign Team Resources Endpoint
+         * @description Reassign every team-owned resource to org-wide (PRD §9.3 Team Deletion Policy).
+         *
+         *     Sets ``owner_team_id = NULL`` (and flips ``visibility`` to ``'org'``, keeping
+         *     the ``ck_*_team_owner`` CHECK constraints satisfied) on every pipeline,
+         *     connector instance, model backend and library primitive currently owned by
+         *     the team, so the team can then be deleted (deletion is blocked while
+         *     ``owner_team_id`` references the team). Admin-only (``team.delete``).
+         *     Idempotent: re-running after a successful reassignment finds zero owned
+         *     rows and returns ``reassigned=0``.
+         */
+        post: operations["reassign_team_resources_endpoint_api_v1_teams__team_id__reassign_org_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/teams/{team_id}/members": {
         parameters: {
             query?: never;
@@ -10069,6 +10097,11 @@ export interface components {
             description: string;
             /** Reject Target */
             reject_target?: string | null;
+            /**
+             * Correction Target
+             * @description Node ID routed to on HITL rejection for the FAR-210 single-node correction path. Accepted and persisted through the graph contract; the reject→correction dispatch seam is tracked as a follow-up (the graph compiler currently kicks a rejection back to reject_target).
+             */
+            correction_target?: string | null;
             /** Claim Expiry Minutes */
             claim_expiry_minutes: number;
             /** Human Only */
@@ -13024,6 +13057,14 @@ export interface components {
              * @default false
              */
             gate_fired: boolean;
+            /** Blocked Partial Summary */
+            blocked_partial_summary?: {
+                [key: string]: unknown;
+            } | null;
+            /** Guardrail Summary */
+            guardrail_summary?: {
+                [key: string]: number;
+            } | null;
         };
         /** RunSummary */
         RunSummary: {
@@ -13206,6 +13247,8 @@ export interface components {
             suggestion_name: string;
             /** Suggestion Description */
             suggestion_description?: string | null;
+            /** Rare Fields */
+            rare_fields?: string[];
         };
         /** SchemaMigrationPlanRequest */
         SchemaMigrationPlanRequest: {
@@ -13280,7 +13323,7 @@ export interface components {
             };
             /**
              * Limit
-             * @default 10
+             * @default 200
              */
             limit: number;
         };
@@ -14093,6 +14136,13 @@ export interface components {
             /** Team Role */
             team_role: string;
         };
+        /** TeamReassignResponse */
+        TeamReassignResponse: {
+            /** Team Id */
+            team_id: string;
+            /** Reassigned */
+            reassigned: number;
+        };
         /** TeamResponse */
         TeamResponse: {
             /** Id */
@@ -14860,6 +14910,11 @@ export interface components {
             events?: string[];
             /** Description */
             description?: string | null;
+            /**
+             * Team Id
+             * @description Optional team scope; when set, only that team's events hit this endpoint
+             */
+            team_id?: string | null;
         };
         /** WebhookResponse */
         WebhookResponse: {
@@ -14877,6 +14932,8 @@ export interface components {
             is_active: boolean;
             /** Consecutive Dead Letter Count */
             consecutive_dead_letter_count: number;
+            /** Team Id */
+            team_id?: string | null;
             /** Disabled At */
             disabled_at: string | null;
             /** Created At */
@@ -14892,6 +14949,11 @@ export interface components {
             events?: string[] | null;
             /** Description */
             description?: string | null;
+            /**
+             * Team Id
+             * @description Optional team scope; when set, only that team's events hit this endpoint
+             */
+            team_id?: string | null;
         };
         /** WsTokenResponse */
         WsTokenResponse: {
@@ -19277,6 +19339,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TeamResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reassign_team_resources_endpoint_api_v1_teams__team_id__reassign_org_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamReassignResponse"];
                 };
             };
             /** @description Validation Error */

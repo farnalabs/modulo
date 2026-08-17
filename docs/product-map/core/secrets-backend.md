@@ -85,9 +85,9 @@ The `SecretsBackend` ABC defines a uniform interface (`get_secret`, `set_secret`
 
 - [x] Empty key string behaviour (all backends) — raises `ValueError("Secret key must be a non-empty string")`
 - [x] Invalid Fernet key at construction (`ValueError` from `cryptography.fernet.Fernet`)
-- [ ] Null bytes in secret values (Fernet encryption round-trip)
-- [ ] Concurrent delete+set race (two concurrent sessions operating on same key)
-- [ ] Org ID caching expiry / reset on session change
+- [ ] Null bytes in secret values (Fernet encryption round-trip) — Fernet encrypts arbitrary bytes, but no explicit null-byte round-trip test exists (see Known Gaps)
+- [ ] Concurrent delete+set race (two concurrent sessions operating on same key) — the Fernet `set_secret` TOCTOU retry guards concurrent INSERTs, but delete-vs-set interleaving is untested (see Known Gaps)
+- [x] Org ID caching expiry / reset on session change — `FernetSecretsBackend.set_session()` resets `_org_id = None` so it is re-read from the new session (`fernet.py:81`), covered by `test_set_session_clears_cached_org_id`; caching itself covered by `test_read_org_id_from_session_caches`
 
 ### Credential-in-state rule (PRD §7.13)
 
@@ -104,10 +104,10 @@ The `SecretsBackend` ABC defines a uniform interface (`get_secret`, `set_secret`
 - [x] AWS `_ensure_client()` uses `asyncio.Lock` for thread-safe lazy initialisation (double-checked locking)
 - [x] Fernet backend org_id is cached to avoid redundant `current_setting()` queries after first read
 - [x] Vault/AWS network errors and timeouts wrapped as `RuntimeError` — never raw 500
-- [ ] No retry/backoff on Vault/AWS transient failures (HTTP 429, 503, connection reset)
-- [ ] No circuit breaker pattern for Vault/AWS repeated failures
-- [ ] No fallback chain between backends (Fernet → Vault → AWS)
-- [ ] Fernet backend `with_for_update()` lock is silently ignored on SQLite — no locking on multi-backend deployments
+- No retry/backoff on Vault/AWS transient failures (HTTP 429, 503, connection reset) — see Known Gaps
+- No circuit breaker pattern for Vault/AWS repeated failures — see Known Gaps
+- No fallback chain between backends (Fernet → Vault → AWS) — see Known Gaps
+- Fernet backend `with_for_update()` lock is silently ignored on SQLite — no locking on multi-backend deployments (see Known Gaps)
 
 ## QA History
 
@@ -137,3 +137,14 @@ The `SecretsBackend` ABC defines a uniform interface (`get_secret`, `set_secret`
 - No secret expiry / TTL support
 - Fernet backend stores encrypted values in the same DB as application data — no HSM or external KMS
 - Fernet backend `set_secret` uses `with_for_update()` which is silently ignored on SQLite — concurrent upserts for the same key may trigger `IntegrityError` on SQLite (mitigated by single-connection SQLite driver)
+- No retry/backoff on Vault/AWS transient failures (HTTP 429, 503, connection reset) — a transient upstream failure fails the operation outright
+- No circuit breaker pattern for Vault/AWS repeated failures — repeated failures always take the full (single-shot) path with no trip-and-cool-down
+- No fallback chain between backends (Fernet → Vault → AWS) — a backend failure is not retried on an alternate backend
+- No explicit null-byte round-trip test — Fernet encrypts arbitrary bytes correctly, but there is no regression test for secret values containing `\x00`
+- Concurrent delete+set race untested — the Fernet `set_secret` TOCTOU retry (2 attempts) guards concurrent INSERTs, but a delete interleaving with a set is not explicitly covered
+
+## QA History
+
+### 2026-08-15 — coverage sweep (partial-small-a)
+
+- **Marked "Org ID caching expiry / reset on session change" [x]** — verified `FernetSecretsBackend.set_session()` resets `_org_id = None` (re-read from the new session on next op) and caching is covered by `test_set_session_clears_cached_org_id` + `test_read_org_id_from_session_caches` in `test_fernet_backend.py`. Confirmed the remaining unchecked items are genuine gaps (null-byte round-trip test absent, delete+set race untested, no Vault/AWS retry/backoff, no circuit breaker, no fallback chain, SQLite `with_for_update()` no-op) and moved them into Known Gaps. Status: partial (53/59 — all remaining unchecked items are documented gaps).

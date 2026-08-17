@@ -145,6 +145,7 @@ async def track_okr_progress(
             WITH suite_eval_ids AS (
                 SELECT id FROM eval_definitions
                 WHERE suite_id = :suite_id AND organisation_id = :org_id
+                  AND eval_type != 'guardrail'
             )
             SELECT
                 SUM(CASE WHEN er.evaluated_at >= :window_7 THEN 1 ELSE 0 END)

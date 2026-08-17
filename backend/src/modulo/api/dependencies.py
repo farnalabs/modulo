@@ -49,6 +49,10 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.settings_resolver import resolve_authz_enforce
 from modulo.settings import Settings, get_settings
 
+_CODE_PERMISSION_DENIED = "permission.denied"
+_MSG_DATABASE_TEMPORARILY_UNAVAILABLE = "Database temporarily unavailable."
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -108,7 +112,7 @@ def require_permission(permission: str) -> Any:
                 assert_org_role(principal.org_role, required, permission)
             except PermissionDenied as exc:
                 logger.warning(
-                    "permission.denied",
+                    _CODE_PERMISSION_DENIED,
                     extra={
                         "permission": permission,
                         "required": required,
@@ -147,7 +151,7 @@ def require_in_dev_operator(principal: TenantPrincipal, permission: str) -> None
         assert_org_role(principal.org_role, required, permission, kill_switch_eligible=False)
     except PermissionDenied as exc:
         logger.warning(
-            "permission.denied",
+            _CODE_PERMISSION_DENIED,
             extra={
                 "permission": permission,
                 "required": required,
@@ -197,7 +201,7 @@ def require_permission_any_credential(permission: str) -> Any:
                 assert_org_role(principal.org_role, required, permission)
             except PermissionDenied as exc:
                 logger.warning(
-                    "permission.denied",
+                    _CODE_PERMISSION_DENIED,
                     extra={
                         "permission": permission,
                         "required": required,
@@ -234,7 +238,7 @@ def require_system_permission(permission: str) -> DependsParameter:
     ) -> AuthenticatedPrincipal:
         if not current_user.is_system_admin:
             logger.warning(
-                "permission.denied",
+                _CODE_PERMISSION_DENIED,
                 extra={
                     "permission": permission,
                     "required": "system_admin",
@@ -275,7 +279,7 @@ def require_system_or_org_admin(permission: str) -> Any:
             assert_org_role(principal.org_role, "admin", permission, kill_switch_eligible=False)
         except PermissionDenied as exc:
             logger.warning(
-                "permission.denied",
+                _CODE_PERMISSION_DENIED,
                 extra={
                     "permission": permission,
                     "required": "admin",
@@ -377,13 +381,13 @@ def require_target_org_role(
                 logger.exception("permission.live_role_read_failed")
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="Database temporarily unavailable.",
+                    detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
                 ) from None
             try:
                 assert_org_role(role, min_role, permission, kill_switch_eligible=kill_switch_eligible)
             except PermissionDenied as exc:
                 logger.warning(
-                    "permission.denied",
+                    _CODE_PERMISSION_DENIED,
                     extra={
                         "permission": permission,
                         "required": min_role,
@@ -467,7 +471,7 @@ def require_team_membership_or_admin(resource_team_id_provider: TeamScopeProvide
             logger.exception("permission.team_scope_read_failed")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Database temporarily unavailable.",
+                detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
             ) from None
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
@@ -475,7 +479,7 @@ def require_team_membership_or_admin(resource_team_id_provider: TeamScopeProvide
             return principal
         if not is_member:
             logger.warning(
-                "permission.denied",
+                _CODE_PERMISSION_DENIED,
                 extra={
                     "permission": "team.membership_or_admin",
                     "required": "team_membership",
@@ -747,7 +751,7 @@ async def deny_break_glass_mint(
         logger.exception("permission.break_glass_mint_read_failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
     if account is None:
         return current_user

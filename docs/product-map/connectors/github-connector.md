@@ -211,6 +211,7 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [x] ~~**Batch file operations**~~ — **RESOLVED (2026-08-06)**: `write("commit")`/`write("files")` applies create/update/delete/move actions in one commit via the Git Database API
 
 ## QA History
+- **2026-08-15 (coverage sweep partial-small-b): Verified all 19 unchecked behaviours remain genuine gaps — no pre-run scope blocking in ConnectorHub (health check flags but does not refuse), partial scope verification (only `repo`/`read:org` probed), opaque URL cursor without page-number helper or automatic pagination, PAT-only auth (no OAuth flow), and the BDD/frontmatter coverage gaps (line 203's base64 encoding item is marked RESOLVED in-text and left as-is). 127/146 behaviours covered.**
 
 ### 2026-08-12 — improve-architecture: fine-grained PAT scope verification RESOLVED
 

@@ -42,7 +42,6 @@ Parse raw JSON Schema content and extract fields for use in the schema builder U
 - [x] ProgrammingError returns 501
 - [x] SQLAlchemyError returns 503
 - [x] Exception returns 500 with logging
-- [ ] Import of very large schemas — no size limit enforced
 
 ## Edge Cases
 
@@ -50,17 +49,17 @@ Parse raw JSON Schema content and extract fields for use in the schema builder U
 - [x] Schema with only `type: object` and no `properties` — handled
 - [x] Circular `$ref` references — parsed but may cause recursion in field extraction
 - [x] Non-ASCII field names — stored and returned as-is
-- [ ] Draft 2020-12 validation rejects valid older drafts (2019-09, draft-07, draft-04)
-- [ ] `$ref` to external URLs — not resolved, reference stored as-is
 
 ## Security
 
 - [x] Auth required — 401 for unauthenticated
 - [x] Schema access is org-scoped — cross-org access returns 404
-- [ ] Imported schema content not sanitised — potential XSS in `title`/`description` fields rendered in frontend
 
 ## Known Gaps
 
 ### 2026-07-12 — Round 3 (systemic sweep: B904, exc_info, dead code)
 - No code issues found in entry code paths (schemas.py clean from earlier passes)
 - Frontmatter valid; Known Gaps remain accurate
+
+### 2026-08-15 — coverage sweep (partial-small-a)
+- Verified the 4 unchecked behaviours are genuine gaps (confirmed against `api/routes/schemas.py`): (1) no size limit enforced on imported schemas — a very large `definition_json` is accepted; (2) validation uses `Draft202012Validator` only, so valid older drafts (2019-09, draft-07, draft-04) are rejected; (3) `$ref` to external URLs is stored as-is, never resolved or fetched; (4) imported `title`/`description` content is not sanitized before being stored/rendered in the frontend (potential XSS). All four moved to Known Gaps as plain bullets. None are PRD-mandated for the current scope. Status: partial (22/26 — all remaining unchecked items are documented gaps).

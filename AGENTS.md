@@ -103,7 +103,7 @@ The root `AGENTS.md` has the full non-negotiable rule under **Agent Isolation: A
 
 ## Delivery Workflow for QA
 
-1. Check `docs/delivery-tracker.md` — QA Reviews section.
+1. Check `Repos/devtools/harness/docs/delivery-tracker.md` — QA Reviews section.
 2. Run each QA review using the `qa` skill.
 3. After finishing a review, toggle its checkbox and add the date + outcome.
 4. Do not start QA #N+1 until QA #N is complete.
@@ -587,6 +587,19 @@ Wait-Process -Name "uv" -ErrorAction SilentlyContinue  # doesn't block; just con
 
 ## Lessons Learned
 
+### Squashing alembic migrations: stamp the live DB to the last still-existing revision, never rely on `upgrade heads` to recover from an orphaned version
+
+When a migration squash deletes revision files (e.g. replacing 94 post-squash migrations with a reconciliation chain), any live DB whose `alembic_version` points at a DELETED revision becomes an **orphan**. `alembic upgrade heads` does NOT gracefully stamp forward from an orphan — it fails hard with `Can't locate revision identified by '<deleted_rev>'` (alembic.util.messaging). This crashed the staging deploy (app + worker both ran `alembic upgrade heads` at boot, both failed, both crash-looped on the migration advisory lock).
+
+The correct rollout for a squash that deletes revisions:
+
+1. **Stamp the live DB to the last revision that still exists in the new chain** — a single-row `UPDATE alembic_version SET version_num = '<last_existing_rev>'`. Do NOT wipe the table; stamp to a known-good revision so `upgrade heads` can walk forward. (For the 2026-08-16 squash: `0107_guardrail_t1_remainder` was deleted, so we stamped staging and prod to `0005_v2_features_system`, then `upgrade heads` ran `0005 -> 0108 -> 0109 -> 0110`.)
+2. **The reconciliation migrations must be idempotent** (CREATE ... IF NOT EXISTS / existence guards / data-safe SET NOT NULL) so they no-op on the existing schema and just stamp forward — this is what makes the squash "compatible with existing datasets".
+3. **Do this BEFORE the deploy's release command runs** — the Fly `[release]` command (`release.sh`) is the single migrator that runs `alembic upgrade heads` once per deploy before machines roll out. If the DB is orphaned, the release command fails and every machine then fails in the boot-time fallback loop.
+4. **Verify the DB is at the new head after deploy** (`SELECT version_num FROM alembic_version`) and that the app health check passes — a crash-looping app on the advisory lock is the symptom of an orphaned version.
+
+Also: a squash that deletes revisions will break (a) tests that pin deleted revision IDs (adapt them to assert final schema state), (b) `check-migration-heads` numeric-prefix collisions (renumber to the next free prefix after main's current head), and (c) product-map `code:` paths referencing deleted migration files (repoint to the reconciliation file). The `check-migration-heads` CI gate compares the PR's migration filenames against main's still-present files, so new reconciliation files must use prefixes higher than main's current head.
+
 ### Canonicalizing a value at an API boundary requires auditing every other consumer of the raw column
 
 When the runs API started canonicalizing run error codes to the dotted taxonomy at the read boundary (present_error / _do_list_runs / MCP), the raw `runs.error_code` column was STILL consumed raw by other surfaces — the analytics facts table stores the raw spelling, so the analytics error-code filter and `dimension=error_code` chart silently disagreed with the runs UI until reconciled in the same change. Two reconciliation patterns shipped (dist #1423): `expand_code_variants()` matches dotted + legacy + class-name spellings of one canonical code (IN clause over the variants), and the `harness.unknown` aggregate filter uses `error_code NOT IN known_error_codes()` to round-trip the dimension's "Unknown error" slice. Rule: any boundary canonicalization must grep for EVERY reader of the raw value (analytics facts/filter/dimension, MCP resources, run classification, notifier events) and reconcile them in the same change — a filter/dimension asymmetry silently returns zero rows or shows keys that no longer match the UI.
@@ -701,7 +714,6 @@ first-party endpoint:
 | `eslint` (staged .vue/.ts) | |
 | `check-migration-heads` (if migrations staged) | |
 | `graph-validate` (if product-map changed) | |
-| `pre-commit-checks.ps1` (pattern scan) | |
 | `check-merge-conflict` | |
 | `check-yaml` / `check-toml` / `check-json` | |
 | `end-of-file-fixer` | |
@@ -813,12 +825,7 @@ Rules:
 4. Pre-commit hooks (eslint via `pnpm run lint`, etc.) work in a worktree once its own node_modules is installed.
 5. If a worktree's node_modules is corrupt/missing, delete it and re-run `pnpm install --frozen-lockfile` — it is an isolated tree; nothing else is affected.
 
-**Gotcha:** `pre-commit-checks.ps1` (harness Check 5) flags pre-existing
-admin-view gaps whenever an `Admin*.vue` file is touched — every
-`frontend/src/views/Admin*.vue` must contain a `<FeatureGate>` wrapper. If your
-change touches an admin view that lacks one (e.g. `AdminViewsView.vue` until
-FAR-117), the commit is blocked — add the wrapper with the correct feature name
-(match sibling views) rather than bypassing the hook.
+**Gotcha (farnalabs sessions only):** the Lessons-Learned pattern scan (`pre-commit-checks.ps1`, harness Check 5) no longer runs in this repo's pre-commit — it runs via farnalabs gate.ps1 (devtools). The admin-view rule it enforces still applies: every `frontend/src/views/Admin*.vue` must contain a `<FeatureGate>` wrapper. If your change touches an admin view that lacks one (e.g. `AdminViewsView.vue` until FAR-117), add the wrapper with the correct feature name (match sibling views) — the scan will block the gate if you don't.
 
 ### Systemic patterns: apply as bulk sweeps, not per-feature QA
 
@@ -1500,3 +1507,16 @@ From the FAR-191 streak-status reader (a read-only `get_trigger_streak_status` t
 - **A raw `text()` fragment interpolated into an ORM `select` leaves its placeholders unbound unless you pass them explicitly.** `_STREAK_BOUNDARY_SQL` carries `:oid`/`:tid`; the ORM auto-binds its own `organisation_id_1`/`trigger_id_1` from column predicates but knows nothing about the fragment's params. The query raised `InvalidRequestError: A value is required for bind parameter 'oid'` on EVERY real execution — swallowed by the per-sub-read `except`, so `last_outcomes` degraded to `[]` silently. Substring-routed mock sessions and an integration test that asserted the empty case both passed for the wrong reason (a broken query returns the same empty result as a genuinely empty table). Fix: `session.execute(stmt, {"oid": str(org_id), "tid": str(trigger_id)})`, compile the statement to confirm the merged bind set fully resolves, and make the integration test seed the caller's OWN data and assert it SURFACES — never assert only the empty side of a query.
 
 - **A never-raises reader needs per-sub-read try/excepts, not one function-level try.** A single `try` around count + outcomes + reason means a failure in the LAST optional read discards the already-computed primary data (streak + outcomes vanish into the `unconfigured` base). Each independent read degrades independently: count failure -> base; outcomes failure -> keep streak, empty outcomes; reason failure -> keep state, null reason.
+
+
+### 13. Complexity refactors (S3776) routinely break mypy strict - run mypy on every extracted helper before pushing
+
+From the FAR-281 cognitive-complexity sweep (2026-08-16/17): extracting cohesive blocks into private helper functions to reduce SonarQube S3776 complexity repeatedly introduced mypy strict errors that CI caught after the fact:
+- Bare generic types in extracted helper signatures - `def _sanitize_mcp_mapping(value: dict) -> dict:` and `def _sanitize_mcp_sequence(value: list) -> list:` (missing `[str, Any]` / `[Any]` type args), and `def _mcp_run_item(r: Any, child_rollup: dict) -> dict[str, Any]:` (bare `dict`).
+- The Branch Fixer also contributed a concurrent mypy fix for the same class of error in graph_validator / workflow_import_export / cron_helpers.
+
+Rules:
+- When you extract a helper during a complexity refactor, the helper's signature is NEW code - it must satisfy mypy strict, not just the original function's annotations. Bare `dict`/`list`/`set`/`tuple` without type arguments are mypy strict errors (`[type-arg]`).
+- Run `uv run mypy <changed-file>` on EVERY file you touch in a complexity refactor BEFORE pushing - do not rely on CI to catch it. The refactor changes signatures and moves code, so type-check the whole file, not just the diff.
+- Prefer explicit type arguments on extracted helpers: `dict[str, Any]`, `list[Any]`, `set[str]`, `tuple[Any, int]`. If the helper's parameter type is genuinely heterogeneous, use `Any` explicitly rather than a bare generic.
+- This applies to ANY refactor that extracts helpers or changes signatures (complexity, DRY, dead-code removal), not just S3776.

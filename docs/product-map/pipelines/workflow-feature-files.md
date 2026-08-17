@@ -147,11 +147,12 @@ import it into another organisation with schema/connector/model backend binding.
 - [x] Oversized bundle (>100MB in core function, >50MB at API boundary) rejected
 - [x] Edge with missing source/target node IDs raises ValueError → 500
 - [x] Concurrency: non-existent owner_team_id produces validation error, not cryptic FK violation
-- [ ] Import with already-deleted team produces clear validation error
+- [x] Import with already-deleted team produces clear validation error — a deleted team is a non-existent `owner_team_id`; `materialize_import` validates the team exists (by id + org) and raises `ValueError("Team {id} not found in this organisation.")`, covered by `test_nonexistent_owner_team_id_raises_value_error` (test_workflow_import_export_resilience.py)
 - [x] `hitl_gate_config` now preserved in edge export (fixed in cross-cutting QA)
 - [x] Duplicate agent name within bundle detected as warning during analysis (added in cross-cutting QA)
 
 ## QA History
+- **2026-08-15 (coverage sweep partial-small-b): Verified the remaining unchecked items are genuine gaps (bundle `requires.connector_types`/`requires.abstract_schemas`, prompt-template review UI before confirm, V2 registry checksum compare — all unimplemented). FLIPPED `[ ]`→`[x]` “Import with already-deleted team produces clear validation error”: a deleted team is a non-existent `owner_team_id`, validated in `materialize_import` (`ValueError: Team {id} not found in this organisation.`) and covered by `test_nonexistent_owner_team_id_raises_value_error` (test_workflow_import_export_resilience.py). 74/78 → 75/78 behaviours covered.**
 
 - 2026-08-12: improve-tests QA lens pass on the `workflow_import_export` test package — dedicated 72-test unit suite for `modulo.core.workflow_import_export` (previously only `_sanitize_retry_policy` was covered; line coverage 11% → 88%). Locks the pure helper contracts (`_safe_uuid`, `_sanitize_slug`, `suggest_import_name`), the ZIP/name/retry-policy sanitisation gates, the local-equivalent resolution chain (`resolve_schema` / `resolve_connector_type` / `resolve_model_backend`), the v1 ZIP and v2 YAML exporters (org-private stripping, trigger/owner-team/author enrichment), and `materialize_import` happy/error paths (format gate, owner-team validation, schema name-collision rename, IntegrityError retry, connector-binding rewire, unresolved-ref warnings, malformed retry_policy → `{}`, non-list graph nodes, invalid/unknown edges).
 - 2026-07-05: Prodmap pipelines QA: Added depends-on (feat-pipelines-core, feat-pipelines-library). Added QA History section. Moved `confirm_import` account_id bug fix description from Known Gaps to QA History.

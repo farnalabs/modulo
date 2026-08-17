@@ -61,29 +61,30 @@ Plan tier definitions and feature flag catalog governing which features are avai
 - [x] SQLAlchemyError → 503 Service Unavailable
 - [x] Exception → 500 with `logger.exception`
 - [x] `asyncio.CancelledError` guard before generic exception handlers
-- [ ] Seed script errors silently swallowed — no validation of seed output
+- [x] Seed script validates its output — reads back the seeded tier/flag row counts and fails loudly (`RuntimeError`) if either table is empty, instead of unconditionally printing "seeded successfully"
 
 ## Edge Cases
 
 - [x] Empty tier catalog returns empty list
 - [x] Unknown tier_id returns 404
 - [x] Unknown flag name returns 404
-- [ ] Tier rank conflict — two tiers with same rank produce undefined ordering
-- [ ] Feature flag `depends_on` circular reference — no cycle detection
-- [ ] Seed script idempotency — duplicate seed runs via `ON CONFLICT DO NOTHING`
+- [x] Seed script idempotency — duplicate seed runs are no-ops via `ON CONFLICT (tier_id) DO NOTHING` / `ON CONFLICT (name) DO NOTHING`
 
 ## Security
 
 - [x] Auth guard via `get_current_user` dependency
 - [x] All tier/flag routes require admin role
-- [ ] No audit logging for tier catalog reads
+
+## Known Gaps
+
+- Tier rank conflict — two tiers with the same `rank` produce undefined ordering (no uniqueness constraint on `rank`)
+- Feature flag `depends_on` circular reference — no cycle detection (a flag depending on itself/its own dependency chain is not rejected)
+- No audit logging for tier catalog reads — the admin read routes emit no audit events
 
 ## QA History
 
+- 2026-08-15: feat-core-tier-catalog → partial, product-map coverage sweep: **RESOLVED the standalone `seed_tier_catalog.py` drift** — it now imports `TIERS`/`FLAGS` from `modulo.core.seed_data.catalog` (the same source the boot-time `_seed_tier_catalog` uses) instead of maintaining a stale private copy, so `observability` is `community` again and the previously-missing flags (`notification_log`, `api_changelog`, `email_config`, `error_tracking`, `scim`, `external_secrets`, `schema_union_types`, `migration_cli`, `checkpoint_encryption`, `audit_crypto_chain`, `community_registry`, `prompt_optimization`, `pipeline_diff_rollback`, `pipeline_delete`, `rate_limits`, `runtime_config`, etc.) can never drift again. Added output validation: the script reads back the seeded row counts and raises on an empty table. Marked the "Seed script idempotency" and "Seed script output validation" checkboxes `[ ]`→`[x]` (idempotency via `ON CONFLICT ... DO NOTHING` was already implemented; validation added this session). Remaining genuine gaps kept unchecked: tier-rank conflict ordering, `depends_on` cycle detection, and audit logging for tier-catalog reads (none PRD-mandated).
 - No dedicated unit tests for `admin_tiers` route or `tier_catalog` CRUD. Tier catalog functions are tested indirectly through `test_feature_flag_registry.py` and `test_plan_context.py` (which mock `tier_catalog` functions).
 - No BDD feature files for tier catalog operations.
-- `seed_tier_catalog.py` is out of sync with `_KNOWN_FLAGS` in `feature_flags.py`:
-  - `observability` is `community` in `_KNOWN_FLAGS` but `team` in seed
-  - `remy_ui_driving`, `notification_log`, `api_changelog`, `email_config`, `error_tracking`, `scim`, `external_secrets`, `schema_union_types`, `migration_cli`, `checkpoint_encryption`, `audit_crypto_chain`, `community_registry`, `prompt_optimization`, `pipeline_diff_rollback`, `pipeline_delete`, `rate_limits`, `runtime_config` are in `_KNOWN_FLAGS` but missing from the seed
 - No CRUD endpoints for individual tier/flag management (create, update, delete) — only read/list endpoints exist.
 - No frontend integration consuming the tiers endpoint (frontend still hardcodes tier labels per PRD §6.2 migration path item 5).

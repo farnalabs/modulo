@@ -1128,3 +1128,59 @@ async def test_guardrail_cap_configurable_cap_enforced_at_graph_save():
 async def test_guardrail_cap_no_rows_is_skipped():
     result = await GraphValidator().validate_definition(_SINGLE_NODE, _session_returning([]), guardrail_definitions=[])
     assert result.is_valid
+
+
+# ---------------------------------------------------------------------------
+# Guardrail redact+correct hard-block (FAR-210 T2b)
+# ---------------------------------------------------------------------------
+
+
+def _redact_correction_row(node_id, name, *, action="redact", has_correction=True):
+    row = MagicMock()
+    row.id = uuid.uuid4()
+    row.organisation_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    row.pipeline_id = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
+    row.node_id = node_id
+    row.name = name
+    row.eval_type = "guardrail"
+    config = {"action": action}
+    if has_correction:
+        config["correction"] = {"id": "corr-1", "model_backend_id": "mb-1"}
+    row.config_json = config
+    row.failure_behaviour = "warn"
+    row.pass_threshold = None
+    row.suite_id = None
+    return row
+
+
+async def test_redact_correct_hard_blocked_at_graph_save():
+    """A 'correction' block on a 'redact'-action guardrail is rejected at
+    graph-save (exfiltration channel) — matches the runtime
+    RedactCorrectBlockedError backstop."""
+    rows = [_redact_correction_row(None, "g-redact-correct")]
+    result = await GraphValidator().validate_definition(
+        _SINGLE_NODE, _session_returning([]), guardrail_definitions=rows
+    )
+    assert not result.is_valid
+    assert any(i.code == "REDACT_CORRECT_BLOCKED" for i in result.issues)
+
+
+async def test_redact_without_correction_passes_graph_save():
+    """A plain 'redact'-action guardrail (no correction block) is valid."""
+    rows = [_redact_correction_row(None, "g-redact-only", has_correction=False)]
+    result = await GraphValidator().validate_definition(
+        _SINGLE_NODE, _session_returning([]), guardrail_definitions=rows
+    )
+    assert result.is_valid
+    assert not any(i.code == "REDACT_CORRECT_BLOCKED" for i in result.issues)
+
+
+async def test_non_redact_correction_passes_graph_save():
+    """A correction on a non-redact guardrail is NOT the exfiltration channel
+    the hard-block protects — it stays valid at graph-save."""
+    rows = [_redact_correction_row(None, "g-block-correct", action="block")]
+    result = await GraphValidator().validate_definition(
+        _SINGLE_NODE, _session_returning([]), guardrail_definitions=rows
+    )
+    assert result.is_valid
+    assert not any(i.code == "REDACT_CORRECT_BLOCKED" for i in result.issues)

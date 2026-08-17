@@ -186,6 +186,28 @@ async def test_query_search_empty(connector):
 
 
 @respx.mock
+async def test_query_search_non_list_objects_no_crash(connector):
+    """A corrupt ``objects`` field must fall back to an empty page, not a bare string."""
+    respx.get(f"{API_BASE}/-/v1/search", params={"text": "react", "size": "100"}).mock(
+        return_value=httpx.Response(200, json={"objects": "not-a-list", "total": 0}),
+    )
+    result = await connector.query(ConnectorQuery(resource="search", filters={"text": "react"}))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_search_corrupt_body_no_crash(connector):
+    """A non-dict search body must degrade to an empty page, not crash on ``.get()``."""
+    respx.get(f"{API_BASE}/-/v1/search", params={"text": "react", "size": "100"}).mock(
+        return_value=httpx.Response(200, json=["garbage"]),
+    )
+    result = await connector.query(ConnectorQuery(resource="search", filters={"text": "react"}))
+    assert not result.records
+    assert result.total == 0
+
+
+@respx.mock
 async def test_query_search_with_limit(connector):
     respx.get(f"{API_BASE}/-/v1/search", params={"text": "react", "size": "5"}).mock(
         return_value=httpx.Response(

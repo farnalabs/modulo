@@ -22,7 +22,7 @@ import logging
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,6 +40,8 @@ class ApiKeyInvalidError(PermissionError):
 _PREFIX_LEN = 8
 _SECRET_LEN = 32  # url-safe base64 chars
 _MK_PREFIX = "mk_"
+
+_UNSET = object()  # sentinel: ``team_id`` not provided in an update payload
 
 
 def generate_api_key() -> tuple[str, str, str]:
@@ -149,13 +151,21 @@ async def revoke_api_key(
     key_id: uuid.UUID,
     org_id: uuid.UUID,
 ) -> bool:
-    """Revoke an API key. Returns True if the key was found and revoked."""
+    """Revoke an API key. Returns True if the key was found and revoked.
+
+    The key row is locked with ``FOR UPDATE`` so two concurrent revocations
+    serialise: the second waits for the first to commit, re-reads the row with
+    ``revoked_at`` already set (the ``revoked_at IS NULL`` filter excludes it)
+    and returns False instead of racing on the same row.
+    """
     result = await session.execute(
-        select(OrgApiKey).where(
+        select(OrgApiKey)
+        .where(
             OrgApiKey.id == key_id,
             OrgApiKey.organisation_id == org_id,
             OrgApiKey.revoked_at.is_(None),
         )
+        .with_for_update()
     )
     key = result.scalar_one_or_none()
     if key is None:
@@ -210,10 +220,16 @@ async def update_api_key(
     *,
     name: str | None = None,
     role: str | None = None,
-    team_id: uuid.UUID | None = None,
+    team_id: uuid.UUID | object | None = _UNSET,
     expires_at: datetime | None = None,
 ) -> OrgApiKey | None:
-    """Update an API key's metadata. Returns None if the key was not found."""
+    """Update an API key's metadata. Returns None if the key was not found.
+
+    ``team_id`` accepts three states:
+    - ``_UNSET`` (default): leave the current team scope unchanged.
+    - ``None``: clear the team scope (team-scoped key becomes org-wide).
+    - a ``uuid.UUID``: scope the key to that team.
+    """
     stmt = select(OrgApiKey).where(
         OrgApiKey.id == key_id,
         OrgApiKey.organisation_id == org_id,
@@ -226,14 +242,17 @@ async def update_api_key(
         return None
     if name is not None:
         key.name = name
-    effective_role = role if role is not None else key.role
-    effective_team_id = team_id if team_id is not None else key.team_id
-    if effective_team_id is not None and effective_role == "admin":
-        raise ApiKeyInvalidError("team-scoped API keys cannot have admin role")
+    if role is not None or team_id is not _UNSET:
+        effective_role = role if role is not None else key.role
+        # team_id is the NEW scope when provided: None clears it (org-wide),
+        # a UUID scopes it; _UNSET keeps the current scope.
+        effective_team_id = key.team_id if team_id is _UNSET else team_id
+        if effective_team_id is not None and effective_role == "admin":
+            raise ApiKeyInvalidError("team-scoped API keys cannot have admin role")
     if role is not None:
         key.role = role
-    if team_id is not None:
-        key.team_id = team_id
+    if team_id is not _UNSET:
+        key.team_id = cast(uuid.UUID | None, team_id)
     if expires_at is not None:
         key.expires_at = expires_at
     await session.flush()

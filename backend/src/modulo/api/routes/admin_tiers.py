@@ -11,6 +11,7 @@ from redis.asyncio import Redis
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
@@ -78,4 +79,4 @@ async def list_tiers_endpoint(
         raise HTTPException(status_code=503, detail="Database error occurred.") from None
     except Exception:
         logger.exception("Unexpected error in list_tiers_endpoint")
-        raise HTTPException(status_code=500, detail="Internal server error") from None
+        raise HTTPException(status_code=500, detail=MSG_INTERNAL_SERVER_ERROR) from None

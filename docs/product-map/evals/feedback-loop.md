@@ -128,7 +128,7 @@ The Feedback System treats every human rejection as structured signal. Handles F
 - [x] update_status validates transitions via _VALID_STATUS_TRANSITIONS with descriptive error message
 - [x] HITL reject path (/hitl/{gate_id}/reject) does NOT create a FeedbackRecord � feedback records are created exclusively via the explicit POST /runs/{run_id}/feedback endpoint
 - [x] Review feedback endpoint catches FeedbackRecordNotFoundError ? 404, InvalidTransitionError/ConcurrentModificationError ? 409, FeedbackManagerError ? 404 (base class catch � not ValueError)
-- [ ] Review feedback endpoint base-class FeedbackManagerError ? 404 is too broad � could mask unexpected subclasses; should be narrowed
+- [x] Review feedback endpoint maps only specific FeedbackManager subclasses: FeedbackRecordNotFoundError / FeedbackRecordRunNotFoundError ? 404, InvalidTransitionError / ConcurrentModificationError ? 409; other subclasses (e.g. ValidationError) are NOT collapsed to 404 (narrowed 2026-08-15)
 
 ### Resilience
 - [ ] ConcurrentModificationError on update_status/link_correction_run has no automatic retry � caller must catch and retry
@@ -152,13 +152,18 @@ The Feedback System treats every human rejection as structured signal. Handles F
 - No feedback_handler supersedes reject_target enforcement at validation/gate level
 - ~~No audit events recorded for FeedbackRecord status transitions~~ **RESOLVED (2026-08-15)**: `feedback.status_changed` is dispatched from the update-status and review routes (fresh post-commit transaction, RLS re-established, failure-isolated), plus `feedback.created` on record creation. Both documented in `core/audit-trail.md` implemented-event list.
 - No eval proposal curation UI (draft eval editor, publish, immediate activation) — the queue view exists (EvalProposalsQueueView.vue) but has no editor and "Publish" does not create an eval definition
-- Review endpoint catches FeedbackManagerError (base class) as 404 � too broad, should be narrowed to specific subclasses
+- ~~Review endpoint catches FeedbackManagerError (base class) as 404~~ **RESOLVED (2026-08-15)**: `spawn_correction_run` now raises a dedicated `FeedbackRecordRunNotFoundError` for a missing original run, and the review route catches `FeedbackRecordNotFoundError` / `FeedbackRecordRunNotFoundError` → 404 and `InvalidTransitionError` / `ConcurrentModificationError` → 409. The broad base-class `FeedbackManagerError` → 404 catch was removed, so a non-404 subclass (e.g. `ValidationError`) is no longer silently masked as 404. Covered by `test_create_correction_run_returns_404_when_original_run_missing` and `test_create_correction_run_validation_error_is_not_collapsed_to_404`.
 - run_post_correction_eval escalates the FeedbackRecord on eval failure (implemented); it is not yet wired into the run completion lifecycle so the escalation never auto-triggers in production
 - No advisory lock cross-session coordination on FeedbackRecord rows
 - producing_node_id not format-validated
 - CASCADE deletion of FeedbackRecord when parent run is deleted
 
 ## QA History
+
+### 2026-08-15 — Coverage-completion round 2 (dist partial-evals-d)
+- **Fixed**: review endpoint's base-class `FeedbackManagerError` → 404 catch was too broad (could mask unexpected subclasses as 404). Introduced `FeedbackRecordRunNotFoundError` (dedicated to the missing-original-run case) in `feedback_manager`, switched `spawn_correction_run` to raise it, and narrowed the review route to catch `FeedbackRecordNotFoundError` / `FeedbackRecordRunNotFoundError` → 404 and `InvalidTransitionError` / `ConcurrentModificationError` → 409. A non-404 subclass (`ValidationError`) now surfaces as 500 instead of being silently collapsed to 404.
+- **Tests**: `test_create_correction_run_returns_404_when_original_run_missing` (narrowed 404) + `test_create_correction_run_validation_error_is_not_collapsed_to_404` (narrowing proof) in `test_feedback_endpoint.py`; the manager test for a missing original run now asserts `FeedbackRecordRunNotFoundError`.
+- **Verified remaining gaps** (left unchecked, all genuine): `default_feedback_handler` column is defined but no runtime code reads it (PRD 8.20 acknowledges this); no typed gate-level `feedback_handler`; `reject_routing_conflict` validation unimplemented; correction-proposal accept/reject UI for `ai_correction_with_human_review`; `run_post_correction_eval` not wired into the run-completion lifecycle; AI correction / eval-proposal agent; draft eval editor + publish; producing_node_id not format-validated.
 
 ### 2026-08-15 — improve-architecture (feedback audit gaps)
 - **RESOLVED the "No audit events recorded for FeedbackRecord status transitions" known gap** (`api/routes/feedback.py`).

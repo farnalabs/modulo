@@ -437,6 +437,46 @@ async def test_stream_graph_detaches_context_on_exception():
     detach.assert_called_once()
 
 
+async def test_stream_graph_maps_output_schema_validation_error_to_domain_code():
+    """An OutputSchemaValidationError from a node resolves to the domain
+    ``schema_validation_failure`` error code — never a raw exception name —
+    and publishes a ``run_failed`` payload carrying that code."""
+    from modulo.core.pipeline_engine.node_runner import OutputSchemaValidationError
+
+    compiled = _mock_compiled_raising(OutputSchemaValidationError("Manual output missing required field 'name'"))
+    broker = _mock_registry().get_or_create.return_value
+
+    executor = PipelineExecutor(MagicMock())
+    executor._otel_bridge = MagicMock()
+    executor._otel_bridge.start_run_root.return_value = MagicMock()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.context_api.attach", return_value="tok"),
+        patch("modulo.core.pipeline_engine.executor.context_api.detach") as detach,
+    ):
+        status, error_code, detail, _ntu = await executor._stream_graph(
+            compiled,
+            None,
+            {"configurable": {"thread_id": "org:run"}},
+            {"node-a"},
+            broker,
+            uuid.uuid4(),
+        )
+
+    assert status == "failed"
+    assert error_code == "schema_validation_failure"
+    assert error_code != "ValueError"
+    assert error_code != "OutputSchemaValidationError"
+    assert "missing required field 'name'" in detail
+
+    published = [call.args for call in broker.publish.call_args_list if call.args[0] == "run_failed"]
+    assert len(published) == 1
+    assert published[0][1]["error"] == "schema_validation_failure"
+    assert "missing required field 'name'" in published[0][1]["detail"]
+    executor._otel_bridge.end_run_root.assert_called_once()
+    detach.assert_called_once()
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -1136,6 +1176,127 @@ async def test_execute_handles_streamed_interrupt_from_real_graph():
     assert "hitl_awaiting" in published_types
     assert "run_completed" not in published_types
     registry.close.assert_not_called()
+
+
+async def test_dispatch_hitl_awaiting_routes_through_notifier():
+    notifier = MagicMock()
+    notifier.dispatch_event = AsyncMock()
+    executor = PipelineExecutor(MagicMock(), notifier=notifier)
+    run_id = uuid.uuid4()
+    team_id = uuid.uuid4()
+    org_id = uuid.uuid4()
+
+    await executor._dispatch_hitl_awaiting(
+        org_id=org_id,
+        run_id=run_id,
+        gate_id="gate-7",
+        pipeline_name="My Pipeline",
+        team_id=team_id,
+    )
+
+    kwargs = notifier.dispatch_event.await_args.kwargs
+    assert kwargs["org_id"] == org_id
+    assert kwargs["event_type"] == "hitl_awaiting"
+    assert kwargs["run_id"] == run_id
+    assert kwargs["team_id"] == team_id
+    assert kwargs["payload"] == {
+        "run_id": str(run_id),
+        "gate_id": "gate-7",
+        "team_id": str(team_id),
+        "pipeline_name": "My Pipeline",
+    }
+
+
+async def test_dispatch_hitl_awaiting_without_pipeline_name_omits_key():
+    notifier = MagicMock()
+    notifier.dispatch_event = AsyncMock()
+    executor = PipelineExecutor(MagicMock(), notifier=notifier)
+    run_id = uuid.uuid4()
+
+    await executor._dispatch_hitl_awaiting(
+        org_id=uuid.uuid4(),
+        run_id=run_id,
+        gate_id="gate-1",
+        pipeline_name=None,
+        team_id=None,
+    )
+
+    kwargs = notifier.dispatch_event.await_args.kwargs
+    assert kwargs["event_type"] == "hitl_awaiting"
+    assert kwargs["run_id"] == run_id
+    assert kwargs["team_id"] is None
+    assert "pipeline_name" not in kwargs["payload"]
+    assert kwargs["payload"]["gate_id"] == "gate-1"
+
+
+async def test_dispatch_hitl_awaiting_skips_without_notifier():
+    notifier = MagicMock()
+    notifier.dispatch_event = AsyncMock()
+    executor = PipelineExecutor(MagicMock(), notifier=notifier)
+    executor._notifier = None
+
+    await executor._dispatch_hitl_awaiting(
+        org_id=uuid.uuid4(),
+        run_id=uuid.uuid4(),
+        gate_id="gate-1",
+        pipeline_name="P",
+        team_id=None,
+    )
+
+    assert executor._notifier is None
+    notifier.dispatch_event.assert_not_awaited()
+
+
+async def test_dispatch_hitl_awaiting_failure_is_isolated():
+    notifier = MagicMock()
+    notifier.dispatch_event = AsyncMock(side_effect=RuntimeError("boom"))
+    executor = PipelineExecutor(MagicMock(), notifier=notifier)
+
+    with patch("modulo.core.pipeline_engine.executor._log.exception") as mock_exc:
+        await executor._dispatch_hitl_awaiting(
+            org_id=uuid.uuid4(),
+            run_id=uuid.uuid4(),
+            gate_id="gate-1",
+            pipeline_name="P",
+            team_id=None,
+        )
+
+    assert notifier.dispatch_event.await_count == 1
+    mock_exc.assert_called_once()
+
+
+async def test_execute_with_notifier_dispatches_hitl_awaiting():
+    from langgraph.errors import GraphInterrupt
+    from langgraph.types import Interrupt
+
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="awaiting_human")
+    snapshot = _make_snapshot()
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    compiled = _mock_compiled_raising(GraphInterrupt((Interrupt(value={"gate_id": "gate-1"}),)))
+    registry = _mock_registry()
+    notifier = MagicMock()
+    notifier.dispatch_event = AsyncMock()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+    ):
+        executor = PipelineExecutor(MagicMock(), notifier=notifier)
+        await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+
+    assert notifier.dispatch_event.await_count == 1
+    kwargs = notifier.dispatch_event.await_args.kwargs
+    assert kwargs["event_type"] == "hitl_awaiting"
+    assert kwargs["payload"]["run_id"] == str(run.id)
+    assert kwargs["payload"]["gate_id"] == "gate-1"
 
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
@@ -21,6 +22,10 @@ from modulo.core.audit_logger import (
     verify_chain,
 )
 from modulo.db.rls import set_rls_org
+
+_CODE_AUDIT_MANAGE = "audit.manage"
+_MSG_DATABASE_CONNECTION_FAILED_PLEASE = "Database connection failed. Please try again."
+
 
 _log = logging.getLogger(__name__)
 
@@ -47,7 +52,7 @@ async def list_audit_events_endpoint(
     from_date: datetime | None = Query(None, alias="from_date", description="Filter by start date (ISO 8601)"),
     to_date: datetime | None = Query(None, alias="to_date", description="Filter by end date (ISO 8601)"),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("audit.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_AUDIT_MANAGE),
 ) -> dict[str, object]:
     """List audit events with cursor pagination and filters.
 
@@ -81,13 +86,13 @@ async def list_audit_events_endpoint(
         _log.exception("audit.list_audit_events_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("list_audit_events: database error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database connection failed. Please try again.",
+            detail=_MSG_DATABASE_CONNECTION_FAILED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -95,7 +100,7 @@ async def list_audit_events_endpoint(
         _log.exception("Unexpected error in list_audit_events_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     return result
 
@@ -104,7 +109,7 @@ async def list_audit_events_endpoint(
 async def batch_detail_endpoint(
     req: BatchDetailRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("audit.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_AUDIT_MANAGE),
 ) -> list[dict[str, object]]:
     """Return full details for a batch of audit event IDs."""
     try:
@@ -119,13 +124,13 @@ async def batch_detail_endpoint(
         _log.exception("audit.batch_detail_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("batch_detail: database error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database connection failed. Please try again.",
+            detail=_MSG_DATABASE_CONNECTION_FAILED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -133,7 +138,7 @@ async def batch_detail_endpoint(
         _log.exception("Unexpected error in batch_detail_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     return result
 
@@ -142,7 +147,7 @@ async def batch_detail_endpoint(
 @handle_db_errors("audit.verify_chain_endpoint")
 async def verify_chain_endpoint(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("audit.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_AUDIT_MANAGE),
 ) -> dict[str, object]:
     """Verify the cryptographic integrity of the org's audit chain."""
     try:
@@ -153,13 +158,13 @@ async def verify_chain_endpoint(
         _log.exception("audit.verify_chain_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("verify_chain: database error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database connection failed. Please try again.",
+            detail=_MSG_DATABASE_CONNECTION_FAILED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -167,7 +172,7 @@ async def verify_chain_endpoint(
         _log.exception("Unexpected error in verify_chain_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     return result
 
@@ -182,7 +187,7 @@ async def export_chain_endpoint(
     from_date: datetime | None = Query(None, description="Filter by start date (ISO 8601)"),
     to_date: datetime | None = Query(None, description="Filter by end date (ISO 8601)"),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("audit.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_AUDIT_MANAGE),
 ) -> dict[str, object]:
     """Export audit events as paginated JSON with optional filters."""
     actor_uid = None
@@ -212,13 +217,13 @@ async def export_chain_endpoint(
         _log.exception("audit.export_chain_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("export_chain: database error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database connection failed. Please try again.",
+            detail=_MSG_DATABASE_CONNECTION_FAILED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -226,6 +231,6 @@ async def export_chain_endpoint(
         _log.exception("Unexpected error in export_chain_endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     return result

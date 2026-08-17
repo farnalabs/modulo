@@ -22,12 +22,14 @@ from sqlalchemy import Date, case, cast, func, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.core.analytics import compute_delta
 from modulo.core.remy.config_service import RemyConfigService
+from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.feedback_record import FeedbackRecord
@@ -39,6 +41,10 @@ from modulo.db.models.run_daily_facts import RunDailyFact
 from modulo.db.models.team import Team
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
+
+_MSG_DATABASE_TEMPORARILY_UNAVAILABLE = "The database is temporarily unavailable."
+_CODE_DASHBOARD_DAILY_RUN_COUNTS = "dashboard.daily_run_counts"
+
 
 _log = logging.getLogger(__name__)
 
@@ -231,6 +237,7 @@ async def _eval_rate_window(
                 EvalResult.organisation_id == org_id,
                 EvalResult.evaluated_at >= window_start,
                 EvalResult.evaluated_at < window_end,
+                non_guardrail_eval_results_clause(),
             )
         )
     ).one()
@@ -430,7 +437,10 @@ async def dashboard_summary(
                     func.sum(case((EvalResult.passed.is_(True), 1), else_=0)).label("passed"),
                 )
                 .select_from(EvalResult)
-                .where(EvalResult.organisation_id == org_id)
+                .where(
+                    EvalResult.organisation_id == org_id,
+                    non_guardrail_eval_results_clause(),
+                )
             )
             eval_totals_row = (await session.execute(eval_totals_query)).one()
             eval_total = int(eval_totals_row.total) if eval_totals_row.total is not None else 0
@@ -449,6 +459,7 @@ async def dashboard_summary(
                 .where(
                     EvalResult.organisation_id == org_id,
                     Run.owner_team_id.is_not(None),
+                    non_guardrail_eval_results_clause(),
                 )
                 .group_by(Run.owner_team_id, Run.pipeline_id)
             )
@@ -535,6 +546,7 @@ async def dashboard_summary(
                 .where(
                     EvalResult.organisation_id == org_id,
                     EvalResult.evaluated_at >= seven_days_ago,
+                    non_guardrail_eval_results_clause(),
                 )
                 .group_by(cast(EvalResult.evaluated_at, Date))
                 .order_by(cast(EvalResult.evaluated_at, Date))
@@ -664,13 +676,13 @@ async def dashboard_summary(
         _log.exception("dashboard.dashboard_summary")
         raise HTTPException(
             status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("dashboard.dashboard_summary")
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="The database is temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         # Preserve the intended status for the days validation (422) instead of
@@ -709,6 +721,7 @@ async def dashboard_trends(
                 .where(
                     EvalResult.organisation_id == org_id,
                     EvalResult.evaluated_at >= start_date,
+                    non_guardrail_eval_results_clause(),
                 )
                 .group_by(cast(EvalResult.evaluated_at, Date))
                 .order_by(cast(EvalResult.evaluated_at, Date))
@@ -887,13 +900,13 @@ async def dashboard_trends(
         _log.exception("dashboard.dashboard_trends")
         raise HTTPException(
             status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("dashboard.dashboard_trends")
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="The database is temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except Exception as exc:
         _log.exception("dashboard.trends_failed")
@@ -904,11 +917,11 @@ async def dashboard_trends(
 
 
 @router.get("/daily-run-counts")
-@handle_db_errors("dashboard.daily_run_counts")
+@handle_db_errors(_CODE_DASHBOARD_DAILY_RUN_COUNTS)
 async def daily_run_counts(
     days: int = Query(30, ge=1, le=365),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("dashboard.daily_run_counts"),
+    principal: TenantPrincipal = require_permission(_CODE_DASHBOARD_DAILY_RUN_COUNTS),
 ) -> dict[str, Any]:
     """Return daily run counts for the last N days, grouped by status."""
     try:
@@ -940,16 +953,16 @@ async def daily_run_counts(
 
         return {"daily_counts": daily, "days": days}
     except ProgrammingError as exc:
-        _log.exception("dashboard.daily_run_counts")
+        _log.exception(_CODE_DASHBOARD_DAILY_RUN_COUNTS)
         raise HTTPException(
             status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        _log.exception("dashboard.daily_run_counts")
+        _log.exception(_CODE_DASHBOARD_DAILY_RUN_COUNTS)
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="The database is temporarily unavailable.",
+            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except Exception as exc:
         _log.exception("dashboard.daily_run_counts_failed")

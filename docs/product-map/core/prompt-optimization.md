@@ -117,10 +117,12 @@ LLM-driven prompt improvement from eval failures, with full version history, rol
 - [x] LLM call failures (network, timeout) propagate to caller for optimize endpoint
 - [x] LLM call timeout (configurable _LLM_TIMEOUT=60s with asyncio.wait_for)
 - [x] Retry/backoff on LLM call failure (3 retries, exponential backoff + jitter)
-- [ ] No retry/backoff on credential decryption failure in optimize endpoint
-- [ ] No circuit breaker if the LLM backend is persistently unavailable
+- No retry/backoff on credential decryption failure in optimize endpoint (see Known Gaps)
+- No circuit breaker if the LLM backend is persistently unavailable (see Known Gaps)
 
 ## Known Gaps
+- No retry/backoff on credential decryption failure in the optimize endpoint — a transient decryption failure fails the request outright (LLM calls get 3 retries with exponential backoff; decryption does not).
+- No circuit breaker when the LLM backend is persistently unavailable — repeated failures always take the full 3-retry path; there is no trip-and-cool-down state.
 - No unit test for get_prompt_diffs SequenceMatcher diff logic as a standalone function — hash comparison has dedicated tests in `TestGetPromptDiffs` but the diff comparison (SequenceMatcher) logic is inlined in the route handler and only tested via the API endpoint, not as an independent unit
 - No integration test exercising the full optimize→LLM→parse→response chain with a real model backend
 - No performance or regression tests for large version histories (100+ entries)
@@ -130,6 +132,9 @@ LLM-driven prompt improvement from eval failures, with full version history, rol
 - ~~`version` path parameter in `optimize_prompt` is accepted but never validated or used — non-existent version accepted as source~~ **RESOLVED 2026-08-12**: see QA History.
 
 ## QA History
+
+### 2026-08-15 — coverage sweep (partial-small-a)
+- Confirmed the 2 remaining unchecked Resilience items are genuine gaps and moved both into Known Gaps: (1) no retry/backoff on credential decryption failure in the optimize endpoint — LLM calls get `_MAX_RETRIES=3` exponential backoff but decryption is single-shot; (2) no circuit breaker when the LLM backend is persistently unavailable. Neither is PRD-mandated hardening. No code change. Status: partial (70/72).
 
 ### 2026-08-12 — improve-architecture: validate + use the optimize `version` path param RESOLVED
 - **RESOLVED "version path param accepted but never validated or used"** (`api/routes/agents.py`). `optimize_prompt` accepted any `version` (e.g. `v99` or garbage) and silently optimized from the agent's *current* template.

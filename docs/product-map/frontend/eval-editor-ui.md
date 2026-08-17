@@ -131,6 +131,7 @@ json_schema, custom_function.
 - Smoke test is minimal (renders + text check only, no interaction tests)
 
 ## QA History
+- **2026-08-15 (coverage sweep partial-small-b): Verified the remaining unchecked behaviour “Config JSON textarea with placeholder per type” is a genuine gap — the textarea uses a single generic placeholder, not per-type placeholders (already documented in Known Gaps). All 51 other behaviours verified against EvalEditorView.vue + EvalEditorView.spec.ts + eval backend tests. 51/52 behaviours covered.**
 
 ### 2026-08-15 — Coverage completion (FAR-231/FAR-233 distribute batch)
 

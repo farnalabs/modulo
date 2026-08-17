@@ -6,6 +6,7 @@ from pydantic import BaseModel, field_validator, model_validator
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
@@ -105,7 +106,7 @@ async def get_monitor_config(
         _log.exception("Unexpected error in get_monitor_config")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     return _merge(entry)
 
@@ -143,6 +144,6 @@ async def set_monitor_config(
         _log.exception("Unexpected error in set_monitor_config")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+            detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     return _merge(entry)

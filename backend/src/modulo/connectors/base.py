@@ -372,6 +372,58 @@ class ConnectorResult:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+class CompensationOutcome(StrEnum):
+    """Outcome of a connector compensating callback (FAR-213).
+
+    ``compensated``     — the inverse action was performed (PR closed, ticket
+                          unassigned).
+    ``not_supported``   — the connector has no inverse for this operation
+                          (the default — connectors OPT IN).
+    ``failed``          — an inverse exists but the attempt failed.
+    """
+
+    COMPENSATED = "compensated"
+    NOT_SUPPORTED = "not_supported"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class CompensationOperation:
+    """A connector write operation a run node performed, with the data to invert it.
+
+    ``resource`` is the connector write resource (e.g. ``"pr"`` for GitHub),
+    ``data`` the write payload (the performed action's arguments), and
+    ``output`` the entity the connector returned (e.g. the created PR dict).
+    Summary-only — never raw payloads beyond what the write itself used.
+    """
+
+    resource: str
+    data: dict[str, Any] = field(default_factory=dict)
+    output: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class CompensationContext:
+    """Run-scoped context for a compensating callback (FAR-213).
+
+    IDs only — never payload content.
+    """
+
+    org_id: str
+    run_id: str
+    node_id: str
+    connector_instance_id: str
+
+
+@dataclass(frozen=True)
+class CompensationResult:
+    """Outcome of a compensating callback (FAR-213)."""
+
+    outcome: CompensationOutcome
+    detail: str = ""
+    resource_id: str | None = None
+
+
 @dataclass(frozen=True)
 class HealthResult:
     ok: bool
@@ -430,3 +482,28 @@ class ConnectorBase(ABC):
     @abstractmethod
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         """Write data to the external tool. Returns the created/updated resource."""
+
+    async def compensate(
+        self,
+        operation: CompensationOperation,
+        *,
+        context: CompensationContext,
+        error: str,
+    ) -> CompensationResult:
+        """Best-effort inverse of a performed connector operation (FAR-213).
+
+        Run-termination compensation for guardrail-blocked runs calls this for
+        every executed node that performed a connector write. Contract: given
+        the performed operation (resource, write payload, returned entity) and
+        the termination reason (the guardrail block detail), attempt the inverse
+        (close a PR, unassign a ticket, revert a status) and report an outcome.
+
+        The default returns ``not_supported`` — connectors OPT IN by overriding
+        and returning :class:`CompensationResult`. Compensation is best-effort
+        and must never raise into the terminalization path; wrap external I/O
+        and return ``failed`` with a summary detail instead of raising.
+        """
+        return CompensationResult(
+            outcome=CompensationOutcome.NOT_SUPPORTED,
+            detail="connector does not implement compensation",
+        )

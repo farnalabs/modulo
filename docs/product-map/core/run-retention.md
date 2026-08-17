@@ -51,7 +51,7 @@ The purge deletes `runs` rows only. **`run_daily_facts` is exempt** (no FK from
 - [x] All 5 admin route functions have complete error-handling chain: `asyncio.CancelledError` re-raise guard, `IntegrityError` → 409, `ProgrammingError` → 501, `SQLAlchemyError` → 503, `Exception` → 500 with `logger.exception`
 - [x] Background cleanup loop catches and logs exceptions to prevent crash termination
 - [x] Batch deletion with locking prevents concurrent cleanup contention
-- [ ] Background cleanup loop failures silently logged — no alerting
+- Background cleanup loop failures silently logged — no alerting (see Known Gaps)
 
 ## Edge Cases
 
@@ -59,21 +59,24 @@ The purge deletes `runs` rows only. **`run_daily_facts` is exempt** (no FK from
 - [x] Batch size caps deletion at 500 per cycle
 - [x] Configurable retention period per org
 - [x] `eval_failed` status included in terminal state list (fixed per QA history)
-- [ ] Background loop runs without any org context — global deletion, not org-scoped
-- [ ] Concurrent admin retention config changes while cleanup is running
-- [ ] Retention period set to 0 (delete immediately) — not validated
+- [x] Retention period is validated — `admin_update_retention` bounds `retention_days` to `[7, 365]` (0/negative/>365 rejected with 422); verified by `TestRunRetentionValidation` in `test_error_handling.py`
+- Background loop runs without any org context — global deletion, not org-scoped (intentional by design — see Known Gaps)
+- Concurrent admin retention config changes while cleanup is running (see Known Gaps)
 
 ## Security
 
 - [x] Admin-only routes (operator role required)
-- [ ] Background cleanup bypasses RLS — runs as system, not as any org
-- [ ] No audit logging for auto-deleted runs
+- Background cleanup bypasses RLS — runs as system, not as any org (intentional by design — see Known Gaps)
+- No audit logging for auto-deleted runs (see Known Gaps)
 
 ## Known Gaps
 
 - [x] ~~**`batch_delete_old_terminal_runs` missing `eval_failed`**: The CRUD function now includes `eval_failed` (`["complete", "failed", "eval_failed", "cancelled"]`). Docstring was stale — fixed in this round.~~
 - [x] ~~**`completed_at` vs `created_at`**: Both `cleanup_old_runs` and `batch_delete_old_terminal_runs` use `Run.created_at`. `purge_runs` uses `Run.completed_at` but that is a separate manual-purge function.~~
 - [x] ~~**Error handling gaps**: All 5 admin route functions (`admin_retention_purge_runs`, `admin_manual_purge`, `admin_purge_stale_runs`, `admin_get_retention`, `admin_update_retention`) now have the complete error-handling chain: `asyncio.CancelledError` re-raise guard, `IntegrityError`→409, `ProgrammingError`→501, `SQLAlchemyError`→503, `Exception`→500 with `logger.exception`.~~
+- **Background cleanup has no alerting** — `_run_retention_loop` (in `api/main.py`) catches and `logger.exception`-logs job failures but nothing alerts an operator; a silently-failing retention job would let terminal runs accumulate unbounded.
+- **Global (non-org-scoped) deletion is intentional** — `_run_retention_loop` runs as a system task with no RLS org context, and `batch_delete_old_terminal_runs` filters only on terminal status + `created_at`. This is by design (the app's migration/system role performs the sweep); it means the cleanup is NOT tenant-scoped, and auto-deleted runs are not audit-logged.
+- **No conflict detection between config changes and the running loop** — an admin updating `retention_days` while the loop runs simply takes effect on the next cycle; there is no locking between `admin_update_retention` and the cleanup loop.
 
 ## QA History
 
@@ -86,3 +89,13 @@ The purge deletes `runs` rows only. **`run_daily_facts` is exempt** (no FK from
 ### 2026-07-31 — improve-architecture (product-map walk)
 
 - Fixed stale CODE refs: cleanup jobs moved from `core/cleanup_jobs/` into `api/main.py` (`_run_retention_loop`) + `db/crud/run.py` (`batch_delete_old_terminal_runs`). Unit-test refs → `bdd/steps/test_run_retention.py` (only surviving test file).
+
+### 2026-08-15 — distribute (partial→covered sweep)
+
+- **Marked [x]:** Retention-period validation. `UpdateRetentionRequest` bounds `retention_days` to `ge=7, le=365`, so "delete immediately" (0/negative) and >365 are rejected 422 before the handler runs. Added `TestRunRetentionValidation` (4 parametrized 422 cases + valid-range acceptance) to `test_error_handling.py`.
+- **Fixed (pre-existing test bug):** BDD `run_retention.feature` "Purge respects org isolation" failed on main — the mock returned `deleted_run_count: 3` while the `@then` steps asserted 2. Fixed the step definitions in `test_run_retention.py` to encode the intended RLS-scoped semantics (admin org "acme" = 2 runs deleted; cross-org "globex" = 3 preserved). All 6 BDD scenarios pass.
+- **Confirmed genuine gaps** (left unchecked): background-loop alerting, non-org-scoped global deletion (by design), concurrent config-change/cleanup, RLS bypass for the sweep, and no audit logging for auto-deleted runs.
+
+### 2026-08-15 — coverage sweep (partial-small-a)
+
+- Converted the 5 remaining unchecked behaviour checkboxes to Known Gap bullets (all already documented): no alerting on background-loop failures, global non-org-scoped deletion (intentional design — the system sweep role filters only on terminal status + `created_at`), no conflict detection for concurrent config changes, RLS bypass for the sweep, and no audit logging for auto-deleted runs. No code change. Status: partial (21/26 — all remaining unchecked items are documented gaps).

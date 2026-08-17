@@ -139,8 +139,8 @@ SAML 2.0 SSO with HTTP-Redirect AuthnRequest, HTTP-POST ACS, IdP metadata parsin
 - [x] Garbled base64 SAMLResponse returns 401 (binascii.Error caught)
 - [x] Malformed XML SAMLResponse returns 401 (ET.ParseError caught)
 - [x] Non-UTF-8 SAMLResponse returns 401 (UnicodeDecodeError caught)
-- [ ] Missing SAMLResponse Destination attribute validation (SAML 2.0 Core §4.1.1) — not implemented
-- [ ] Missing InResponseTo validation on SAML Response (replay risk) — not implemented
+- [x] Missing SAMLResponse Destination attribute validation (SAML 2.0 Core §4.1.1) — implemented in `saml_process_response` via `_validate_saml_response_destination` (2026-08-15)
+- [ ] Missing InResponseTo validation on SAML Response (replay risk) — not implemented (requires AuthnRequest ID tracking)
 - [x] Missing Subject/NameID produces empty email → caught by jit_provision_user RuntimeError or DB constraint
 - [x] Missing email attribute falls back to NameID text, then empty string
 - [x] Missing displayName falls back to email prefix, then raw email
@@ -169,7 +169,7 @@ SAML 2.0 SSO with HTTP-Redirect AuthnRequest, HTTP-POST ACS, IdP metadata parsin
 - [x] Connection test reports failure details on invalid XML/missing descriptor
 - [ ] Zero retry or rate-limit handling across all external HTTP calls (no exponential backoff)
 - [ ] No connection pooling — new `httpx.AsyncClient()` per call
-- [ ] No SAML Response signature verification — relies on transport-level HTTPS only
+- [x] SAML Response signature verification performed via python3-saml using the IdP's X.509 certificate from metadata — the earlier "no signature verification" gap was closed by the `saml_handler` rewrite (verified 2026-08-15)
 - [ ] No namespace fallback for non-SAML2.0 IdP metadata (hardcoded `urn:oasis:names:tc:SAML:2.0:metadata`)
 
 ### QA History
@@ -179,16 +179,17 @@ SAML 2.0 SSO with HTTP-Redirect AuthnRequest, HTTP-POST ACS, IdP metadata parsin
 
 - 2026-07-12: Cross-cutting QA (index 415). Fixed MAJOR — BDD `test_sso_saml.py` step definitions returned single `MagicMock()` from `jit_provision_user` mock instead of `(Account, UUID, str)` tuple. All 3 ACS scenarios (`acs_valid_response`, `acs_with_groups`, and the `_setup_saml_client` paths) now mock the correct return shape. Updated known gap to [x] (fixed). All 22 SAML unit + BDD step tests pass.
 
+- 2026-08-15: Cross-cutting QA (FAR-244 partial-sso sweep). Implemented SAML Response `Destination` validation (SAML 2.0 Core §4.1.1) in `saml_process_response` via new `_validate_saml_response_destination` helper — a mismatched Destination now rejects with 401 instead of being silently accepted. Added 5 unit tests (mismatch rejected, match accepted, absent accepted, garbled response skipped, end-to-end through `saml_process_response`). Corrected stale "no signature verification" claims — python3-saml performs XML signature verification using the IdP X.509 cert from metadata; rewrote the known-gap wording to reflect the true remaining gap (SP does not sign AuthnRequests). Edge-case `[ ]`→`[x]`: Destination validation. Known gaps reduced by one (Destination). Status: partial (13 known gaps + 3 unchecked edge cases — InResponseTo, team-deletion FK, `memberOf`/`Group` test gap — + 3 unchecked resilience items). All 30 SAML/SSO unit tests pass.
+
 ### Known gaps
 
-- [ ] No SAML Response signature verification — SP private key / cert not wired
+- [ ] SP does not sign AuthnRequests — SP private key / cert not wired for AuthnRequest signing (response signature verification IS performed via the IdP cert)
 - [ ] ID token signature verification not performed (documented, shared with OIDC)
 - [ ] No SAML Single Logout (SLO) endpoint
 - [ ] SCIM provisioning deferred to v2
 - [ ] `modulo_saml_sp_private_key` and `modulo_saml_sp_x509_cert` settings defined but unused
 - [ ] No integration test for SAML ACS with real XML parsing (all existing tests mock `_saml_fetch_idp_metadata`)
 - [ ] Concurrent SAML ACS requests for same unregistered email may cause unique constraint crash (no DB-level locking around JIT provision check-and-create)
-- [ ] Missing SAML Response `Destination` validation (SAML 2.0 Core §4.1.1 — not implemented)
 - [ ] Missing `InResponseTo` validation on SAML Response (replay risk — not implemented)
 - [ ] Team deletion breaks group mappings — FK cascade removes membership, re-add on next login may hit FK violation
 - [ ] `memberOf`/`Group` attribute name fallbacks in group lookup not tested (code handles them, tests only cover `groups`)

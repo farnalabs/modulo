@@ -46,6 +46,9 @@ ERROR_CODE_CAPACITY_TIMEOUT = "capacity_timeout"
 # failures. The stale-run sweep exempts runs carrying these markers.
 CAPACITY_MARKERS = frozenset({ERROR_CODE_ORG_CAPACITY_LIMITED, ERROR_CODE_PIPELINE_CAPACITY})
 
+# Day-key format used for run-usage bucketing and the --older-than parser.
+_DAY_FORMAT = "%Y-%m-%d"
+
 # The canonical whitelist of run statuses (subset of the ``ck_runs_status``
 # CHECK constraint). ``transition_run`` and ``update_run_status`` refuse any
 # status outside this set (a typo would otherwise silently violate the CHECK
@@ -420,15 +423,21 @@ async def create_run(
     # observe/warn-only guardrails log-and-continue on mechanism error.
     run_id = uuid.uuid4()
     guardrail_results: list[Any] = []
+    guardrail_redactions: list[Any] = []
     guardrail_blocked = False
     guardrail_block_message = ""
+    guardrail_blocking_eval_name = ""
     guardrail_observed_by_eval: dict[uuid.UUID, bool] = {}
     from modulo.core.eval_engine import EvalEngine
     from modulo.core.guardrails import (
+        GUARDRAIL_SKIP_EXPECTED_REASONS,
         GuardrailAction,
         GuardrailSkip,
+        alert_unexpected_guardrail_skip,
         audit_guardrail_skip,
+        build_guardrail_summary,
         guardrail_cap_violation,
+        log_guardrail_fired_signatures,
         non_conformant_blocking_guardrails,
         notify_guardrail_event,
         run_interception_pass_async,
@@ -574,9 +583,13 @@ async def create_run(
                 else:
                     stored_payload = outcome.payload
                     guardrail_results = outcome.results
+                    guardrail_redactions = outcome.redactions
                     guardrail_blocked = outcome.blocked
                     guardrail_block_message = outcome.block_message
                     skipped_guardrails = outcome.skipped
+                    # FAR-213: the blocking eval name feeds the blocked_partial
+                    # summary written at terminalization below.
+                    guardrail_blocking_eval_name = outcome.blocking_eval_name
                 # Item 7 — guardrail latency metric: the interception runs
                 # BEFORE the first node starts, so its wall-clock is accounted
                 # separately (a structured log line) and never silently eats
@@ -599,8 +612,45 @@ async def create_run(
 
         # Item 10 — audit + alert skipped pinned guardrails (best-effort: the
         # skip is the policy; a failed audit/alert never breaks the run).
+        # Item 11 — a skip NOT explained by soft-deleted pin state is
+        # UNEXPECTED and pages an additional ``guardrail_unexpected_skip``
+        # alert (Notification Log + Error Forwarders).
         for skip in skipped_guardrails:
             await audit_guardrail_skip(session, org_id, run_id, skip)
+            if skip.reason not in GUARDRAIL_SKIP_EXPECTED_REASONS:
+                await alert_unexpected_guardrail_skip(org_id, run_id, skip)
+
+        # Item 11 — guardrail_summary telemetry snapshot + per-pattern
+        # fired-signature regression log. Computed BEFORE the run row exists so
+        # it can be persisted on the Run in one place. ``bound`` = the guardrail
+        # rows bound at run start (pinned set or live fallback) INCLUDING
+        # skipped pins, so ``evaluated + errored + skipped == bound`` holds by
+        # construction (build_guardrail_summary absorbs no-clean-detection
+        # guardrails into ``errored``). TELEMETRY: best-effort fail-open — a
+        # summary-derivation failure must never break run creation (the
+        # enforcement already happened); it degrades to no summary + a log.
+        guardrail_summary_dict: dict[str, int] | None = None
+        try:
+            guardrail_summary_dict = build_guardrail_summary(
+                bound=len(guardrail_defs) + len(skipped_guardrails),
+                definitions=guardrail_defs,
+                results=guardrail_results,
+                redactions=guardrail_redactions,
+                skipped=skipped_guardrails,
+                observed_by_eval=guardrail_observed_by_eval,
+            ).to_dict()
+            log_guardrail_fired_signatures(
+                org_id=org_id,
+                run_id=run_id,
+                definitions=guardrail_defs,
+                results=guardrail_results,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("guardrails.summary_derive_failed", extra={"run_id": str(run_id)})
+    else:
+        guardrail_summary_dict = None
 
     # Engine-only feedback-correction context (FAR-142): the
     # ``_feedback_correction`` key is reserved and stripped above, so a user
@@ -659,6 +709,7 @@ async def create_run(
         work_item_refs=canonical_refs,
         is_replay=is_replay,
         variant_group_id=variant_group_id,
+        guardrail_summary_json=guardrail_summary_dict,
     )
     if guardrail_blocked:
         # A guardrail block at the ingestion edge is TERMINAL (eval_failed) —
@@ -697,6 +748,31 @@ async def create_run(
     # NEVER abort create_run — a lost create-stamp is recoverable at finalise
     # via the deterministic canonical id.
     await _hydrate_journeys(session, org_id, canonical_refs)
+
+    # Run-termination compensation (FAR-213) — runs AFTER the terminal status
+    # write (the run was flushed above) as best-effort + failure-isolated: it
+    # writes the blocked_partial summary and, when a connector hub is supplied,
+    # compensates executed nodes' external side effects. It must NEVER block or
+    # delay the terminal write and never propagate — guard-the-guard: any
+    # compensation raise is logged + audited here. At the ingestion edge no
+    # nodes have executed (connector_hub is always None here), so only the
+    # summary + summary audit are written; the mid-run terminalization paths
+    # call compensate_blocked_run directly with the executed node outputs and a
+    # connector hub.
+    if guardrail_blocked:
+        from modulo.core.guardrails.compensation import compensate_blocked_run
+
+        try:
+            await compensate_blocked_run(
+                session,
+                run,
+                guardrail_block=guardrail_block_message,
+                blocking_eval_name=guardrail_blocking_eval_name,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("guardrails.compensation.error run=%s", run_id)
     return run
 
 
@@ -1531,7 +1607,7 @@ async def _get_run_stats_python(
     dur_by_day: dict[str, list[int]] = defaultdict(list)
 
     for r in runs:
-        day = r.created_at.strftime("%Y-%m-%d")
+        day = r.created_at.strftime(_DAY_FORMAT)
         by_day[day]["count"] += 1
         if r.status == "complete":
             by_day[day]["success"] += 1
@@ -1539,7 +1615,7 @@ async def _get_run_stats_python(
             by_day[day]["failed"] += 1
 
     for r in completed_runs:
-        day = r.created_at.strftime("%Y-%m-%d")
+        day = r.created_at.strftime(_DAY_FORMAT)
         if r.completed_at is None or r.started_at is None:
             continue
         ms = int((r.completed_at - r.started_at).total_seconds() * 1000)
@@ -1702,7 +1778,7 @@ async def get_run_heatmap(
 
     by_day: dict[str, int] = defaultdict(int)
     for r in runs:
-        by_day[r.created_at.strftime("%Y-%m-%d")] += 1
+        by_day[r.created_at.strftime(_DAY_FORMAT)] += 1
 
     return [{"date": d, "count": c} for d, c in sorted(by_day.items())]
 
@@ -1756,7 +1832,7 @@ async def purge_runs(
     Returns dict with ``deleted_run_count``.
     """
     try:
-        cutoff = datetime.strptime(older_than, "%Y-%m-%d").replace(tzinfo=UTC)
+        cutoff = datetime.strptime(older_than, _DAY_FORMAT).replace(tzinfo=UTC)
     except ValueError as exc:
         raise ValueError(f"Invalid date format: '{older_than}'. Expected YYYY-MM-DD.") from exc
     deleted_total = 0

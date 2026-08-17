@@ -399,6 +399,53 @@ def test_get_run_returns_current_status(client: TestClient) -> None:
     assert resp.json()["status"] == "complete"
 
 
+def test_get_run_exposes_blocked_partial_summary(client: TestClient) -> None:
+    """FAR-213: a guardrail-blocked run's blocked_partial summary is surfaced on
+    the run-detail response (executed nodes + per-node publish status)."""
+    summary = {
+        "blocked": True,
+        "blocking_eval_name": "no-secrets",
+        "executed_nodes": ["node_a"],
+        "nodes": [
+            {
+                "node_id": "node_a",
+                "publish_status": "compensated",
+                "output_ref": {"run_id": str(_RUN_ID), "node_id": "node_a"},
+                "compensation": {"outcome": "compensated", "reason": "closed", "resource_id": "42"},
+            }
+        ],
+    }
+    run = _make_run(status="eval_failed", error_code="eval_blocked")
+    run.blocked_partial_summary = summary
+
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["blocked_partial_summary"] == summary
+    assert body["blocked_partial_summary"]["nodes"][0]["publish_status"] == "compensated"
+
+
+def test_get_run_blocked_partial_summary_non_dict_returns_null(client: TestClient) -> None:
+    """FAR-213 defensive coercion: a corrupt (non-dict) column value is surfaced
+    as null, never a 500."""
+    run = _make_run(status="eval_failed", error_code="eval_blocked")
+    run.blocked_partial_summary = "not-a-dict"
+
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.status_code == 200
+    assert resp.json()["blocked_partial_summary"] is None
+
+
 # ---------------------------------------------------------------------------
 # GET /api/v1/runs/{run_id} — not found
 # ---------------------------------------------------------------------------
@@ -528,6 +575,69 @@ def test_run_response_gate_fired_false_for_plain_complete(client: TestClient) ->
     body = resp.json()
     assert body["gate_fired"] is False
     assert body["run_classification"]["reason"] == "no_work"
+
+
+def test_run_response_populates_guardrail_summary(client: TestClient) -> None:
+    """FAR-223 item 11: the guardrail_summary snapshot is surfaced on run detail."""
+    run = _make_run(status="eval_failed")
+    run.guardrail_summary_json = {
+        "bound": 1,
+        "evaluated": 1,
+        "passed": 0,
+        "violated": 1,
+        "observed": 0,
+        "errored": 0,
+        "redacted": 0,
+        "skipped": 0,
+        "expected_skips": 0,
+        "unexpected_skips": 0,
+    }
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    body = resp.json()
+    assert body["guardrail_summary"] == {
+        "bound": 1,
+        "evaluated": 1,
+        "passed": 0,
+        "violated": 1,
+        "observed": 0,
+        "errored": 0,
+        "redacted": 0,
+        "skipped": 0,
+        "expected_skips": 0,
+        "unexpected_skips": 0,
+    }
+
+
+def test_run_response_guardrail_summary_none_when_absent(client: TestClient) -> None:
+    """Runs without guardrail interception (or pre-migration) expose None."""
+    run = _make_run(status="complete")
+    run.guardrail_summary_json = None
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.json()["guardrail_summary"] is None
+
+
+def test_run_response_guardrail_summary_malformed_is_none(client: TestClient) -> None:
+    """A corrupt JSON value degrades to None, never a 500."""
+    run = _make_run(status="complete")
+    run.guardrail_summary_json = {"bound": "not-an-int"}
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.status_code == 200
+    assert resp.json()["guardrail_summary"] is None
 
 
 def test_run_response_gate_fired_true_on_idempotency_gate_code(client: TestClient) -> None:

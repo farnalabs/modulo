@@ -10,6 +10,7 @@ import httpx
 from modulo.connectors._retry_headers import parse_retry_after as _parse_retry_after
 from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
 from modulo.connectors._safe_int import safe_int as _safe_int
+from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -227,7 +228,7 @@ class SlackConnector(ConnectorBase):
         _check_slack_ok(body, "conversations.list")
         meta = body.get("response_metadata") or {}
         return ConnectorResult(
-            records=body.get("channels", []),
+            records=_safe_records(body, "channels"),
             next_cursor=_safe_cursor(meta.get("next_cursor")) if isinstance(meta, dict) else None,
         )
 
@@ -249,7 +250,7 @@ class SlackConnector(ConnectorBase):
         _check_slack_ok(body, "conversations.history")
         meta = body.get("response_metadata") or {}
         return ConnectorResult(
-            records=body.get("messages", []),
+            records=_safe_records(body, "messages"),
             next_cursor=_safe_cursor(meta.get("next_cursor")) if isinstance(meta, dict) else None,
         )
 
@@ -262,7 +263,7 @@ class SlackConnector(ConnectorBase):
         _check_slack_ok(body, "users.list")
         meta = body.get("response_metadata") or {}
         return ConnectorResult(
-            records=body.get("members", []),
+            records=_safe_records(body, "members"),
             next_cursor=_safe_cursor(meta.get("next_cursor")) if isinstance(meta, dict) else None,
         )
 
@@ -297,7 +298,7 @@ class SlackConnector(ConnectorBase):
         _check_slack_ok(body, "conversations.members")
         meta = body.get("response_metadata") or {}
         return ConnectorResult(
-            records=[{"user_id": uid} for uid in body.get("members", [])],
+            records=[{"user_id": uid} for uid in _safe_records(body, "members")],
             next_cursor=_safe_cursor(meta.get("next_cursor")) if isinstance(meta, dict) else None,
         )
 
@@ -320,7 +321,7 @@ class SlackConnector(ConnectorBase):
         _check_slack_ok(body, "conversations.replies")
         meta = body.get("response_metadata") or {}
         return ConnectorResult(
-            records=body.get("messages", []),
+            records=_safe_records(body, "messages"),
             next_cursor=_safe_cursor(meta.get("next_cursor")) if isinstance(meta, dict) else None,
         )
 
@@ -458,7 +459,7 @@ class SlackConnector(ConnectorBase):
         _check_slack_ok(body, "chat.scheduledMessages.list")
         meta = body.get("response_metadata") or {}
         return ConnectorResult(
-            records=body.get("scheduled_messages", []),
+            records=_safe_records(body, "scheduled_messages"),
             next_cursor=_safe_cursor(meta.get("next_cursor")) if isinstance(meta, dict) else None,
         )
 

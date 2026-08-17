@@ -42,6 +42,9 @@ _log = logging.getLogger(__name__)
 # Claim staleness gates (configurable via settings).
 RUN_CLAIM_STALE_SECONDS = 450
 
+# RLS org-context SQL applied at the start of each run transaction (S1192).
+_SQL_SET_ORG_ID = "SELECT set_config('app.organisation_id', :val, true)"
+
 # DB heartbeat cadence (F4). Must stay well below the 300s SAQ sweep threshold.
 RUN_HEARTBEAT_SECONDS = 30
 SAQ_JOB_HEARTBEAT = 300
@@ -212,7 +215,7 @@ async def _maybe_alert_retry_storm(aengine: AsyncEngine, run_id: str, org_id: st
     try:
         async with aengine.connect() as c:
             await c.execute(
-                text("SELECT set_config('app.organisation_id', :val, true)"),
+                text(_SQL_SET_ORG_ID),
                 {"val": org_id},
             )
             result = await c.execute(text("SELECT claim_count FROM runs WHERE id=:rid"), {"rid": run_id})
@@ -261,7 +264,7 @@ async def claim_run_async(
             # matches ZERO rows unless the org context is set on this connection
             # first. Under a NOBYPASSRLS role the claim silently returned None.
             await c.execute(
-                text("SELECT set_config('app.organisation_id', :val, true)"),
+                text(_SQL_SET_ORG_ID),
                 {"val": org_id},
             )
             result = await c.execute(
@@ -284,7 +287,7 @@ async def set_rls_org(session: Any, org_id: uuid.UUID) -> None:
     dialect = session.get_bind().dialect.name
     if dialect == "postgresql":
         await session.execute(
-            text("SELECT set_config('app.organisation_id', :val, true)"),
+            text(_SQL_SET_ORG_ID),
             {"val": str(org_id)},
         )
     else:
@@ -308,7 +311,14 @@ async def load_and_setup(aeng: AsyncEngine, rid: uuid.UUID, oid: uuid.UUID) -> t
 
     settings = get_settings()
     conn_string = str(settings.database_url).replace("+asyncpg", "").replace("+psycopg", "")
-    executor = PipelineExecutor(aeng, checkpointer_conn_string=conn_string)
+    from modulo.core.notifier import Notifier
+
+    notifier: Notifier | None = None
+    try:
+        notifier = Notifier(aeng, settings.fernet_key)
+    except Exception:
+        _log.exception("pipeline_execution.load_and_setup: notifier init failed — run still executes")
+    executor = PipelineExecutor(aeng, checkpointer_conn_string=conn_string, notifier=notifier)
     return cur, executor
 
 
@@ -316,7 +326,7 @@ async def _read_current_claim_token(aeng: AsyncEngine, run_id: str, org_id: str)
     """Read the run's current ``claim_token`` from the DB (RLS-scoped)."""
     async with aeng.connect() as c:
         await c.execute(
-            text("SELECT set_config('app.organisation_id', :val, true)"),
+            text(_SQL_SET_ORG_ID),
             {"val": org_id},
         )
         result = await c.execute(text("SELECT claim_token FROM runs WHERE id=:rid"), {"rid": run_id})
@@ -348,7 +358,7 @@ async def heartbeat_once(
     updated = False
     async with aeng.connect() as c:
         await c.execute(
-            text("SELECT set_config('app.organisation_id', :val, true)"),
+            text(_SQL_SET_ORG_ID),
             {"val": org_id},
         )
         if claim_token is not None:
@@ -443,7 +453,7 @@ async def mark_complete(
     """
     async with aeng.connect() as c, c.begin():
         await c.execute(
-            text("SELECT set_config('app.organisation_id', :val, true)"),
+            text(_SQL_SET_ORG_ID),
             {"val": org_id},
         )
         result = await c.execute(
@@ -488,7 +498,7 @@ async def fail_run_terminal(
     """
     async with aeng.connect() as c, c.begin():
         await c.execute(
-            text("SELECT set_config('app.organisation_id', :val, true)"),
+            text(_SQL_SET_ORG_ID),
             {"val": org_id},
         )
         result = await c.execute(
@@ -671,7 +681,7 @@ async def _read_run_status(aeng: AsyncEngine, run_id: str, org_id: str) -> str |
     """Read the run's current status (RLS-scoped)."""
     async with aeng.connect() as c:
         await c.execute(
-            text("SELECT set_config('app.organisation_id', :val, true)"),
+            text(_SQL_SET_ORG_ID),
             {"val": org_id},
         )
         result = await c.execute(text("SELECT status FROM runs WHERE id=:rid"), {"rid": run_id})
@@ -689,7 +699,7 @@ async def _kill_sandbox_best_effort(aeng: AsyncEngine, run_id: str, org_id: str)
         sandbox_id: str | None = None
         async with aeng.connect() as c:
             await c.execute(
-                text("SELECT set_config('app.organisation_id', :val, true)"),
+                text(_SQL_SET_ORG_ID),
                 {"val": org_id},
             )
             result = await c.execute(text("SELECT sandbox_id FROM runs WHERE id=:rid"), {"rid": run_id})
@@ -1014,7 +1024,7 @@ async def stale_run_recovery_sweep(
         for org_id in org_ids:
             async with async_engine.connect() as conn, conn.begin():
                 await conn.execute(
-                    text("SELECT set_config('app.organisation_id', :val, true)"),
+                    text(_SQL_SET_ORG_ID),
                     {"val": str(org_id)},
                 )
                 never_result = await conn.execute(
@@ -1263,7 +1273,7 @@ async def claim_resume_run_async(
             # ``claim_run_async`` — without it the resume claim UPDATE matches
             # ZERO rows under a NOBYPASSRLS role and the claim returns None.
             await c.execute(
-                text("SELECT set_config('app.organisation_id', :val, true)"),
+                text(_SQL_SET_ORG_ID),
                 {"val": org_id},
             )
             result = await c.execute(
