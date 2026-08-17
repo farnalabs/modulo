@@ -184,8 +184,9 @@ async def test_query_unsupported_resource(connector):
 
 async def test_query_issues_corrupt_body(connector):
     for bad in [{"not": "a list"}, "garbage", 42, None]:
+        response = httpx.Response(200, content=b"null") if bad is None else httpx.Response(200, json=bad)
         with respx.mock:
-            respx.get(f"{_BASE}/issues").mock(return_value=httpx.Response(200, json=bad))
+            respx.get(f"{_BASE}/issues").mock(return_value=response)
             result = await connector.query(ConnectorQuery(resource="issues"))
         assert result.records == []
         assert result.total == 0
