@@ -54,11 +54,10 @@ Feature: Audit Viewer
     And the response has a page field of 1
     And the response has a page_size field of 50
 
-  Scenario: Team gate blocks non-admin
+  Scenario: Recent-events list stays Community when audit_viewer is disabled
     Given the audit_viewer feature is disabled
     When I GET /api/v1/admin/audit
-    Then the response status is 402
-    And the response detail mentions "audit_viewer"
+    Then the response status is 200
 
   Scenario: Empty audit log
     Given no audit events exist
