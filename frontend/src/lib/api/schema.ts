@@ -14903,7 +14903,7 @@ export interface components {
             description?: string | null;
             /**
              * Team Id
-             * @description Optional team scope; when set, only that team's events are dispatched to this endpoint
+             * @description Optional team scope; when set, only that team's events hit this endpoint
              */
             team_id?: string | null;
         };
@@ -14942,7 +14942,7 @@ export interface components {
             description?: string | null;
             /**
              * Team Id
-             * @description Optional team scope; when set, only that team's events are dispatched to this endpoint
+             * @description Optional team scope; when set, only that team's events hit this endpoint
              */
             team_id?: string | null;
         };
