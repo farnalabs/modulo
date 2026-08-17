@@ -11990,10 +11990,10 @@ export interface components {
             stall_timeout_seconds?: number | null;
             /**
              * Enable Heartbeat
-             * @default true
              * @description Enable the connection-liveness (heartbeat) stall channel.
+             * @default true
              */
-            enable_heartbeat?: boolean;
+            enable_heartbeat: boolean;
             /**
              * Watch Log Path
              * @description Log-growth detector: a path inside the sandbox whose growth counts as activity.

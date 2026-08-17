@@ -467,14 +467,14 @@ def test_pipeline_graph_node_stall_detector_round_trip() -> None:
     assert node.stall_timeout_seconds == 600
     assert node.enable_heartbeat is False
     assert node.watch_log_path == "/home/user/agent.log"
-    assert node.stdout_percentage_delta == 0.2
+    assert node.stdout_percentage_delta == pytest.approx(0.2)
     assert node.watch_globs == ["*.log", "/home/user/out/*"]
 
     legacy = PipelineGraphNode.model_validate(_sandbox_node_json())
     assert legacy.enable_heartbeat is True
     assert legacy.watch_log_path is None
     assert legacy.stdout_percentage_delta is None
-    assert legacy.watch_globs == []
+    assert not legacy.watch_globs
     assert legacy.stall_timeout_seconds is None
 
 
