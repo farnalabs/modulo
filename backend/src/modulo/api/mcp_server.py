@@ -1989,6 +1989,57 @@ async def bind_connector_to_node(
         return _tool_error("Failed to bind connector to node")
 
 
+def _trigger_pipeline_validate_id(pipeline_id: str) -> tuple[uuid.UUID | None, dict[str, Any] | None]:
+    try:
+        pid = uuid.UUID(pipeline_id)
+    except ValueError:
+        return None, {
+            "error": "invalid_id",
+            "field": "pipeline_id",
+            "detail": f"Invalid UUID format: {pipeline_id}",
+        }
+    return pid, None
+
+
+async def _create_manual_run(
+    s: AsyncSession,
+    org_id: uuid.UUID,
+    pid: uuid.UUID,
+    pipeline_id: str,
+    payload: dict[str, Any],
+) -> tuple[uuid.UUID | None, str | None, dict[str, Any] | None]:
+    from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
+    from modulo.db.crud.run import create_run
+
+    uid = _ctx_user_id_val()
+    pipeline = await get_pipeline(s, pid)
+    if pipeline is None:
+        return None, None, {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+    if _team_scoped_key_mismatch(pipeline.owner_team_id):
+        return None, None, _team_scope_error("pipeline", pipeline_id)
+    snapshot = await create_snapshot_from_live_graph(s, pipeline_id=pid, account_id=uid)
+    if snapshot is None:
+        return None, None, {"error": "snapshot_failed", "pipeline_id": pipeline_id}
+    if not snapshot.graph_json or not snapshot.graph_json.get("nodes"):
+        return (
+            None,
+            None,
+            {
+                "error": "validation_failed",
+                "detail": "Pipeline graph has no nodes — cannot trigger run",
+            },
+        )
+    run = await create_run(
+        s,
+        org_id=org_id,
+        pipeline_id=pid,
+        snapshot_id=snapshot.id,
+        trigger_type="manual",
+        input_payload=payload,
+    )
+    return run.id, run.langgraph_thread_id, None
+
+
 @mcp.tool(description="Fire a pipeline run and return immediately with run_id. Poll get_run_status to track progress.")
 @_RETRY_DB
 async def trigger_pipeline(
@@ -2005,41 +2056,18 @@ async def trigger_pipeline(
                 extra={"client_key": _trigger_pipeline_client_key()},
             )
             return {"error": "rate_limited", "detail": "Rate limit exceeded for trigger_pipeline (60/min)"}
-        from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
-        from modulo.db.crud.run import create_run
-
         org_id = _ctx_org_id_val()
-        try:
-            pid = uuid.UUID(pipeline_id)
-        except ValueError:
-            return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
+        pid, id_err = _trigger_pipeline_validate_id(pipeline_id)
+        if id_err:
+            return id_err
+        assert pid is not None
         payload = input_payload or {}
 
         async with _session(org_id) as s:
-            pipeline = await get_pipeline(s, pid)
-            if pipeline is None:
-                return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
-            if _team_scoped_key_mismatch(pipeline.owner_team_id):
-                return _team_scope_error("pipeline", pipeline_id)
-            uid = _ctx_user_id_val()
-            snapshot = await create_snapshot_from_live_graph(s, pipeline_id=pid, account_id=uid)
-            if snapshot is None:
-                return {"error": "snapshot_failed", "pipeline_id": pipeline_id}
-            if not snapshot.graph_json or not snapshot.graph_json.get("nodes"):
-                return {
-                    "error": "validation_failed",
-                    "detail": "Pipeline graph has no nodes — cannot trigger run",
-                }
-            run = await create_run(
-                s,
-                org_id=org_id,
-                pipeline_id=pid,
-                snapshot_id=snapshot.id,
-                trigger_type="manual",
-                input_payload=payload,
-            )
-            run_id = run.id
-            thread_id = run.langgraph_thread_id
+            run_id, thread_id, run_err = await _create_manual_run(s, org_id, pid, pipeline_id, payload)
+        if run_err:
+            return run_err
+        assert run_id is not None
 
         await dispatch_run(str(run_id), str(org_id), queue="runs")
 
