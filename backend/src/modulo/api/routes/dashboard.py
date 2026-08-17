@@ -546,6 +546,7 @@ async def dashboard_summary(
                 .where(
                     EvalResult.organisation_id == org_id,
                     EvalResult.evaluated_at >= seven_days_ago,
+                    non_guardrail_eval_results_clause(),
                 )
                 .group_by(cast(EvalResult.evaluated_at, Date))
                 .order_by(cast(EvalResult.evaluated_at, Date))
@@ -720,6 +721,7 @@ async def dashboard_trends(
                 .where(
                     EvalResult.organisation_id == org_id,
                     EvalResult.evaluated_at >= start_date,
+                    non_guardrail_eval_results_clause(),
                 )
                 .group_by(cast(EvalResult.evaluated_at, Date))
                 .order_by(cast(EvalResult.evaluated_at, Date))

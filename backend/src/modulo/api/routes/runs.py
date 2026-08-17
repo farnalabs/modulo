@@ -407,7 +407,8 @@ def _run_gate_fired(run: Any) -> bool:
     suppression), (b) the stored classification reason is ``email_delivered``,
     or (c) any raw-output marker carries ``delivery_done is True`` (guard A /
     success-path stamp / cancelled-retention). Never raises on non-dict columns.
-    """  # The DB stores the RAW spelling for legacy rows (``idempotency_gate``) and
+    """
+    # The DB stores the RAW spelling for legacy rows (``idempotency_gate``) and
     # the dotted registry code (``harness.idempotency_gate``) for new writes, so
     # the read is routed through ``map_legacy_code`` to match both.
     if map_legacy_code(getattr(run, "error_code", None)) == "harness.idempotency_gate":
