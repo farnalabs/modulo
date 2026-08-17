@@ -345,8 +345,8 @@ class TestRuntimeConfigStore:
         self._purge_singleton()
         with patch.dict(os.environ, {}, clear=True):
             store = get_runtime_config_store()
-            store.set_override("MODULO_SEED_DEMO_DATA", "true")
-            entry = next(item for item in store.get_all() if item.key == "MODULO_SEED_DEMO_DATA")
+            store.set_override("MODULO_TELEMETRY_ENABLED", "true")
+            entry = next(item for item in store.get_all() if item.key == "MODULO_TELEMETRY_ENABLED")
             assert entry.provenance == "override"
             assert entry.override_value == "true"
             assert entry.current_value == "true"
@@ -355,11 +355,11 @@ class TestRuntimeConfigStore:
         self._purge_singleton()
         with patch.dict(os.environ, {}, clear=True):
             store = get_runtime_config_store()
-            store.set_override("MODULO_SEED_DEMO_DATA", "true")
-            store.clear_override("MODULO_SEED_DEMO_DATA")
-            entry = next(item for item in store.get_all() if item.key == "MODULO_SEED_DEMO_DATA")
+            store.set_override("MODULO_TELEMETRY_ENABLED", "true")
+            store.clear_override("MODULO_TELEMETRY_ENABLED")
+            entry = next(item for item in store.get_all() if item.key == "MODULO_TELEMETRY_ENABLED")
             assert entry.provenance == "default"
-            assert entry.current_value == DEFAULT_VALUES["MODULO_SEED_DEMO_DATA"]
+            assert entry.current_value == DEFAULT_VALUES["MODULO_TELEMETRY_ENABLED"]
 
     # ----------------------------------------------------------------
     # clear_all_overrides
@@ -370,10 +370,10 @@ class TestRuntimeConfigStore:
         with patch.dict(os.environ, {}, clear=True):
             store = get_runtime_config_store()
             store.set_override("MODULO_LOG_LEVEL", "DEBUG")
-            store.set_override("MODULO_SEED_DEMO_DATA", "true")
+            store.set_override("MODULO_TELEMETRY_ENABLED", "true")
             store.clear_all_overrides()
             assert store.get("MODULO_LOG_LEVEL") == DEFAULT_VALUES["MODULO_LOG_LEVEL"]
-            assert store.get("MODULO_SEED_DEMO_DATA") == DEFAULT_VALUES["MODULO_SEED_DEMO_DATA"]
+            assert store.get("MODULO_TELEMETRY_ENABLED") == DEFAULT_VALUES["MODULO_TELEMETRY_ENABLED"]
 
     # ----------------------------------------------------------------
     # reload()

@@ -29,7 +29,6 @@ _KEY_CONFIG: dict[str, _KeyConfig] = {
     "MODULO_USERS": _KeyConfig(default=""),
     "MODULO_ADMIN_PASSWORD": _KeyConfig(default=""),
     "MODULO_PUBLIC_URL": _KeyConfig(default="http://localhost:8000", hot_reloadable=True),
-    "MODULO_SEED_DEMO_DATA": _KeyConfig(default="false", hot_reloadable=True),
     "MODULO_LICENSE_KEY": _KeyConfig(default=""),
     "MODULO_OIDC_PROVIDERS": _KeyConfig(default="[]"),
     "MODULO_SAML_ENABLED": _KeyConfig(default="false"),
