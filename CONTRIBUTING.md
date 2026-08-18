@@ -89,7 +89,7 @@ docker compose -f docker-compose.local.yml up -d db-local redis-local
 
 # 3. Install backend dependencies
 cd backend
-uv sync
+uv sync --frozen
 cd ..
 
 # 4. Run database migrations
@@ -343,7 +343,7 @@ uv run pytest tests/architecture -q
 Require a running PostgreSQL instance. Run from `backend/`:
 
 ```powershell
-docker compose up -d db
+docker compose -f docker-compose.local.yml up -d db-local
 cd backend
 uv run pytest tests/integration/ -m integration -n 2
 ```
@@ -357,12 +357,16 @@ Require PostgreSQL, Redis, a running backend, and a built frontend. Run from
 `backend/`:
 
 ```powershell
-docker compose up -d db redis
+docker compose -f docker-compose.local.yml up -d db-local redis-local
 cd backend
 uv run alembic upgrade heads
-# In separate terminals:
-#   backend:  uv run uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000
-#   frontend: cd ../frontend && pnpm run build && pnpm run preview -- --port 4173
+# Terminal 1 — backend:
+uv run uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000
+
+# Terminal 2 — frontend (build + preview):
+cd ../frontend
+pnpm run build
+pnpm run preview -- --port 4173
 cd backend
 uv run pytest tests/bdd/ -m e2e --base-url http://localhost:4173 -q
 ```
