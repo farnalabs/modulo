@@ -46,7 +46,7 @@
                 <SelectContent>
                   <SelectItem v-for="v in sortedVersions" :key="v.version" :value="v.version">
                     v{{ v.version }}
-                    <template v-if="v.created_by"> — {{ v.created_by }}</template>
+                    <template v-if="v.created_by"> — <span class="select-all font-mono" :title="v.created_by">{{ shortId(v.created_by) }}</span></template>
                   </SelectItem>
                 </SelectContent>
               </Select>
@@ -259,6 +259,7 @@ import ProvenanceBadge from '../../components/lifecycle-map/ProvenanceBadge.vue'
 import JourneyCard from '../../components/lifecycle-map/JourneyCard.vue'
 import ErrorAlert from '../../components/shared/ErrorAlert.vue'
 import { formatRunDate } from '../../utils/runUtils'
+import { shortId } from '../../utils/format'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import type { JourneySummary } from '../../types/lifecycleMap'

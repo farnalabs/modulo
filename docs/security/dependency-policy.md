@@ -2,7 +2,7 @@
 
 ## Scope
 
-This policy covers all runtime and development dependencies for the Modulo backend (`backend/pyproject.toml` + `backend/uv.lock`) and frontend (`frontend/package.json` + `frontend/package-lock.json`).
+This policy covers all runtime and development dependencies for the Modulo backend (`backend/pyproject.toml` + `backend/uv.lock`) and frontend (`frontend/package.json` + `frontend/pnpm-lock.yaml`).
 
 ## CVE Severity Classification
 

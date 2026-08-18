@@ -15,7 +15,7 @@
               <Badge variant="default">{{ $t('common.active') }}</Badge>
             </div>
             <p v-if="licenseInfo.org_id" class="mt-2 text-sm text-muted-foreground">
-              Licensed to <span class="font-medium text-foreground">{{ licenseInfo.org_id }}</span>
+              Licensed to <span class="font-medium text-foreground" :title="licenseInfo.org_id"><span class="select-all font-mono">{{ shortId(licenseInfo.org_id) }}</span></span>
             </p>
             <p v-if="licenseInfo.expires_at" class="mt-1 text-sm text-muted-foreground">
               Expires <span class="font-medium text-foreground">{{ formatDate(licenseInfo.expires_at) }}</span>
@@ -117,6 +117,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { Badge } from '../components/ui/badge'
 import FormDialog from '../components/shared/FormDialog.vue'
 import { format } from 'date-fns'
+import { shortId } from '../utils/format'
 
 const planStore = usePlanStore()
 

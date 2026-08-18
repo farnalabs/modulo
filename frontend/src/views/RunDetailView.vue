@@ -68,7 +68,24 @@
         <div v-for="gate in pendingGates" :key="gate.gate_id" class="space-y-3">
           <div class="flex items-center gap-2 text-sm">
             <span class="font-medium">{{ $t('views.RunDetailView.gate_label') }}</span>
-            <code class="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{{ gate.gate_id }}</code>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <code class="cursor-help select-all rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{{ gate.label || shortId(gate.gate_id) }}</code>
+                </TooltipTrigger>
+                <TooltipContent side="top" class="max-w-xs break-all">
+                  {{ gate.gate_id }}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+            <button
+              data-testid="run-detail-copy-gate-id"
+              :aria-label="$t('views.RunDetailView.copy_gate_id')"
+              class="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/10"
+              @click="copyText(gate.gate_id)"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            </button>
           </div>
           <div v-if="gate.claimed_by && !claimToken" class="rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground">
             Claimed by {{ gate.claimed_by }}
@@ -126,7 +143,7 @@
         <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.created') }}</span> {{ runTimestamps.created }}</div>
         <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.started') }}</span> {{ runTimestamps.started }}</div>
         <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.completed') }}</span> {{ runTimestamps.completed }}</div>
-        <div data-testid="run-detail-trigger-actor"><span class="font-medium text-foreground">{{ $t('views.RunDetailView.triggered_by') }}</span> {{ run.trigger_actor || '—' }}</div>
+        <div data-testid="run-detail-trigger-actor"><span class="font-medium text-foreground">{{ $t('views.RunDetailView.triggered_by') }}</span> {{ run.trigger_actor || triggerTypeLabel(run.trigger_type, t) }}</div>
         <div data-testid="run-detail-heartbeat">
           <span class="font-medium text-foreground">{{ $t('views.RunDetailView.last_heartbeat') }}</span>
           <span :class="isHeartbeatStale(heartbeatAge) ? 'font-medium text-warning' : ''">{{ formatHeartbeatAge(heartbeatAge, t) }}<span v-if="isHeartbeatStale(heartbeatAge)"> ({{ $t('views.RunDetailView.stale') }})</span></span>
@@ -225,7 +242,7 @@
       <!-- Trace ID -->
       <div v-if="run.trace_id" class="flex items-center gap-2">
         <span class="text-xs text-muted-foreground">{{ $t('views.RunDetailView.otel_trace_id') }}</span>
-        <code class="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{{ run.trace_id }}</code>
+        <code class="select-all rounded bg-muted px-1.5 py-0.5 font-mono text-xs" :title="run.trace_id">{{ shortId(run.trace_id) }}</code>
         <button
           data-testid="run-detail-copy-trace-id"
           :aria-label="$t('views.RunDetailView.copy_trace_id')"
@@ -359,7 +376,17 @@
               :key="node.name"
               class="border-b last:border-b-0 hover:bg-muted/30"
             >
-              <td class="py-3 pr-4 font-medium">{{ node.name }}</td>
+              <td class="py-3 pr-4 font-medium" :title="node.name">
+                <span class="select-all">{{ nodeLabel(node.name) }}</span>
+                <button
+                  data-testid="run-detail-copy-node-id"
+                  :aria-label="$t('views.RunDetailView.copy_node_id')"
+                  class="ml-1 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium text-primary hover:bg-primary/10"
+                  @click="copyText(node.name)"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                </button>
+              </td>
               <td class="py-3 pr-4">
                 <span :class="[nodeStatusBadgeClass(node), 'capitalize']">{{ node.status }}</span>
                 <span
@@ -522,7 +549,7 @@
           </div>
           <div v-if="workspaceLease.sandbox_id" class="flex items-center gap-2">
             <span class="font-medium">{{ $t('views.RunDetailView.sandbox_label') }}</span>
-            <code class="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{{ workspaceLease.sandbox_id }}</code>
+            <code class="select-all rounded bg-muted px-1.5 py-0.5 font-mono text-xs" :title="workspaceLease.sandbox_id">{{ shortId(workspaceLease.sandbox_id) }}</code>
           </div>
           <div v-if="workspaceLease.duration_seconds != null">
             <span class="font-medium">{{ $t('views.RunDetailView.duration_label') }}</span>
@@ -702,13 +729,14 @@ import DialogTitle from '../components/ui/dialog/DialogTitle.vue'
 import DialogDescription from '../components/ui/dialog/DialogDescription.vue'
 import DialogFooter from '../components/ui/dialog/DialogFooter.vue'
 import Button from '../components/ui/button/Button.vue'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip'
 import { formatApiError } from '../lib/api/formatError'
 import { requestRunCancellation } from '../lib/api/runs'
 import { isTerminalStatus } from '../constants/runStatuses'
+import { triggerTypeLabel, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge } from '../utils/runUtils'
 import { shortId, formatRun } from '../utils/format'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
-import { heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge } from '../utils/runUtils'
 import { Check, X } from '@lucide/vue'
 
 type RunResponse = components['schemas']['RunResponse'] & {
@@ -719,6 +747,7 @@ type RunResponse = components['schemas']['RunResponse'] & {
   child_runs_count?: number
   aggregate_cost_usd?: string | null
   trigger_actor?: string | null
+  trigger_type?: string | null
   trigger_id?: string | null
   heartbeat_at?: string | null
   work_item_refs?: WorkItemRef[] | null
@@ -1004,6 +1033,11 @@ async function copyText(text: string) {
   }
 }
 
+function nodeLabel(nodeId: string): string {
+  const labels = runIO.value?.node_labels as Record<string, string> | undefined
+  return labels?.[nodeId] || shortId(nodeId)
+}
+
 async function revealPrompt(nodeName: string) {
   const cached = revealedPrompts.value[nodeName]
   if (cached?.prompt) {
@@ -1106,8 +1140,7 @@ function nodeSummary(node: NodeEntry): string | null {
   return typeof telemetrySummary === 'string' && telemetrySummary.length > 0 ? telemetrySummary : null
 }
 
-const statusBadgeClass = computed(() => {
-  const s = run.value?.status ?? ''
+function statusBadgeClassFor(status: string | undefined): string {
   const map: Record<string, string> = {
     running: 'badge badge-status-primary',
     complete: 'badge badge-status-success',
@@ -1117,20 +1150,17 @@ const statusBadgeClass = computed(() => {
     pending: 'badge badge-status-muted',
     awaiting_human: 'badge badge-status-pending',
   }
-  return map[s] ?? 'badge badge-context-slate'
-})
+  return map[status ?? ''] ?? 'badge badge-context-slate'
+}
+
+const statusBadgeClass = computed(() => statusBadgeClassFor(run.value?.status))
 
 const isTerminal = computed(() => run.value != null && isTerminalStatus(run.value.status))
 
 const canCancel = computed(() => run.value != null && !isTerminalStatus(run.value.status))
 
 function nodeStatusBadgeClass(node: NodeEntry): string {
-  const map: Record<string, string> = {
-    running: 'badge badge-status-primary',
-    complete: 'badge badge-status-success',
-    failed: 'badge badge-status-destructive',
-  }
-  return map[node.status] ?? 'badge badge-context-slate'
+  return statusBadgeClassFor(node.status)
 }
 
 const runTimestamps = computed(() => {
@@ -1566,16 +1596,7 @@ const heartbeatAge = computed<number | null>(() => {
 })
 
 function childRunBadgeClass(status: string | undefined): string {
-  const map: Record<string, string> = {
-    running: 'badge badge-status-primary',
-    complete: 'badge badge-status-success',
-    failed: 'badge badge-status-destructive',
-    stalled: 'badge badge-status-destructive',
-    cancelled: 'badge badge-status-warning',
-    pending: 'badge badge-status-muted',
-    awaiting_human: 'badge badge-status-pending',
-  }
-  return map[status ?? ''] ?? 'badge badge-context-slate'
+  return statusBadgeClassFor(status)
 }
 
 async function fetchHitlGates(runId: string) {

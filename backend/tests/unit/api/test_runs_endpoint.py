@@ -1819,6 +1819,57 @@ class TestGetRunIO:
         assert body["input_payload"]["prompt"] == "Hello"
         assert body["input_payload"]["api_key"] == SENSITIVE_VALUE_MASK
 
+    def test_io_populates_node_labels_from_snapshot_graph(self, client: TestClient, mock_session: AsyncMock) -> None:
+        run = _make_io_run(
+            input_payload={"prompt": "Hello"},
+            outputs_json={"planner": {"result": "ok"}},
+            node_telemetry_json=None,
+        )
+        run.snapshot_id = _SNAPSHOT_ID
+
+        snapshot = MagicMock()
+        snapshot.graph_json = {
+            "nodes": [
+                {"id": "planner", "label": "Planner Agent"},
+                {"id": "coder", "node_type": "sandbox_agent"},
+                {"id": "unlabeled"},
+            ],
+            "edges": [],
+        }
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = snapshot
+        mock_session.execute.return_value = exec_result
+
+        with (
+            patch("modulo.api.routes.runs.get_run", return_value=run),
+            patch("modulo.api.routes.runs.set_rls_org"),
+        ):
+            resp = client.get(f"/api/v1/runs/{_RUN_ID}/io")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["node_labels"] == {
+            "planner": "Planner Agent",
+            "coder": "sandbox_agent",
+            "unlabeled": "unlabeled",
+        }
+
+    def test_io_node_labels_empty_without_snapshot(self, client: TestClient, mock_session: AsyncMock) -> None:
+        run = _make_io_run(
+            input_payload={"prompt": "Hello"},
+            outputs_json={"planner": {"result": "ok"}},
+            node_telemetry_json=None,
+        )
+
+        with (
+            patch("modulo.api.routes.runs.get_run", return_value=run),
+            patch("modulo.api.routes.runs.set_rls_org"),
+        ):
+            resp = client.get(f"/api/v1/runs/{_RUN_ID}/io")
+
+        assert resp.status_code == 200
+        assert not resp.json()["node_labels"]
+
 
 # ---------------------------------------------------------------------------
 # Active-run observability (FAR-307)
@@ -1860,6 +1911,7 @@ class TestGetRunObservability:
         assert resp.status_code == 200
         body = resp.json()
         assert body["trigger_actor"] == "duncan@modulo.run"
+        assert body["trigger_type"] == "manual"
         assert body["trigger_id"] == str(run.trigger_id)
         assert body["heartbeat_at"] == run.heartbeat_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
         assert body["work_item_refs"] == run.work_item_refs
@@ -1884,6 +1936,7 @@ class TestGetRunObservability:
         assert resp.status_code == 200
         body = resp.json()
         assert body["trigger_actor"] is None
+        assert body["trigger_type"] == "manual"
         assert body["trigger_id"] is None
         assert body["heartbeat_at"] is None
         assert body["work_item_refs"] is None
