@@ -127,7 +127,7 @@ RECONCILE_STALE_HEARTBEAT_FACTOR = 2  # 2 * SAQ_JOB_HEARTBEAT = 600s
 # (FAR-108). A run demoted to ``pending`` with ``error_code`` in
 # (``org_capacity_limited``, ``pipeline_capacity``) used to wait for the
 # stale-run sweep's multi-minute stranded window (~12-min TTL + up-to-5-min
-# sweep lag) — the observed ~18-minute pending gap on app.modulo.run.
+# sweep lag) — the observed ~18-minute pending gap on a busy deployment.
 # dispatcher_reconcile (every 60s) now re-dispatches such a run once its
 # heartbeat is older than this window (or NULL — a never-claimed org-capacity-
 # deferred run). The heartbeat gate throttles the executor sandbox-cap

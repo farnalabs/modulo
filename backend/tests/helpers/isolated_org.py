@@ -1,7 +1,7 @@
 """Create and manage isolated orgs for test isolation.
 
 Each test run gets its own org so test data is fully isolated.
-Used when testing against real deployments (staging.modulo.run)
+Used when testing against real deployments (e.g. staging)
 rather than mock sessions.
 """
 

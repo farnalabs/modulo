@@ -27,13 +27,13 @@ MAX_SELF_REPORTED_USD = Decimal("10000.0")
 MAX_REPORTABLE_USD_MIN = Decimal("0.000001")
 # The SINGLE canonical name for the ABOVE-BAND clamp ceiling — the TOP OF THE
 # SANITY BAND, the trust boundary for self-reported model cost. Shared with
-# devtools ``_common.py`` (the dogfood reader applies the same clamp via this
+# the deployment-side reader applies the same clamp via this
 # constant — now redundant but harmless; the backend extraction boundary is
 # the single enforcement point). The dual name ``BAND_ABOVE_CEILING`` is
 # dropped.
 MAX_REPORTABLE_BAND_USD = Decimal("50.0")
 # Value-checked across the two repos: CI asserts this constant == Decimal("50.0")
-# in BOTH backend constants.py AND devtools _common.py.
+# in BOTH backend constants.py AND the deployment-side reader.
 
 # The pinned plausible node count used by the near-ceiling first-finalization
 # check (MAX_SELF_REPORTED_USD x PLAUSIBLE_NODE_COUNT).

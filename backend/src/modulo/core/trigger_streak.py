@@ -74,7 +74,7 @@ def _ch() -> Any:
 # ``no_delivery_min_window_hours`` (wall-clock window). Product default is N=5
 # WITH a 24h minimum wall-clock window so other customers' quiet stretches never
 # self-deactivate (the boundary must be at least the window old before the
-# streak can fire); the dogfood deployment overrides the window to 0 via
+# streak can fire); a deployment overrides the window to 0 via
 # MODULO_ONGOING_STREAK_MIN_WINDOW_HOURS so a fast-moving repo's quiet stretch
 # still stops the pool.
 ONGOING_MAX_NO_DELIVERY_STREAK_DEFAULT = 5
@@ -205,7 +205,7 @@ _STREAK_COUNT_SQL = (
 # so a re-enabled trigger (active=false already, or epoch re-anchored) and a
 # stale tick can never be hit — concurrent ticks produce one rowcount=1 and the
 # second is a no-op. The boundary must also be at least ``window_cutoff`` old
-# (the 24h wall-clock window, 0 for dogfood — a cutoff of "now" is trivially
+# (the 24h wall-clock window, 0 for a deployment — a cutoff of "now" is trivially
 # satisfied). ``RETURNING`` carries the streak value (same correlated subquery)
 # for the audit record, so no second walk is needed. The explicit
 # ``organisation_id = :oid`` predicate keeps the raw text() statement scoped to
@@ -343,7 +343,7 @@ def _streak_deactivate_enabled() -> bool:
 def _streak_min_window_hours_default() -> int:
     """Product default minimum wall-clock window before a no-delivery streak
     fires (24h — a quiet stretch must not self-deactivate within the first day
-    after a delivery). The dogfood deployment overrides this to 0 via
+    after a delivery). A deployment overrides this to 0 via
     ``MODULO_ONGOING_STREAK_MIN_WINDOW_HOURS`` so a fast-moving repo's quiet
     stretch still stops the pool. Per-trigger ``no_delivery_min_window_hours``
     config overrides both.
@@ -361,9 +361,9 @@ def _streak_config(config: dict[str, Any] | None) -> tuple[int, int]:
     """Resolve (threshold, min_window_hours) from a trigger's ``config_json``.
 
     Threshold: ``max_no_delivery_streak``, falling back to the legacy
-    ``max_consecutive_failures`` key (read for one release) — else the dogfood
+    ``max_consecutive_failures`` key (read for one release) — else a deployment
     default (5). Window: per-trigger ``no_delivery_min_window_hours``, else the
-    env default (24h product; 0 for dogfood). Only genuine ``int`` values are
+    env default (24h product; 0 for a deployment). Only genuine ``int`` values are
     accepted — a boolean (``int(True) == 1``) or a float is rejected so a
     mis-typed config can never fire instantly or silently truncate. Invalid
     values fall back to the defaults — a mis-typed config can never disable the

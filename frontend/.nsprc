@@ -2,7 +2,7 @@
   "advisories": {
     "GHSA-mh99-v99m-4gvg": {
       "ignore": true,
-      "reason": "brace-expansion vulnerability in transitive deps through eslint/glob. Fix requires eslint@10 which is breaking. Tracked in Linear (farnalabs-modulo, FAR team)"
+      "reason": "brace-expansion vulnerability in transitive deps through eslint/glob. Fix requires eslint@10 which is breaking. Tracked in the project's issue tracker"
     }
   }
 }
