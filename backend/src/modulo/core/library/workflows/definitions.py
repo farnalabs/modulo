@@ -617,6 +617,7 @@ DOGFOODING_PIPELINE: dict[str, Any] = {
             "id": "read-issue",
             "agent": None,
             "connector_binding": {"type": "source_control", "required": True},
+            "input_schema": "ticket-input",
             "description": "Read a GitHub issue from the configured repository",
         },
         {
