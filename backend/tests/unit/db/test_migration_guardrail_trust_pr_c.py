@@ -321,10 +321,10 @@ class TestModelMigrationConsistency:
         # from 0116's upgrade) — the downgrade symmetry guard would also fire.
         migration_removed = {rev: set(cols) for rev, cols in real_migration_columns.items()}
         migration_removed[_REVISION_0116].discard(("eval_definitions", "deleted_at"))
-        with pytest.raises(AssertionError):
+        with pytest.raises(AssertionError, match=r"must create eval_definitions\.deleted_at"):
             _assert_drift_free(model_columns, migration_removed)
         # (b) the ORM model loses a column a migration still creates.
         model_missing = {table: set(cols) for table, cols in model_columns.items()}
         model_missing["runs"].discard("guardrail_summary_json")
-        with pytest.raises(AssertionError):
+        with pytest.raises(AssertionError, match="is missing trust column guardrail_summary_json"):
             _assert_drift_free(model_missing, real_migration_columns)
