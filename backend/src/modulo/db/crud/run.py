@@ -1518,6 +1518,38 @@ async def get_org_run_concurrency_limit(session: AsyncSession, org_id: uuid.UUID
     )
 
 
+async def get_run_api_key_ttl_seconds(session_factory: Any, org_id: uuid.UUID, node_timeout_seconds: int) -> int:
+    """Per-run API-key TTL for script-mode sandboxes (FAR-296 Phase 3b).
+
+    TTL = max(15 min, node_timeout_seconds + 5 min), capped by the org-level
+    ``run_api_key_max_ttl_seconds`` setting (default 3600 = 1 hour). Read via
+    the existing org settings_json resolution pattern (``_read_org_int_limit``)
+    on a fresh session. Fail-open: a settings read failure falls back to the
+    default cap.
+    """
+    from modulo.db.rls import set_rls_org
+
+    org_max = 3600
+    try:
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            raw = await _read_org_int_limit(
+                session,
+                org_id,
+                "run_api_key_max_ttl_seconds",
+                300,
+                86400,
+                "run_api_key_ttl",
+            )
+            if raw is not None:
+                org_max = raw
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("run_api_key_ttl.read_failed", extra={"org_id": str(org_id)})
+    return min(max(900, node_timeout_seconds + 300), org_max)
+
+
 def _percentile(sorted_data: list[float], p: float) -> float:
     """Linear interpolation percentile."""
     if not sorted_data:

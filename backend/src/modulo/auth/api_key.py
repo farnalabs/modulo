@@ -16,6 +16,7 @@ Team-scoped enforcement:
   team-scoped tables enforce that only the owning team's data is accessible.
 """
 
+import asyncio
 import hashlib
 import hmac
 import logging
@@ -24,7 +25,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.api_key import OrgApiKey
@@ -102,6 +103,70 @@ async def create_api_key(
     session.add(key)
     await session.flush()
     return key, full_key
+
+
+async def mint_run_api_key(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    node_id: str,
+    account_id: uuid.UUID,
+    ttl_seconds: int,
+) -> tuple[OrgApiKey, str] | None:
+    """Mint a short-TTL RUNNER-ROLE API key for a script-mode sandbox run.
+
+    FAR-296 Phase 3b: the key gives the script a restricted identity to call
+    the Modulo API (trigger/list runs only — runner role, never
+    pipelines/connectors/secrets). TTL is clamped to ``[300, 86400]`` so a
+    leaked key expires quickly. Fail-open: the caller decides whether a failed
+    mint blocks the dispatch (it should NOT — the sandbox runs without the key
+    rather than failing).
+    """
+    ttl_seconds = max(300, min(ttl_seconds, 86400))
+    try:
+        key, full_key = await create_api_key(
+            session,
+            org_id=org_id,
+            name=f"run:{run_id}:node:{node_id}",
+            role="runner",
+            account_id=account_id,
+            expires_at=datetime.now(UTC) + timedelta(seconds=ttl_seconds),
+        )
+        key.run_id = run_id
+        await session.flush()
+        return key, full_key
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "api_key.mint_run_failed",
+            extra={"run_id": str(run_id), "node_id": node_id, "org_id": str(org_id)},
+        )
+        return None
+
+
+async def revoke_run_api_key(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> int:
+    """Revoke all per-run API keys linked to a run (FAR-296 Phase 3b).
+
+    Returns the number of keys revoked. Uses the ``run_id`` linkage column.
+    """
+    from sqlalchemy.engine import CursorResult
+
+    result = cast(
+        "CursorResult[Any]",
+        await session.execute(
+            update(OrgApiKey)
+            .where(OrgApiKey.organisation_id == org_id, OrgApiKey.run_id == run_id, OrgApiKey.revoked_at.is_(None))
+            .values(revoked_at=datetime.now(UTC))
+        ),
+    )
+    return result.rowcount or 0
 
 
 async def validate_api_key(
