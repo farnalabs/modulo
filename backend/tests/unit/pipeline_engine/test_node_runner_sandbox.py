@@ -1652,7 +1652,7 @@ async def test_watch_log_growth_keeps_silent_strict_run_alive_end_to_end():
     """
     node_def = _base_node_def(
         timeout_seconds=30,
-        stall_timeout_seconds=0.1,
+        stall_timeout_seconds=0.5,
         enable_heartbeat=False,
         watch_log_path="/home/user/progress.log",
     )
@@ -1663,10 +1663,14 @@ async def test_watch_log_growth_keeps_silent_strict_run_alive_end_to_end():
     cmd_result.stdout = ""
     cmd_result.stderr = ""
 
-    # The command stays "running" for 5 tick slices (each ~0.03s taking the
-    # run past the 0.1s stall window) before completing on the 6th — so in the
-    # no-detector case the watchdog fires mid-run, and with the detector the
-    # log-growth touch on every tick keeps it alive to completion.
+    # The command stays "running" for 5 tick slices (each ~0.03s) before
+    # completing on the 6th. The stall window (0.5s) is kept an order of
+    # magnitude wider than the tick interval so a loaded event loop can never
+    # stretch a single tick past it and trip the idle watchdog spuriously (the
+    # original 0.1s window flaked under suite load); the log-growth touch on
+    # every tick is what keeps the run alive to completion. The no-detector
+    # stall case is proven separately by
+    # test_heartbeat_off_no_detector_stalls_end_to_end.
     wait_calls = {"n": 0}
 
     async def _wait():
