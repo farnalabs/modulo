@@ -469,3 +469,42 @@ async def test_create_run_excludes_soft_deleted_guardrail_from_live_binding(sess
     run = await _create(session, input_payload={"body": "leak SECRET_ABC12345"})
     assert run.status == "pending"
     assert run.guardrail_summary_json is None
+
+
+async def test_create_run_replay_soft_deleted_pin_skips_with_audit(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+):
+    """FAR-309 PR B two-step soft-delete + replay: a pinned guardrail whose live
+    row was SOFT-deleted (deleted_at/deleted_by stamped — NOT hard-removed) is
+    skipped on replay exactly like a hard-deleted row. The soft-deleted pin is
+    an EXPECTED skip (explained by pin state): recorded skipped=1 /
+    expected_skips=1 / unexpected_skips=0, the run stays pending (never a run
+    failure), and the unexpected-skip alert is NOT fired."""
+    unexpected_alerts: list[dict[str, Any]] = []
+
+    async def _fake_unexpected(org_id: uuid.UUID, run_id: uuid.UUID, skip: Any) -> None:
+        unexpected_alerts.append({"guardrail": skip.name, "reason": skip.reason})
+
+    monkeypatch.setattr(guardrails_module, "alert_unexpected_guardrail_skip", _fake_unexpected)
+    await _seed(session)
+    gid = await _seed_guardrail(session, name="ghost-block", action="block")
+    pinned_row = await _get_guardrail_row(session, gid)
+    await _seed_snapshot_with_pins(session, guardrail_defs=[pinned_row])
+    # Two-step soft-delete (PR B): stamp the row — the row is RETAINED, but the
+    # live binding (load_pipeline_guardrail_rows) excludes it from fresh runs.
+    pinned_row.deleted_at = datetime.now(UTC)
+    pinned_row.deleted_by = _ACCOUNT
+    await session.flush()
+
+    run = await _create(session, input_payload={"body": "clean"}, is_replay=True)
+    assert run.status == "pending"
+    s = _summary(run)
+    assert s["bound"] == 1
+    assert s["evaluated"] == 0
+    assert s["errored"] == 0
+    assert s["skipped"] == 1
+    assert s["expected_skips"] == 1
+    assert s["unexpected_skips"] == 0
+    assert _invariant(s)
+    # Expected skip (soft-deleted pin state) → no unexpected-skip alert.
+    assert unexpected_alerts == []
