@@ -1,10 +1,15 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 import { nextTick } from 'vue'
 
 let mockRunStatus = 'complete'
 let mockInputPayload: Record<string, unknown> | null = null
+let mockTriggerActor: string | null = null
+let mockHeartbeatAt: string | null = null
+let mockWorkItemRefs: unknown = null
+let mockChildRuns: unknown = null
+let mockCapacity: unknown = null
 
 vi.mock('../lib/api/client', () => {
   const mockPost = vi.fn().mockImplementation((url: string) => {
@@ -36,7 +41,13 @@ vi.mock('../lib/api/client', () => {
               total_cost_usd: 1.23,
               token_consumption: null,
               node_token_usage: { 'node-a': { input_tokens: 10, output_tokens: 20, total_tokens: 30 } },
-              trace_id: null
+              trace_id: null,
+              trigger_type: 'manual',
+              trigger_actor: mockTriggerActor,
+              heartbeat_at: mockHeartbeatAt,
+              work_item_refs: mockWorkItemRefs,
+              child_runs: mockChildRuns,
+              capacity: mockCapacity,
             },
             error: undefined
           })
@@ -123,6 +134,16 @@ describe('RunDetailView', () => {
     vi.clearAllMocks()
     mockRunStatus = 'complete'
     mockInputPayload = null
+    mockTriggerActor = null
+    mockHeartbeatAt = null
+    mockWorkItemRefs = null
+    mockChildRuns = null
+    mockCapacity = null
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
   })
 
   function createWrapper() {
@@ -828,6 +849,142 @@ describe('RunDetailView', () => {
     expect(section.exists()).toBe(true)
     expect(section.text()).toContain('Run Input')
     expect(section.text()).toContain('fix bug')
+    wrapper.unmount()
+  })
+
+  it('running run shows the live node progress strip with a running chip', async () => {
+    mockRunStatus = 'running'
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') {
+        return Promise.resolve({
+          data: {
+            ...baseDetail(),
+            status: 'running',
+            node_token_usage: { 'node-a': { input_tokens: 10, output_tokens: 20, total_tokens: 30 } },
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/runs/{run_id}/io') {
+        return Promise.resolve({
+          data: {
+            outputs_json: { 'node-a': { output: 'ok' } },
+            node_telemetry: { 'node-a': { status: 'complete' } },
+          },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ events: [{ seq: 1, event_type: 'node_started', payload: { node_id: 'node-a' } }] }),
+    }))
+
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    // Let the 3s polling interval fire once so fetchLiveOutput ingests the event.
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushPromises()
+    await nextTick()
+
+    const strip = wrapper.find('[data-testid="run-detail-node-progress"]')
+    expect(strip.exists()).toBe(true)
+    const runningChip = wrapper.find('[data-testid="run-detail-node-progress-node-a"]')
+    expect(runningChip.exists()).toBe(true)
+    expect(runningChip.attributes('aria-label')).toContain('running')
+    expect(runningChip.text()).toContain('running')
+    wrapper.unmount()
+  })
+
+  it('running run shows the trigger actor in the metadata row', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      status: 'running',
+      trigger_type: 'manual',
+      trigger_actor: 'Duncan (GitHub)',
+    })
+
+    const actor = wrapper.find('[data-testid="run-detail-trigger-actor"]')
+    expect(actor.exists()).toBe(true)
+    expect(actor.text()).toContain('Triggered by')
+    expect(actor.text()).toContain('Duncan (GitHub)')
+    wrapper.unmount()
+  })
+
+  it('running run shows live cost and token totals so far', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      status: 'running',
+      node_token_usage: { 'node-a': { input_tokens: 10, output_tokens: 20, total_tokens: 30 } },
+    })
+
+    const line = wrapper.find('[data-testid="run-detail-live-cost"]')
+    expect(line.exists()).toBe(true)
+    expect(line.text()).toContain('Cost so far')
+    expect(line.text()).toContain('30')
+    expect(line.text()).toContain('tokens')
+    wrapper.unmount()
+  })
+
+  it('pending run with capacity.waiting shows the queue banner', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      status: 'pending',
+      capacity: { active_runs: 3, concurrency_limit: 5, waiting: true },
+    })
+
+    const banner = wrapper.find('[data-testid="run-detail-queue-banner"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('Queued')
+    expect(banner.text()).toContain('3 active')
+    expect(banner.text()).toContain('5 limit')
+    wrapper.unmount()
+  })
+
+  it('run with work_item_refs shows the work items section', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      work_item_refs: [
+        { kind: 'pr', ref: 'https://github.com/acme/repo/pull/42', source: 'github', status: 'open' },
+      ],
+    })
+
+    const section = wrapper.find('[data-testid="run-detail-work-items"]')
+    expect(section.exists()).toBe(true)
+    expect(section.text()).toContain('Work items')
+    expect(section.text()).toContain('pr')
+    expect(section.text()).toContain('https://github.com/acme/repo/pull/42')
+    expect(section.text()).toContain('github')
+    expect(section.text()).toContain('open')
+    wrapper.unmount()
+  })
+
+  it('run with child_runs shows the child runs section with links', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      child_runs: [
+        { run_id: 'child-run-1', run_number: 7, status: 'complete', pipeline_name: 'Child Pipeline' },
+      ],
+    })
+
+    const section = wrapper.find('[data-testid="run-detail-child-runs"]')
+    expect(section.exists()).toBe(true)
+    expect(section.text()).toContain('Child runs')
+    expect(section.text()).toContain('#7')
+    expect(section.text()).toContain('complete')
+    expect(section.text()).toContain('Child Pipeline')
+    const link = wrapper.find('[data-testid="run-detail-child-link-child-run-1"]')
+    expect(link.exists()).toBe(true)
     wrapper.unmount()
   })
 })

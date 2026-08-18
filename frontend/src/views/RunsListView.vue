@@ -49,6 +49,8 @@
             { key: 'status', label: $t('views.RunsListView.status'), sortable: true },
             { key: 'error', label: $t('views.RunsListView.error'), sortable: true },
             { key: 'trigger_type', label: $t('views.RunsListView.trigger'), sortable: true },
+            { key: 'trigger_actor', label: $t('views.RunsListView.triggered_by'), sortable: true },
+            { key: 'heartbeat', label: $t('views.RunsListView.heartbeat'), sortable: false },
             { key: 'input_preview', label: $t('views.RunsListView.input'), sortable: false },
             { key: 'run_number', label: '#', numeric: true, sortable: true },
             { key: 'started_at', label: $t('views.RunsListView.start'), sortable: true },
@@ -69,10 +71,15 @@
               {{ row.pipeline_name || '(deleted pipeline)' }}
             </router-link>
           </template>
-          <template #cell-status="{ value }">
+          <template #cell-status="{ value, row }">
             <span :class="runStatusBadgeClass(value as string)" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize">
               {{ value }}
             </span>
+            <span
+              v-if="(row as RunListItem).capacity?.waiting"
+              :data-testid="`runs-list-queued-${row.run_id}`"
+              class="ml-1.5 inline-flex items-center rounded-full bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning capitalize"
+            >{{ $t('views.RunsListView.queued') }}</span>
           </template>
           <template #cell-error="{ row }">
             <RunErrorTag
@@ -85,6 +92,16 @@
           </template>
           <template #cell-trigger_type="{ value }">
             <span class="text-xs text-muted-foreground">{{ triggerTypeLabel(value as string | null | undefined, t) }}</span>
+          </template>
+          <template #cell-trigger_actor="{ row }">
+            <span :data-testid="`runs-list-trigger-actor-${row.run_id}`" class="text-xs text-muted-foreground">{{ row.trigger_actor || '—' }}</span>
+          </template>
+          <template #cell-heartbeat="{ row }">
+            <span
+              :data-testid="`runs-list-heartbeat-${row.run_id}`"
+              :class="isListHeartbeatStale(row as RunListItem) ? 'text-warning font-medium' : 'text-muted-foreground'"
+              class="text-xs whitespace-nowrap"
+            >{{ formatHeartbeat(heartbeatAgeFor(row as RunListItem, now)) }}</span>
           </template>
           <template #cell-input_preview="{ row }">
             <span
@@ -195,7 +212,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { DataTable } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
-import { runStatusBadgeClass, formatRunDate, triggerTypeLabel } from '../utils/runUtils'
+import { runStatusBadgeClass, formatRunDate, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, triggerTypeLabel } from '../utils/runUtils'
 import { RUN_STATUS, TRIGGER_TYPE } from '../constants/filters'
 import { isNonTerminalStatus } from '../constants/runStatuses'
 import { formatMoney } from '../lib/money'
@@ -267,7 +284,9 @@ const now = ref(Date.now())
 let elapsedTimer: ReturnType<typeof setInterval> | null = null
 
 const hasElapsedRuns = computed(() =>
-  runs.value.some((r) => isNonTerminalStatus(r.status) && !!r.started_at),
+  runs.value.some((r) =>
+    isNonTerminalStatus(r.status) && (!!r.started_at || !!r.heartbeat_at),
+  ),
 )
 
 watch(hasElapsedRuns, (active) => {
@@ -431,6 +450,18 @@ function inputPayloadText(payload: Record<string, unknown> | null | undefined): 
   } catch {
     return String(payload)
   }
+}
+
+function heartbeatAgeFor(run: RunListItem, nowMs: number): number | null {
+  return heartbeatAgeSeconds(run.heartbeat_at, run.status, nowMs)
+}
+
+function isListHeartbeatStale(run: RunListItem): boolean {
+  return isHeartbeatStale(heartbeatAgeFor(run, now.value))
+}
+
+function formatHeartbeat(age: number | null): string {
+  return formatHeartbeatAge(age, t, 'views.RunsListView.ago')
 }
 
 </script>

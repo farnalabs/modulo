@@ -16,6 +16,8 @@ with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/observability/otel_traces.feature")
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/observability/run_logs.feature")
+with contextlib.suppress(FileNotFoundError, OSError):
+    scenarios("../../bdd/features/observability/active_run_observability.feature")
 
 
 # ---------------------------------------------------------------------------
@@ -387,3 +389,113 @@ def log_entries_delivered(ctx):
     assert ctx.get("stream_active"), "Event stream is not active"
     entries = ctx.get("log_entries", [])
     assert len(entries) > 0, "No log entries delivered via stream"
+
+
+# ============================================================================
+# active_run_observability.feature — Run detail / events contract round-trip
+#
+# Gated @awaiting-implementation: the steps round-trip the REAL payload shape
+# through the REAL endpoint (no hand-crafted frontend mock), but the run
+# detail/events routes drive an async_sessionmaker via _run_with_retry while the
+# mock BDD client overrides _get_session_factory with a bare MagicMock, so the
+# scenarios TypeError until that harness gap is closed (see feature note).
+# ============================================================================
+
+
+@given("an active run with heartbeat, capacity, work item refs, and child runs")
+def active_run_with_observability(ctx, request):
+    ctx["run_id"] = uuid.uuid4()
+    ctx["expected_observability"] = {
+        "trigger_actor": "tester@modulo.run",
+        "heartbeat_at": "2026-08-18T12:00:00Z",
+        "capacity": {"active_runs": 2, "concurrency_limit": 4, "waiting": True},
+        "work_item_refs": [{"kind": "pr", "ref": "farnalabs/modulo#1234", "source": "github", "status": "open"}],
+        "child_runs": [
+            {"run_id": str(uuid.uuid4()), "run_number": 2, "status": "running", "pipeline_name": "deploy-service"},
+        ],
+    }
+    request.node._run_id = ctx["run_id"]
+
+
+@given("an active run with node lifecycle events")
+def active_run_with_node_events(ctx, request):
+    ctx["run_id"] = uuid.uuid4()
+    ctx["lifecycle_events"] = {
+        "node_started": [{"node_id": "analyze", "ts": "2026-08-18T12:00:01Z"}],
+        "node_completed": [{"node_id": "analyze", "ts": "2026-08-18T12:00:05Z"}],
+        "node_failed": [{"node_id": "summarize", "ts": "2026-08-18T12:00:09Z"}],
+    }
+    request.node._run_id = ctx["run_id"]
+
+
+@when("I fetch the run detail via the API")
+def fetch_run_detail_via_api(client, request):
+    run_id = request.node._run_id
+    resp = client.get(f"/api/v1/runs/{run_id}")
+    request.node._resp = resp
+    assert resp.status_code == 200, resp.text
+
+
+@when("I fetch the run event stream via the API")
+def fetch_run_event_stream_via_api(client, request):
+    run_id = request.node._run_id
+    resp = client.get(f"/api/v1/runs/{run_id}/events")
+    request.node._resp = resp
+    assert resp.status_code == 200, resp.text
+
+
+@then("the run detail response includes trigger_actor")
+def run_detail_includes_trigger_actor(request):
+    data = request.node._resp.json()
+    assert data.get("trigger_actor") == "tester@modulo.run"
+
+
+@then("the run detail response includes heartbeat_at")
+def run_detail_includes_heartbeat_at(request):
+    data = request.node._resp.json()
+    assert data.get("heartbeat_at") is not None
+
+
+@then("the run detail response includes a capacity object with active_runs, concurrency_limit, and waiting")
+def run_detail_includes_capacity(request):
+    data = request.node._resp.json()
+    capacity = data.get("capacity")
+    assert isinstance(capacity, dict), "capacity missing"
+    assert "active_runs" in capacity
+    assert "concurrency_limit" in capacity
+    assert "waiting" in capacity
+
+
+@then("the run detail response includes work_item_refs")
+def run_detail_includes_work_item_refs(request):
+    data = request.node._resp.json()
+    refs = data.get("work_item_refs")
+    assert isinstance(refs, list) and len(refs) > 0, "work_item_refs missing"
+
+
+@then("the run detail response includes child_runs")
+def run_detail_includes_child_runs(request):
+    data = request.node._resp.json()
+    children = data.get("child_runs")
+    assert isinstance(children, list) and len(children) > 0, "child_runs missing"
+
+
+@then("the event stream includes node_started events")
+def event_stream_includes_node_started(request):
+    data = request.node._resp.json()
+    event_types = {e["event_type"] for e in data.get("events", [])}
+    assert "node_started" in event_types, f"node_started missing from {event_types}"
+
+
+@then("the event stream includes node_completed events")
+def event_stream_includes_node_completed(request):
+    data = request.node._resp.json()
+    event_types = {e["event_type"] for e in data.get("events", [])}
+    assert "node_completed" in event_types, f"node_completed missing from {event_types}"
+
+
+@then("the event stream includes node_failed events")
+def event_stream_includes_node_failed(request):
+    data = request.node._resp.json()
+    event_types = {e["event_type"] for e in data.get("events", [])}
+    assert "node_failed" in event_types, f"node_failed missing from {event_types}"
