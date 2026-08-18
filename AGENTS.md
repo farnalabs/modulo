@@ -626,7 +626,7 @@ Rules:
 
 ### Multi-PR delivery: merge the first PR manually, then branch the next PR off main
 
-When delivering a feature as multiple PRs (e.g. PR A -> PR B -> PR C), once PR N is green on CI and APPROVED by the reviewer, MERGE IT MANUALLY (`gh pr merge --squash`) rather than waiting for the merge queue. Then branch PR N+1 off the updated main. Waiting for the merge queue on a fast-moving main means the next PR's branch base goes stale while it waits, forcing repeated rebases. Manual merge after approval is the single biggest accelerator for multi-PR delivery. Only wait for the merge queue when you are NOT chaining PRs (single independent PR).
+farnalabs-internal delivery process. See `Repos/devtools/AGENTS.md` (moved in FAR-287).
 
 ### Once a PR exists, stop chasing main - merge in only when required, never rebase
 
@@ -650,38 +650,15 @@ Never edit source/text files with PowerShell string replacement (Get-Content -Ra
 
 ### Merge queue re-verifies review state at merge time - never trust the collection step alone
 
-The merge queue (`.github/workflows/merge-queue.yml`) checks for APPROVED reviews in its "Collect open PRs" step, but between collection and the actual `gh pr merge` (which runs 15-30 minutes later, after squash-queueing and full backend/frontend CI), a reviewer can post CHANGES_REQUESTED - and the merge step never re-checked. This TOCTOU race caused PR #535 (a security fix) to merge despite a CHANGES_REQUESTED review posted minutes earlier; the buggy code reached main and needed a follow-up fix PR (#542).
-
-The guard (added in #546): the workflow re-queries `reviewDecision` via `gh pr view` at TWO points - (1) before squash-merging each PR into the merge-queue branch, and (2) immediately before `gh pr merge --squash`. Any PR whose `reviewDecision` is not APPROVED at merge time is skipped and stays open for the next queue cycle.
-
-Rules:
-1. Any workflow that merges PRs must re-verify the review decision immediately before the actual merge, never rely on a check done at collection time.
-2. When a security review lands with CHANGES_REQUESTED and the merge already happened, fix the finding in a follow-up PR immediately - do not leave the vulnerability on main.
-3. The reviewbot does not pin reviews to a commit SHA; a CHANGES_REQUESTED posted mid-flight applies to the whole PR regardless of when the APPROVED was given.
+farnalabs-internal (reviewbot / merge-queue race guidance). See `Repos/devtools/AGENTS.md` (moved in FAR-287).
 
 ### Branch-fixer / opencode coder agent
 
-- **opencode auth step runs before fetch-ci** → `Configure opencode auth` references `steps.fetch-ci.outputs.ci_failures` but must run AFTER `Fetch CI failures`. GitHub Actions evaluates `if:` conditions at step execution time, and the referenced step's outputs are empty/false if it hasn't run yet. Always verify step ordering when a step's condition depends on another step's output.
-
-- **opencode version must be modern** → Installing opencode from GitHub releases (v0.0.55 from June 2025) gives an ancient version that doesn't support the coder agent's file-editing tools. Always install from npm: `npm install -g opencode-ai` (current: v1.18.4). The `opencode run --agent coder` command requires a version that supports tool-using agents.
-
-- **Use `repository_dispatch` instead of `workflow_dispatch` for triggering workflows** → GitHub has a known caching bug where `workflow_dispatch` triggers are not recognized for recently-modified workflow files, returning HTTP 422 "Workflow does not have 'workflow_dispatch' trigger". Use `repository_dispatch` via `gh api repos/.../dispatches` which is not affected by this bug. Both the sender (CI) and receiver (branch-fixer) need to support it.
-
-- **`gh run view --log-failed` returns only the last failed step's output** → For CI workflows that run scripts (coverage thresholds, post-processing) after the actual tests, `--log-failed` returns the post-processing step's output — not the test failures. Use `gh run view --log | grep "FAILED"` to extract actual test failure lines.
-
-- **GitHub Actions step ordering: `Configure opencode auth` must precede `Run opencode fix`** → The auth step writes the API key to `~/.local/share/opencode/auth.json`. Without it, opencode runs without credentials and cannot call the LLM, so it produces no file edits. Both steps need identical `if:` conditions referencing `steps.fetch-ci.outputs.ci_failures`.
+farnalabs-internal (opencode install + `opencode run --agent coder` guidance). See `Repos/devtools/AGENTS.md` (moved in FAR-287).
 
 ### The opencode `agent`-node HTTP provider is unreliable — use `sandbox_agent` + the CLI
 
-The `opencode` model provider is an OpenAI-compatible backend that talks to the
-external zen HTTP gateway at `https://opencode.ai/zen/go/v1` (see
-`backend/src/modulo/model_backends/opencode/` and the hub's
-`_OPENAI_COMPATIBLE_BACKENDS` entry). It is an external dependency, not a
-first-party endpoint:
-
-- **The gateway's `/chat/completions` path can fail upstream while `/models` works.** Verified 2026-08-11: `/models` returned 200 with the same key, but every completion request returned HTTP 500. When an `agent` node uses the `opencode` provider, the run failed with a misleading `error_code` (`AuthenticationError` or the raw openai error type) even though the key was valid — the gateway was down, not the credentials.
-- **The reliable path for opencode work is `sandbox_agent` + the opencode CLI** (`opencode run --model opencode-go/deepseek-v4-flash`, key via `OPENCODE_API_KEY` / `~/.local/share/opencode/auth.json`), which is what all production pipelines (Branch Fixer, PR Reviewer, improve-*) use. It does not depend on the zen gateway. Prefer it for any opencode-typed work.
-- **Classification fix (2026-08-11):** `OpenAICompatibleBackend.invoke()`/`stream()` now re-raise upstream HTTP 5xx and connection failures as `ProviderUnavailableError` (run `error_code` = `ProviderUnavailableError`), while genuine 4xx auth errors still surface as `openai.AuthenticationError`. A gateway outage is now distinguishable from a bad key. The hub still builds the plain `OpenAICompatibleBackend` for `opencode`; `OpenCodeBackend` is a drop-in subclass that pins the zen base URL.
+farnalabs-internal (our E2B sandbox pipeline choice — the reliable path for opencode-typed work). See `Repos/devtools/AGENTS.md` (moved in FAR-287).
 
 #
 ## Pre-commit hooks (appended from root AGENTS.md)
@@ -1131,15 +1108,7 @@ For tests that need the login page visible:
 
 ### Never merge PRs directly unless explicitly authorised
 
-The `--admin` flag on `gh pr merge` bypasses the merge queue, CI checks, and all SDLC gates. This must NEVER be used unless the user explicitly says "merge it manually" or "use --admin".
-
-Default merge path: let the merge queue pick up approved PRs. If a PR needs expediting, ask the user first. Direct merges skip:
-- CI validation (lint, tests, security scans)
-- Integration/BDD/Docker checks in the merge queue
-- Auto-review re-triggering on the merge commit
-- Audit trail in the merge queue
-
-Exception: trivial documentation-only changes (typos, formatting) may be merged directly without asking.
+farnalabs-internal (merge path / `--admin` guard). See `Repos/devtools/AGENTS.md` (moved in FAR-287).
 
 
 ### Manifest: preview: true means dev-mode-only, not feature preview

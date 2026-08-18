@@ -6,7 +6,7 @@ Remaining semantic lessons in `AGENTS.md` after Semgrep-covered entries were rem
 
 | # | Type | Topic | File | Lines |
 |---|---|---|---|---|
-| 1 | I | Branch-fixer / opencode coder agent (CI step ordering, `repository_dispatch`, `gh run view`) | `AGENTS.md` | 586-596 |
+| 1 | I | Branch-fixer / opencode coder agent (CI step ordering, `repository_dispatch`, `gh run view`) | `Repos/devtools/AGENTS.md` (moved in FAR-287) | - |
 | 2 | I | Pre-commit hooks configuration and split stages | `AGENTS.md` | 599-632 |
 | 3 | W | Rebasing: merge conflict resolution workflow | `AGENTS.md` | 634-656 |
 | 4 | I | Test suites: how to run backend and frontend tests | `AGENTS.md` | 658-668 |
@@ -46,7 +46,7 @@ Remaining semantic lessons in `AGENTS.md` after Semgrep-covered entries were rem
 | 38 | A | ADR 003 supersedes ADR 001: Modulo dispatches, doesn't run agents | `AGENTS.md` | 874-894 |
 | 39 | S | Fly --strategy immediate desyncs proxy routing table | `AGENTS.md` | 896-916 |
 | 40 | S | Playwright E2E: `storageState` for shared login on staging | `AGENTS.md` | 918-941 |
-| 41 | W | Never merge PRs directly unless explicitly authorised | `AGENTS.md` | 943-953 |
+| 41 | W | Never merge PRs directly unless explicitly authorised | `Repos/devtools/AGENTS.md` (moved in FAR-287) | - |
 | 42 | W | Manifest: `preview: true` means dev-mode-only, not feature preview | `AGENTS.md` | 956-962 |
 
 ## Removed: Semgrep-Covered Lessons
