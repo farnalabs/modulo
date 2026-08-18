@@ -396,6 +396,50 @@ def test_sandbox_output_schema_incomplete_warns():
     assert "SANDBOX_SCHEMA_INCOMPLETE" in _codes(result)
 
 
+def test_sandbox_bad_jinja_errors():
+    """FAR-226: an agent_command with invalid Jinja syntax is a hard save error."""
+    graph = {"nodes": [_sandbox_node(agent_command="opencode --model {{ \\\\ }}")], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_BAD_JINJA_TEMPLATE" in _codes(result)
+    assert not result.is_valid
+
+
+def test_sandbox_bad_jinja_carries_node_id():
+    """FAR-226: the SANDBOX_BAD_JINJA_TEMPLATE issue carries the offending node id."""
+    graph = {"nodes": [_sandbox_node(agent_command="opencode --model {{ \\\\ }}")], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    issue = next(i for i in result.issues if i.code == "SANDBOX_BAD_JINJA_TEMPLATE")
+    assert issue.node_id == graph["nodes"][0]["id"]
+    assert "agent_command" in issue.message
+
+
+def test_sandbox_valid_jinja_no_issue():
+    """FAR-226: a renderable agent_command (with or without {{ }} templates) passes."""
+    for cmd in ("opencode run", "opencode run --model {{ input.model }} --auto"):
+        graph = {"nodes": [_sandbox_node(agent_command=cmd)], "edges": []}
+        result = ValidationResult()
+        GraphValidator._check_sandbox_agent_config(graph, result)
+        assert "SANDBOX_BAD_JINJA_TEMPLATE" not in _codes(result)
+
+
+def test_sandbox_script_mode_jinja_not_checked():
+    """FAR-226: script mode runs script_command verbatim — its Jinja-ish content is not checked."""
+    node = {
+        "id": str(uuid.uuid4()),
+        "node_type": "sandbox_agent",
+        "mode": "script",
+        "script_command": "python3 main.py",
+        "template_id": "opencode",
+    }
+    graph = {"nodes": [node], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_BAD_JINJA_TEMPLATE" not in _codes(result)
+    assert result.is_valid
+
+
 def test_sandbox_multiple_issues_collected():
     """A badly configured sandbox node surfaces all issues at once."""
     graph = {

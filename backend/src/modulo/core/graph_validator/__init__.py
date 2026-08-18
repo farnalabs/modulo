@@ -381,6 +381,21 @@ def _check_sandbox_command(node: dict[str, Any], nid: str, result: ValidationRes
         result.error("SANDBOX_MISSING_COMMAND", str(exc), node_id=nid)
 
 
+def _check_sandbox_jinja(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
+    """Sandbox check: the agent_command must be Jinja-renderable (FAR-226).
+
+    Renders through the same ``SandboxedEnvironment`` the node runner uses, so
+    a broken template (e.g. an invalid backslash) is caught at SAVE time as a
+    clear config error instead of surfacing as an opaque instant-fail for every
+    run of the pipeline. Only llm mode is checked (script mode is verbatim).
+    """
+    from modulo.core.pipeline_engine.sandbox_mode import validate_sandbox_agent_command_jinja
+
+    err = validate_sandbox_agent_command_jinja(node)
+    if err:
+        result.error("SANDBOX_BAD_JINJA_TEMPLATE", err, node_id=nid)
+
+
 def _check_sandbox_template(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
     """Sandbox check 2: template_id must be set to a known-good sandbox template."""
     template_id = node.get("template_id")
@@ -2033,6 +2048,7 @@ class GraphValidator:
         7. stall_timeout_seconds is a positive number, not exceeding timeout_seconds.
         8. FAR-306 opt-in stall-detector fields (stdout_percentage_delta,
            watch_globs, watch_log_path, enable_heartbeat) are well-formed.
+        9. agent_command is Jinja-renderable (FAR-226).
         """
         _reserved_env_prefixes = ("MODULO_", "OPENCODE_API_KEY")
 
@@ -2041,6 +2057,7 @@ class GraphValidator:
                 continue
             nid = _string_or_default(node.get("id"))
             _check_sandbox_command(node, nid, result)
+            _check_sandbox_jinja(node, nid, result)
             _check_sandbox_template(node, nid, result)
             _check_sandbox_timeout(node, nid, result)
             _check_sandbox_stall_timeout(node, nid, result)

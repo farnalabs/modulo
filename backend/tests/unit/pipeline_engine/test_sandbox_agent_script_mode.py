@@ -30,6 +30,7 @@ from modulo.core.pipeline_engine.sandbox_mode import (
     _validate_sandbox_egress_config,
     _validate_sandbox_mode_config,
     _validate_sandbox_resource_limits_config,
+    validate_sandbox_agent_command_jinja,
 )
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
@@ -228,6 +229,61 @@ def test_mode_validation_error_messages_are_distinct():
         _validate_sandbox_mode_config({**base, "mode": "docker", "agent_command": "a"})
     with pytest.raises(ValueError, match="mode='script' requires"):
         _validate_sandbox_mode_config({**base, "mode": "script", "agent_command": "a"})
+
+
+# ---------------------------------------------------------------------------
+# FAR-226: agent_command Jinja syntax validation
+# ---------------------------------------------------------------------------
+
+
+def test_jinja_helper_accepts_plain_command():
+    """A plain agent_command (no Jinja syntax) validates clean."""
+    assert validate_sandbox_agent_command_jinja({"id": "n1", "mode": "llm", "agent_command": "opencode run"}) is None
+
+
+def test_jinja_helper_accepts_undefined_var_template():
+    """A valid {{ }} template referencing a not-yet-known variable is NOT flagged —
+    undefined vars are lenient (render to empty), matching run-time handling."""
+    assert (
+        validate_sandbox_agent_command_jinja(
+            {"id": "n1", "mode": "llm", "agent_command": "opencode --model {{ input.model }} --auto"}
+        )
+        is None
+    )
+
+
+def test_jinja_helper_rejects_broken_template():
+    """An invalid backslash inside {{ }} is a TemplateSyntaxError -> error message."""
+    err = validate_sandbox_agent_command_jinja(
+        {"id": "n1", "mode": "llm", "agent_command": "opencode --model {{ \\\\ }}"}
+    )
+    assert err is not None
+    assert "agent_command" in err
+    assert "n1" in err
+
+
+def test_jinja_helper_skips_script_mode():
+    """script mode runs script_command VERBATIM — no Jinja check applies."""
+    assert (
+        validate_sandbox_agent_command_jinja({"id": "n1", "mode": "script", "script_command": "python3 x.py"}) is None
+    )
+
+
+def test_jinja_helper_skips_empty_command():
+    """An empty/missing agent_command is left to the mode validator, not the Jinja check."""
+    assert validate_sandbox_agent_command_jinja({"id": "n1", "mode": "llm", "agent_command": ""}) is None
+
+
+def test_jinja_helper_validates_agent_commands_list():
+    """The joined agent_commands list form is validated against Jinja."""
+    good = {"id": "n1", "mode": "llm", "agent_commands": ["opencode run", "--model {{ input.m }}"]}
+    assert validate_sandbox_agent_command_jinja(good) is None
+
+    bad = {"id": "n1", "mode": "llm", "agent_commands": ["opencode run", "--model {{ \\\\ }}"]}
+    err = validate_sandbox_agent_command_jinja(bad)
+    assert err is not None
+    assert "agent_command" in err
+    assert "n1" in err
 
 
 # ---------------------------------------------------------------------------
