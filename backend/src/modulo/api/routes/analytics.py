@@ -37,6 +37,7 @@ from modulo.core.analytics.builder import (
     AnalyticsStatus,
     AnalyticsTriggerType,
 )
+from modulo.core.analytics.guardrails import run_guardrail_scorecard
 from modulo.core.analytics.service import (
     EXPORT_COLUMN_NAMES,
     AnalyticsDatabaseError,
@@ -115,6 +116,94 @@ class ConcurrencyResponse(BaseModel):
     date_to: str | None = None
     pool_reference: int | None = None
     buckets: list[ConcurrencyBucket]
+
+
+class GuardrailScorecardScope(BaseModel):
+    """Run-level fire counts — how many runs in range carried/triggered guardrails."""
+
+    runs_with_guardrail: int
+    runs_with_violations: int
+    runs_blocked: int
+    first_try_pass_runs: int
+
+
+class GuardrailFireCounts(BaseModel):
+    """Guardrail-level aggregate buckets (summed across the per-run summaries)."""
+
+    bound: int
+    evaluated: int
+    passed: int
+    violated: int
+    observed: int
+    errored: int
+    redacted: int
+    skipped: int
+    expected_skips: int
+    unexpected_skips: int
+
+
+class GuardrailRates(BaseModel):
+    """ADVISORY rates only — the raw detection rate plus the separated
+    first-try-pass view. Every metric is labelled advisory and never gates
+    autonomy (a raw-pass-rate gate is FAR-218, deferred)."""
+
+    raw_violation_rate: float | None = None
+    first_try_pass_rate: float | None = None
+    note: str = ""
+
+
+class GuardrailSelfCorrection(BaseModel):
+    """Single-node correction outcomes (FAR-210 T2b trail).
+
+    Reported SEPARATELY from first-try-pass — never merged into a single pass
+    rate (Goodhart: retries inflate pass rates; retrying a violation makes a
+    naive pass rate look better than the raw detection did).
+    """
+
+    corrections_total: int
+    converged_clean: int
+    escalated_hitl: int
+    budget_exhausted: int
+    dismissed: int
+    in_flight: int
+    corrected_pass_rate: float | None = None
+    note: str = ""
+
+
+class GuardrailEvasionBandDrift(BaseModel):
+    """Advisory drift signal (canary-band concept, FAR-223 PR C).
+
+    Tracks when ``unexpected_skips`` or the ``errored`` bucket move outside a
+    soft band vs the historical baseline. ADVISORY ONLY — never a gate, never
+    blocks anything, never changes CI enforcement.
+    """
+
+    current_errored_rate: float | None = None
+    baseline_errored_rate: float | None = None
+    baseline_window_days: int = 0
+    unexpected_skips_total: int = 0
+    drift_detected: bool = False
+    drift_indicator: str = "in_band"
+    advisory_only: bool = True
+    note: str = ""
+
+
+class GuardrailScorecardResponse(BaseModel):
+    """Advisory guardrail scorecard (FAR-217).
+
+    Read-only, org-scoped, and deliberately advisory: no metric here gates
+    autonomy, blocks a run, or changes CI enforcement.
+    """
+
+    advisory_only: bool = True
+    date_from: str
+    date_to: str
+    scope: GuardrailScorecardScope
+    fire_counts: GuardrailFireCounts
+    rates: GuardrailRates
+    self_correction: GuardrailSelfCorrection
+    evasion_band_drift: GuardrailEvasionBandDrift
+    generated_at: str
 
 
 class AnalyticsExportItem(BaseModel):
@@ -340,6 +429,43 @@ async def analytics_concurrency(
             raise
         raise _map_service_error(exc) from None
     return ConcurrencyResponse(**result)
+
+
+@router.get("/guardrails", response_model=GuardrailScorecardResponse)
+async def analytics_guardrails(
+    date_from: datetime | None = Query(None),
+    date_to: datetime | None = Query(None),
+    settings: Settings = Depends(get_settings),
+    principal: TenantPrincipal = require_permission(_CODE_ANALYTICS_QUERY),
+    _: object = require_feature("analytics_page"),
+) -> GuardrailScorecardResponse:
+    """Advisory guardrail scorecard (FAR-217) — read-only, never a gate.
+
+    Aggregates the per-run guardrail_summary telemetry (fire counts, raw
+    detection rate, first-try-pass), the single-node self-correction trail
+    (converged clean / escalated to HITL / budget-exhausted, reported
+    SEPARATELY from first-try-pass), and an advisory evasion-band drift signal
+    (unexpected skips + errored rate vs baseline). Every metric is advisory:
+    nothing here gates autonomy, blocks a run, or changes CI enforcement.
+    ``date_from``/``date_to`` accept bare dates or ISO datetimes like the other
+    analytics endpoints.
+    """
+    org_id = _require_org(principal)
+    try:
+        result = await run_guardrail_scorecard(
+            org_id=org_id,
+            factory=_analytics_session_factory(settings),
+            settings=settings,
+            account_id=principal.account_id,
+            org_role=principal.org_role,
+            date_from=date_from,
+            date_to=date_to,
+        )
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise
+        raise _map_service_error(exc) from None
+    return GuardrailScorecardResponse(**result)
 
 
 @router.get("/export", response_model=AnalyticsExportResponse)
