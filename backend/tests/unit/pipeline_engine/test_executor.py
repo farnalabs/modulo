@@ -7,6 +7,8 @@ from typing import Any, TypedDict
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from langchain_core.messages import AIMessage
+from langgraph.errors import NodeCancelledError
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,12 +16,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.core.pipeline_engine.executor import (
     PipelineExecutor,
     RunNotFoundError,
+    _accumulate_chat_model_tokens,
+    _accumulate_llm_tokens,
     _failure_event_matches,
     _graph_contains_sandbox_agent,
     _node_output_stall_reason,
+    _record_node_markers,
     _retry_after_policy,
     _seed_state,
+    _terminal_failure,
 )
+from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
 from modulo.otel_bridge import trace_id_for_thread
 
 
@@ -2590,3 +2598,161 @@ async def test_finalize_run_after_stream_revocation_failure_is_isolated():
         final_run = await executor._finalize_run_after_stream(**_finalize_args(run_id, org_id))
 
     assert final_run is not None
+
+
+# ---------------------------------------------------------------------------
+# S3776 decomposition helpers (FAR-310) — direct coverage for extracted helpers
+# ---------------------------------------------------------------------------
+
+
+class TestRecordNodeMarkers:
+    def test_stall_reason_publishes_run_stalled(self) -> None:
+        broker = MagicMock()
+        output = {"output": {"status": "failed", "stall_reason": "idle for 60s"}}
+        stall, agent_failure, session_lost = _record_node_markers(output, broker, "node-a")
+        assert stall == "idle for 60s"
+        assert agent_failure is None
+        assert session_lost is None
+        broker.publish.assert_called_once_with("run_stalled", {"node_id": "node-a", "stall_reason": "idle for 60s"})
+
+    def test_agent_failure_returns_reason_without_publish(self) -> None:
+        broker = MagicMock()
+        output = {"output": {"agent_status": "failed", "error": "agent crashed"}}
+        stall, agent_failure, session_lost = _record_node_markers(output, broker, "node-a")
+        assert stall is None
+        assert agent_failure == "agent crashed"
+        assert session_lost is None
+        broker.publish.assert_not_called()
+
+    def test_session_lost_marker_returns_reason(self) -> None:
+        broker = MagicMock()
+        output = {"output": {"sandbox_session_lost": True, "summary": "opencode session died"}}
+        stall, agent_failure, session_lost = _record_node_markers(output, broker, "node-a")
+        assert stall is None
+        assert agent_failure is None
+        assert session_lost == "opencode session died"
+        broker.publish.assert_not_called()
+
+    def test_clean_output_returns_no_markers(self) -> None:
+        broker = MagicMock()
+        output = {"output": {"status": "completed", "summary": "all good"}}
+        assert _record_node_markers(output, broker, "node-a") == (None, None, None)
+        broker.publish.assert_not_called()
+
+
+class TestTerminalFailure:
+    def test_publishes_run_failed_and_returns_tuple(self) -> None:
+        broker = MagicMock()
+        usage = {"node-a": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}
+        result = _terminal_failure(broker, "failed", "executor_stalled", "detail-here", usage)
+        assert result == ("failed", "executor_stalled", "detail-here", usage)
+        broker.publish.assert_called_once_with("run_failed", {"error": "executor_stalled", "detail": "detail-here"})
+
+    def test_empty_or_none_usage_normalizes_to_none(self) -> None:
+        broker = MagicMock()
+        assert _terminal_failure(broker, "failed", "code", "detail", None)[3] is None
+        assert _terminal_failure(broker, "failed", "code", "detail", {})[3] is None
+
+
+class TestAccumulateChatModelTokens:
+    @staticmethod
+    def _event(node: str, output: Any) -> dict[str, Any]:
+        return {"metadata": {"langgraph_node": node}, "data": {"output": output}}
+
+    def test_accumulates_usage_metadata_from_base_message(self) -> None:
+        usage: dict[str, dict[str, int]] = {}
+        msg = AIMessage("hi", usage_metadata={"input_tokens": 5, "output_tokens": 7, "total_tokens": 12})
+        _accumulate_chat_model_tokens(self._event("node-a", msg), usage, None, None)
+        assert usage == {"node-a": {"input_tokens": 5, "output_tokens": 7, "total_tokens": 12}}
+
+    def test_accumulates_legacy_llm_output_token_usage(self) -> None:
+        usage: dict[str, dict[str, int]] = {}
+        output = {"llm_output": {"token_usage": {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14}}}
+        _accumulate_chat_model_tokens(self._event("node-a", output), usage, None, None)
+        assert usage == {"node-a": {"input_tokens": 10, "output_tokens": 4, "total_tokens": 14}}
+
+    def test_cumulative_across_events(self) -> None:
+        usage: dict[str, dict[str, int]] = {}
+        output = {"llm_output": {"token_usage": {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14}}}
+        _accumulate_chat_model_tokens(self._event("node-a", output), usage, None, None)
+        _accumulate_chat_model_tokens(self._event("node-a", output), usage, None, None)
+        assert usage["node-a"]["input_tokens"] == 20
+        assert usage["node-a"]["output_tokens"] == 8
+        assert usage["node-a"]["total_tokens"] == 28
+
+    def test_records_cumulative_tokens_on_guard(self) -> None:
+        guard = RunawayGuard()
+        output = {"llm_output": {"token_usage": {"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7}}}
+        _accumulate_chat_model_tokens(self._event("node-a", output), {}, guard, None)
+        assert guard._token_count == 7
+
+    def test_node_budget_breach_raises_runaway_run_error(self) -> None:
+        output = {"llm_output": {"token_usage": {"prompt_tokens": 100, "completion_tokens": 0, "total_tokens": 100}}}
+        with pytest.raises(RunawayRunError) as excinfo:
+            _accumulate_chat_model_tokens(self._event("node-a", output), {}, None, {"node-a": 50})
+        assert excinfo.value.guard == "token_budget"
+        assert excinfo.value.current == 100
+        assert excinfo.value.limit == 50
+
+    def test_at_budget_does_not_raise(self) -> None:
+        output = {"llm_output": {"token_usage": {"prompt_tokens": 50, "completion_tokens": 0, "total_tokens": 50}}}
+        _accumulate_chat_model_tokens(self._event("node-a", output), {}, None, {"node-a": 50})
+        _accumulate_chat_model_tokens(self._event("node-a", output), {}, None, {"node-a": 100})
+
+    def test_ignores_events_without_node_name(self) -> None:
+        usage: dict[str, dict[str, int]] = {}
+        _accumulate_chat_model_tokens({"metadata": {}, "data": {"output": {}}}, usage, None, None)
+        assert usage == {}
+
+
+class TestAccumulateLlmTokens:
+    @staticmethod
+    def _event(node: str, output: Any) -> dict[str, Any]:
+        return {"metadata": {"langgraph_node": node}, "data": {"output": output}}
+
+    def test_accumulates_llm_output_token_usage(self) -> None:
+        usage: dict[str, dict[str, int]] = {}
+        output = {"llm_output": {"token_usage": {"prompt_tokens": 8, "completion_tokens": 2, "total_tokens": 10}}}
+        _accumulate_llm_tokens(self._event("node-a", output), usage, None, None)
+        assert usage == {"node-a": {"input_tokens": 8, "output_tokens": 2, "total_tokens": 10}}
+
+    def test_node_budget_breach_raises_runaway_run_error(self) -> None:
+        output = {"llm_output": {"token_usage": {"prompt_tokens": 60, "completion_tokens": 0, "total_tokens": 60}}}
+        with pytest.raises(RunawayRunError) as excinfo:
+            _accumulate_llm_tokens(self._event("node-a", output), {}, None, {"node-a": 50})
+        assert excinfo.value.guard == "token_budget"
+        assert excinfo.value.current == 60
+        assert excinfo.value.limit == 50
+
+    def test_ignores_events_without_node_name(self) -> None:
+        usage: dict[str, dict[str, int]] = {}
+        _accumulate_llm_tokens({"metadata": {}, "data": {"output": {}}}, usage, None, None)
+        assert usage == {}
+
+
+class TestTransientFailureDetail:
+    @staticmethod
+    def _executor() -> PipelineExecutor:
+        return PipelineExecutor(MagicMock())
+
+    def test_script_lease_unknown_is_needs_human_code(self) -> None:
+        code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(
+            exc=NodeCancelledError("node-a"), script_lease_ok=False
+        )
+        assert code == "script.side_effect_unknown"
+        assert "side effect unknown" in detail
+        assert "needs human review" in detail
+
+    def test_node_cancelled_error_detail(self) -> None:
+        code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(
+            exc=NodeCancelledError("killed"), script_lease_ok=True
+        )
+        assert code == "node_cancelled"
+        assert detail.startswith("Sandbox node cancelled (transient) after retries exhausted:")
+        assert "killed" in detail
+
+    def test_sandbox_node_failed_error_detail(self) -> None:
+        exc = SandboxNodeFailedError("stalled", node_id="node-a")
+        code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(exc=exc, script_lease_ok=True)
+        assert code == "node_cancelled"
+        assert "Sandbox node failed (transient) after retries exhausted: stalled" in detail
