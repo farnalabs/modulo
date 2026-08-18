@@ -47,7 +47,7 @@ Credentials decrypt once at run-start into a run-scoped context; they never ente
 **Benefit:** a run cannot leak credentials in traces, logs, or prompts.
 
 ## 7. We dispatch, we don't run agents
-Modulo orchestrates work to external agent runtimes; it owns dispatch, auth, audit, cost tracking, eval gates, HITL. The runtime owns the tool-using loop. Bring your own model, agent, prompt.
+Modulo dispatches work to external agent runtimes; it owns dispatch, auth, audit, cost tracking, eval gates, HITL. The runtime owns the tool-using loop. Bring your own model, agent, prompt.
 **Why:** established agent runtimes do tool-use better than a platform can; competing with them is the wrong strategy.
 **Where:** `docs/adr/003-agent-dispatch-model.md`, `sandbox_agent` node type, `docs/product-map/core/agent-model.md`.
 **Benefit:** swap runtimes without changing governance; your stack stays yours.

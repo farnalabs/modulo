@@ -37,7 +37,7 @@ In this model, Modulo owned the entire agent runtime  –  tool calling, executi
 
 ## Decision
 
-**Modulo dispatches work to external agent runtimes in sandboxes, then evaluates the output.** Modulo is the SDLC orchestration layer  –  it owns dispatch, auth, audit, cost tracking, eval gates, and HITL  –  not the agent loop itself.
+**Modulo dispatches work to external agent runtimes in sandboxes, then evaluates the output.** Modulo is the SDLC governance layer  –  it owns dispatch, auth, audit, cost tracking, eval gates, and HITL  –  not the agent loop itself.
 
 ### Architecture
 
@@ -108,7 +108,7 @@ These provide sandbox lifecycle primitives (create sandbox, run command, destroy
 
 ### Modulo is no longer in the "agent runtime" business
 
-Modulo does not compete with Claude Code, opencode, or Cursor. It orchestrates them. The `sandbox_agent` node type is a dispatch client, not an agent runtime. This reframing simplifies the product story and eliminates a class of infrastructure complexity.
+Modulo does not compete with Claude Code, opencode, or Cursor. It dispatches to them. The `sandbox_agent` node type is a dispatch client, not an agent runtime. This reframing simplifies the product story and eliminates a class of infrastructure complexity.
 
 ### ShellConnector UI deprecation
 

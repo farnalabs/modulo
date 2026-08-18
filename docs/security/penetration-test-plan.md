@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Document owner | Security Team |
-| Applies to | Modulo (AI SDLC orchestration platform) |
+| Applies to | Modulo (AI SDLC agent governance platform) |
 | Classification | Internal — Confidential |
 | Version | 1.0 |
 | Last updated | 2026-06-28 |

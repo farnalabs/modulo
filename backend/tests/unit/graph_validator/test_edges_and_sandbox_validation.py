@@ -597,3 +597,46 @@ def test_sandbox_enable_heartbeat_false_is_clean():
     GraphValidator._check_sandbox_agent_config(graph, result)
     assert "SANDBOX_ENABLE_HEARTBEAT_INVALID" not in _codes(result)
     assert result.is_valid
+
+
+# ---------------------------------------------------------------------------
+# _check_node_idempotent — FAR-295 idempotent flag
+# ---------------------------------------------------------------------------
+
+
+def test_idempotent_absent_or_bool_is_clean():
+    """The idempotent flag is optional (defaults to true) and a real bool passes."""
+    for node in (
+        {"id": str(uuid.uuid4())},
+        {"id": str(uuid.uuid4()), "idempotent": True},
+        {"id": str(uuid.uuid4()), "idempotent": False},
+    ):
+        graph = {"nodes": [node], "edges": []}
+        result = ValidationResult()
+        GraphValidator._check_node_idempotent(graph, result)
+        assert "NODE_IDEMPOTENT_INVALID" not in _codes(result)
+        assert result.is_valid
+
+
+def test_idempotent_non_bool_errors_on_any_node_type():
+    """A non-boolean idempotent value is a hard error on ANY executor type — a
+    string like "false" would otherwise be silently treated as idempotent and
+    an auto-retry could re-run a side-effecting action."""
+    for node_type in ("agent", "sandbox_agent", "connector", "manual"):
+        node = {"id": str(uuid.uuid4()), "node_type": node_type, "idempotent": "false"}
+        graph = {"nodes": [node], "edges": []}
+        result = ValidationResult()
+        GraphValidator._check_node_idempotent(graph, result)
+        assert "NODE_IDEMPOTENT_INVALID" in _codes(result)
+        assert not result.is_valid
+
+
+def test_idempotent_non_bool_error_carries_node_id():
+    """The NODE_IDEMPOTENT_INVALID issue carries the offending node id."""
+    node = {"id": "node-x", "idempotent": 1}
+    graph = {"nodes": [node], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_node_idempotent(graph, result)
+    issue = next(i for i in result.issues if i.code == "NODE_IDEMPOTENT_INVALID")
+    assert issue.node_id == "node-x"
+    assert "idempotent" in issue.message
