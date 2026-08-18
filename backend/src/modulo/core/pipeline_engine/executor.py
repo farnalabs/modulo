@@ -202,7 +202,7 @@ def _retry_backoff_seconds(
     n = max(int(attempt_n), 1)
     exponential: float = min(float(base) * float(2 ** (n - 1)), cap)
     # Jitter is NOT crypto — it only decorrelates concurrent retries (S311).
-    jitter = float(random.uniform(0.0, exponential * max(jitter_fraction, 0.0)))  # noqa: S311
+    jitter = float(random.uniform(0.0, exponential * max(jitter_fraction, 0.0)))  # noqa: S311  # nosec B311 — non-cryptographic retry jitter only
     return min(exponential + jitter, cap)
 
 

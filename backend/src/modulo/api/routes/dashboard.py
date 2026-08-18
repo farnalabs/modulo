@@ -479,7 +479,7 @@ async def dashboard_summary(
                     "pass_rate": pr,
                 }
                 # Derive per-team aggregates
-                team_entry = per_team_eval.setdefault(team_id, {"total_evals": 0, "passed_evals": 0, "pass_rate": 0.0})
+                team_entry = per_team_eval.setdefault(team_id, {"total_evals": 0, "passed_evals": 0, "pass_rate": 0.0})  # nosec B105 — numeric zero default, not a password
                 team_entry["total_evals"] += total
                 team_entry["passed_evals"] += passed
                 team_entry["pass_rate"] = (
@@ -489,7 +489,8 @@ async def dashboard_summary(
                 )
                 # Derive per-pipeline aggregates
                 pipe_entry = per_pipeline.setdefault(
-                    pipeline_id, {"total_evals": 0, "passed_evals": 0, "pass_rate": 0.0}
+                    pipeline_id,
+                    {"total_evals": 0, "passed_evals": 0, "pass_rate": 0.0},  # nosec B105 — numeric zero default, not a password
                 )
                 pipe_entry["total_evals"] += total
                 pipe_entry["passed_evals"] += passed

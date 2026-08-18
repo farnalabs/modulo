@@ -114,7 +114,7 @@ class AdvisoryLockService:
                         attempt,
                     )
                     return False
-                jitter = random.random() * _POLL_JITTER_MAX  # noqa: S311 — jitter, not crypto
+                jitter = random.random() * _POLL_JITTER_MAX  # noqa: S311  # nosec B311 — jitter, not crypto
                 await asyncio.sleep(interval + jitter)
 
     async def release(self, session: AsyncSession, resource_id: uuid.UUID) -> None:

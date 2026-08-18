@@ -1098,7 +1098,8 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
         token, auth_err = _extract_bearer_token(request)
         if auth_err is not None:
             return auth_err
-        assert token is not None
+        if token is None:
+            raise RuntimeError("McpAuthMiddleware.dispatch: token unresolved after successful extraction")
 
         # Try API key first (backwards compatible).
         if token.startswith("mk_"):
@@ -1540,7 +1541,8 @@ async def _query_analytics_impl(
     )
     if p_err:
         return p_err
-    assert params is not None
+    if params is None:
+        raise RuntimeError("_query_analytics_impl: parse returned no error and no params")
 
     result = await run_analytics_query(
         org_id=org_id,
@@ -1650,7 +1652,8 @@ async def _query_analytics_concurrency_impl(
     )
     if p_err:
         return p_err
-    assert params is not None
+    if params is None:
+        raise RuntimeError("_query_analytics_concurrency_impl: parse returned no error and no params")
 
     return await run_concurrency_query(
         org_id=org_id,
@@ -2157,14 +2160,16 @@ async def _trigger_pipeline_impl(
     pid, id_err = _trigger_pipeline_validate_id(pipeline_id)
     if id_err:
         return id_err
-    assert pid is not None
+    if pid is None:
+        raise RuntimeError("_trigger_pipeline_impl: validate returned no error and no pipeline id")
     payload = input_payload or {}
 
     async with _session(org_id) as s:
         run_id, thread_id, run_err = await _create_manual_run(s, org_id, pid, pipeline_id, payload)
     if run_err:
         return run_err
-    assert run_id is not None
+    if run_id is None:
+        raise RuntimeError("_trigger_pipeline_impl: manual run creation returned no error and no run id")
 
     await dispatch_run(str(run_id), str(org_id), queue="runs")
 
@@ -2801,7 +2806,8 @@ async def _review_hitl_impl(
     rid, parse_err = _parse_hitl_action(run_id, action, claim_token, output)
     if parse_err:
         return parse_err
-    assert rid is not None
+    if rid is None:
+        raise RuntimeError("_review_hitl_impl: parse returned no error and no run id")
 
     try:
         check_tool_scope(_ctx_role_val(), "review_hitl", action=action)
@@ -3476,7 +3482,8 @@ async def _create_trigger_impl(
     pid, input_err = _validate_trigger_create_inputs(pipeline_id, max_concurrent_runs, daily_spend_limit)
     if input_err:
         return input_err
-    assert pid is not None
+    if pid is None:
+        raise RuntimeError("_create_trigger_impl: validate returned no error and no pipeline id")
 
     async with _session(org_id) as s:
         owner_team_id = await _pipeline_owner_team_id(s, pid)
@@ -6147,7 +6154,8 @@ async def _oauth_token_impl(request: Request) -> JSONResponse:
     params, parse_err = await _parse_oauth_form(request)
     if parse_err:
         return parse_err
-    assert params is not None
+    if params is None:
+        raise RuntimeError("_oauth_token_impl: form parse returned no error and no params")
 
     creds, cred_err = _extract_oauth_client_credentials(request, params)
     if cred_err:
@@ -6163,7 +6171,8 @@ async def _oauth_token_impl(request: Request) -> JSONResponse:
     token_resp, token_err = await _exchange_authorization_code(creds, settings)
     if token_err:
         return token_err
-    assert token_resp is not None
+    if token_resp is None:
+        raise RuntimeError("_oauth_token_impl: token exchange returned no error and no response")
     return JSONResponse(token_resp)
 
 
@@ -6342,7 +6351,8 @@ async def _oauth_refresh_impl(request: Request) -> JSONResponse:
     params, parse_err = await _parse_oauth_form(request)
     if parse_err:
         return parse_err
-    assert params is not None
+    if params is None:
+        raise RuntimeError("_oauth_refresh_impl: form parse returned no error and no params")
 
     creds, cred_err = _extract_oauth_refresh_credentials(request, params)
     if cred_err:
@@ -6352,7 +6362,8 @@ async def _oauth_refresh_impl(request: Request) -> JSONResponse:
     token_resp, token_err = await _exchange_refresh_token(creds, settings)
     if token_err:
         return token_err
-    assert token_resp is not None
+    if token_resp is None:
+        raise RuntimeError("_oauth_refresh_impl: token exchange returned no error and no response")
     return JSONResponse(token_resp)
 
 

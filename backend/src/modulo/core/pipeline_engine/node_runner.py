@@ -2732,7 +2732,8 @@ def make_sandbox_agent_fn(
                 ),
                 timeout=min(sandbox_timeout, 120),
             )
-            assert sandbox is not None, "Sandbox was not created before use"
+            if sandbox is None:
+                raise RuntimeError("Sandbox was not created before use")
             _sandbox_id = getattr(sandbox, "sandbox_id", None) or None
             # Persist the real sandbox id so the heartbeat-lost path
             # (run_executor_with_watchdog) can kill the sandbox by id.

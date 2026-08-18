@@ -202,7 +202,7 @@ async def issue_sso_tokens(
         token_family=str(family.family_id),
         token_sequence=0,
     )
-    return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
+    return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}  # nosec B105 — OAuth token_type label, not a credential
 
 
 # ---------------------------------------------------------------------------
