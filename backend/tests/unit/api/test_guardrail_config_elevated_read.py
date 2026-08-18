@@ -18,8 +18,8 @@ from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import TenantPrincipal
+from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.guardrails.config import GuardrailPin
 from modulo.settings import Settings, get_settings
 
@@ -128,6 +128,16 @@ def _make_client(*, org_role: str) -> TestClient:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username=f"{org_role}@test",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role=org_role,
+    )
+    # FAR-309 PR B: the elevated read carries ``deny_break_glass_mint`` (which
+    # resolves ``get_current_user`` directly) — a non-break-glass principal is
+    # needed for the marker to pass. ``get_current_tenant_user`` is overridden
+    # separately to skip the identity DB read.
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username=f"{org_role}@test",
         organisation_id=_ORG_ID,
         account_id=_USER_ID,

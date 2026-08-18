@@ -1316,6 +1316,29 @@ def serialize_guardrail_pin(db_row: Any) -> dict[str, Any]:
     }
 
 
+def fingerprint_guardrail_pins(pins: Sequence[Mapping[str, Any]] | None) -> str | None:
+    """Deterministic fingerprint of a serialized guardrail pin set (FAR-309 PR B).
+
+    Computed over the canonical JSON of the pin dicts (sorted so
+    re-serialization order never changes the digest). A snapshot's
+    ``guardrail_pins_json`` is fingerprinted at snapshot creation; the
+    run-start replay seam re-computes the fingerprint of the LOADED pins and
+    compares — a mismatch means the pins were tampered with (or drifted) since
+    creation and the replay fails closed as a mechanism error. Returns None
+    for an empty/absent set (nothing to verify) or a set with no usable dict
+    entries.
+    """
+    if not pins:
+        return None
+    items = sorted(
+        json.dumps(pin, sort_keys=True, separators=(",", ":"), default=str) for pin in pins if isinstance(pin, Mapping)
+    )
+    if not items:
+        return None
+    canonical = "[" + ",".join(items) + "]"
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def to_engine_definition_from_pin(entry: dict[str, Any]) -> EvalDefinition:
     """Build an engine ``EvalDefinition`` DTO from a snapshot pin entry.
 
@@ -1390,6 +1413,7 @@ __all__ = [
     "check_payload_within_budget",
     "derive_conformance_state",
     "evaluate_guardrails",
+    "fingerprint_guardrail_pins",
     "guardrail_cap_violation",
     "guardrail_pattern_hash",
     "log_guardrail_fired_signatures",

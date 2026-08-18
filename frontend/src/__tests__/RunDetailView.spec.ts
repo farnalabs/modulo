@@ -931,7 +931,7 @@ describe('RunDetailView', () => {
       trigger_actor: null,
     })
     const row = wrapper.find('[data-testid="run-detail-trigger-actor"]')
-    expect(row.text()).toContain('Agent signal')
+    expect(row.text()).toContain('Agent Signal')
     expect(row.text()).not.toContain('agent_signal')
     wrapper.unmount()
   })

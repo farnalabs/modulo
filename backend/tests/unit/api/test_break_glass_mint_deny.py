@@ -82,6 +82,20 @@ EXPECTED_MINT_MARKED: dict[str, set[str]] = {
         "delete_eval_definition",
         "create_eval_from_run",
     },
+    # guardrail config-as-code admin surface (FAR-309 PR B per-scope invariant):
+    # the elevated read + propose/apply/reject carry the break-glass deny.
+    "guardrail_config.py": {
+        "get_guardrail_config_elevated",
+        "propose_guardrail_config",
+        "apply_guardrail_config",
+        "reject_guardrail_config",
+    },
+    # org guardrail kill-switch (FAR-309 PR B org-global invariant): a
+    # break-glass account must never disable (or read) the safety control.
+    "admin_orgs.py": {
+        "admin_get_org_guardrails_kill_switch",
+        "admin_set_org_guardrails_kill_switch",
+    },
 }
 
 

@@ -125,6 +125,16 @@ describe('RunsListView', () => {
     expect(wrapper.exists()).toBe(true)
   })
 
+  it('renders a human-readable trigger type label', async () => {
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, trigger_type: 'agent_signal' }])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.text()).toContain('Agent Signal')
+    expect(wrapper.text()).not.toContain('agent_signal')
+    wrapper.unmount()
+  })
+
   it('renders empty state when no runs exist', async () => {
     const wrapper = mountView()
     await flushPromises()

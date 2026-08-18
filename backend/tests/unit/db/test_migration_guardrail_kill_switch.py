@@ -27,7 +27,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 
 _MIGRATION_0006 = "0108_schema_org_identity"
 _MIGRATION_0113 = "0113_guardrail_summary"
-_HEAD_MIGRATION = "0115_notification_preferences"
+_HEAD_MIGRATION = "0116_guardrail_trust_pr_b"
 
 
 def _source(name: str) -> str:
@@ -41,7 +41,7 @@ def _script() -> ScriptDirectory:
 
 
 class TestKillSwitchMigration:
-    def test_single_head_is_0114(self) -> None:
+    def test_single_head(self) -> None:
         heads = _script().get_heads()
         assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
 
@@ -64,13 +64,18 @@ class TestKillSwitchMigration:
         assert 'DROP COLUMN "guardrails_kill_switch"' not in source
         assert 'DROP COLUMN "guardrails_kill_switch_at"' not in source
 
-    def test_kill_switch_owned_by_0108_not_0113(self) -> None:
+    def test_kill_switch_owned_by_0108_not_later_migrations(self) -> None:
         # The kill-switch flag shipped in PR A's reconciliation (0108), not in
         # the guardrail-summary migration (0113, which only adds
-        # runs.guardrail_summary_json) nor the FAR-296 run-API-key head (0114)
-        # nor the FAR-247 notification-preferences head (0115).
+        # runs.guardrail_summary_json), nor the FAR-296 run-API-key migration
+        # (0114), nor the FAR-247 notification migration (0115), nor the
+        # trust-model head (0116).
         source_0113 = _source(_MIGRATION_0113)
         assert "guardrails_kill_switch" not in source_0113
         assert "guardrail_summary_json" in source_0113
-        source_0114 = _source(_HEAD_MIGRATION)
+        source_0114 = _source("0114_org_api_keys_run_id")
         assert "guardrails_kill_switch" not in source_0114
+        source_0115 = _source("0115_notification_preferences")
+        assert "guardrails_kill_switch" not in source_0115
+        source_0116 = _source(_HEAD_MIGRATION)
+        assert "guardrails_kill_switch" not in source_0116

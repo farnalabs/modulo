@@ -91,7 +91,7 @@
             <span v-else>—</span>
           </template>
           <template #cell-trigger_type="{ value }">
-            <span class="text-xs text-muted-foreground capitalize">{{ value || '—' }}</span>
+            <span class="text-xs text-muted-foreground">{{ triggerTypeLabel(value as string | null | undefined, t) }}</span>
           </template>
           <template #cell-trigger_actor="{ row }">
             <span :data-testid="`runs-list-trigger-actor-${row.run_id}`" class="text-xs text-muted-foreground">{{ row.trigger_actor || '—' }}</span>
@@ -212,7 +212,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { DataTable } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
-import { runStatusBadgeClass, formatRunDate, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge } from '../utils/runUtils'
+import { runStatusBadgeClass, formatRunDate, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, triggerTypeLabel } from '../utils/runUtils'
 import { RUN_STATUS, TRIGGER_TYPE } from '../constants/filters'
 import { isNonTerminalStatus } from '../constants/runStatuses'
 import { formatMoney } from '../lib/money'

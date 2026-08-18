@@ -5497,6 +5497,15 @@ export interface paths {
         /**
          * Delete Eval Definition
          * @description Delete an eval definition. Admin only.
+         *
+         *     Two-step soft-delete (FAR-309 PR B): a GUARDRAIL eval definition is
+         *     SOFT-deleted (``deleted_at``/``deleted_by`` stamped) instead of hard
+         *     removed, so snapshot pins that reference it keep resolving to the
+         *     skipped-with-audit path rather than a dangling row. A second admin step
+         *     (``?purge=true``) hard-removes soft-deleted rows. Non-guardrail evals
+         *     keep their existing hard delete. Every soft-delete and purge writes an
+         *     org-scoped audit event (best-effort fail-open-with-log, matching the
+         *     admin_orgs audit pattern — a failed audit never rolls back the delete).
          */
         delete: operations["delete_eval_definition_api_v1_evals__eval_id__delete"];
         options?: never;
@@ -28289,6 +28298,8 @@ export interface operations {
     delete_eval_definition_api_v1_evals__eval_id__delete: {
         parameters: {
             query?: {
+                /** @description Hard-remove a soft-deleted guardrail eval definition (step 2) */
+                purge?: boolean;
                 _fresh?: boolean;
             };
             header?: never;
