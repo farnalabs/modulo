@@ -186,6 +186,15 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity="warning",
         guidance="Delivery already sent; transient retry suppressed by the idempotency gate.",
     ),
+    "harness.non_idempotent": ErrorCodeSpec(
+        error_class="harness",
+        retryable=False,
+        alert_severity="warning",
+        guidance=(
+            "Run contains a node with idempotent: false; automatic retry suppressed to "
+            "avoid re-running an external side effect."
+        ),
+    ),
     # --- sandbox codes ---------------------------------------------------
     "sandbox.no_output_json": ErrorCodeSpec(
         error_class="sandbox",

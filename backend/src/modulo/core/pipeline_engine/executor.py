@@ -521,6 +521,26 @@ def _graph_has_script_mode(graph_json: dict[str, Any] | None) -> bool:
     return False
 
 
+def _graph_has_non_idempotent_node(graph_json: dict[str, Any] | None) -> bool:
+    """True when the graph declares any node with ``idempotent: false`` (FAR-295).
+
+    An auto-retry (SAQ transient re-dispatch or the pipeline's retry_policy)
+    re-runs the WHOLE pipeline, so a node whose action has an external side
+    effect (``idempotent: false``) must never be re-run implicitly — the run
+    terminal-fails instead. Only an explicit boolean ``False`` counts; anything
+    else (absent, True, or a malformed non-bool that slipped past save-time
+    validation) is treated as idempotent.
+    """
+    if not isinstance(graph_json, dict):
+        return False
+    for node in graph_json.get("nodes", []) or []:
+        if not isinstance(node, dict):
+            continue
+        if node.get("idempotent") is False:
+            return True
+    return False
+
+
 async def _script_lease_probe_ok(
     session_factory: Callable[..., Any] | None,
     run_id: str,
@@ -2141,6 +2161,11 @@ class PipelineExecutor:
         single_sandbox_node: bool = (
             sum(1 for n in graph_json.get("nodes", []) if str(n.get("node_type", "")).strip() == "sandbox_agent") == 1
         )
+        # FAR-295: any node with ``idempotent: false`` makes the whole run
+        # non-retryable — an auto-retry would re-run that node's external side
+        # effect. Threaded through BOTH retry decision sites below (transient
+        # NodeCancelledError and the pipeline retry_policy).
+        graph_has_non_idempotent: bool = _graph_has_non_idempotent_node(graph_json)
         # FAR-228: set when guard B suppressed a transient retry — gates the
         # eval-suite/fire_agent_signal block and publishes run_completed.
         gate_suppressed = False
@@ -2349,6 +2374,26 @@ class PipelineExecutor:
                 # below — fall through to the existing finalization with
                 # final_status="complete". run_completed is published after the
                 # eval-skip point (below), while the broker is still open.
+            elif graph_has_non_idempotent and not superseded and not stalled and script_lease_ok:
+                # FAR-295: the graph declares a node with ``idempotent: false``
+                # (an action with an external side effect that must not be
+                # duplicated). An auto-retry would re-run that action, so the
+                # transient re-dispatch is suppressed and the run terminal-fails
+                # with a clear needs-review code instead. A superseded/stalled
+                # executor or a stale script lease still takes their existing
+                # paths below.
+                _log.warning(
+                    "pipeline.non_idempotent.suppressed_retry",
+                    extra={"run_id": str(run_id), "reason": "graph declares a node with idempotent: false"},
+                )
+                final_status = "failed"
+                error_code = "harness.non_idempotent"
+                error_detail = _sanitize_detail(
+                    "Run contains a node with idempotent: false; automatic retry suppressed to "
+                    "avoid re-running an external side effect: " + str(exc),
+                    limit=5000,
+                )
+                broker.publish("run_failed", {"error": error_code, "detail": error_detail})
             elif node_attempt_count < retries and not superseded and not stalled and script_lease_ok:
                 # Fenced pending-reset: a conditional UPDATE guarded by OUR
                 # captured claim token + status='running' so a superseded
@@ -2501,7 +2546,16 @@ class PipelineExecutor:
                         "script.lease_probe.blocked_retry_policy",
                         extra={"run_id": str(run_id), "reason": "stale script_executing lease"},
                     )
-            if node_attempt_count <= retry_budget and not superseded and script_retry_probe_ok:
+            # FAR-295: a graph declaring any node with ``idempotent: false`` is
+            # NEVER re-dispatched by the retry policy — the re-run would execute
+            # that node's external side effect again. The run terminal-fails
+            # with the clear ``harness.non_idempotent`` code instead.
+            if (
+                not graph_has_non_idempotent
+                and node_attempt_count <= retry_budget
+                and not superseded
+                and script_retry_probe_ok
+            ):
                 _log.warning(
                     "pipeline.retry_policy",
                     extra={
@@ -2567,6 +2621,25 @@ class PipelineExecutor:
                     limit=5000,
                 )
                 broker.publish("run_failed", {"error": "script.side_effect_unknown", "detail": error_detail})
+            elif graph_has_non_idempotent and error_code != "harness.non_idempotent":
+                # FAR-295: the run reached a retryable terminal state but the
+                # graph declares a non-idempotent node. Override the terminal
+                # outcome with a clear code so the run reaches a needs-review
+                # state instead of silently failing with an opaque exception
+                # class name. (When the NodeCancelledError path already set
+                # harness.non_idempotent, that publish stands — no duplicate.)
+                _log.warning(
+                    "pipeline.retry_policy.suppressed_non_idempotent",
+                    extra={"run_id": str(run_id), "status": final_status, "error_code": error_code},
+                )
+                final_status = "failed"
+                error_code = "harness.non_idempotent"
+                error_detail = _sanitize_detail(
+                    "Run contains a node with idempotent: false; automatic retry suppressed to "
+                    "avoid re-running an external side effect.",
+                    limit=5000,
+                )
+                broker.publish("run_failed", {"error": error_code, "detail": error_detail})
 
         try:
             # (The eval_blocked audit for this run is recorded in

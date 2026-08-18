@@ -147,6 +147,15 @@ def test_is_retryable_transient_codes_true():
         assert is_retryable(code) is True, code
 
 
+def test_non_idempotent_code_is_never_retryable():
+    """FAR-295: harness.non_idempotent is a TERMINAL code — a run containing a
+    node with ``idempotent: false`` is never retried (re-running the pipeline
+    would duplicate the node's external side effect)."""
+    assert ERROR_CODE_REGISTRY["harness.non_idempotent"].error_class == "harness"
+    assert ERROR_CODE_REGISTRY["harness.non_idempotent"].retryable is False
+    assert is_retryable("harness.non_idempotent") is False
+
+
 def test_is_retryable_provider_transient_codes():
     """Transient provider codes are retryable; authentication is permanent."""
     assert is_retryable("provider.unavailable") is True

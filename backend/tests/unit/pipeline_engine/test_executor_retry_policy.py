@@ -320,6 +320,76 @@ async def test_execute_retry_policy_resets_pending_and_reraises():
     registry.close.assert_called()
 
 
+def test_graph_has_non_idempotent_node():
+    """FAR-295: the graph helper flags ONLY an explicit boolean False — anything
+    else (absent, True, or a malformed non-bool) stays idempotent so a retry is
+    never fail-opened by a type mixup."""
+    from modulo.core.pipeline_engine.executor import _graph_has_non_idempotent_node
+
+    assert _graph_has_non_idempotent_node(None) is False
+    assert _graph_has_non_idempotent_node({"nodes": []}) is False
+    assert _graph_has_non_idempotent_node({"nodes": [{"id": "node-a"}]}) is False
+    assert _graph_has_non_idempotent_node({"nodes": [{"id": "node-a", "idempotent": True}]}) is False
+    assert _graph_has_non_idempotent_node({"nodes": [{"id": "node-a", "idempotent": False}]}) is True
+    mixed = {"nodes": [{"id": "node-a", "idempotent": True}, {"id": "node-b", "idempotent": False}]}
+    assert _graph_has_non_idempotent_node(mixed) is True
+    # A malformed non-bool value must NOT count as non-idempotent — it stays
+    # retryable here (save-time validation rejects the graph before it runs).
+    assert _graph_has_non_idempotent_node({"nodes": [{"id": "node-a", "idempotent": "false"}]}) is False
+
+
+async def test_execute_retry_policy_suppressed_for_non_idempotent_graph():
+    """FAR-295: a pipeline retry_policy must NOT re-dispatch a run whose graph
+    declares a node with ``idempotent: false`` — the re-run would re-execute that
+    node's external side effect. The run terminal-fails with the clear
+    harness.non_idempotent code: no RunRetryPolicyError, no fenced pending-reset,
+    and a live run_failed publish."""
+    run = _make_run(node_attempt_count=1, claim_token="tok-claim-abc")
+    snapshot = _make_snapshot(graph_json={"nodes": [{"id": "node-a", "idempotent": False}], "edges": []})
+    statements: list[str] = []
+    retry_policy = {"on": ["failure"], "max_retries": 2}
+    session = _make_session(snapshot, statements=statements, retry_policy=retry_policy)
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    broker = registry.get_or_create.return_value
+    settings = MagicMock(saq_run_retries=5)
+    compiled = _make_failure_compiled()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+        patch("modulo.settings.get_settings", return_value=settings),
+        patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=AsyncMock()),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        result = await executor.execute(
+            run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
+        )
+
+    # No re-dispatch: execute() returned normally (no RunRetryPolicyError) and
+    # no fenced pending-reset was issued.
+    assert result is not None
+    assert not any("status='pending'" in s for s in statements)
+    # Terminal failure via the single finalization path with the clear code.
+    mock_finalize.assert_awaited_once()
+    assert mock_finalize.await_args.kwargs["status"] == "failed"
+    assert mock_finalize.await_args.kwargs["error_code"] == "harness.non_idempotent"
+    # Live run_failed publish so WS subscribers see the suppression reason.
+    # (_stream_graph's generic catch publishes the raw exception class first;
+    # the authoritative terminal publish below carries the FAR-295 code.)
+    run_failed = [c.args for c in broker.publish.call_args_list if c.args and c.args[0] == "run_failed"]
+    assert run_failed
+    assert run_failed[-1][1]["error"] == "harness.non_idempotent"
+    assert "idempotent: false" in run_failed[-1][1]["detail"]
+
+
 class _GenericFailureError(Exception):
     """A non-transient generic failure — its class name becomes the error_code,
     matching the "failure" retry event (unlike NodeCancelledError subclasses)."""
