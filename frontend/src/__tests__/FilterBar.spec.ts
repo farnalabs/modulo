@@ -10,6 +10,8 @@ const selectStubs = {
     props: ['value'],
     template: '<div data-testid="select-option" :data-value="value"><slot /></div>',
   },
+  SelectLabel: { template: '<div data-testid="select-label"><slot /></div>' },
+  SelectSeparator: { template: '<div data-testid="select-separator" />' },
   SelectValue: {
     props: ['placeholder'],
     template: '<span class="select-value">{{ placeholder }}</span>',
@@ -92,5 +94,17 @@ describe('FilterBar', () => {
     })
     const allOption = wrapper.findAll('[data-testid="select-option"]').find((o) => o.attributes('data-value') === '__all__')
     expect(allOption!.text()).toBe('All levels')
+  })
+
+  it('renders the filter name as a non-selectable label at the top of the dropdown', () => {
+    const wrapper = mountFilterBar()
+    const label = wrapper.find('[data-testid="select-label"]')
+    expect(label.exists()).toBe(true)
+    expect(label.text()).toBe('Status')
+  })
+
+  it('renders a separator between the "All" option and the real options', () => {
+    const wrapper = mountFilterBar()
+    expect(wrapper.find('[data-testid="select-separator"]').exists()).toBe(true)
   })
 })
