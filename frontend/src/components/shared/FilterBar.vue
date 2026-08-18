@@ -32,7 +32,9 @@
         <SelectValue :placeholder="filter.label" />
       </SelectTrigger>
       <SelectContent>
+        <SelectLabel v-if="showLabel(filter)">{{ filter.label }}</SelectLabel>
         <SelectItem value="__all__">{{ allLabel(filter) }}</SelectItem>
+        <SelectSeparator v-if="filter.options.length" />
         <SelectItem v-for="opt in filter.options" :key="opt.value" :value="opt.value">
           {{ opt.label }}
         </SelectItem>
@@ -45,7 +47,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Select, SelectContent, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 const props = defineProps<{
   search?: { placeholder?: string }
@@ -77,5 +79,10 @@ function allLabel(filter: { key: string; label: string }): string {
     return label
   }
   return `${t('common.all')} ${label}`
+}
+
+function showLabel(filter: { key: string; label: string }): boolean {
+  const label = filter.label.trim().toLowerCase()
+  return label !== 'all' && !label.startsWith('all ')
 }
 </script>

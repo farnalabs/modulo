@@ -157,7 +157,7 @@ class HITLManager:
     backwards compatibility.
     """
 
-    def __init__(self, secret_key: str = "") -> None:
+    def __init__(self, secret_key: str = "") -> None:  # nosec B107 — empty default disables JWT claim tokens (opaque tokens used instead); real key is injected at runtime
         self._secret_key = secret_key
 
     # ------------------------------------------------------------------

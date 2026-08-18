@@ -189,9 +189,9 @@ def pick_variant_weighted(
     weights = [float(v.get("weight", 1.0)) for v in clean]
     total = sum(weights)
     if total <= 0:
-        return random.choice(clean)  # noqa: S311 — variant selection is not cryptographic
+        return random.choice(clean)  # noqa: S311  # nosec B311 — variant selection is not cryptographic
 
-    r = random.random() * total  # noqa: S311 — variant selection is not cryptographic
+    r = random.random() * total  # noqa: S311  # nosec B311 — variant selection is not cryptographic
     cumulative = 0.0
     for i, w in enumerate(weights):
         cumulative += w
