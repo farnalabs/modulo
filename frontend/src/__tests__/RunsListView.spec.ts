@@ -543,4 +543,64 @@ describe('RunsListView', () => {
     expect(routerMocks.replace).not.toHaveBeenCalled()
     wrapper.unmount()
   })
+
+  it('renders the trigger actor column value', async () => {
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, trigger_actor: 'Duncan (GitHub)' }])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    const cell = wrapper.find('[data-testid="runs-list-trigger-actor-run1"]')
+    expect(cell.exists()).toBe(true)
+    expect(cell.text()).toContain('Duncan (GitHub)')
+    wrapper.unmount()
+  })
+
+  it('renders a dash for the trigger actor when absent', async () => {
+    mockResponses['/api/v1/runs'] = listWith([baseRun])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    const cell = wrapper.find('[data-testid="runs-list-trigger-actor-run1"]')
+    expect(cell.exists()).toBe(true)
+    expect(cell.text()).toBe('—')
+    wrapper.unmount()
+  })
+
+  it('renders the heartbeat column as Xs ago for a running run with a recent heartbeat', async () => {
+    const heartbeatAt = new Date(Date.now() - 5000).toISOString()
+    mockResponses['/api/v1/runs'] = listWith([
+      { ...baseRun, status: 'running', completed_at: null, heartbeat_at: heartbeatAt },
+    ])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    const cell = wrapper.find('[data-testid="runs-list-heartbeat-run1"]')
+    expect(cell.exists()).toBe(true)
+    expect(cell.text()).toMatch(/^\d+s ago$/)
+    wrapper.unmount()
+  })
+
+  it('renders a dash for the heartbeat when the run is terminal', async () => {
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, heartbeat_at: new Date().toISOString() }])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    const cell = wrapper.find('[data-testid="runs-list-heartbeat-run1"]')
+    expect(cell.exists()).toBe(true)
+    expect(cell.text()).toBe('—')
+    wrapper.unmount()
+  })
+
+  it('renders the queued badge when capacity.waiting is true', async () => {
+    mockResponses['/api/v1/runs'] = listWith([
+      { ...baseRun, status: 'pending', capacity: { active_runs: 3, concurrency_limit: 5, waiting: true } },
+    ])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    const badge = wrapper.find('[data-testid="runs-list-queued-run1"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.text()).toContain('queued')
+    wrapper.unmount()
+  })
 })

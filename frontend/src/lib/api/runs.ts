@@ -19,6 +19,9 @@ export interface RunListItem extends Record<string, unknown> {
   child_runs_count?: number
   aggregate_cost_usd?: string | null
   input_payload?: Record<string, unknown> | null
+  trigger_actor?: string | null
+  heartbeat_at?: string | null
+  capacity?: { active_runs: number; concurrency_limit: number | null; waiting: boolean } | null
 }
 
 export interface RunListResponse {

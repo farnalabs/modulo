@@ -43,6 +43,25 @@
         </div>
       </header>
 
+      <!-- Queue position banner (pending + waiting on sandbox capacity) -->
+      <div
+        v-if="run.status === 'pending' && run.capacity?.waiting"
+        data-testid="run-detail-queue-banner"
+        role="status"
+        aria-live="polite"
+        class="mb-4 rounded-lg border border-warning/50 bg-warning/10 px-4 py-2 text-sm text-warning"
+      >
+        {{ $t('views.RunDetailView.queued_waiting_slot', { active: run.capacity.active_runs, limit: run.capacity.concurrency_limit ?? '∞' }) }}
+      </div>
+      <p
+        v-else-if="run.status === 'pending'"
+        data-testid="run-detail-queued-starting"
+        role="status"
+        class="mb-4 text-xs text-muted-foreground"
+      >
+        {{ $t('views.RunDetailView.queued_starting_soon') }}
+      </p>
+
       <!-- HITL Gate -->
       <section v-if="run.status === 'awaiting_human' && pendingGates.length > 0" class="rounded-lg border bg-card p-6 mb-6">
         <h2 class="text-base font-semibold tracking-tight mb-4">HITL Gate</h2>
@@ -107,6 +126,48 @@
         <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.created') }}</span> {{ runTimestamps.created }}</div>
         <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.started') }}</span> {{ runTimestamps.started }}</div>
         <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.completed') }}</span> {{ runTimestamps.completed }}</div>
+        <div data-testid="run-detail-trigger-actor"><span class="font-medium text-foreground">{{ $t('views.RunDetailView.triggered_by') }}</span> {{ run.trigger_actor || run.trigger_type || '—' }}</div>
+        <div data-testid="run-detail-heartbeat">
+          <span class="font-medium text-foreground">{{ $t('views.RunDetailView.last_heartbeat') }}</span>
+          <span :class="isHeartbeatStale ? 'font-medium text-warning' : ''">{{ formatHeartbeat(heartbeatAgeSeconds) }}<span v-if="isHeartbeatStale"> ({{ $t('views.RunDetailView.stale') }})</span></span>
+        </div>
+      </div>
+
+      <!-- Live cost + tokens so far (non-terminal runs only) -->
+      <div v-if="liveCostPresent" data-testid="run-detail-live-cost" class="mt-2 mb-4 text-xs text-muted-foreground">
+        <span class="font-medium text-foreground">{{ $t('views.RunDetailView.cost_so_far') }}:</span>
+        {{ formatMoney(liveCostTotal, currencyCode, 4) }}<span v-if="liveTokenTotal > 0"> · {{ formatTokenCount(liveTokenTotal) }} {{ $t('views.RunDetailView.tokens') }}</span>
+      </div>
+
+      <!-- Live node progress strip -->
+      <div
+        v-if="nodeProgressChips.length > 0"
+        data-testid="run-detail-node-progress"
+        class="mb-4 flex flex-wrap items-center gap-1.5"
+        aria-live="polite"
+      >
+        <button
+          v-for="chip in nodeProgressChips"
+          :key="chip.name"
+          type="button"
+          :aria-label="`Node ${chip.name}: ${chip.state}`"
+          :data-testid="`run-detail-node-progress-${chip.name}`"
+          class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium transition-colors hover:opacity-80"
+          :class="chipClass(chip.state)"
+          @click="toggleNodeLogs(chip.name)"
+        >
+          <template v-if="chip.state === 'running'">
+            <span class="relative flex h-2 w-2" aria-hidden="true">
+              <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-warning opacity-75"></span>
+              <span class="relative inline-flex h-2 w-2 rounded-full bg-warning"></span>
+            </span>
+            {{ $t('views.RunDetailView.running_label') }}
+          </template>
+          <svg v-else-if="chip.state === 'completed'" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+          <svg v-else-if="chip.state === 'failed'" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          <span v-else class="h-1.5 w-1.5 rounded-full bg-muted-foreground/40" aria-hidden="true"></span>
+          <span>{{ chip.name }}</span>
+        </button>
       </div>
 
       <!-- Run Input Payload — the parameters provided when the run was scheduled -->
@@ -114,6 +175,37 @@
         <h3 class="text-sm font-semibold mb-1">{{ $t('views.RunDetailView.run_input') }}</h3>
         <JsonViewer :data="runIO.input_payload" :show-toolbar="true" :max-height="'16rem'" />
       </div>
+
+      <!-- Work items -->
+      <section v-if="run.work_item_refs && run.work_item_refs.length > 0" data-testid="run-detail-work-items" class="rounded-lg border border-border bg-card p-4 mb-4">
+        <h3 class="text-sm font-semibold mb-2">{{ $t('views.RunDetailView.work_items') }}</h3>
+        <div class="space-y-1.5">
+          <div v-for="(item, idx) in run.work_item_refs" :key="`${item.kind}-${item.ref}-${idx}`" class="flex flex-wrap items-center gap-2 text-xs">
+            <span class="inline-flex items-center rounded-full bg-muted px-2 py-0.5 font-medium capitalize">{{ item.kind || '—' }}</span>
+            <code class="rounded bg-muted px-1.5 py-0.5 font-mono">{{ item.ref || '—' }}</code>
+            <span v-if="item.source" class="text-muted-foreground">{{ item.source }}</span>
+            <span v-if="item.status" class="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-muted-foreground capitalize">{{ item.status }}</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Child runs -->
+      <section v-if="run.child_runs && run.child_runs.length > 0" data-testid="run-detail-child-runs" class="rounded-lg border border-border bg-card p-4 mb-4">
+        <h3 class="text-sm font-semibold mb-2">{{ $t('views.RunDetailView.child_runs') }}</h3>
+        <div class="space-y-1.5">
+          <div v-for="child in run.child_runs" :key="child.run_id" class="flex flex-wrap items-center gap-2 text-xs">
+            <router-link
+              :to="`/runs/${child.run_id}`"
+              :data-testid="`run-detail-child-link-${child.run_id}`"
+              class="font-medium text-primary hover:underline"
+            >
+              {{ child.run_number != null ? `#${child.run_number}` : shortId(child.run_id) }}
+            </router-link>
+            <span :class="childRunBadgeClass(child.status)" class="capitalize">{{ child.status || '—' }}</span>
+            <span v-if="child.pipeline_name" class="text-muted-foreground">{{ child.pipeline_name }}</span>
+          </div>
+        </div>
+      </section>
 
       <!-- Cancel button for non-terminal runs -->
       <div v-if="canCancel" class="my-4">
@@ -624,6 +716,13 @@ type RunResponse = components['schemas']['RunResponse'] & {
   child_runs_cost_usd?: string | null
   child_runs_count?: number
   aggregate_cost_usd?: string | null
+  trigger_type?: string | null
+  trigger_actor?: string | null
+  trigger_id?: string | null
+  heartbeat_at?: string | null
+  work_item_refs?: WorkItemRef[] | null
+  child_runs?: ChildRunRef[] | null
+  capacity?: RunCapacity | null
 }
 type RunIOResponse = components['schemas']['RunIOResponse']
 
@@ -633,6 +732,26 @@ interface NodeTokenUsage {
   total_tokens?: number
   cost_usd?: number
   model_cost_display_usd?: number
+}
+
+interface WorkItemRef {
+  kind?: string
+  ref?: string
+  source?: string
+  status?: string | null
+}
+
+interface ChildRunRef {
+  run_id: string
+  run_number?: number | null
+  status?: string
+  pipeline_name?: string | null
+}
+
+interface RunCapacity {
+  active_runs: number
+  concurrency_limit: number | null
+  waiting: boolean
 }
 
 interface CostBreakdownEntry {
@@ -704,6 +823,8 @@ const hitlNotes = ref('')
 const hitlMessage = ref<{ type: string; text: string } | null>(null)
 const liveOutput = ref<Record<string, string>>({})
 const liveOutputSeq = ref(0)
+const liveNodeStates = ref<Record<string, 'running' | 'completed' | 'failed'>>({})
+const heartbeatNow = ref(Date.now())
 const overrideDialogOpen = ref(false)
 const overrideInput = ref('')
 const overrideSubmitting = ref(false)
@@ -1362,6 +1483,109 @@ const nodeEntries = computed<NodeEntry[]>(() => {
   })
 })
 
+type NodeProgressState = 'completed' | 'running' | 'failed' | 'pending'
+
+function nodeHasUsageOrOutput(name: string): boolean {
+  const ntu = run.value?.node_token_usage as Record<string, NodeTokenUsage> | null ?? {}
+  const outputs = runIO.value?.outputs_json as Record<string, unknown> | null ?? {}
+  return Boolean(ntu[name]) || Boolean(outputs[name])
+}
+
+function nodeProgressState(name: string): NodeProgressState {
+  const live = liveNodeStates.value[name]
+  if (live === 'running') return 'running'
+  if (live === 'failed') return 'failed'
+  if (live === 'completed') return 'completed'
+  if (nodeHasUsageOrOutput(name)) return 'completed'
+  return 'pending'
+}
+
+const nodeProgressChips = computed(() => {
+  const names: string[] = []
+  const seen = new Set<string>()
+  for (const entry of nodeEntries.value) {
+    if (!seen.has(entry.name)) {
+      seen.add(entry.name)
+      names.push(entry.name)
+    }
+  }
+  for (const name of Object.keys(liveNodeStates.value)) {
+    if (!seen.has(name)) {
+      seen.add(name)
+      names.push(name)
+    }
+  }
+  return names.map(name => ({ name, state: nodeProgressState(name) }))
+})
+
+function chipClass(state: NodeProgressState): string {
+  const map: Record<NodeProgressState, string> = {
+    completed: 'bg-success/10 text-success border border-success/30',
+    running: 'bg-warning/10 text-warning border border-warning/30',
+    failed: 'bg-destructive/10 text-destructive border border-destructive/30',
+    pending: 'bg-muted text-muted-foreground border border-border',
+  }
+  return map[state]
+}
+
+const liveTokenTotal = computed(() => {
+  const ntu = run.value?.node_token_usage as Record<string, NodeTokenUsage> | null ?? {}
+  return Object.values(ntu).reduce((sum, n) => {
+    if (typeof n?.total_tokens === 'number') return sum + n.total_tokens
+    return sum + (n?.input_tokens ?? 0) + (n?.output_tokens ?? 0)
+  }, 0)
+})
+
+const liveCostTotal = computed(() => {
+  const ntu = run.value?.node_token_usage as Record<string, NodeTokenUsage> | null ?? {}
+  return Object.values(ntu).reduce((sum, n) => sum + (n?.cost_usd ?? n?.model_cost_display_usd ?? 0), 0)
+})
+
+const liveCostPresent = computed(() => {
+  const r = run.value
+  if (!r) return false
+  if (isTerminalStatus(r.status)) return false
+  return liveTokenTotal.value > 0 || liveCostTotal.value > 0
+})
+
+function formatTokenCount(count: number): string {
+  if (count >= 1_000_000) return `${(Math.round((count / 1_000_000) * 10) / 10)}M`
+  if (count >= 1_000) return `${(Math.round((count / 1_000) * 10) / 10)}k`
+  return String(count)
+}
+
+const heartbeatAgeSeconds = computed<number | null>(() => {
+  const r = run.value
+  if (!r?.heartbeat_at) return null
+  if (isTerminalStatus(r.status)) return null
+  const t = new Date(r.heartbeat_at).getTime()
+  if (isNaN(t)) return null
+  return Math.max(0, Math.floor((heartbeatNow.value - t) / 1000))
+})
+
+const isHeartbeatStale = computed(() => {
+  const age = heartbeatAgeSeconds.value
+  return age != null && age > 60
+})
+
+function formatHeartbeat(age: number | null): string {
+  if (age == null) return '—'
+  return t('views.RunDetailView.ago', { s: age })
+}
+
+function childRunBadgeClass(status: string | undefined): string {
+  const map: Record<string, string> = {
+    running: 'badge badge-status-primary',
+    complete: 'badge badge-status-success',
+    failed: 'badge badge-status-destructive',
+    stalled: 'badge badge-status-destructive',
+    cancelled: 'badge badge-status-warning',
+    pending: 'badge badge-status-muted',
+    awaiting_human: 'badge badge-status-pending',
+  }
+  return map[status ?? ''] ?? 'badge badge-context-slate'
+}
+
 async function fetchHitlGates(runId: string) {
   if (hitlLoading.value) return
   hitlLoading.value = true
@@ -1408,6 +1632,7 @@ async function fetchLiveOutput(runId: string) {
     const events = data?.events
     if (!events || events.length === 0) return
     const next = { ...liveOutput.value }
+    const nextStates = { ...liveNodeStates.value }
     let maxSeq = liveOutputSeq.value
     for (const evt of events) {
       if (!evt || typeof evt.seq !== 'number') continue
@@ -1419,9 +1644,19 @@ async function fetchLiveOutput(runId: string) {
         const nodeId = evt.payload.node_id
         next[nodeId] = (next[nodeId] ?? '') + (evt.payload.chunk ?? '')
       }
+      if (evt.event_type === 'node_started' && evt.payload?.node_id) {
+        nextStates[evt.payload.node_id] = 'running'
+      }
+      if (evt.event_type === 'node_completed' && evt.payload?.node_id) {
+        nextStates[evt.payload.node_id] = 'completed'
+      }
+      if (evt.event_type === 'node_failed' && evt.payload?.node_id) {
+        nextStates[evt.payload.node_id] = 'failed'
+      }
       if (evt.seq > maxSeq) maxSeq = evt.seq
     }
     liveOutput.value = next
+    liveNodeStates.value = nextStates
     liveOutputSeq.value = maxSeq
   } catch (e) {
     // Live output is best-effort — polling must never break the page.
@@ -1430,7 +1665,9 @@ async function fetchLiveOutput(runId: string) {
 }
 
 function startPolling(runId: string) {
+  heartbeatNow.value = Date.now()
   pollInterval.value = setInterval(async () => {
+    heartbeatNow.value = Date.now()
     if (run.value && isTerminalStatus(run.value.status)) {
       clearInterval(pollInterval.value!)
       pollInterval.value = null
