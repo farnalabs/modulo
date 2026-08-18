@@ -26,6 +26,7 @@ from modulo.core.guardrails.config import (
     hash_config_set,
     hash_guardrail_item,
     load_config_set,
+    mask_config_set,
     to_eval_config,
     validate_config_set,
 )
@@ -640,3 +641,69 @@ def test_knobs_do_not_drift_on_rebuild_from_rows():
     assert hash_config_set(rebuilt) == hash_config_set(config_set)
     pin = GuardrailPin(org_id=_ORG_ID, applied_hash=hash_config_set(config_set))
     assert check_guardrail_drift(definitions, pin) is False
+
+
+# ---------------------------------------------------------------------------
+# FAR-309 PR A — elevated-read masking (mask_config_set)
+# ---------------------------------------------------------------------------
+
+
+def test_mask_config_set_masks_regex_pattern_and_redaction_paths():
+    """The standard (non-admin) read masks the deny-rule internals: the regex
+    pattern and every redaction field path are replaced, while the guardrail
+    topology (id, name, action, detection type, field) is preserved."""
+    config_set = load_config_set(_REGEX_YAML)
+    masked = mask_config_set(config_set)
+    masked_item = masked.guardrails[0]
+
+    assert masked_item.id == "no-aws-keys"
+    assert masked_item.name == "Block AWS keys"
+    assert masked_item.action == GuardrailAction.BLOCK
+    assert masked_item.detection.type == "regex"
+    assert masked_item.detection.field == "body"
+    # The sensitive internals are masked, never leaked.
+    assert masked_item.detection.pattern == "********"
+    assert masked_item.redaction[0].path == "********"
+    # The original set is untouched (structural copy).
+    assert config_set.guardrails[0].detection.pattern == "AKIA[0-9A-Z]{16}"
+    assert config_set.guardrails[0].redaction[0].path == "body"
+
+
+def test_mask_config_set_masks_json_schema():
+    config_set = load_config_set(_JSON_SCHEMA_YAML)
+    masked = mask_config_set(config_set)
+    masked_item = masked.guardrails[0]
+
+    assert masked_item.id == "valid-payload"
+    assert masked_item.detection.type == "json_schema"
+    # The JSON schema body is replaced with a redaction marker.
+    assert masked_item.detection.schema_data == {"redacted": True}
+    assert config_set.guardrails[0].detection.schema_data == {
+        "type": "object",
+        "properties": {"body": {"type": "string"}},
+    }
+
+
+def test_mask_config_set_preserves_knobs_and_empty_sets():
+    empty = mask_config_set(GuardrailConfigSet())
+    assert not empty.guardrails
+    assert empty.max_guardrails_per_node == GuardrailConfigSet().max_guardrails_per_node
+
+    config_set = load_config_set(
+        "version: 1\nmax_guardrails_per_node: 4\nguardrail_timeout_seconds: 1.5\n"
+        + "guardrails:\n  - id: no-aws-keys\n    name: Block\n    action: block\n"
+        + "    detection:\n      type: regex\n      pattern: 'AKIA[0-9A-Z]{16}'\n      field: body\n"
+    )
+    masked = mask_config_set(config_set)
+    assert masked.max_guardrails_per_node == 4
+    assert masked.guardrail_timeout_seconds == 1.5
+    assert masked.guardrails[0].detection.field == "body"
+
+
+def test_mask_config_set_never_returns_a_masked_pattern_in_yaml_dump():
+    """The masked set's YAML dump must never contain the real pattern/schema —
+    the standard read path dumps ``mask_config_set(...)`` output."""
+    config_set = load_config_set(_REGEX_YAML)
+    masked_yaml = dump_config_set(mask_config_set(config_set))
+    assert "AKIA[0-9A-Z]{16}" not in masked_yaml
+    assert "********" in masked_yaml

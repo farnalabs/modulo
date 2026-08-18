@@ -570,7 +570,7 @@ class TestRollbackToSnapshot:
         assert result is new_snapshot
         assert pipeline.graph_nodes_json == nodes
 
-        deleted_stmt = session.execute.call_args_list[3][0][0]
+        deleted_stmt = session.execute.call_args_list[4][0][0]
         assert "DELETE" in str(deleted_stmt)
 
         add_calls = [c.args[0] for c in session.add.call_args_list if c.args]

@@ -254,6 +254,16 @@ _ACTION_URL_TEMPLATES: dict[str, str | None] = {
 }
 
 
+def notification_categories() -> frozenset[str]:
+    """All valid Notification.category values, derived from _EVENT_CONFIG.
+
+    Single source of truth for preference validation/response shaping — never
+    hardcode the category list (FAR-247). Includes every configured category
+    (org/admin/user scoped), so users can opt out of each one.
+    """
+    return frozenset(cfg["category"] for cfg in _EVENT_CONFIG.values())
+
+
 class NotificationEventMapper:
     """Maps platform events to in-app notifications and creates DB records."""
 
