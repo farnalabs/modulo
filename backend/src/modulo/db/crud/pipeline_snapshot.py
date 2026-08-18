@@ -63,6 +63,23 @@ async def _load_pipeline_and_edges(
     return (pipeline, nodes, edge_dicts)
 
 
+def _apply_agent_fields(node: dict[str, Any], agent: Agent) -> uuid.UUID | None:
+    if agent.token_budget is not None:
+        node["token_budget"] = agent.token_budget
+    if agent.prompt_template is not None:
+        node["prompt_template"] = agent.prompt_template
+    if agent.model_backend_id is not None:
+        node["model_backend_id"] = str(agent.model_backend_id)
+    if agent.agent_command is not None:
+        node["agent_command"] = agent.agent_command
+    if agent.agent_commands is not None:
+        node["agent_commands"] = agent.agent_commands
+    if agent.parameter_schema_id is not None:
+        node["parameter_schema_id"] = str(agent.parameter_schema_id)
+        return agent.parameter_schema_id
+    return None
+
+
 async def _materialize_agent_fields(
     session: AsyncSession, nodes: list[dict[str, Any]]
 ) -> tuple[list[Agent], dict[uuid.UUID, Agent], set[uuid.UUID]]:
@@ -79,20 +96,11 @@ async def _materialize_agent_fields(
         if agent_id is None:
             continue
         agent = agents_by_id.get(uuid.UUID(str(agent_id)))
-        if agent is not None:
-            if agent.token_budget is not None:
-                node["token_budget"] = agent.token_budget
-            if agent.prompt_template is not None:
-                node["prompt_template"] = agent.prompt_template
-            if agent.model_backend_id is not None:
-                node["model_backend_id"] = str(agent.model_backend_id)
-            if agent.agent_command is not None:
-                node["agent_command"] = agent.agent_command
-            if agent.agent_commands is not None:
-                node["agent_commands"] = agent.agent_commands
-            if agent.parameter_schema_id is not None:
-                node["parameter_schema_id"] = str(agent.parameter_schema_id)
-                parameter_schema_ids.add(agent.parameter_schema_id)
+        if agent is None:
+            continue
+        schema_id = _apply_agent_fields(node, agent)
+        if schema_id is not None:
+            parameter_schema_ids.add(schema_id)
     return (agents, agents_by_id, parameter_schema_ids)
 
 
