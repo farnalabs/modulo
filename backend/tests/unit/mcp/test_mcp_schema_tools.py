@@ -5,6 +5,7 @@ import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 
 from modulo.api.mcp_server import (
@@ -15,6 +16,7 @@ from modulo.api.mcp_server import (
     list_schemas,
     validate_payload,
 )
+from modulo.core.seed_data.library_schemas import SCHEMAS
 from modulo.db.crud.base import PageResult
 from tests.unit.mcp.helpers import FERNET_KEY, ORG_ID, USER_ID, AuthContext, make_session_context
 
@@ -606,6 +608,13 @@ def _make_schema_version(definition: dict) -> MagicMock:
     return sv
 
 
+def _dogfood_definition(name: str) -> dict:
+    for entry in SCHEMAS:
+        if entry["name"] == name:
+            return entry["definition"]
+    raise AssertionError(f"Schema '{name}' not defined in library seed data")
+
+
 class TestValidatePayloadErrors(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
@@ -741,3 +750,99 @@ class TestValidatePayloadSuccess(AuthContext):
 
         assert result["valid"] is False
         assert result["errors"][0]["path"] == "(schema)"
+
+
+class TestValidatePayloadDogfoodSchemas(AuthContext):
+    """FAR-304: dogfood the schema system — validate_payload against the seeded
+    reusable dogfood pipeline input schemas (``ticket-input``, ``pr-review-input``).
+
+    Mirrors the unit-level jsonschema checks in test_dogfood_input_schemas.py but
+    exercises the production ``validate_payload`` tool path (latest version lookup).
+    """
+
+    @pytest.mark.parametrize(
+        ("schema_name", "payload"),
+        [
+            (
+                "ticket-input",
+                {
+                    "id": "FAR-304",
+                    "title": "Dogfood: define a reusable input schema",
+                    "body": "Bind a registered schema to the dogfood pipeline input.",
+                    "type": "feature",
+                    "priority": "high",
+                    "labels": ["dogfood"],
+                    "repo": "farnalabs/modulo",
+                },
+            ),
+            (
+                "pr-review-input",
+                {
+                    "number": 42,
+                    "repository": "farnalabs/modulo",
+                    "head-ref": "feat/far-304",
+                    "head-sha": "abc123def456",
+                    "action": "synchronize",
+                },
+            ),
+        ],
+    )
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server.get_schema")
+    async def test_valid_payload_passes_for_seeded_dogfood_schema(
+        self,
+        mock_get_schema: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+        schema_name: str,
+        payload: dict,
+    ) -> None:
+        definition = _dogfood_definition(schema_name)
+        schema = MagicMock()
+        mock_get_schema.return_value = schema
+
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none.return_value = _make_schema_version(definition)
+
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=result_mock)
+        mock_session.return_value = make_session_context(mock_sesh)
+
+        result = await validate_payload(schema_id=str(uuid.uuid4()), payload=payload)
+
+        assert result == {"valid": True, "errors": []}
+
+    @pytest.mark.parametrize(
+        ("schema_name", "payload"),
+        [
+            ("ticket-input", {"id": "FAR-304", "title": "Missing required type enum"}),
+            ("pr-review-input", {"number": "not-an-int", "repository": "farnalabs/modulo"}),
+        ],
+    )
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server.get_schema")
+    async def test_invalid_payload_rejected_for_seeded_dogfood_schema(
+        self,
+        mock_get_schema: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+        schema_name: str,
+        payload: dict,
+    ) -> None:
+        definition = _dogfood_definition(schema_name)
+        schema = MagicMock()
+        mock_get_schema.return_value = schema
+
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none.return_value = _make_schema_version(definition)
+
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=result_mock)
+        mock_session.return_value = make_session_context(mock_sesh)
+
+        result = await validate_payload(schema_id=str(uuid.uuid4()), payload=payload)
+
+        assert result["valid"] is False
+        assert len(result["errors"]) > 0
