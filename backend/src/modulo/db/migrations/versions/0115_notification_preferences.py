@@ -1,7 +1,7 @@
 """notification_preferences — per-user read-time notification opt-outs (FAR-247).
 
-Revision ID: 0114_notification_preferences
-Revises: 0113_guardrail_summary
+Revision ID: 0115_notification_preferences
+Revises: 0114_org_api_keys_run_id
 Create Date: 2026-08-18
 
 Per-user notification opt-outs are enforced at READ time via the shared
@@ -52,8 +52,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0114_notification_preferences"
-down_revision: str | None = "0113_guardrail_summary"
+revision: str = "0115_notification_preferences"
+down_revision: str | None = "0114_org_api_keys_run_id"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
