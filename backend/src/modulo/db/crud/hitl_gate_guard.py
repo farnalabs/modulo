@@ -46,6 +46,7 @@ from modulo.db.models.pipeline_edge import PipelineEdge
 _log = logging.getLogger(__name__)
 
 _OPERATOR_LEVEL = org_role_level("operator")
+_ADMIN_LEVEL = org_role_level("admin")
 
 # Reason codes (plan §5)
 REASON_INSUFFICIENT_ROLE = "insufficient-role"
@@ -113,6 +114,36 @@ class HitlGateWeakeningDenied(Exception):  # noqa: N818 — matched by callers
         self.detail = detail
         self.payload_json = payload_json
         message = f"hitl gate weakening denied ({reason_code})"
+        if detail:
+            message += f": {detail}"
+        super().__init__(message)
+
+
+class GuardrailBindingStripDenied(Exception):  # noqa: N818 — matched by callers
+    """Raised by service-layer graph writes when a non-admin strips a guardrail binding.
+
+    A node-bound guardrail (``eval_type='guardrail'`` row with non-null
+    ``node_id``) binds to its node via the interception seam. Removing the node
+    from the graph (replace / update / rollback) drops that binding — an
+    end-run around the admin-only guardrail-management path (FAR-309 PR A).
+
+    ``stripped_node_ids`` names the guardrail-bound nodes that would be removed.
+    ``reason_code`` distinguishes a genuine strip denial (403) from a fail-closed
+    role-resolution failure (``role-check-db-error`` maps to 503 via
+    ``denial_http_status``).
+    """
+
+    def __init__(
+        self,
+        *,
+        stripped_node_ids: list[str] | None = None,
+        detail: str = "",
+        reason_code: str = "guardrail-strip-denied",
+    ) -> None:
+        self.stripped_node_ids = list(stripped_node_ids or [])
+        self.detail = detail
+        self.reason_code = reason_code
+        message = f"guardrail binding strip denied ({reason_code})"
         if detail:
             message += f": {detail}"
         super().__init__(message)
@@ -372,3 +403,105 @@ def denial_http_status(reason_code: str | None) -> int:
     if reason_code == REASON_ROLE_CHECK_DB_ERROR:
         return 503
     return 403
+
+
+async def enforce_guardrail_binding_strip(
+    session: AsyncSession,
+    *,
+    pipeline_id: uuid.UUID,
+    org_id: uuid.UUID,
+    incoming_node_ids: set[str],
+    is_guardrail_admin: bool,
+    caller_type: CallerType,
+    account_id: uuid.UUID | None = None,
+) -> None:
+    """Service-layer guardrail-binding strip guard (FAR-309 PR A review).
+
+    A node-bound guardrail (``eval_type='guardrail'`` row with non-null
+    ``node_id``) binds to its node via the interception seam. Removing the node
+    from the graph (replace / update / rollback) drops that binding — an
+    end-run around the admin-only guardrail-management path. Non-admins are
+    denied; admins (``guardrail.manage``) may remove such nodes.
+
+    Runs under the caller's row lock (the guarded write path already holds
+    ``SELECT ... FOR UPDATE`` on the pipeline row) and BEFORE any graph
+    mutation. The caller's effective admin flag is re-read via
+    ``resolve_effective_privilege`` semantics: for ``caller_type == "rest"``
+    with ``account_id`` the live org role is re-read under the lock
+    (fail-closed on DB error), for ``caller_type == "mcp"`` the caller-supplied
+    flag is used as-is. Raises ``GuardrailBindingStripDenied`` when a
+    guardrail-bound node is stripped by a non-admin.
+    """
+    effective_admin = is_guardrail_admin
+    if caller_type == "rest" and account_id is not None:
+        effective_admin = await _resolve_effective_guardrail_admin(
+            session,
+            org_id=org_id,
+            account_id=account_id,
+            caller_type=caller_type,
+        )
+    if effective_admin:
+        return
+    from modulo.db.crud.guardrail_config import load_pipeline_guardrail_rows
+
+    guardrail_rows = await load_pipeline_guardrail_rows(
+        session,
+        pipeline_id=pipeline_id,
+        organisation_id=org_id,
+    )
+    stripped = sorted(
+        {
+            str(row.node_id)
+            for row in guardrail_rows
+            if row.node_id is not None and str(row.node_id) not in incoming_node_ids
+        }
+    )
+    if stripped:
+        raise GuardrailBindingStripDenied(
+            stripped_node_ids=stripped,
+            detail=(
+                "Non-admin cannot strip a guardrail binding: removing node(s) "
+                + ", ".join(stripped)
+                + " from the graph would drop a node-bound guardrail. Only an "
+                "admin can remove a node that has a bound guardrail."
+            ),
+        )
+
+
+async def _resolve_effective_guardrail_admin(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID,
+    caller_type: CallerType,
+) -> bool:
+    """Re-read the caller's live org role under the lock (admin-level check).
+
+    Mirrors ``resolve_effective_privilege``: for ``caller_type == "rest"`` the
+    live role is re-read via ADR-017's ``resolve_role_from_membership``. A DB
+    error denies with ``role-check-db-error`` (fail-closed, no retry); a
+    missing/deactivated membership denies with ``role-changed``. For
+    ``caller_type == "mcp"`` the caller-supplied admin flag is used as-is (the
+    MCP surface resolves the role at the tool boundary).
+    """
+    if caller_type == "mcp":
+        return False
+    from modulo.db.crud.org_membership import resolve_role_from_membership
+
+    try:
+        live_role = await resolve_role_from_membership(session, str(account_id), str(org_id))
+    except SQLAlchemyError:
+        _log.error(
+            "hitl_gate_guard.guardrail_admin_role_check_db_error",
+            extra={"org_id": str(org_id), "account_id": str(account_id)},
+        )
+        raise GuardrailBindingStripDenied(
+            reason_code=REASON_ROLE_CHECK_DB_ERROR,
+            detail="Failed to re-read the caller's org role under the row lock.",
+        ) from None
+    if live_role is None:
+        raise GuardrailBindingStripDenied(
+            reason_code=REASON_ROLE_CHANGED,
+            detail="No active org membership for the caller.",
+        ) from None
+    return org_role_level(live_role) >= _ADMIN_LEVEL

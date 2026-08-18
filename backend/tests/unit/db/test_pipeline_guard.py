@@ -18,6 +18,7 @@ from modulo.db.crud.hitl_gate_guard import (
     REASON_MCP_NOT_PERMITTED,
     REASON_ROLE_CHANGED,
     REASON_ROLE_CHECK_DB_ERROR,
+    DiffResult,
     HitlGateWeakeningDenied,
 )
 from modulo.db.crud.pipeline import replace_pipeline_graph
@@ -65,6 +66,7 @@ class _SnapshotRow:
         self.id = uuid.uuid4()
         self.pipeline_id = pipeline_id or uuid.uuid4()
         self.graph_json = graph_json
+        self.snapshot_version = 1
 
 
 def _build_session(*results: MagicMock) -> AsyncMock:
@@ -75,7 +77,11 @@ def _build_session(*results: MagicMock) -> AsyncMock:
         if calls:
             return calls.pop(0)
         # Default result for statements we don't need to control (e.g. the
-        # delete(PipelineEdge) that runs after the guard passes).
+        # delete(PipelineEdge) that runs after the guard passes, and the
+        # guardrail-rows query the service-layer strip guard runs). The
+        # guardrail-rows SELECT returns no bound guardrails by default.
+        if _is_guardrail_rows_query(stmt):
+            return _empty_scalars_result()
         return MagicMock()
 
     session.execute = AsyncMock(side_effect=_execute)
@@ -87,6 +93,10 @@ def _build_session(*results: MagicMock) -> AsyncMock:
     return session
 
 
+def _is_guardrail_rows_query(stmt: object) -> bool:
+    return "FROM eval_definitions" in str(stmt)
+
+
 def _pipeline_result(pipeline: _PipelineRow) -> MagicMock:
     result = MagicMock()
     result.scalar_one_or_none.return_value = pipeline
@@ -96,6 +106,15 @@ def _pipeline_result(pipeline: _PipelineRow) -> MagicMock:
 def _edges_result(edges: list[_EdgeRow]) -> MagicMock:
     result = MagicMock()
     result.scalars.return_value = list(edges)
+    return result
+
+
+def _empty_scalars_result() -> MagicMock:
+    """A result whose ``scalars().all()`` is an empty list (guardrail rows)."""
+    result = MagicMock()
+    scalars = MagicMock()
+    scalars.all.return_value = []
+    result.scalars.return_value = scalars
     return result
 
 
@@ -144,8 +163,9 @@ async def test_replace_pipeline_graph_guard_runs_before_delete(monkeypatch: pyte
         )
     assert excinfo.value.reason_code == REASON_INSUFFICIENT_ROLE
     # The deny happened before the delete/insert executes: execute was called
-    # only for the row lock + the edge load (no delete statement).
-    assert session.execute.await_count == 2
+    # for the row lock + the edge load + the guardrail-rows query (no delete
+    # statement).
+    assert session.execute.await_count == 3
     session.add_all.assert_not_called()
     audit.assert_not_awaited()  # denied path: no allowed-weakening audit
 
@@ -171,7 +191,7 @@ async def test_rollback_to_snapshot_guard_runs_before_delete(monkeypatch: pytest
             caller_type="rest",
         )
     assert excinfo.value.reason_code == REASON_LEGACY_SNAPSHOT_AMBIGUOUS
-    assert session.execute.await_count == 3  # snapshot + row lock + edge load
+    assert session.execute.await_count == 4  # snapshot + row lock + edge load + guardrail rows
     audit.assert_not_awaited()
 
 
@@ -211,7 +231,9 @@ async def test_live_role_check_runs_after_the_row_lock(monkeypatch: pytest.Monke
         _on_lock_acquired=on_lock,
     )
     assert result is not None
-    assert events == ["lock_acquired", "role_query"]
+    # Both the HITL privilege check AND the guardrail-admin check re-read the
+    # live role under the lock (FAR-309 PR A review).
+    assert events == ["lock_acquired", "role_query", "role_query"]
 
 
 async def test_fail_closed_no_retry_on_role_query_db_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -785,3 +807,214 @@ async def test_replace_present_false_with_config_on_new_edge_ignores_value(monke
     persisted = result[1]
     assert persisted[0].hitl_gate_config is None, "present=False must ignore the provided gate value"
     audit.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# FAR-309 PR A review � service-layer guardrail-binding strip guard
+# ---------------------------------------------------------------------------
+
+
+def _guardrail_row(node_id: str) -> _EdgeRow:
+    row = MagicMock()
+    row.node_id = uuid.UUID(node_id)
+    return row
+
+
+def _guardrail_rows_result(rows: list[MagicMock]) -> MagicMock:
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = rows
+    return result
+
+
+async def test_replace_pipeline_graph_denies_guardrail_binding_strip_for_nonadmin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A NON-ADMIN replacing the graph and removing a guardrail-bound node is
+    denied (FAR-309 PR A review service-layer guard). The strip guard runs
+    under the row lock, before any delete/insert."""
+    from modulo.db.crud.hitl_gate_guard import GuardrailBindingStripDenied
+
+    pipeline = _PipelineRow()
+    bound_node = "00000000-0000-0000-0000-0000000000c1"
+    nodes = [{"id": _NODE_A, "agent_id": "ag1"}]
+    session = _build_session(
+        _pipeline_result(pipeline),
+        _edges_result([]),
+        _guardrail_rows_result([_guardrail_row(bound_node)]),
+    )
+    audit = AsyncMock()
+    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+
+    with pytest.raises(GuardrailBindingStripDenied) as excinfo:
+        await replace_pipeline_graph(
+            session,
+            pipeline_id=pipeline.id,
+            org_id=uuid.uuid4(),
+            nodes=nodes,
+            edges=[],
+            is_privileged=False,
+            caller_type="rest",
+        )
+    assert str(bound_node) in excinfo.value.stripped_node_ids
+    assert "strip a guardrail binding" in excinfo.value.detail
+    session.add_all.assert_not_called()
+
+
+async def test_replace_pipeline_graph_allows_guardrail_strip_for_admin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An ADMIN may remove a guardrail-bound node from the graph (admin owns
+    guardrail management via ``guardrail.manage``)."""
+    pipeline = _PipelineRow()
+    bound_node = "00000000-0000-0000-0000-0000000000c1"
+    nodes = [{"id": _NODE_A, "agent_id": "ag1"}]
+    session = _build_session(
+        _pipeline_result(pipeline),
+        _edges_result([]),
+        _guardrail_rows_result([_guardrail_row(bound_node)]),
+    )
+    audit = AsyncMock()
+    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr(
+        "modulo.db.crud.pipeline.apply_gated_edge_diff",
+        AsyncMock(
+            return_value=DiffResult(
+                weakened_edges=[],
+                has_weakening=False,
+                denied=False,
+                reason_code=None,
+                caller_type="rest",
+            )
+        ),
+    )
+
+    result = await replace_pipeline_graph(
+        session,
+        pipeline_id=pipeline.id,
+        org_id=uuid.uuid4(),
+        nodes=nodes,
+        edges=[],
+        is_privileged=True,
+        caller_type="rest",
+        is_guardrail_admin=True,
+    )
+    assert result is not None
+
+
+async def test_replace_pipeline_graph_denies_guardrail_strip_via_live_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The service-layer guard re-reads the caller's live role under the lock:
+    a caller whose route flag claims admin but whose live membership is NOT
+    admin is denied (fail-closed on a stale admin claim)."""
+    from modulo.db.crud.hitl_gate_guard import GuardrailBindingStripDenied
+
+    pipeline = _PipelineRow()
+    bound_node = "00000000-0000-0000-0000-0000000000c1"
+    nodes = [{"id": _NODE_A, "agent_id": "ag1"}]
+    session = _build_session(
+        _pipeline_result(pipeline),
+        _edges_result([]),
+        _guardrail_rows_result([_guardrail_row(bound_node)]),
+    )
+    audit = AsyncMock()
+    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+
+    async def _fake_role(*_a: object, **_k: object) -> str:
+        return "operator"
+
+    monkeypatch.setattr("modulo.db.crud.org_membership.resolve_role_from_membership", _fake_role)
+
+    with pytest.raises(GuardrailBindingStripDenied) as excinfo:
+        await replace_pipeline_graph(
+            session,
+            pipeline_id=pipeline.id,
+            org_id=uuid.uuid4(),
+            nodes=nodes,
+            edges=[],
+            is_privileged=True,
+            caller_type="rest",
+            account_id=uuid.uuid4(),
+            is_guardrail_admin=True,
+        )
+    assert "strip a guardrail binding" in excinfo.value.detail
+
+
+async def test_rollback_to_snapshot_denies_guardrail_binding_strip_for_nonadmin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A NON-ADMIN rolling back to a snapshot whose graph LACKS a currently
+    guardrail-bound node is denied (FAR-309 PR A review service-layer guard)."""
+    from modulo.db.crud.hitl_gate_guard import GuardrailBindingStripDenied
+
+    pipeline = _PipelineRow()
+    bound_node = "00000000-0000-0000-0000-0000000000c1"
+    snapshot = _SnapshotRow(
+        {"nodes": [{"id": _NODE_A, "agent_id": "ag1"}], "edges": []},
+        pipeline_id=pipeline.id,
+    )
+    session = _build_session(
+        _snapshot_result(snapshot),
+        _pipeline_result(pipeline),
+        _edges_result([]),
+        _guardrail_rows_result([_guardrail_row(bound_node)]),
+    )
+    audit = AsyncMock()
+    monkeypatch.setattr("modulo.db.crud.pipeline_snapshot_versioning.append_audit_event", audit)
+
+    with pytest.raises(GuardrailBindingStripDenied) as excinfo:
+        await rollback_to_snapshot(
+            session,
+            pipeline.id,
+            snapshot.id,
+            is_privileged=False,
+            caller_type="rest",
+        )
+    assert str(bound_node) in excinfo.value.stripped_node_ids
+    session.add.assert_not_called()
+
+
+async def test_rollback_to_snapshot_allows_guardrail_strip_for_admin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An ADMIN may roll back to a snapshot that drops a guardrail-bound node."""
+    pipeline = _PipelineRow()
+    bound_node = "00000000-0000-0000-0000-0000000000c1"
+    snapshot = _SnapshotRow(
+        {"nodes": [{"id": _NODE_A, "agent_id": "ag1"}], "edges": []},
+        pipeline_id=pipeline.id,
+    )
+    session = _build_session(
+        _snapshot_result(snapshot),
+        _pipeline_result(pipeline),
+        _edges_result([]),
+        _guardrail_rows_result([_guardrail_row(bound_node)]),
+    )
+    audit = AsyncMock()
+    monkeypatch.setattr("modulo.db.crud.pipeline_snapshot_versioning.append_audit_event", audit)
+    monkeypatch.setattr(
+        "modulo.db.crud.pipeline_snapshot_versioning.apply_gated_edge_diff",
+        AsyncMock(
+            return_value=DiffResult(
+                weakened_edges=[],
+                has_weakening=False,
+                denied=False,
+                reason_code=None,
+                caller_type="rest",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "modulo.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
+        AsyncMock(return_value=_SnapshotRow({"nodes": [], "edges": []})),
+    )
+
+    result = await rollback_to_snapshot(
+        session,
+        pipeline.id,
+        snapshot.id,
+        is_privileged=True,
+        caller_type="rest",
+        is_guardrail_admin=True,
+    )
+    assert result is not None

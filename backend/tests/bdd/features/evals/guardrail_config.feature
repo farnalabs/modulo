@@ -110,3 +110,17 @@ Feature: Guardrail Config-as-Code Workflow
             field: body
       """
     Then the response status is 403
+
+  Scenario: The standard read masks the deny-rule internals but the elevated read shows them
+    Given a guardrail config with a regex pattern was applied
+    When I read the guardrail config as an operator
+    Then the response status is 200
+    And the response config masks the regex pattern
+    When I read the elevated guardrail config as an admin
+    Then the response status is 200
+    And the response config shows the real regex pattern
+
+  Scenario: A non-admin cannot read the elevated guardrail config
+    Given a guardrail config with a regex pattern was applied
+    When I read the elevated guardrail config as an operator
+    Then the response status is 403

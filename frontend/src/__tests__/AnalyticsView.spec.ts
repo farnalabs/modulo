@@ -870,6 +870,57 @@ describe('AnalyticsView', () => {
     expect(arrows[1].text()).toContain('▼')
   })
 
+  it('renders human-readable labels for error_code dimension keys in the table and chart', async () => {
+    const response = {
+      group_by: 'day',
+      dimension: 'error_code',
+      date_from: '2026-07-30',
+      date_to: '2026-08-06',
+      buckets: [
+        { date: '2026-08-01', key: 'agent.stall', count: 3 },
+        { date: '2026-08-01', key: 'harness.worker_failed', count: 1 },
+        { date: '2026-08-02', key: 'agent.stall', count: 2 },
+        { date: '2026-08-02', key: 'harness.worker_failed', count: 4 },
+      ],
+    }
+    const previousResponse = {
+      group_by: 'day',
+      dimension: 'error_code',
+      date_from: '2026-07-23',
+      date_to: '2026-07-29',
+      buckets: [
+        { date: '2026-07-23', key: 'agent.stall', count: 1 },
+        { date: '2026-07-23', key: 'harness.worker_failed', count: 2 },
+      ],
+    }
+    let queryCalls = 0
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/analytics/query') {
+        queryCalls += 1
+        return Promise.resolve({ data: queryCalls === 1 ? response : previousResponse, error: undefined })
+      }
+      if (url === '/api/v1/pipeline-folders') return Promise.resolve({ data: [], error: undefined })
+      if (url === '/api/v1/pipelines') {
+        return Promise.resolve({
+          data: { items: [], total: 0, page: 1, page_size: 100, next_cursor: null, has_more: false },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const store = useAnalyticsStore()
+    store.setFilters({ dimension: 'error_code' })
+    const wrapper = mount(AnalyticsView)
+    await flushPromises()
+    // The chart still renders for a dimensioned (bar) series.
+    expect(wrapper.find('[data-testid="analytics-chart"]').exists()).toBe(true)
+    const tableText = wrapper.find('[data-testid="analytics-table"]').text()
+    expect(tableText).toContain('Agent stalled')
+    expect(tableText).toContain('Worker failed')
+    expect(tableText).not.toContain('agent.stall')
+    expect(tableText).not.toContain('harness.worker_failed')
+  })
+
   it('pre-filters from a deep-link query on mount (e.g. Remy /analytics link)', async () => {
     setupMocks()
     const { useRoute } = await import('vue-router')

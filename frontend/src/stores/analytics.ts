@@ -398,10 +398,15 @@ export function buildChartOption(
   series: AnalyticsBucket[],
   measure: AnalyticsMeasure,
   _groupBy: string,
+  dimension?: string | null,
+  labelFormatter?: (key: string) => string,
 ): Record<string, unknown> {
   const dimensioned = isDimensioned(series);
   const buckets = dimensioned ? aggregateByKey(series) : series;
-  const labels = buckets.map((b) => b.key ?? formatBucketDate(b.date));
+  const labels = buckets.map((b) => {
+    const raw = b.key ?? formatBucketDate(b.date);
+    return b.key != null && dimension === "error_code" && labelFormatter ? labelFormatter(b.key) : raw;
+  });
   const values = buckets.map((b) => measureValue(b, measure));
   return {
     tooltip: { trigger: "axis" },
