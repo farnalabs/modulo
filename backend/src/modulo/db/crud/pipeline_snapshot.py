@@ -96,6 +96,65 @@ async def _materialize_agent_fields(
     return (agents, agents_by_id, parameter_schema_ids)
 
 
+async def _load_parameter_schemas(
+    session: AsyncSession, parameter_schema_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, ParameterSchema]:
+    schema_rows = (
+        (await session.execute(select(ParameterSchema).where(ParameterSchema.id.in_(parameter_schema_ids))))
+        .scalars()
+        .all()
+    )
+    return {s.id: s for s in schema_rows}
+
+
+def _collect_parameter_set_ids(nodes: list[dict[str, Any]]) -> set[uuid.UUID]:
+    set_ids: set[uuid.UUID] = set()
+    for node in nodes:
+        raw_set_id = node.get("parameter_set_id")
+        if raw_set_id is not None:
+            set_ids.add(uuid.UUID(str(raw_set_id)))
+    return set_ids
+
+
+async def _load_parameter_sets(session: AsyncSession, set_ids: set[uuid.UUID]) -> dict[uuid.UUID, ParameterSet]:
+    sets_by_id: dict[uuid.UUID, ParameterSet] = {}
+    if set_ids:
+        set_rows = (await session.execute(select(ParameterSet).where(ParameterSet.id.in_(set_ids)))).scalars().all()
+        sets_by_id = {s.id: s for s in set_rows}
+    return sets_by_id
+
+
+def _resolve_node_parameters(
+    schema: ParameterSchema, sets_by_id: dict[uuid.UUID, ParameterSet], node: dict[str, Any]
+) -> dict[str, Any]:
+    resolved: dict[str, Any] = {}
+    for param in schema.parameters or []:
+        if isinstance(param, dict) and "name" in param:
+            resolved[param["name"]] = param.get("default")
+
+    raw_set_id = node.get("parameter_set_id")
+    if raw_set_id is not None:
+        ps = sets_by_id.get(uuid.UUID(str(raw_set_id)))
+        if ps is not None and isinstance(ps.values, dict):
+            resolved.update(ps.values)
+
+    overrides = node.get("parameter_overrides")
+    if isinstance(overrides, dict):
+        resolved.update(overrides)
+    return resolved
+
+
+def _build_parameter_binding(
+    node: dict[str, Any], schema_id: uuid.UUID, resolved: dict[str, Any], raw_set_id: Any
+) -> dict[str, Any]:
+    return {
+        "agent_id": str(node.get("agent_id")) if node.get("agent_id") else None,
+        "parameter_schema_id": str(schema_id),
+        "parameter_set_id": str(raw_set_id) if raw_set_id is not None else None,
+        "resolved_values": resolved,
+    }
+
+
 async def _resolve_parameter_bindings(
     session: AsyncSession,
     nodes: list[dict[str, Any]],
@@ -103,24 +162,9 @@ async def _resolve_parameter_bindings(
 ) -> dict[str, Any]:
     parameter_bindings: dict[str, Any] = {}
     if parameter_schema_ids:
-        schema_rows = (
-            (await session.execute(select(ParameterSchema).where(ParameterSchema.id.in_(parameter_schema_ids))))
-            .scalars()
-            .all()
-        )
-        schemas_by_id: dict[uuid.UUID, ParameterSchema] = {s.id: s for s in schema_rows}
-
-        set_ids: set[uuid.UUID] = set()
-        for node in nodes:
-            raw_set_id = node.get("parameter_set_id")
-            if raw_set_id is not None:
-                parsed = uuid.UUID(str(raw_set_id))
-                set_ids.add(parsed)
-
-        sets_by_id: dict[uuid.UUID, ParameterSet] = {}
-        if set_ids:
-            set_rows = (await session.execute(select(ParameterSet).where(ParameterSet.id.in_(set_ids)))).scalars().all()
-            sets_by_id = {s.id: s for s in set_rows}
+        schemas_by_id = await _load_parameter_schemas(session, parameter_schema_ids)
+        set_ids = _collect_parameter_set_ids(nodes)
+        sets_by_id = await _load_parameter_sets(session, set_ids)
 
         for node in nodes:
             raw_schema_id = node.get("parameter_schema_id")
@@ -130,30 +174,10 @@ async def _resolve_parameter_bindings(
             schema = schemas_by_id.get(schema_id)
             if schema is None:
                 continue
-
-            resolved: dict[str, Any] = {}
-            for param in schema.parameters or []:
-                if isinstance(param, dict) and "name" in param:
-                    resolved[param["name"]] = param.get("default")
-
-            raw_set_id = node.get("parameter_set_id")
-            if raw_set_id is not None:
-                ps = sets_by_id.get(uuid.UUID(str(raw_set_id)))
-                if ps is not None and isinstance(ps.values, dict):
-                    resolved.update(ps.values)
-
-            overrides = node.get("parameter_overrides")
-            if isinstance(overrides, dict):
-                resolved.update(overrides)
-
+            resolved = _resolve_node_parameters(schema, sets_by_id, node)
             node["_resolved_parameters"] = resolved
-
-            parameter_bindings[str(node["id"])] = {
-                "agent_id": str(node.get("agent_id")) if node.get("agent_id") else None,
-                "parameter_schema_id": str(schema_id),
-                "parameter_set_id": str(raw_set_id) if raw_set_id is not None else None,
-                "resolved_values": resolved,
-            }
+            raw_set_id = node.get("parameter_set_id")
+            parameter_bindings[str(node["id"])] = _build_parameter_binding(node, schema_id, resolved, raw_set_id)
     return parameter_bindings
 
 
