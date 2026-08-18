@@ -686,7 +686,7 @@ def test_mask_config_set_masks_json_schema():
 
 def test_mask_config_set_preserves_knobs_and_empty_sets():
     empty = mask_config_set(GuardrailConfigSet())
-    assert empty.guardrails == []
+    assert not empty.guardrails
     assert empty.max_guardrails_per_node == GuardrailConfigSet().max_guardrails_per_node
 
     config_set = load_config_set(
