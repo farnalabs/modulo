@@ -13266,6 +13266,8 @@ export interface components {
             guardrail_summary?: {
                 [key: string]: number;
             } | null;
+            /** Trigger Type */
+            trigger_type?: string | null;
             /** Trigger Actor */
             trigger_actor?: string | null;
             /** Trigger Id */

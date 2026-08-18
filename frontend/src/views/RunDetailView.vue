@@ -126,7 +126,7 @@
         <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.created') }}</span> {{ runTimestamps.created }}</div>
         <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.started') }}</span> {{ runTimestamps.started }}</div>
         <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.completed') }}</span> {{ runTimestamps.completed }}</div>
-        <div data-testid="run-detail-trigger-actor"><span class="font-medium text-foreground">{{ $t('views.RunDetailView.triggered_by') }}</span> {{ run.trigger_actor || '—' }}</div>
+        <div data-testid="run-detail-trigger-actor"><span class="font-medium text-foreground">{{ $t('views.RunDetailView.triggered_by') }}</span> {{ run.trigger_actor || triggerTypeLabel(run.trigger_type, t) }}</div>
         <div data-testid="run-detail-heartbeat">
           <span class="font-medium text-foreground">{{ $t('views.RunDetailView.last_heartbeat') }}</span>
           <span :class="isHeartbeatStale(heartbeatAge) ? 'font-medium text-warning' : ''">{{ formatHeartbeatAge(heartbeatAge, t) }}<span v-if="isHeartbeatStale(heartbeatAge)"> ({{ $t('views.RunDetailView.stale') }})</span></span>
@@ -705,10 +705,10 @@ import Button from '../components/ui/button/Button.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { requestRunCancellation } from '../lib/api/runs'
 import { isTerminalStatus } from '../constants/runStatuses'
+import { triggerTypeLabel, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge } from '../utils/runUtils'
 import { shortId, formatRun } from '../utils/format'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
-import { heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge } from '../utils/runUtils'
 import { Check, X } from '@lucide/vue'
 
 type RunResponse = components['schemas']['RunResponse'] & {
@@ -719,6 +719,7 @@ type RunResponse = components['schemas']['RunResponse'] & {
   child_runs_count?: number
   aggregate_cost_usd?: string | null
   trigger_actor?: string | null
+  trigger_type?: string | null
   trigger_id?: string | null
   heartbeat_at?: string | null
   work_item_refs?: WorkItemRef[] | null
@@ -1106,8 +1107,7 @@ function nodeSummary(node: NodeEntry): string | null {
   return typeof telemetrySummary === 'string' && telemetrySummary.length > 0 ? telemetrySummary : null
 }
 
-const statusBadgeClass = computed(() => {
-  const s = run.value?.status ?? ''
+function statusBadgeClassFor(status: string | undefined): string {
   const map: Record<string, string> = {
     running: 'badge badge-status-primary',
     complete: 'badge badge-status-success',
@@ -1117,20 +1117,17 @@ const statusBadgeClass = computed(() => {
     pending: 'badge badge-status-muted',
     awaiting_human: 'badge badge-status-pending',
   }
-  return map[s] ?? 'badge badge-context-slate'
-})
+  return map[status ?? ''] ?? 'badge badge-context-slate'
+}
+
+const statusBadgeClass = computed(() => statusBadgeClassFor(run.value?.status))
 
 const isTerminal = computed(() => run.value != null && isTerminalStatus(run.value.status))
 
 const canCancel = computed(() => run.value != null && !isTerminalStatus(run.value.status))
 
 function nodeStatusBadgeClass(node: NodeEntry): string {
-  const map: Record<string, string> = {
-    running: 'badge badge-status-primary',
-    complete: 'badge badge-status-success',
-    failed: 'badge badge-status-destructive',
-  }
-  return map[node.status] ?? 'badge badge-context-slate'
+  return statusBadgeClassFor(node.status)
 }
 
 const runTimestamps = computed(() => {
@@ -1566,16 +1563,7 @@ const heartbeatAge = computed<number | null>(() => {
 })
 
 function childRunBadgeClass(status: string | undefined): string {
-  const map: Record<string, string> = {
-    running: 'badge badge-status-primary',
-    complete: 'badge badge-status-success',
-    failed: 'badge badge-status-destructive',
-    stalled: 'badge badge-status-destructive',
-    cancelled: 'badge badge-status-warning',
-    pending: 'badge badge-status-muted',
-    awaiting_human: 'badge badge-status-pending',
-  }
-  return map[status ?? ''] ?? 'badge badge-context-slate'
+  return statusBadgeClassFor(status)
 }
 
 async function fetchHitlGates(runId: string) {
