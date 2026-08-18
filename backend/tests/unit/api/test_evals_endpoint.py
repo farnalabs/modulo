@@ -594,3 +594,60 @@ class TestDeleteEvalDefinition:
     def test_delete_unauthorized(self, unauth_client: TestClient) -> None:
         resp = unauth_client.delete(f"{self.URL}/{_EVAL_DEF_ID}")
         assert resp.status_code in (401, 403)
+
+
+class TestDeleteEvalDefinitionTwoStep:
+    """FAR-309 PR B two-step soft-delete for GUARDRAIL eval definitions.
+
+    Step 1 — soft-delete: ``DELETE`` stamps ``deleted_at``/``deleted_by`` on a
+    guardrail eval definition (the row is retained so snapshot pins referencing
+    it take the skipped-with-audit path). Step 2 — purge: ``DELETE ?purge=true``
+    hard-removes soft-deleted rows. Non-guardrail evals keep their existing
+    hard delete.
+    """
+
+    URL = "/api/v1/evals"
+
+    def test_delete_guardrail_eval_soft_deletes(self, admin_client: TestClient) -> None:
+        mock_session = _make_mock_session()
+        eval_def = _make_eval_def(eval_type="guardrail")
+        mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
+            _make_result(scalar_value=None),  # set_rls_org
+            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
+            _make_result(scalar_one_value=eval_def),
+        ]
+        mock_session.delete = AsyncMock()
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        resp = admin_client.delete(f"{self.URL}/{_EVAL_DEF_ID}")
+        assert resp.status_code == 204
+        # Step 1: soft-delete stamps deleted_at/deleted_by; the row is NOT
+        # hard-deleted.
+        assert eval_def.deleted_at is not None
+        assert eval_def.deleted_by == _USER_ID
+        mock_session.delete.assert_not_called()
+
+    def test_delete_guardrail_eval_purge_hard_deletes(self, admin_client: TestClient) -> None:
+        mock_session = _make_mock_session()
+        mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
+            _make_result(scalar_value=None),  # set_rls_org
+            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
+            _make_result(scalar_one_value=_make_eval_def(eval_type="guardrail")),
+        ]
+        mock_session.delete = AsyncMock()
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        resp = admin_client.delete(f"{self.URL}/{_EVAL_DEF_ID}?purge=true")
+        assert resp.status_code == 204
+        # Step 2: purge hard-removes the soft-deleted row.
+        mock_session.delete.assert_called_once()

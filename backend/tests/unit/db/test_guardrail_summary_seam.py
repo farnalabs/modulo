@@ -12,6 +12,7 @@ EXPECTED (soft-deleted pin) skip never fires the unexpected-skip alert.
 import logging
 import uuid
 from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
 from typing import Any, cast
 
 import pytest
@@ -19,7 +20,12 @@ from sqlalchemy import Table, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.core import guardrails as guardrails_module
-from modulo.core.guardrails import GuardrailInterceptionOutcome, GuardrailSkip, serialize_guardrail_pin
+from modulo.core.guardrails import (
+    GuardrailInterceptionOutcome,
+    GuardrailSkip,
+    fingerprint_guardrail_pins,
+    serialize_guardrail_pin,
+)
 from modulo.db.crud.run import create_run
 from modulo.db.models.account import Account
 from modulo.db.models.audit_event import AuditChainHead, AuditEvent
@@ -118,7 +124,22 @@ async def _get_guardrail_row(session: AsyncSession, guardrail_id: uuid.UUID) -> 
     return (await session.execute(select(EvalDefinition).where(EvalDefinition.id == guardrail_id))).scalar_one()
 
 
-async def _seed_snapshot_with_pins(session: AsyncSession, *, guardrail_defs: list[EvalDefinition]) -> None:
+async def _seed_snapshot_with_pins(
+    session: AsyncSession,
+    *,
+    guardrail_defs: list[EvalDefinition],
+    fingerprint: str | None = None,
+    tamper: bool = False,
+) -> None:
+    pins = [serialize_guardrail_pin(d) for d in guardrail_defs]
+    if tamper:
+        # A tampered pin set: the stored pins differ from what the saved
+        # fingerprint was computed over. We store a fingerprint of the
+        # ORIGINAL pins but persist the tampered pins, so a re-verify fails.
+        pins = [{**pins[0], "name": f"{pins[0]['name']}-tampered"}]
+        stored_fingerprint = fingerprint_guardrail_pins([serialize_guardrail_pin(d) for d in guardrail_defs])
+    else:
+        stored_fingerprint = fingerprint if fingerprint is not None else fingerprint_guardrail_pins(pins)
     session.add(
         PipelineSnapshot(
             id=_SNAPSHOT,
@@ -130,7 +151,8 @@ async def _seed_snapshot_with_pins(session: AsyncSession, *, guardrail_defs: lis
             schema_pins_json=[],
             prompt_pins_json=[],
             model_backend_pins_json=[],
-            guardrail_pins_json=[serialize_guardrail_pin(d) for d in guardrail_defs],
+            guardrail_pins_json=pins,
+            guardrail_pins_fingerprint=stored_fingerprint,
             run_context_defaults={},
         )
     )
@@ -348,4 +370,102 @@ async def test_create_run_summary_derive_failure_fails_open(session: AsyncSessio
     # The enforcement outcome is unaffected — the run is still blocked.
     assert run.status == "eval_failed"
     assert run.error_code == "eval_blocked"
+    assert run.guardrail_summary_json is None
+
+
+# ---------------------------------------------------------------------------
+# FAR-309 PR B — run-start snapshot-integrity re-verify (saved fingerprint)
+# ---------------------------------------------------------------------------
+
+
+async def test_create_run_replay_clean_fingerprint_evaluates_pinned_set(session: AsyncSession):
+    """A replay against a snapshot whose saved fingerprint matches the current
+    pins proceeds normally — the pinned guardrail set is evaluated."""
+    await _seed(session)
+    gid = await _seed_guardrail(session, name="no-secrets", action="block")
+    pinned = await _get_guardrail_row(session, gid)
+    # One live guardrail row pinned into the snapshot with a matching fingerprint.
+    await _seed_snapshot_with_pins(session, guardrail_defs=[pinned])
+
+    run = await _create(session, input_payload={"body": "clean text"}, is_replay=True)
+    assert run.status == "pending"
+    s = _summary(run)
+    assert s["bound"] == 1
+    assert s["evaluated"] == 1
+    assert s["skipped"] == 0
+    assert _invariant(s)
+
+
+async def test_create_run_replay_fingerprint_mismatch_fails_closed(session: AsyncSession):
+    """A replay whose snapshot's CURRENT pins no longer match the SAVED
+    fingerprint (tampered/drifted) FAILS CLOSED: the run is a terminal
+    eval_failed mechanism error, the tampered pins are NEVER evaluated, and the
+    live rows are NEVER silently used."""
+    await _seed(session)
+    gid = await _seed_guardrail(session, name="no-secrets", action="block")
+    pinned = await _get_guardrail_row(session, gid)
+    # Tamper flag: stored pins differ from the fingerprint they were hashed with.
+    await _seed_snapshot_with_pins(session, guardrail_defs=[pinned], tamper=True)
+
+    run = await _create(session, input_payload={"body": "leak SECRET_ABC12345"}, is_replay=True)
+    assert run.status == "eval_failed"
+    assert run.error_code == "eval_blocked"
+    assert "fingerprint mismatch" in (run.error_detail or "")
+    # Nothing evaluated and nothing skipped — the tampered set is not trusted.
+    s = _summary(run)
+    assert s["bound"] == 0
+    assert s["evaluated"] == 0
+    assert s["skipped"] == 0
+    assert _invariant(s)
+
+
+async def test_create_run_replay_legacy_snapshot_without_fingerprint_still_works(session: AsyncSession):
+    """A legacy snapshot WITHOUT a saved fingerprint (created before PR B) is
+    still trusted — the fingerprint is optional and verified only when
+    present."""
+    await _seed(session)
+    gid = await _seed_guardrail(session, name="no-secrets", action="block")
+    pinned = await _get_guardrail_row(session, gid)
+    await _seed_snapshot_with_pins(session, guardrail_defs=[pinned], fingerprint=None)
+
+    run = await _create(session, input_payload={"body": "clean text"}, is_replay=True)
+    assert run.status == "pending"
+    s = _summary(run)
+    assert s["bound"] == 1
+    assert s["evaluated"] == 1
+    assert _invariant(s)
+
+
+async def test_create_run_replay_legacy_no_fingerprint_violation_still_blocks(session: AsyncSession):
+    """A legacy fingerprint-less snapshot still evaluates its pinned set: a
+    violating payload is DETECTED (recorded in the summary). Replays are
+    detection-only (item 10) — the violation is recorded, never re-blocked."""
+    await _seed(session)
+    gid = await _seed_guardrail(session, name="no-secrets", action="block")
+    pinned = await _get_guardrail_row(session, gid)
+    await _seed_snapshot_with_pins(session, guardrail_defs=[pinned], fingerprint=None)
+
+    run = await _create(session, input_payload={"body": "leak SECRET_ABC12345"}, is_replay=True)
+    assert run.status == "pending"
+    s = _summary(run)
+    assert s["bound"] == 1
+    assert s["evaluated"] == 1
+    assert s["violated"] == 1
+    assert _invariant(s)
+
+
+async def test_create_run_excludes_soft_deleted_guardrail_from_live_binding(session: AsyncSession):
+    """FAR-309 PR B interception respect: a SOFT-deleted guardrail row is
+    excluded from live binding — a fresh (non-replay) run evaluates nothing and
+    carries no summary. (The snapshot-pin path still references it and takes
+    the skipped-with-audit route.)"""
+    await _seed(session)
+    gid = await _seed_guardrail(session, name="no-secrets", action="block")
+    row = await _get_guardrail_row(session, gid)
+    row.deleted_at = datetime.now(UTC)
+    row.deleted_by = _ACCOUNT
+    await session.flush()
+
+    run = await _create(session, input_payload={"body": "leak SECRET_ABC12345"})
+    assert run.status == "pending"
     assert run.guardrail_summary_json is None

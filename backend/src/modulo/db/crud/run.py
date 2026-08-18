@@ -436,6 +436,7 @@ async def create_run(
         alert_unexpected_guardrail_skip,
         audit_guardrail_skip,
         build_guardrail_summary,
+        fingerprint_guardrail_pins,
         guardrail_cap_violation,
         log_guardrail_fired_signatures,
         non_conformant_blocking_guardrails,
@@ -462,11 +463,17 @@ async def create_run(
     snap_pins: list[dict[str, Any]] | None = None
     if is_replay and snapshot_id is not None:
         try:
-            snap_pins = (
+            snap_pin_row = (
                 await session.execute(
-                    select(PipelineSnapshot.guardrail_pins_json).where(PipelineSnapshot.id == snapshot_id)
+                    select(
+                        PipelineSnapshot.guardrail_pins_json,
+                        PipelineSnapshot.guardrail_pins_fingerprint,
+                    ).where(PipelineSnapshot.id == snapshot_id)
                 )
-            ).scalar_one_or_none()
+            ).one_or_none()
+            if snap_pin_row is not None:
+                snap_pins = snap_pin_row[0]
+                saved_fingerprint = snap_pin_row[1]
         except SQLAlchemyError:
             # Column/table absent on an unmigrated DB during bluegreen (or a
             # backend that cannot resolve the column) — the pinned set is
@@ -474,21 +481,52 @@ async def create_run(
             # (pre-pinning behaviour).
             _log.warning("guardrails.pins_read_unavailable", extra={"org_id": str(org_id)})
         if snap_pins:
-            live_by_name = {row.name: row for row in guardrail_rows}
-            for entry in snap_pins:
-                if not isinstance(entry, dict) or not entry.get("name"):
-                    continue
-                name = str(entry["name"])
-                if name not in live_by_name:
-                    skipped_guardrails.append(GuardrailSkip(name=name, reason="soft_deleted"))
-                    continue
-                try:
-                    pinned_defs.append(to_engine_definition_from_pin(entry))
-                except Exception:
-                    _log.exception("guardrails.pin_rebuild_error", extra={"guardrail": name})
-                    skipped_guardrails.append(GuardrailSkip(name=name, reason="soft_deleted", detail="pin unreadable"))
+            # Run-start snapshot-integrity re-verify (FAR-309 PR B): the
+            # fingerprint saved at snapshot creation must match the CURRENT
+            # pins. A mismatch means the snapshot's pin set was tampered with
+            # (or drifted) since creation — fail CLOSED as a mechanism error
+            # (a terminal eval_failed run): the tampered pins are NEVER
+            # evaluated and the live rows are NEVER silently used. A legacy
+            # snapshot WITHOUT a saved fingerprint is still trusted (the
+            # fingerprint is verified only when present).
+            recomputed_fingerprint = fingerprint_guardrail_pins(snap_pins)
+            if saved_fingerprint is not None and recomputed_fingerprint != saved_fingerprint:
+                guardrail_blocked = True
+                guardrail_block_message = "guardrail mechanism error: snapshot guardrail pin fingerprint mismatch"
+                _log.error(
+                    "guardrails.pin_fingerprint_mismatch",
+                    extra={"org_id": str(org_id), "snapshot_id": str(snapshot_id)},
+                )
+                await notify_guardrail_event(
+                    org_id,
+                    "guardrail_enforcement_gap",
+                    {
+                        "guardrail": "<snapshot-pins>",
+                        "reason": "pin_fingerprint_mismatch",
+                        "detail": "snapshot guardrail pin fingerprint mismatch at run start",
+                        "snapshot_id": str(snapshot_id),
+                        "run_id": str(run_id),
+                    },
+                    run_id=run_id,
+                )
+            else:
+                live_by_name = {row.name: row for row in guardrail_rows}
+                for entry in snap_pins:
+                    if not isinstance(entry, dict) or not entry.get("name"):
+                        continue
+                    name = str(entry["name"])
+                    if name not in live_by_name:
+                        skipped_guardrails.append(GuardrailSkip(name=name, reason="soft_deleted"))
+                        continue
+                    try:
+                        pinned_defs.append(to_engine_definition_from_pin(entry))
+                    except Exception:
+                        _log.exception("guardrails.pin_rebuild_error", extra={"guardrail": name})
+                        skipped_guardrails.append(
+                            GuardrailSkip(name=name, reason="soft_deleted", detail="pin unreadable")
+                        )
 
-    if guardrail_rows or pinned_defs or skipped_guardrails:
+    if guardrail_rows or pinned_defs or skipped_guardrails or guardrail_blocked:
         # Item 10 invariant — a snapshot with a NON-EMPTY pinned set evaluates
         # exactly that set, even when EVERY pin fails to rebuild (all pinned
         # rows soft-deleted → ``pinned_defs`` empty). It must never fall back

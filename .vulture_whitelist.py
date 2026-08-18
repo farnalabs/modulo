@@ -184,6 +184,7 @@ __all__ = [
     "delivered_at",
     "checkpointer",
     "input_hash",
+    "deleted_by",  # eval_definitions write-only audit column (set on soft-delete, FAR-309 PR B)
     "_superseded",
     "_task_group",
     "lifespan_context",

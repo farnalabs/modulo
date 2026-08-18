@@ -29,7 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_permission
+from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.eval_engine import EvalDefinition
@@ -135,6 +135,11 @@ async def _load_guardrail_definitions(session: AsyncSession, org_id: uuid.UUID) 
                     EvalDefinitionRow.organisation_id == org_id,
                     EvalDefinitionRow.eval_type == "guardrail",
                     EvalDefinitionRow.node_id.is_(None),
+                    # FAR-309 PR B: a soft-deleted guardrail is no longer a live
+                    # row — it must not appear in the export/drift surface (its
+                    # removal IS the drift, surfaced via the interception skip
+                    # path instead).
+                    EvalDefinitionRow.deleted_at.is_(None),
                 )
             )
         )
@@ -358,7 +363,7 @@ async def get_guardrail_config(
         )
 
 
-@router.get("/elevated", response_model=GuardrailConfigResponse)
+@router.get("/elevated", response_model=GuardrailConfigResponse, dependencies=[Depends(deny_break_glass_mint)])
 @handle_db_errors("guardrail_config.elevated")
 async def get_guardrail_config_elevated(
     session: AsyncSession = Depends(get_db_session),
@@ -398,7 +403,7 @@ async def get_guardrail_config_elevated(
         )
 
 
-@router.post("/propose", response_model=GuardrailProposalResponse)
+@router.post("/propose", response_model=GuardrailProposalResponse, dependencies=[Depends(deny_break_glass_mint)])
 @handle_db_errors("guardrail_config.propose")
 async def propose_guardrail_config(
     req: ProposeGuardrailConfigRequest,
@@ -457,7 +462,7 @@ async def propose_guardrail_config(
     )
 
 
-@router.post("/apply", response_model=GuardrailApplyResponse)
+@router.post("/apply", response_model=GuardrailApplyResponse, dependencies=[Depends(deny_break_glass_mint)])
 @handle_db_errors("guardrail_config.apply")
 async def apply_guardrail_config(
     session: AsyncSession = Depends(get_db_session),
@@ -545,7 +550,7 @@ async def apply_guardrail_config(
     return GuardrailApplyResponse(applied=True, hash=applied_hash, applied_at=now, status="clean")
 
 
-@router.post("/reject", response_model=GuardrailRejectResponse)
+@router.post("/reject", response_model=GuardrailRejectResponse, dependencies=[Depends(deny_break_glass_mint)])
 @handle_db_errors("guardrail_config.reject")
 async def reject_guardrail_config(
     session: AsyncSession = Depends(get_db_session),

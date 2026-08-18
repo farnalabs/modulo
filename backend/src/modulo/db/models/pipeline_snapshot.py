@@ -44,6 +44,13 @@ class PipelineSnapshot(OrgScoped):
     # rows; a pinned guardrail whose live row is gone is skipped-with-audit +
     # enforcement-gap alert. Mirrors the ``composite_bindings_json`` shape.
     guardrail_pins_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True, default=list)
+    # Run-start snapshot-integrity fingerprint (FAR-309 PR B): canonical SHA-256
+    # over the serialized ``guardrail_pins_json`` captured at snapshot creation.
+    # The replay seam re-computes the fingerprint of the LOADED pins and fails
+    # closed on a mismatch — a tampered/drifted pin set must never silently
+    # change which guardrails evaluate. Nullable: legacy snapshots predating
+    # the fingerprint are still trusted (verified only when present).
+    guardrail_pins_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     tag: Mapped[str | None] = mapped_column(String(100), nullable=True)
     notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     default_autonomy_level: Mapped[str | None] = mapped_column(String(30))

@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.guardrails import fingerprint_guardrail_pins
 from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
@@ -177,6 +178,13 @@ async def test_live_graph_becomes_executable_snapshot_with_dependency_pins() -> 
             "suite_id": None,
         }
     ]
+    # FAR-309 PR B: the snapshot carries a deterministic fingerprint of the
+    # serialized pin set so the run-start replay seam can detect a tampered or
+    # drifted pin set and fail closed. It must be a 64-char SHA-256 hex digest
+    # that matches the recomputed fingerprint of the stored pins.
+    assert isinstance(snapshot.guardrail_pins_fingerprint, str)
+    assert len(snapshot.guardrail_pins_fingerprint) == 64
+    assert snapshot.guardrail_pins_fingerprint == fingerprint_guardrail_pins(snapshot.guardrail_pins_json)
     assert "credentials" not in repr(snapshot.connector_bindings_json)
     assert "credentials" not in repr(snapshot.model_backend_pins_json)
     session.add.assert_called_once_with(snapshot)
