@@ -85,7 +85,7 @@ def _reference_files() -> list[Path]:
 def test_reference_copies_match_seed_definitions() -> None:
     """Version-controlled copies under devtools/dogfood/schemas stay in sync."""
     seeds = {entry["name"]: entry for entry in SCHEMAS}
-    refs = {json.loads(ref.read_text()) for ref in _reference_files()}
+    refs = [json.loads(ref.read_text()) for ref in _reference_files()]
     assert refs, "No dogfood schema reference copies found"
 
     for data in refs:
