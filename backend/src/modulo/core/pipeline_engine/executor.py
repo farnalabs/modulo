@@ -1972,7 +1972,37 @@ class PipelineExecutor:
             final_status=final_status,
             completed_node_outputs=completed_node_outputs,
         )
+        # FAR-296 Phase 3b: revoke the per-run runner-role API key (if any was
+        # minted for a script-mode sandbox). Failure-isolated — a revocation
+        # failure never crashes terminalization (the key's short-TTL expiry in
+        # validate_api_key is the backstop).
+        try:
+            await self._revoke_run_api_key(run_id=run_id, org_id=org_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("run_api_key.revoke_failed", extra={"run_id": str(run_id)})
         return final_run
+
+    async def _revoke_run_api_key(self, *, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
+        """Revoke the per-run runner-role API key minted for a script-mode sandbox.
+
+        Failure-isolated at the call site — a revocation failure never crashes
+        terminalization (the key's short-TTL expiry in validate_api_key is the
+        backstop).
+        """
+        if self._session_factory is None:
+            return
+        try:
+            from modulo.auth.api_key import revoke_run_api_key
+
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                await revoke_run_api_key(session, run_id=run_id, org_id=org_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("run_api_key.revoke_failed", extra={"run_id": str(run_id)})
 
     async def execute(
         self,

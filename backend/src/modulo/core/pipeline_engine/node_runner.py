@@ -2669,6 +2669,82 @@ def make_sandbox_agent_fn(
                     # so the caller never marks the lease claimed.
                     raise SupersededNodeError("script lease denied — run superseded or not running")
 
+        async def _mint_run_api_key_for_sandbox() -> str | None:
+            """Mint a short-TTL runner-role API key for this script-mode sandbox (FAR-296 Phase 3b).
+
+            Returns the raw key value, or None when minting is unavailable/failed
+            (fail-open — the sandbox runs without the key rather than failing the
+            dispatch). TTL = max(15 min, node_timeout + 5 min), capped by the
+            org-level max (default 1 hour). The raw value is returned to the
+            caller only, which injects it into the sandbox envs — it is NEVER
+            logged, checkpointed, or placed in LangGraph state.
+            """
+            if session_factory is None:
+                return None
+            org_id_raw = state.get("_org_id")
+            try:
+                org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
+            except (TypeError, ValueError):
+                org_uuid = None
+            if org_uuid is None:
+                return None
+            try:
+                run_uuid = uuid.UUID(str(run_id))
+            except (TypeError, ValueError):
+                return None
+            try:
+                from modulo.auth.api_key import mint_run_api_key
+                from modulo.db.crud.run import get_run_api_key_ttl_seconds
+
+                ttl_seconds = await get_run_api_key_ttl_seconds(session_factory, org_uuid, sandbox_timeout)
+                async with session_factory() as session, session.begin():
+                    await set_rls_org(session, org_uuid)
+                    # account_id: the run's triggering user; fall back to the
+                    # first active admin in the org when the run row has none.
+                    from sqlalchemy import text as _sql_text
+
+                    row = (
+                        await session.execute(
+                            _sql_text("SELECT account_id FROM runs WHERE id=:rid AND organisation_id=:oid"),
+                            {"rid": str(run_uuid), "oid": str(org_uuid)},
+                        )
+                    ).fetchone()
+                    account_id_raw = row[0] if row else None
+                    if account_id_raw is None:
+                        admin_row = (
+                            await session.execute(
+                                _sql_text(
+                                    "SELECT a.id FROM accounts a JOIN org_memberships om ON om.account_id = a.id "
+                                    "WHERE om.organisation_id=:oid AND om.role='admin' AND om.deactivated_at IS NULL "
+                                    "ORDER BY a.created_at LIMIT 1"
+                                ),
+                                {"oid": str(org_uuid)},
+                            )
+                        ).fetchone()
+                        account_id_raw = admin_row[0] if admin_row else None
+                    if account_id_raw is None:
+                        return None
+                    minted = await mint_run_api_key(
+                        session,
+                        org_id=org_uuid,
+                        run_id=run_uuid,
+                        node_id=node_id,
+                        account_id=uuid.UUID(str(account_id_raw)),
+                        ttl_seconds=ttl_seconds,
+                    )
+                    if minted is None:
+                        return None
+                    _key_row, full_key = minted
+                    return full_key
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception(
+                    "sandbox_agent.run_api_key_mint_failed",
+                    extra={"run_id": run_id, "node_id": node_id},
+                )
+                return None
+
         async def _clear_dispatch_marker() -> None:
             """Fenced marker clear — only when the claim token still matches.
 
@@ -3127,6 +3203,15 @@ def make_sandbox_agent_fn(
                 if sandbox_mode == "script":
                     await _store_script_lease()
                     _script_lease_claimed = True
+                    # FAR-296 Phase 3b: mint a short-TTL runner-role API key so
+                    # the script can authenticate to the Modulo API with a
+                    # restricted identity. The key is per-run, revoked at run
+                    # finalization, and never the long-lived host credentials.
+                    # Fail-open: a mint failure leaves the key absent (the
+                    # sandbox still runs).
+                    _run_api_key = await _mint_run_api_key_for_sandbox()
+                    if _run_api_key:
+                        sandbox_envs["MODULO_API_KEY"] = _run_api_key
                 _bridge_wrapped_command = rendered_agent_command
                 # FAR-211: start the loop-interception callback server + write
                 # the bridge client into the sandbox. Best-effort and
