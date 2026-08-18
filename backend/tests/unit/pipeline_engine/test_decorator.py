@@ -2,6 +2,7 @@
 
 import asyncio
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -10,6 +11,11 @@ from modulo.core.pipeline_engine import (
     RunCancelledError,
     cancellable_node,
     set_cancellation_check,
+)
+from modulo.core.pipeline_engine.decorator import (
+    get_connector_hub,
+    set_audit_hook,
+    set_connector_hub,
 )
 
 # ---------------------------------------------------------------------------
@@ -320,3 +326,159 @@ async def test_context_var_isolation():
 
     await asyncio.gather(task_a(), task_b())
     assert results in (["a_cancelled", "b_ran"], ["b_ran", "a_cancelled"])
+
+
+# ---------------------------------------------------------------------------
+# DB-backed cancellation check — degraded paths
+# ---------------------------------------------------------------------------
+
+
+async def test_db_check_exception_degrades_to_false():
+    """A DB-check failure (e.g. connection error) is caught and logged; the
+    run continues as if not cancelled (conservative degrade, invariant 6)."""
+    node_calls = [0]
+
+    async def _broken_db_check() -> bool:
+        raise RuntimeError("connection lost")
+
+    set_cancellation_check(_broken_db_check)
+    try:
+
+        @cancellable_node()
+        async def node(state: dict[str, Any]) -> dict[str, Any]:
+            node_calls[0] += 1
+            return {"ok": True}
+
+        result = await node(_LIVE_STATE)
+    finally:
+        set_cancellation_check(None)
+
+    assert result["ok"] is True
+    assert node_calls[0] == 1, "Node must still run when the DB check fails"
+
+
+async def test_db_check_cancelled_error_propagates():
+    """asyncio.CancelledError from the DB check must propagate — it is not a
+    degraded-cancellation signal, it is the task being cancelled."""
+    set_cancellation_check(AsyncMock(side_effect=asyncio.CancelledError))
+    try:
+
+        @cancellable_node()
+        async def node(state: dict[str, Any]) -> dict[str, Any]:
+            return {}
+
+        with pytest.raises(asyncio.CancelledError):
+            await node(_LIVE_STATE)
+    finally:
+        set_cancellation_check(None)
+
+
+# ---------------------------------------------------------------------------
+# Connector hub ContextVar accessors
+# ---------------------------------------------------------------------------
+
+
+def test_get_connector_hub_defaults_to_none():
+    assert get_connector_hub() is None
+
+
+def test_set_and_get_connector_hub():
+    hub = object()
+    set_connector_hub(hub)
+    try:
+        assert get_connector_hub() is hub
+    finally:
+        set_connector_hub(None)
+
+
+# ---------------------------------------------------------------------------
+# Reserved-key stripping in context-setters
+# ---------------------------------------------------------------------------
+
+
+async def test_context_setter_reserved_keys_stripped():
+    """A context-setter that attempts to write reserved keys (cancelled,
+    input, ...) has them stripped silently and the write-log still records the
+    non-reserved fields."""
+
+    @cancellable_node(role="context_setter")
+    async def ctx_node(state: dict[str, Any]) -> dict[str, Any]:
+        return {"run_context": {"cancelled": True, "seeded": "ok", "input": "nope"}}
+
+    result = await ctx_node(_LIVE_STATE)
+    assert result["run_context"] == {"seeded": "ok"}
+    write_log = result["_run_context_write_log"]
+    assert len(write_log) == 1
+    assert write_log[0]["written_fields"] == ["seeded"]
+    assert write_log[0]["node_name"] == "ctx_node"
+    assert write_log[0]["role"] == "context_setter"
+
+
+async def test_context_setter_only_reserved_keys_no_write_log():
+    """A context-setter that writes ONLY reserved keys is stripped to an empty
+    run_context and records no write-log entry."""
+
+    @cancellable_node(role="context_setter")
+    async def ctx_node(state: dict[str, Any]) -> dict[str, Any]:
+        return {"run_context": {"cancelled": True}}
+
+    result = await ctx_node(_LIVE_STATE)
+    assert result["run_context"] == {}
+    assert "_run_context_write_log" not in result
+
+
+# ---------------------------------------------------------------------------
+# Audit-hook dispatch for non-context-setter violations
+# ---------------------------------------------------------------------------
+
+
+async def test_audit_hook_invoked_on_violation():
+    """The per-run audit hook receives {node_id, role, attempted_keys} when a
+    non-context-setter node writes run_context."""
+    hook = AsyncMock()
+
+    set_audit_hook(hook)
+    try:
+
+        @cancellable_node(role="agent")
+        async def bad_node(state: dict[str, Any]) -> dict[str, Any]:
+            return {"run_context": {"tampered": True}}
+
+        with pytest.raises(ContextSetterViolationError):
+            await bad_node(_LIVE_STATE)
+    finally:
+        set_audit_hook(None)
+
+    hook.assert_awaited_once()
+    payload = hook.await_args.args[0]
+    assert payload == {"node_id": "bad_node", "role": "agent", "attempted_keys": ["tampered"]}
+
+
+async def test_audit_hook_failure_does_not_mask_violation():
+    """A failing audit hook must never mask the ContextSetterViolationError."""
+    set_audit_hook(AsyncMock(side_effect=RuntimeError("audit db down")))
+    try:
+
+        @cancellable_node(role=None)
+        async def bad_node(state: dict[str, Any]) -> dict[str, Any]:
+            return {"run_context": {"x": 1}}
+
+        with pytest.raises(ContextSetterViolationError):
+            await bad_node(_LIVE_STATE)
+    finally:
+        set_audit_hook(None)
+
+
+async def test_audit_hook_cancelled_error_propagates():
+    """asyncio.CancelledError from the audit hook propagates (task cancelled)."""
+    set_audit_hook(AsyncMock(side_effect=asyncio.CancelledError))
+    try:
+
+        @cancellable_node(role=None)
+        async def bad_node(state: dict[str, Any]) -> dict[str, Any]:
+            return {"run_context": {"x": 1}}
+
+        with pytest.raises(asyncio.CancelledError):
+            await bad_node(_LIVE_STATE)
+    finally:
+        set_audit_hook(None)

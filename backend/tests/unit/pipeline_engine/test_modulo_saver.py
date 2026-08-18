@@ -1,8 +1,15 @@
-"""Unit tests for ModuloPostgresSaver — org isolation, encryption, SQL."""
+"""Unit tests for ModuloPostgresSaver â€” org isolation, encryption, SQL."""
 
+import asyncio
 import json
 import uuid
-from unittest.mock import AsyncMock, MagicMock
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from cryptography.fernet import Fernet, InvalidToken
+
+from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 
 
 class _AsyncIter:
@@ -18,11 +25,6 @@ class _AsyncIter:
         except StopIteration:
             raise StopAsyncIteration from None
 
-
-import pytest  # noqa: E402
-from cryptography.fernet import Fernet  # noqa: E402
-
-from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver  # noqa: E402
 
 _FERNET_KEY = Fernet.generate_key().decode()
 _ORG_ID = uuid.uuid4()
@@ -343,3 +345,419 @@ class TestIsEncrypted:
 
     def test_short_blob_less_than_6_bytes(self):
         assert not self._is_encrypted(b"short")
+
+
+class OperationalError(Exception):
+    """A stand-in for psycopg.OperationalError (matched by class name in aput)."""
+
+
+class TestDecryptEdgePaths:
+    async def test_decrypt_dict_with_encrypted_flag(self, mock_conn):
+        saver = await _make_saver(mock_conn)
+        encrypted = saver._encrypt_checkpoint({"secret": 1})
+        wrapper = json.loads(encrypted)
+        # Feed the dict form (as read from a JSONB column) straight to decrypt.
+        result = saver._decrypt_checkpoint(wrapper)
+        assert result == {"secret": 1}
+
+    async def test_decrypt_dict_with_encrypted_flag_no_fernet(self, mock_conn):
+        saver = await _make_saver(mock_conn, fernet_key=None)
+        # Without a key the dict is returned as-is (no decryption possible).
+        result = saver._decrypt_checkpoint({"__encrypted__": True, "data": "garbage"})
+        assert result == {"__encrypted__": True, "data": "garbage"}
+
+    async def test_decrypt_malformed_encrypted_json_raises(self, mock_conn):
+        saver = await _make_saver(mock_conn)
+        with pytest.raises(json.JSONDecodeError):
+            saver._decrypt_checkpoint('{"__encrypted__": true, "data": "unterminated')
+
+    async def test_decrypt_without_fernet_returns_ciphertext(self, mock_conn):
+        saver = await _make_saver(mock_conn, fernet_key=None)
+        raw = b"not-encrypted-bytes"
+        assert saver._decrypt_with_fallback(raw) == raw
+
+    async def test_decrypt_old_key_fallback(self, mock_conn):
+        old_key = Fernet.generate_key().decode()
+        new_key = Fernet.generate_key().decode()
+        old_fernet = Fernet(old_key.encode())
+        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=new_key, fernet_key_old=old_key)
+        ciphertext = old_fernet.encrypt(b"legacy-data")
+        assert saver._decrypt_with_fallback(ciphertext) == b"legacy-data"
+
+    async def test_decrypt_fallback_reraises_when_no_old_key(self, mock_conn):
+        saver = await _make_saver(mock_conn)
+        other = Fernet(Fernet.generate_key())
+        ciphertext = other.encrypt(b"x")
+        with pytest.raises(InvalidToken):
+            saver._decrypt_with_fallback(ciphertext)
+
+    async def test_decrypt_blob_fallback_warning(self, mock_conn):
+        saver = await _make_saver(mock_conn)
+        other = Fernet(Fernet.generate_key())
+        blob = [[b"ch", b"bytes", other.encrypt(b"x")]]
+        result = saver._decrypt_blobs(blob)
+        # Decryption failed, warning logged, raw ciphertext preserved.
+        assert list(result.keys()) == ["ch"]
+
+    async def test_decrypt_writes_none_returns_none(self, mock_conn):
+        saver = await _make_saver(mock_conn)
+        assert saver._decrypt_writes(None) is None
+        assert saver._decrypt_writes([]) is None
+
+    async def test_decrypt_writes_short_entry_skipped(self, mock_conn):
+        saver = await _make_saver(mock_conn)
+        writes = [[b"task", b"ch"]]  # len < 4 â€” skipped
+        assert saver._decrypt_writes(writes) == []
+
+
+class TestAgetTupleRowPath:
+    async def test_get_tuple_returns_checkpoint(self, mock_conn):
+        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        cursor = AsyncMock()
+        cursor.__aenter__ = AsyncMock(return_value=cursor)
+        cursor.__aexit__ = AsyncMock(return_value=False)
+        row = {
+            "checkpoint_id": "ckp-9",
+            "parent_checkpoint_id": None,
+            "checkpoint": saver._encrypt_checkpoint({"channel_values": {"a": 1}}),
+            "metadata": {"source": "test"},
+            "pending_writes": None,
+            "pending_sends": None,
+        }
+        cursor.__aiter__ = MagicMock(return_value=_AsyncIter([row]))
+        saver._cursor = MagicMock(return_value=cursor)
+
+        config = {"configurable": {"thread_id": "t1", "checkpoint_ns": "", "checkpoint_id": "ckp-9"}}
+        result = await saver.aget_tuple(config)
+        assert result is not None
+        assert result.config["configurable"]["checkpoint_id"] == "ckp-9"
+        assert result.checkpoint["channel_values"] == {"a": 1}
+        assert result.metadata == {"source": "test"}
+        assert result.parent_config is None
+
+    async def test_get_tuple_returns_checkpoint_with_parent(self, mock_conn):
+        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        cursor = AsyncMock()
+        cursor.__aenter__ = AsyncMock(return_value=cursor)
+        cursor.__aexit__ = AsyncMock(return_value=False)
+        row = {
+            "checkpoint_id": "ckp-10",
+            "parent_checkpoint_id": "ckp-9",
+            "checkpoint": saver._encrypt_checkpoint({"channel_values": {}}),
+            "metadata": {},
+            "pending_writes": None,
+            "pending_sends": None,
+        }
+        cursor.__aiter__ = MagicMock(return_value=_AsyncIter([row]))
+        saver._cursor = MagicMock(return_value=cursor)
+
+        config = {"configurable": {"thread_id": "t1", "checkpoint_ns": ""}}
+        result = await saver.aget_tuple(config)
+        assert result is not None
+        assert result.parent_config["configurable"]["checkpoint_id"] == "ckp-9"
+
+
+class TestAlist:
+    async def test_alist_iterates_rows(self, mock_conn):
+        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        cursor = AsyncMock()
+        cursor.__aenter__ = AsyncMock(return_value=cursor)
+        cursor.__aexit__ = AsyncMock(return_value=False)
+        rows = [
+            {
+                "checkpoint_id": "ckp-1",
+                "parent_checkpoint_id": None,
+                "checkpoint": saver._encrypt_checkpoint({"channel_values": {"a": 1}}),
+                "metadata": {},
+                "pending_writes": None,
+                "pending_sends": None,
+            },
+            {
+                "checkpoint_id": "ckp-0",
+                "parent_checkpoint_id": None,
+                "checkpoint": saver._encrypt_checkpoint({"channel_values": {"a": 2}}),
+                "metadata": {},
+                "pending_writes": None,
+                "pending_sends": None,
+            },
+        ]
+        cursor.__aiter__ = MagicMock(return_value=_AsyncIter(rows))
+        saver._cursor = MagicMock(return_value=cursor)
+
+        config = {"configurable": {"thread_id": "t1", "checkpoint_ns": ""}}
+        items = [item async for item in saver.alist(config)]
+        assert len(items) == 2
+        assert [i.config["configurable"]["checkpoint_id"] for i in items] == ["ckp-1", "ckp-0"]
+
+    async def test_alist_with_before_and_limit(self, mock_conn):
+        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        cursor = AsyncMock()
+        cursor.__aenter__ = AsyncMock(return_value=cursor)
+        cursor.__aexit__ = AsyncMock(return_value=False)
+        cursor.__aiter__ = MagicMock(return_value=_AsyncIter([]))
+        saver._cursor = MagicMock(return_value=cursor)
+
+        config = {"configurable": {"thread_id": "t1", "checkpoint_ns": ""}}
+        items = [
+            item async for item in saver.alist(config, before={"configurable": {"checkpoint_id": "ckp-5"}}, limit=3)
+        ]
+        assert items == []
+        sql = cursor.execute.call_args[0][0]
+        assert "checkpoint_id <" in sql
+        assert "LIMIT 3" in sql
+
+
+class TestAputExtraPaths:
+    async def test_aput_with_parent_config(self, mock_conn):
+        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        cursor = AsyncMock()
+        cursor.__aenter__ = AsyncMock(return_value=cursor)
+        cursor.__aexit__ = AsyncMock(return_value=False)
+        saver._cursor = MagicMock(return_value=cursor)
+        saver.get_next_version = MagicMock(return_value="ckp-id")
+
+        config = {
+            "configurable": {
+                "thread_id": "t1",
+                "checkpoint_ns": "",
+                "parent_config": {"configurable": {"checkpoint_id": "parent-ckp"}},
+            }
+        }
+        checkpoint = {"channel_values": {}}
+        await saver.aput(config, checkpoint, {})
+        executed_args = cursor.execute.call_args[0][1]
+        assert executed_args[4] == "parent-ckp"
+
+    async def test_aput_retries_on_conn_drop(self, mock_conn):
+        saver = ModuloPostgresSaver(
+            mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY, conn_string="postgres://x"
+        )
+        cursor = AsyncMock()
+        cursor.__aenter__ = AsyncMock(return_value=cursor)
+        cursor.__aexit__ = AsyncMock(return_value=False)
+        # First cursor acquisition raises OperationalError, second succeeds.
+        saver._cursor = MagicMock(side_effect=[OperationalError("connection is closed"), cursor])
+        saver._reconnect = AsyncMock()
+        saver.get_next_version = MagicMock(return_value="ckp-id")
+
+        config = {"configurable": {"thread_id": "t1", "checkpoint_ns": ""}}
+        result = await saver.aput(config, {"channel_values": {}}, {})
+        assert result["configurable"]["checkpoint_id"] == "ckp-id"
+        assert saver._reconnect.await_count == 1
+
+    async def test_aput_conn_drop_without_conn_string_reraises(self, mock_conn):
+        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY)
+        saver._cursor = MagicMock(side_effect=OperationalError("connection is closed"))
+        saver._reconnect = AsyncMock()
+        saver.get_next_version = MagicMock(return_value="ckp-id")
+
+        config = {"configurable": {"thread_id": "t1", "checkpoint_ns": ""}}
+        with pytest.raises(OperationalError, match="connection is closed"):
+            await saver.aput(config, {"channel_values": {}}, {})
+
+    async def test_aput_retry_reconnect_timeout_reraises_original(self, mock_conn):
+        saver = ModuloPostgresSaver(
+            mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY, conn_string="postgres://x"
+        )
+        saver._cursor = MagicMock(side_effect=OperationalError("connection is closed"))
+
+        async def _reconnect_timeout():
+            raise TimeoutError()
+
+        saver._reconnect = _reconnect_timeout
+        saver.get_next_version = MagicMock(return_value="ckp-id")
+
+        config = {"configurable": {"thread_id": "t1", "checkpoint_ns": ""}}
+        with pytest.raises(OperationalError, match="connection is closed"):
+            await saver.aput(config, {"channel_values": {}}, {})
+
+
+class TestReconnect:
+    async def test_reconnect_noop_without_conn_string(self, mock_conn):
+        saver = await _make_saver(mock_conn)
+        await saver._reconnect()  # should return silently
+
+    async def test_reconnect_skips_when_not_stale(self, mock_conn):
+        saver = ModuloPostgresSaver(
+            mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY, conn_string="postgres://x"
+        )
+        saver._connection_is_stale = MagicMock(return_value=False)
+        await saver._reconnect()  # no close, no reconnect
+
+    async def test_reconnect_success(self, mock_conn):
+        saver = ModuloPostgresSaver(
+            mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY, conn_string="postgres://x"
+        )
+        old_conn = MagicMock()
+        old_conn.closed = True
+        new_conn = MagicMock()
+        saver.conn = old_conn
+        saver._connection_is_stale = MagicMock(return_value=True)
+
+        async def _fake_connect(*args, **kwargs):
+            return new_conn
+
+        async def _fake_close():
+            return None
+
+        old_conn.close = AsyncMock(side_effect=_fake_close)
+        with pytest.MonkeyPatch.context() as mp:
+            import psycopg
+
+            mp.setattr(psycopg, "AsyncConnection", type("C", (), {"connect": staticmethod(_fake_connect)}))
+            mp.setattr("modulo.core.pipeline_engine.modulo_saver._RECONNECT_TIMEOUT_SECONDS", 5.0)
+            await saver._reconnect()
+
+        assert saver.conn is new_conn
+
+    async def test_reconnect_timeout_closes_and_raises(self, mock_conn):
+        saver = ModuloPostgresSaver(
+            mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY, conn_string="postgres://x"
+        )
+        old_conn = MagicMock()
+        old_conn.close = AsyncMock()
+        saver.conn = old_conn
+        saver._connection_is_stale = MagicMock(return_value=True)
+
+        async def _hanging_connect(*args, **kwargs):
+            await asyncio.sleep(30)
+
+        with pytest.MonkeyPatch.context() as mp:
+            import psycopg
+
+            mp.setattr(psycopg, "AsyncConnection", type("C", (), {"connect": staticmethod(_hanging_connect)}))
+            mp.setattr("modulo.core.pipeline_engine.modulo_saver._RECONNECT_TIMEOUT_SECONDS", 0.01)
+            with pytest.raises(asyncio.TimeoutError):
+                await saver._reconnect()
+
+    async def test_connection_is_stale_none_conn(self, mock_conn):
+        saver = await _make_saver(mock_conn)
+        saver.conn = None
+        assert saver._connection_is_stale() is False
+
+    async def test_cursor_reconnects_stale(self, mock_conn):
+        saver = ModuloPostgresSaver(
+            mock_conn, organisation_id=_ORG_ID, fernet_key=_FERNET_KEY, conn_string="postgres://x"
+        )
+        saver._connection_is_stale = MagicMock(return_value=True)
+        saver._reconnect = AsyncMock()
+
+        real_cursor = AsyncMock()
+        real_cursor.__aenter__ = AsyncMock(return_value=real_cursor)
+        real_cursor.__aexit__ = AsyncMock(return_value=False)
+
+        from contextlib import asynccontextmanager
+
+        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+        @asynccontextmanager
+        async def _base_cursor(self, pipeline=False):
+            yield real_cursor
+
+        original = AsyncPostgresSaver._cursor
+        AsyncPostgresSaver._cursor = _base_cursor
+        try:
+            async with saver._cursor():
+                pass
+        finally:
+            AsyncPostgresSaver._cursor = original
+        assert saver._reconnect.await_count == 1
+
+
+class TestSyncWrappers:
+    def test_run_sync_from_sync_context(self):
+        saver = asyncio.run(_make_saver(MagicMock()))
+        # Outside an event loop, _run_sync executes the coroutine to completion.
+        result = saver._run_sync(_echo(42))
+        assert result == 42
+
+    def test_run_sync_raises_in_async_context(self):
+        async def _inner():
+            saver = await _make_saver(MagicMock())
+            with pytest.raises(RuntimeError, match="must not be called from an async context"):
+                # A plain value (not a coroutine) is fine — _run_sync raises on
+                # the running-loop check before touching its argument.
+                saver._run_sync(object())
+
+        asyncio.run(_inner())
+
+    async def test_load_blobs_and_writes_delegate(self, mock_conn):
+        saver = await _make_saver(mock_conn)
+        assert saver._load_blobs(None) is None
+        assert saver._load_writes(None) is None
+
+
+async def _echo(value):
+    return value
+
+
+class TestFromConnString:
+    async def test_from_conn_string_constructs_saver(self):
+
+        base = MagicMock()
+        base.conn = MagicMock()
+
+        @asynccontextmanager
+        async def _base_cm(_conn_string):
+            yield base
+
+        with patch("modulo.core.pipeline_engine.modulo_saver.AsyncPostgresSaver.from_conn_string", _base_cm):
+            async with ModuloPostgresSaver.from_conn_string(
+                "postgresql://user:pass@localhost/db",
+                organisation_id=_ORG_ID,
+                fernet_key=_FERNET_KEY,
+            ) as saver:
+                assert saver.conn is base.conn
+                assert saver._org_id == _ORG_ID
+                assert saver._fernet is not None
+                assert saver._conn_string == "postgresql://user:pass@localhost/db"
+
+    async def test_from_conn_string_passes_old_fernet_key(self):
+
+        base = MagicMock()
+        base.conn = MagicMock()
+        old_key = Fernet.generate_key().decode()
+
+        @asynccontextmanager
+        async def _base_cm(_conn_string):
+            yield base
+
+        with patch("modulo.core.pipeline_engine.modulo_saver.AsyncPostgresSaver.from_conn_string", _base_cm):
+            async with ModuloPostgresSaver.from_conn_string(
+                "postgresql://u:p@localhost/db",
+                organisation_id=_ORG_ID,
+                fernet_key=_FERNET_KEY,
+                fernet_key_old=old_key,
+            ) as saver:
+                assert saver._fernet_old is not None
+
+
+class TestSyncOverrides:
+    def test_get_tuple_sync_wrapper(self):
+        """get_tuple runs aget_tuple through _run_sync from a sync context."""
+        saver = asyncio.run(_make_saver(MagicMock()))
+        saver.aget_tuple = AsyncMock(return_value="tuple-result")
+        result = saver.get_tuple({"configurable": {"thread_id": "t", "checkpoint_id": "c"}})
+        assert result == "tuple-result"
+        saver.aget_tuple.assert_awaited_once_with({"configurable": {"thread_id": "t", "checkpoint_id": "c"}})
+
+    def test_list_sync_wrapper(self):
+        """list runs _alist_sync through _run_sync and collects rows."""
+        saver = asyncio.run(_make_saver(MagicMock()))
+        called_with: dict[str, object] = {}
+
+        async def _fake_alist(config, *, filter=None, before=None, limit=None):
+            called_with["config"] = config
+            called_with["filter"] = filter
+            called_with["before"] = before
+            called_with["limit"] = limit
+            for row in ("row-1", "row-2"):
+                yield row
+
+        saver.alist = _fake_alist
+        result = saver.list({"configurable": {"thread_id": "t"}}, limit=5)
+        assert result == ["row-1", "row-2"]
+        assert called_with["config"] == {"configurable": {"thread_id": "t"}}
+        assert called_with["filter"] is None
+        assert called_with["before"] is None
+        assert called_with["limit"] == 5

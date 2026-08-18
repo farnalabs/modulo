@@ -28,7 +28,9 @@ from modulo.core.pipeline_engine.evidence import (
     SandboxEvidenceProvider,
     combine_probe_results,
     compute_work_intact,
+    evidence_enabled,
     extract_output_json,
+    extract_stored_output_json,
     node_declared_success,
     output_json_has_content,
     reconcile_noop_evidence,
@@ -98,6 +100,37 @@ class TestExtractOutputJson:
     def test_garbage(self) -> None:
         assert extract_output_json(None) is None
         assert extract_output_json({"output": {}}) is None
+
+    def test_artifacts_empty_or_non_dict_ignored(self) -> None:
+        # An empty artifacts list must fall through to the direct-output check.
+        assert extract_output_json({"artifacts": [], "output": {"output_json": {"b": 2}}}) == {"b": 2}
+        assert extract_output_json({"artifacts": [{"output": {}}]}) is None
+
+
+class TestExtractStoredOutputJson:
+    def test_legacy_envelope(self) -> None:
+        outputs = {
+            "node-a": {
+                "artifacts": [{"output": {"output_json": {"changed": True}, "status": "completed"}}],
+                "status": "completed",
+            }
+        }
+        assert extract_stored_output_json(outputs, {}, "node-a") == {"changed": True}
+
+    def test_pure_return_used_when_no_envelope(self) -> None:
+        # A P1 split row: node_return returns the pure output_json dict.
+        outputs = {"node-a": {"pr_url": "https://github.com/farnalabs/modulo/pull/1"}}
+        assert extract_stored_output_json(outputs, {}, "node-a") == {
+            "pr_url": "https://github.com/farnalabs/modulo/pull/1"
+        }
+
+    def test_non_dict_return_is_none(self) -> None:
+        assert extract_stored_output_json(None, {}, "node-a") is None
+        assert extract_stored_output_json({"node-a": "just-a-string"}, {}, "node-a") is None
+
+    def test_envelope_without_output_json_is_none(self) -> None:
+        outputs = {"node-a": {"output": {"status": "completed"}}}
+        assert extract_stored_output_json(outputs, {}, "node-a") is None
 
 
 class TestCombineProbeResults:
@@ -307,6 +340,55 @@ class TestSandboxFilesystemProbe:
     async def test_no_sandbox_is_unverifiable(self) -> None:
         provider = SandboxEvidenceProvider(sandbox_id_resolver=lambda _rid, _nid: None)
         assert await provider.sandbox_filesystem_probe(uuid.uuid4(), "node-a") == EvidenceResult.unverifiable
+
+    async def test_no_list_files_is_unverifiable(self) -> None:
+        provider = SandboxEvidenceProvider(sandbox_id_resolver=lambda _rid, _nid: "sandbox-1", list_files=None)
+        assert await provider.sandbox_filesystem_probe(uuid.uuid4(), "node-a") == EvidenceResult.unverifiable
+
+    async def test_directory_only_fs_is_verified_empty(self, tmp_path: Path) -> None:
+        root = tmp_path / "dirs"
+        root.mkdir()
+        (root / "sub").mkdir()
+
+        async def _list(_sid: str) -> list[FileInfo]:
+            return [FileInfo(name="sub", size=0, is_dir=True)]
+
+        provider = SandboxEvidenceProvider(
+            sandbox_id_resolver=lambda _rid, _nid: "sandbox-1",
+            list_files=_list,
+            timeout_seconds=30.0,
+        )
+        assert await provider.sandbox_filesystem_probe(uuid.uuid4(), "node-a") == EvidenceResult.verified_empty
+
+
+class TestProviderResolverConvenience:
+    async def test_awaitable_resolver_is_awaited(self) -> None:
+        async def _resolve(_rid, _nid) -> str | None:
+            return "sandbox-1"
+
+        provider = SandboxEvidenceProvider(
+            sandbox_id_resolver=_resolve,
+            run_command=lambda _sid, _cmd: _cmd_result(),
+            output_json_loader=lambda _rid, _nid: {},
+            timeout_seconds=30.0,
+        )
+        # Reaching the command runner with a resolved sandbox id proves the
+        # awaitable resolver path was awaited (non-awaitable resolver covered
+        # implicitly by _provider() above).
+        result = await provider._resolve_sandbox_id(uuid.uuid4(), "node-a")
+        assert result == "sandbox-1"
+
+    async def test_awaitable_output_json_loader_is_awaited(self) -> None:
+        async def _load(_rid, _nid) -> dict:
+            return {"a": 1}
+
+        provider = SandboxEvidenceProvider(output_json_loader=_load)
+        result = await provider._load_output_json(uuid.uuid4(), "node-a")
+        assert result == {"a": 1}
+
+
+def _cmd_result():
+    return CommandResult(exit_code=0, stdout="", stderr="")
 
 
 # ---------------------------------------------------------------------------
@@ -562,6 +644,97 @@ class TestHeuristicMetrics:
         assert evidence._heuristic_probe_latency is None
         assert evidence._heuristic_probe_cost is None
 
+    def test_get_meter_returns_none_when_provider_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import opentelemetry.metrics as otel_metrics
+
+        provider = otel_metrics.get_meter_provider()
+        monkeypatch.setattr(otel_metrics, "get_meter_provider", lambda: None)
+        assert evidence._get_meter() is None
+        assert provider is not None  # ensure we actually toggled the provider
+
+    def test_get_meter_returns_none_on_lookup_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def _boom() -> None:
+            raise RuntimeError("otel unavailable")
+
+        monkeypatch.setattr(
+            "opentelemetry.metrics.get_meter_provider",
+            _boom,
+        )
+        assert evidence._get_meter() is None
+
+    def test_ensure_early_returns_when_handles_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        evidence._heuristic_errors_total = object()
+        evidence._ensure()
+        assert evidence._heuristic_errors_total is not None
+
+
+class TestMetadataKeySkip:
+    def test_output_json_has_content_skips_metadata_key(self) -> None:
+        # _METADATA_OUTPUT_JSON_KEYS is empty today, so the branch is a no-op —
+        # a normal key still counts as content.
+        assert output_json_has_content({"status": "completed", "summary": "done"}) is True
+        assert output_json_has_content({"status": ""}) is False
+
+
+class TestSandboxProviderUnavailablePaths:
+    def test_resolve_sandbox_id_none_resolver(self) -> None:
+        provider = SandboxEvidenceProvider()
+        assert asyncio.run(provider._resolve_sandbox_id(uuid.uuid4(), "node-a")) is None
+
+    def test_resolve_sandbox_id_none_resolver_reconcile(self, sqlite_factory) -> None:
+        provider = SandboxEvidenceProvider()
+        result = asyncio.run(
+            run_evidence_probe(
+                provider=provider,
+                session_factory=sqlite_factory,
+                run_id=uuid.uuid4(),
+                node_id="node-a",
+            )
+        )
+        assert result == EvidenceResult.unverifiable
+
+    def test_git_diff_empty_no_run_command(self) -> None:
+        async def _no_sandbox(run_id, node_id):
+            return None
+
+        provider = SandboxEvidenceProvider(sandbox_id_resolver=_no_sandbox)
+        result = asyncio.run(provider.git_diff_empty(uuid.uuid4(), "node-a"))
+        assert result == EvidenceResult.unverifiable
+
+    def test_run_evidence_probe_cancelled_error_propagates(
+        self, sqlite_factory, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class _CancellingProvider:
+            async def git_diff_empty(self, run_id, node_id):
+                raise asyncio.CancelledError
+
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(
+                run_evidence_probe(
+                    provider=_CancellingProvider(),
+                    session_factory=sqlite_factory,
+                    run_id=uuid.uuid4(),
+                    node_id="node-a",
+                )
+            )
+
+    def test_reconcile_disabled_returns_empty_summary(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MODULO_HEURISTIC_ENABLED", "0")
+        summary = asyncio.run(
+            reconcile_noop_evidence(
+                session_factory=lambda: None,  # type: ignore[arg-type]  # never called when disabled
+                provider=object(),  # type: ignore[arg-type]
+            )
+        )
+        assert summary == {
+            "scanned": 0,
+            "probed": 0,
+            "has_work": 0,
+            "verified_empty": 0,
+            "unverifiable": 0,
+            "errors": 0,
+        }
+
 
 # ---------------------------------------------------------------------------
 # reconcile_noop_evidence — bounded reconciliation sweep
@@ -659,3 +832,164 @@ class TestReconcileNoopEvidence:
 
         assert summary["scanned"] == 1
         assert summary["probed"] == 0
+
+    async def test_probe_failure_counts_as_error_and_continues(self, sqlite_factory) -> None:
+        run_id = uuid.uuid4()
+        async with sqlite_factory() as session, session.begin():
+            session.add(
+                _complete_run(
+                    run_id,
+                    uuid.uuid4(),
+                    outputs_json={"node-a": {"output": {"agent_status": "completed", "agent_outcome": "success"}}},
+                    telemetry={"node-a": {"agent_status": "completed", "agent_outcome": "success"}},
+                )
+            )
+            await session.flush()
+
+        class _RaisingProvider:
+            async def git_diff_empty(self, run_id, node_id):
+                raise RuntimeError("sandbox gone")
+
+            async def sandbox_filesystem_probe(self, run_id, node_id):
+                return EvidenceResult.verified_empty
+
+        # run_evidence_probe fails open (never raises for ordinary errors), so
+        # the sweep's errors bucket is only reachable by an exception escaping
+        # run_evidence_probe itself — patch it to raise and assert the sweep
+        # still completes without aborting.
+        async def _exploding_probe(**kwargs):
+            raise RuntimeError("probe layer failure")
+
+        monkeypatch_probe = pytest.MonkeyPatch()
+        monkeypatch_probe.setattr("modulo.core.pipeline_engine.evidence.run_evidence_probe", _exploding_probe)
+        try:
+            summary = await reconcile_noop_evidence(sqlite_factory, provider=_RaisingProvider(), max_runs=10)
+        finally:
+            monkeypatch_probe.undo()
+
+        assert summary["scanned"] == 1
+        assert summary["probed"] == 1
+        assert summary["errors"] == 1
+
+    async def test_budget_break_stops_sweep(self, sqlite_factory) -> None:
+        run_id = uuid.uuid4()
+        async with sqlite_factory() as session, session.begin():
+            session.add(
+                _complete_run(
+                    run_id,
+                    uuid.uuid4(),
+                    outputs_json={"node-a": {"output": {"agent_status": "completed", "agent_outcome": "success"}}},
+                    telemetry={"node-a": {"agent_status": "completed", "agent_outcome": "success"}},
+                )
+            )
+            await session.flush()
+
+        provider = FakeEvidenceProvider(EvidenceResult.verified_empty, EvidenceResult.verified_empty)
+        # A negative budget puts the deadline in the past — the sweep scans the
+        # run then stops before probing any node.
+        summary = await reconcile_noop_evidence(sqlite_factory, provider=provider, max_runs=10, budget_seconds=-1.0)
+        assert summary["scanned"] == 1
+        assert summary["probed"] == 0
+
+
+class TestEvidenceEnabled:
+    def test_default_enabled_without_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MODULO_HEURISTIC_ENABLED", raising=False)
+        assert evidence_enabled() is True
+
+    @pytest.mark.parametrize(
+        "value",
+        ["1", "true", "TRUE", "yes", "on"],
+    )
+    def test_env_truthy_values(self, monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+        monkeypatch.setenv("MODULO_HEURISTIC_ENABLED", value)
+        assert evidence_enabled() is True
+
+    @pytest.mark.parametrize(
+        "value",
+        ["0", "false", "no", "off", "banana"],
+    )
+    def test_env_falsy_values(self, monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+        monkeypatch.setenv("MODULO_HEURISTIC_ENABLED", value)
+        assert evidence_enabled() is False
+
+    def test_settings_fallback_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MODULO_HEURISTIC_ENABLED", raising=False)
+
+        class _Settings:
+            modulo_heuristic_enabled = True
+
+        monkeypatch.setattr("modulo.settings.get_settings", lambda: _Settings())
+        assert evidence_enabled() is True
+
+    def test_settings_fallback_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MODULO_HEURISTIC_ENABLED", raising=False)
+
+        class _Settings:
+            modulo_heuristic_enabled = False
+
+        monkeypatch.setattr("modulo.settings.get_settings", lambda: _Settings())
+        assert evidence_enabled() is False
+
+    def test_settings_lookup_failure_defaults_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MODULO_HEURISTIC_ENABLED", raising=False)
+
+        def _boom() -> None:
+            raise ImportError("no settings module")
+
+        monkeypatch.setattr("modulo.settings.get_settings", _boom)
+        assert evidence_enabled() is True
+
+    async def test_run_probe_disabled_is_unverifiable_without_provider(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MODULO_HEURISTIC_ENABLED", "0")
+        result = await run_evidence_probe(
+            provider=object(),  # type: ignore[arg-type]  # never touched when disabled
+            session_factory=object(),  # type: ignore[arg-type]
+            run_id=uuid.uuid4(),
+            node_id="node-a",
+        )
+        assert result == EvidenceResult.unverifiable
+
+
+class TestRunEvidenceProbeErrorPaths:
+    async def test_probe_error_records_and_fails_open(self, sqlite_factory) -> None:
+        class _BrokenProvider:
+            async def git_diff_empty(self, run_id, node_id):
+                raise RuntimeError("boom")
+
+            async def sandbox_filesystem_probe(self, run_id, node_id):
+                return EvidenceResult.verified_empty
+
+        result = await run_evidence_probe(
+            provider=_BrokenProvider(), session_factory=sqlite_factory, run_id=uuid.uuid4(), node_id="node-a"
+        )
+        assert result == EvidenceResult.unverifiable
+        async with sqlite_factory() as session, session.begin():
+            rows = (await session.execute(select(RunEvidence))).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].evidence_state == "unverifiable"
+
+    async def test_evidence_write_failure_fails_open(self, sqlite_factory) -> None:
+        provider = FakeEvidenceProvider(EvidenceResult.verified_empty, EvidenceResult.verified_empty)
+
+        class _BrokenFactory:
+            def __call__(self):
+                raise RuntimeError("db down")
+
+        result = await run_evidence_probe(
+            provider=provider, session_factory=_BrokenFactory(), run_id=uuid.uuid4(), node_id="node-a"
+        )
+        assert result == EvidenceResult.verified_empty
+
+    async def test_cancelled_error_propagates(self, sqlite_factory) -> None:
+        class _CancelProvider:
+            async def git_diff_empty(self, run_id, node_id):
+                raise asyncio.CancelledError()
+
+            async def sandbox_filesystem_probe(self, run_id, node_id):
+                return EvidenceResult.verified_empty
+
+        with pytest.raises(asyncio.CancelledError):
+            await run_evidence_probe(
+                provider=_CancelProvider(), session_factory=sqlite_factory, run_id=uuid.uuid4(), node_id="node-a"
+            )

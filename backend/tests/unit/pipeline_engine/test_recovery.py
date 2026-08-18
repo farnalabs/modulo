@@ -18,10 +18,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
+    GuardrailOverrideError,
     GuardrailOverrideRequiredError,
     NodeAlreadyCompletedError,
     NodeNotFoundInGraphError,
     RecoveryNotAllowedError,
+    guardrail_override,
     recover_node,
 )
 
@@ -77,6 +79,12 @@ def _make_snapshot() -> MagicMock:
     snap.id = _SNAPSHOT_ID
     snap.run_context_defaults = {}
     return snap
+
+
+def _blocked_false_outcome() -> Any:
+    from modulo.core.guardrails import GuardrailInterceptionOutcome
+
+    return GuardrailInterceptionOutcome(payload={"foo": "bar"}, blocked=False)
 
 
 def _mock_session() -> AsyncMock:
@@ -420,3 +428,188 @@ async def test_concurrent_recovery_race():
             )
 
     assert "concurrent" in str(exc_info.value).lower()
+
+
+@pytest.mark.asyncio
+async def test_recover_node_disappears_after_lock():
+    """If the run vanishes after the pipeline lock is taken, raise not_found."""
+    run = _make_run(status="failed")
+    session = _mock_session()
+
+    with (
+        patch("modulo.core.pipeline_engine.recovery.get_run", side_effect=[run, None]),
+        pytest.raises(RecoveryNotAllowedError) as exc_info,
+    ):
+        pipeline_result = MagicMock()
+        pipeline_result.scalar_one.return_value = MagicMock()
+        session.execute = AsyncMock(side_effect=[pipeline_result])
+
+        await recover_node(
+            session,
+            org_id=_ORG_ID,
+            run_id=_RUN_ID,
+            node_id=_NODE_ID,
+            input_data={"foo": "bar"},
+        )
+
+    assert "not_found" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_recover_node_missing_snapshot():
+    """A run whose snapshot was deleted raises a hard RuntimeError."""
+    run = _make_run(status="failed")
+    session = _mock_session()
+
+    with patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run):
+        pipeline_result = MagicMock()
+        pipeline_result.scalar_one.return_value = MagicMock()
+        snapshot_result = MagicMock()
+        snapshot_result.scalar_one_or_none.return_value = None
+
+        session.execute = AsyncMock(
+            side_effect=[
+                pipeline_result,
+                snapshot_result,
+            ]
+        )
+
+        with pytest.raises(RuntimeError, match="Snapshot"):
+            await recover_node(
+                session,
+                org_id=_ORG_ID,
+                run_id=_RUN_ID,
+                node_id=_NODE_ID,
+                input_data={"foo": "bar"},
+            )
+
+
+@pytest.mark.asyncio
+async def test_recover_node_audit_failure_is_logged_not_fatal():
+    """An append_audit_event failure must not abort the recovery."""
+    run = _make_run(status="failed", outputs_json={})
+    session = _mock_session()
+    snap = _make_snapshot()
+
+    with (
+        patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run),
+        patch(
+            "modulo.core.pipeline_engine.recovery.append_audit_event",
+            AsyncMock(side_effect=RuntimeError("db down")),
+        ),
+    ):
+        pipeline_result = MagicMock()
+        pipeline_result.scalar_one.return_value = MagicMock()
+        snapshot_result = MagicMock()
+        snapshot_result.scalar_one_or_none.return_value = snap
+        locked_result = MagicMock()
+        locked_result.scalar_one_or_none.return_value = _RUN_ID
+
+        session.execute = AsyncMock(
+            side_effect=[
+                pipeline_result,
+                snapshot_result,
+                locked_result,
+            ]
+        )
+
+        result = await recover_node(
+            session,
+            org_id=_ORG_ID,
+            run_id=_RUN_ID,
+            node_id=_NODE_ID,
+            input_data={"review": "ok"},
+            actor_id=_ACTOR_ID,
+        )
+
+    assert result is not None
+    assert result.status == "running"
+
+
+@pytest.mark.asyncio
+async def test_guardrail_override_run_not_found():
+    """guardrail_override on a missing run raises GuardrailOverrideError."""
+    session = _mock_session()
+
+    with (
+        patch("modulo.core.pipeline_engine.recovery.get_run", return_value=None),
+        pytest.raises(GuardrailOverrideError) as exc_info,
+    ):
+        await guardrail_override(
+            session,
+            org_id=_ORG_ID,
+            run_id=_RUN_ID,
+            input_data={"foo": "bar"},
+            actor_id=_ACTOR_ID,
+        )
+
+    assert "not found" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_guardrail_override_disappears_after_lock():
+    """If the run vanishes after the pipeline lock, raise GuardrailOverrideError."""
+    run = _make_run(status="eval_failed")
+    run.error_code = "eval_blocked"
+    session = _mock_session()
+
+    with (
+        patch("modulo.core.pipeline_engine.recovery.get_run", side_effect=[run, None]),
+        pytest.raises(GuardrailOverrideError) as exc_info,
+    ):
+        pipeline_result = MagicMock()
+        pipeline_result.scalar_one.return_value = MagicMock()
+        session.execute = AsyncMock(side_effect=[pipeline_result])
+
+        await guardrail_override(
+            session,
+            org_id=_ORG_ID,
+            run_id=_RUN_ID,
+            input_data={"foo": "bar"},
+            actor_id=_ACTOR_ID,
+        )
+
+    assert "not found" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_guardrail_override_audit_failure_is_logged_not_fatal():
+    """An append_audit_event failure must not abort the override."""
+    run = _make_run(status="eval_failed")
+    run.error_code = "eval_blocked"
+    session = _mock_session()
+
+    with (
+        patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run),
+        patch(
+            "modulo.core.pipeline_engine.recovery.append_audit_event",
+            AsyncMock(side_effect=RuntimeError("db down")),
+        ),
+        patch(
+            "modulo.core.guardrails.run_interception_pass_async",
+            AsyncMock(return_value=_blocked_false_outcome()),
+        ),
+        patch("modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows", return_value=[]),
+    ):
+        pipeline_result = MagicMock()
+        pipeline_result.scalar_one.return_value = MagicMock()
+        locked_result = MagicMock()
+        locked_result.scalar_one_or_none.return_value = _RUN_ID
+
+        session.execute = AsyncMock(
+            side_effect=[
+                pipeline_result,
+                locked_result,
+            ]
+        )
+
+        result = await guardrail_override(
+            session,
+            org_id=_ORG_ID,
+            run_id=_RUN_ID,
+            input_data={"foo": "bar"},
+            actor_id=_ACTOR_ID,
+        )
+
+    assert result is not None
+    assert result.status == "pending"

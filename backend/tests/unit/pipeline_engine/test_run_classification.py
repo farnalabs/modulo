@@ -32,6 +32,7 @@ from modulo.core.pipeline_engine.classify import (
     REASON_DELIVERED,
     REASON_DELIVERED_EMAIL,
     REASON_NEEDS_HUMAN,
+    REASON_NO_DELIVERY,
     REASON_NO_WORK,
     REASON_PARSE_ERROR,
     REASON_SOURCE_ERROR,
@@ -555,6 +556,60 @@ async def _read_classification(engine: AsyncEngine, run_id: uuid.UUID) -> dict[s
     async with maker() as s, s.begin():
         run = (await s.execute(select(Run).where(Run.id == run_id))).scalar_one_or_none()
     return run.run_classification if run is not None else None
+
+
+class TestPrUrlEdgeCases:
+    """Pure-helper edge paths in the pr_url extraction / validity logic."""
+
+    def test_validation_error_url_is_invalid(self) -> None:
+        """A URL whose urlsplit raises ValueError is invalid (no delivery)."""
+        bad = "http://[::1"  # malformed IPv6 bracket -> urlsplit ValueError
+        result = classify_run("complete", None, outputs_json={"n1": _node_return_with_pr(bad)}, telemetry_json={})
+        assert result.value == RunClassificationValue.no_delivery
+
+    def test_non_dict_node_value_extracts_nothing(self) -> None:
+        """A scalar node value carries no pr_url (no crash)."""
+        urls = collect_pr_urls({"n1": "just-a-string"}, {"n1": "also-a-string"}, None)
+        assert urls == []
+
+    def test_cyclic_node_value_terminates_scan(self) -> None:
+        """A self-referencing node value does not loop forever."""
+        cyclic: dict[str, Any] = {}
+        cyclic["self"] = cyclic
+        urls = collect_pr_urls({"n1": {"pr_url": "not-a-valid-url", "nested": cyclic}}, {}, None)
+        assert urls == []
+
+    def test_non_dict_marker_values_skipped(self) -> None:
+        """markers whose values are not dicts are skipped in collect."""
+        urls = collect_pr_urls({}, {}, {"attempt-0": "not-a-dict", "attempt-1": {"pr_url": _PR}})
+        assert urls == [_PR]
+
+    def test_invalid_marker_url_skipped(self) -> None:
+        """A marker carrying an invalid pr_url is skipped."""
+        urls = collect_pr_urls({}, {}, {"attempt-0": {"pr_url": "not a url"}})
+        assert urls == []
+
+    def test_parse_error_skips_non_dict_marker(self) -> None:
+        """_any_marker_parse_error ignores non-dict marker values."""
+        markers = {"attempt-0": "not-a-dict", "attempt-1": {"parse_error": ""}}
+        result = classify_run("failed", "node.cancelled", raw_output_markers=markers)
+        assert result.reason != REASON_PARSE_ERROR
+
+    def test_delivery_done_skips_non_dict_marker(self) -> None:
+        """_any_marker_delivery_done ignores non-dict marker values."""
+        markers = {"attempt-0": "not-a-dict", "attempt-1": {"delivery_done": True}}
+        result = classify_run("complete", None, raw_output_markers=markers)
+        assert result.value == RunClassificationValue.delivered
+
+    def test_class_for_failure_falls_back_to_no_delivery(self) -> None:
+        """A class_for lookup failure yields no_delivery, not a crash."""
+        with patch(
+            "modulo.core.pipeline_engine.error_codes.class_for",
+            side_effect=RuntimeError("registry broken"),
+        ):
+            result = classify_run("failed", "agent.failed")
+        assert result.value == RunClassificationValue.no_delivery
+        assert result.reason == REASON_NO_DELIVERY
 
 
 class TestPersistenceHook:
