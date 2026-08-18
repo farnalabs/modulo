@@ -394,10 +394,11 @@ def log_entries_delivered(ctx):
 # ============================================================================
 # active_run_observability.feature — Run detail / events contract round-trip
 #
-# Gated @awaiting-implementation until the backend observability PR (#1583)
-# merges; the steps below round-trip the REAL payload shape through the REAL
-# endpoint (no hand-crafted frontend mock) so removing the tag activates a
-# live backend contract check.
+# Gated @awaiting-implementation: the steps round-trip the REAL payload shape
+# through the REAL endpoint (no hand-crafted frontend mock), but the run
+# detail/events routes drive an async_sessionmaker via _run_with_retry while the
+# mock BDD client overrides _get_session_factory with a bare MagicMock, so the
+# scenarios TypeError until that harness gap is closed (see feature note).
 # ============================================================================
 
 
@@ -460,7 +461,9 @@ def run_detail_includes_capacity(request):
     data = request.node._resp.json()
     capacity = data.get("capacity")
     assert isinstance(capacity, dict), "capacity missing"
-    assert "active_runs" in capacity and "concurrency_limit" in capacity and "waiting" in capacity
+    assert "active_runs" in capacity
+    assert "concurrency_limit" in capacity
+    assert "waiting" in capacity
 
 
 @then("the run detail response includes work_item_refs")

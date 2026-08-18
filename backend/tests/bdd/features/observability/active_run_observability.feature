@@ -4,13 +4,15 @@ Feature: Active-Run Observability Contract
   So that the live node-progress strip, queue banner, trigger actor, heartbeat,
   work items, and child runs render without silent empty sections
 
-# Deselected from CI until the companion backend lands. The wire shapes below
-# match the Pydantic fields delivered by the backend observability PR (#1583);
-# when that PR merges, remove the @awaiting-implementation tag (and this note)
-# so the scenarios round-trip the REAL payload through the REAL endpoint and
-# gate any future contract drift. The frontend tests (RunDetailView.spec.ts,
-# RunsListView.spec.ts) mock api.GET/fetch with hand-crafted payloads and so
-# cannot catch backend contract drift on their own.
+# Deselected from CI. The wire shapes below match the Pydantic fields
+# delivered by the backend observability PR (#1583, merged); the steps round-trip
+# the REAL payload through the REAL route. They stay gated because the mock
+# BDD client (tests/bdd/conftest.py) overrides _get_session_factory with a bare
+# MagicMock, and the run detail/events routes drive an async_sessionmaker via
+# _run_with_retry — so the scenarios TypeError until that harness gap is closed.
+# The frontend tests (RunDetailView.spec.ts, RunsListView.spec.ts) mock
+# api.GET/fetch with hand-crafted payloads and so cannot catch backend contract
+# drift on their own. Removing the tag requires closing the factory gap.
 
 @awaiting-implementation
   Scenario: Run detail exposes the active-run observability fields

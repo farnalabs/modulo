@@ -207,6 +207,12 @@ PINNED_AWAITING_IMPLEMENTATION: dict[str, frozenset[str]] = {
             "MCP trigger without auth is rejected",
         }
     ),
+    "tests/bdd/features/observability/active_run_observability.feature": frozenset(
+        {
+            "Run detail exposes the active-run observability fields",
+            "Run event stream exposes node lifecycle events",
+        }
+    ),
     "tests/bdd/features/model_backends/health_check.feature": frozenset(
         {
             "Health check respects org scoping",
