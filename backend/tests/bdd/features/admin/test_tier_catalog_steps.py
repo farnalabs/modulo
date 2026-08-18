@@ -1,6 +1,6 @@
 """Step definitions for admin tier-catalog BDD scenarios."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
@@ -27,6 +27,11 @@ _STANDARD_TIERS = [
 ]
 
 _TIERS_PATCH_TARGET = "modulo.api.routes.admin_tiers.list_tiers"
+
+_REDIS_NEUTRAL = MagicMock()
+_REDIS_NEUTRAL.get = AsyncMock(return_value=None)
+_REDIS_NEUTRAL.setex = AsyncMock()
+_REDIS_NEUTRAL.aclose = AsyncMock()
 
 _TIERS_MOCK_ATTR = "_tiers_catalog_mock"
 
@@ -62,7 +67,10 @@ def _configure_tiers_failure(request, exc) -> None:
 @when("I request GET /api/v1/admin/tiers")
 def _bdd_get_tiers(request) -> None:
     tiers_mock = getattr(request.node, _TIERS_MOCK_ATTR, AsyncMock(return_value=_STANDARD_TIERS))
-    with patch(_TIERS_PATCH_TARGET, tiers_mock):
+    with (
+        patch(_TIERS_PATCH_TARGET, tiers_mock),
+        patch("modulo.api.routes.admin_tiers.Redis.from_url", return_value=_REDIS_NEUTRAL),
+    ):
         request.node._resp = _active_client(request).get("/api/v1/admin/tiers")
 
 
