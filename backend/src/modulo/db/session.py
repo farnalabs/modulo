@@ -90,11 +90,6 @@ def _build_engine(
     kw: dict[str, Any] = {
         "url": settings.database_url,
         "pool_pre_ping": True,
-        # SQLAlchemy 2.0.x insertmanyvalues (multi-row INSERT ... RETURNING)
-        # cannot match UUID sentinels back to parameter sets on asyncpg —
-        # a 2+ edge graph save raised InvalidRequestError. Disable the
-        # batching optimization; correctness over throughput.
-        "use_insertmanyvalues": False,
         "connect_args": connect_args,
     }
 
