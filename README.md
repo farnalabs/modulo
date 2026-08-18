@@ -1,15 +1,76 @@
 # Modulo
 
-Modulo is a self-hosted orchestration layer for building governed, repeatable
-AI-assisted software delivery pipelines. It connects atomic agents to tools
-such as GitHub, Linear, and Notion while keeping execution, approvals, audit
-data, and credentials under the operator's control.
+<!-- HERO: logo + tagline + badge row -->
+<p align="center">
+  <img src="docs/assets/modulo-logo.svg" width="200" alt="Modulo logo"/>
+</p>
 
-> **Alpha software:** Modulo is under active development. Interfaces, database
+<p align="center">
+  <em>Modulo is a self-hosted orchestration layer for building governed,
+  repeatable AI-assisted software delivery pipelines.</em>
+</p>
+
+<!-- BADGE ROW — active badges (work on private repo) -->
+<p align="center">
+  <a href="https://github.com/farnalabs/modulo/actions"><img src="https://img.shields.io/github/actions/workflow/status/farnalabs/modulo/ci.yml?branch=main&label=CI&logo=github"/></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-BSL%201.1-blue"/></a>
+  <a href="https://docs.modulo.run"><img src="https://img.shields.io/badge/docs-docs.modulo.run-blue"/></a>
+  <a href="https://app.modulo.run"><img src="https://img.shields.io/badge/app-app.modulo.run-blue"/></a>
+</p>
+
+<!-- PUBLIC LAUNCH ONLY — uncomment when repo goes public:
+<p align="center">
+  <img src="https://img.shields.io/github/stars/farnalabs/modulo"/>
+  <img src="https://img.shields.io/github/forks/farnalabs/modulo"/>
+  <img src="https://img.shields.io/github/v/release/farnalabs/modulo"/>
+</p>
+-->
+
+<!-- SONARQUBE/SONARCLOUD — uncomment when FAR-319 lands:
+<p align="center">
+  <a href="https://sonarcloud.io/dashboard?id=modulo"><img src="https://sonarcloud.io/api/project_badges/quality_gate?project=modulo"/></a>
+  <a href="https://sonarcloud.io/dashboard?id=modulo"><img src="https://sonarcloud.io/api/project_badges/measure?project=modulo&metric=coverage"/></a>
+  <a href="https://sonarcloud.io/dashboard?id=modulo"><img src="https://sonarcloud.io/api/project_badges/measure?project=modulo&metric=bugs"/></a>
+  <a href="https://sonarcloud.io/dashboard?id=modulo"><img src="https://sonarcloud.io/api/project_badges/measure?project=modulo&metric=security_rating"/></a>
+</p>
+-->
+
+> [!WARNING]
+> **Alpha software.** Modulo is under active development. Interfaces, database
 > migrations, configuration, and deployment procedures may change. Evaluate it
 > before using it with production data and keep current backups.
 
-## What it includes
+<!-- SCREENSHOT placeholder — replace with a real screenshot before public launch -->
+![Modulo pipeline editor](docs/assets/screenshot-pipeline-editor.png)
+
+## Table of Contents
+- [What it is](#what-it-is)
+- [Key features](#key-features)
+- [Quick start](#quick-start)
+- [Documentation](#documentation)
+- [Architecture](#architecture)
+- [Development and testing](#development-and-testing)
+- [Contributing](#contributing)
+- [Security](#security)
+- [License](#license)
+
+## What it is
+
+Modulo is a self-hosted orchestration layer for building governed, repeatable
+AI-assisted software delivery pipelines. It connects atomic agents to tools such
+as GitHub, Linear, and Notion while keeping execution, approvals, audit data,
+and credentials under the operator's control.
+
+Unlike running agents ad hoc, Modulo gives you a visual, composable pipeline of
+atomic AI agents with built-in governance: role-based access, audit trails,
+human-in-the-loop approvals, cost controls, and evaluation gates — so AI-assisted
+delivery is repeatable and auditable, not a one-off experiment.
+
+The detailed product intent and delivery status live in [the PRD](docs/prd.md).
+Items described there may be planned or partially delivered; check the relevant
+product-map entry and tests before relying on a capability.
+
+## Key features
 
 - A visual pipeline editor and reusable pipeline templates
 - Agent, manual, conditional, parallel, and approval stages
@@ -17,21 +78,6 @@ data, and credentials under the operator's control.
 - Role-based access controls, audit trails, SSO, and feature licensing
 - Extensible model backends, connectors, MCP tools, and runtime providers
 - PostgreSQL as the primary database, with additional database conformance work
-
-The detailed product intent and delivery status live in [the PRD](docs/prd.md).
-Items described there may be planned or partially delivered; check the relevant
-product-map entry and tests before relying on a capability.
-
-## Architecture
-
-| Area | Technology |
-|---|---|
-| API and workers | Python 3.12, FastAPI, SQLAlchemy, Alembic, SAQ |
-| Agent orchestration | LangGraph and provider-specific LangChain packages |
-| Web application | Vue 3, TypeScript, Pinia, Vite |
-| Data services | PostgreSQL 16 and Redis 7 |
-| Local deployment | Docker Compose |
-| Quality tooling | pytest, Vitest, Ruff, mypy, ESLint, Semgrep, Bandit |
 
 ## Quick start
 
@@ -86,6 +132,17 @@ Postgres + Redis + uvicorn gets zero trigger firing.
 - [System requirements](docs/system-requirements.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Upgrade process](docs/upgrade-process.md)
+
+## Architecture
+
+| Area | Technology |
+|---|---|
+| API and workers | Python 3.12, FastAPI, SQLAlchemy, Alembic, SAQ |
+| Agent orchestration | LangGraph and provider-specific LangChain packages |
+| Web application | Vue 3, TypeScript, Pinia, Vite |
+| Data services | PostgreSQL 16 and Redis 7 |
+| Local deployment | Docker Compose |
+| Quality tooling | pytest, Vitest, Ruff, mypy, ESLint, Semgrep, Bandit |
 
 ## Development and testing
 
