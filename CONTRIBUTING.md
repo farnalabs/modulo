@@ -15,7 +15,7 @@
 
 ## Welcome
 
-Modulo is a governed orchestration layer for agentic SDLC pipelines. It
+Modulo is an agent governance platform for agentic SDLC pipelines. It
 provides a composable pipeline of atomic AI agents that automate work between
 existing tools like GitHub, Linear, and Notion.
 

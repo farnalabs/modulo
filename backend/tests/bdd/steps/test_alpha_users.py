@@ -357,6 +357,11 @@ def runner_gets_run(run_id, request):
             return_value=(Decimal("0.00"), 0),
         ),
         patch("modulo.api.routes.runs._do_get_otel_endpoint", new_callable=AsyncMock, return_value=""),
+        patch(
+            "modulo.api.routes.runs._do_get_run_observability",
+            new_callable=AsyncMock,
+            return_value=(None, None, None),
+        ),
     ):
         resp = c.get(f"/api/v1/runs/{resolved}")
     request.node._resp = resp
