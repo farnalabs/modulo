@@ -297,6 +297,18 @@ async def _load_guardrail_pins(session: AsyncSession, pipeline: Pipeline) -> lis
     return [serialize_guardrail_pin(row) for row in guardrail_rows] or None
 
 
+def _fingerprint_guardrail_pins(pins: list[dict[str, Any]] | None) -> str | None:
+    """Canonical SHA-256 over the serialized guardrail pin set (FAR-309 PR B).
+
+    Localized wrapper so the snapshot CRUD layer never reaches into the
+    engine's internals — the fingerprint is computed by the shared guardrails
+    module helper and only the digest is stored on the snapshot.
+    """
+    from modulo.core.guardrails import fingerprint_guardrail_pins
+
+    return fingerprint_guardrail_pins(pins)
+
+
 def _add_snapshot_schema_pins(
     session: AsyncSession,
     organisation_id: uuid.UUID,
@@ -396,6 +408,10 @@ async def create_snapshot_from_live_graph(
         # (the pinned set), never the live rows. Loaded here — not inside
         # create_run — so the pin is immutable like the graph itself.
         guardrail_pins = await _load_guardrail_pins(session, pipeline)
+        # Run-start snapshot-integrity fingerprint (FAR-309 PR B): the digest
+        # of the serialized pin set is saved alongside it so the replay seam
+        # can detect a tampered/drifted pin set and fail closed.
+        guardrail_pins_fingerprint = _fingerprint_guardrail_pins(guardrail_pins)
 
         snapshot = PipelineSnapshot(
             organisation_id=pipeline.organisation_id,
@@ -410,6 +426,7 @@ async def create_snapshot_from_live_graph(
             composite_bindings_json=composite_bindings or None,
             parameter_bindings_json=parameter_bindings or None,
             guardrail_pins_json=guardrail_pins,
+            guardrail_pins_fingerprint=guardrail_pins_fingerprint,
             run_context_defaults=copy.deepcopy(pipeline.run_context_defaults),
         )
         session.add(snapshot)

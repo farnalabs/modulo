@@ -16,7 +16,12 @@ if TYPE_CHECKING:
 
 from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_system_permission, require_target_org_role
+from modulo.api.dependencies import (
+    deny_break_glass_mint,
+    get_db_session,
+    require_system_permission,
+    require_target_org_role,
+)
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
 from modulo.core.audit_logger import append_audit_event
@@ -716,7 +721,14 @@ class SetOrgGuardrailsKillSwitchResponse(BaseModel):
     enabled_at: str | None
 
 
-@router.get("/{org_id}/guardrails/kill-switch", response_model=GetOrgGuardrailsKillSwitchResponse)
+@router.get(
+    "/{org_id}/guardrails/kill-switch",
+    response_model=GetOrgGuardrailsKillSwitchResponse,
+    # FAR-309 PR B org-global invariant: the kill-switch is the org-global
+    # guardrail safety control — a break-glass account must never be able to
+    # disable it (or read it) even though it is an admin-scoped endpoint.
+    dependencies=[Depends(deny_break_glass_mint)],
+)
 @handle_db_errors("admin.orgs.get_org_guardrails_kill_switch")
 async def admin_get_org_guardrails_kill_switch(
     org_id: uuid.UUID,
@@ -758,7 +770,14 @@ async def admin_get_org_guardrails_kill_switch(
         ) from None
 
 
-@router.put("/{org_id}/guardrails/kill-switch", response_model=SetOrgGuardrailsKillSwitchResponse)
+@router.put(
+    "/{org_id}/guardrails/kill-switch",
+    response_model=SetOrgGuardrailsKillSwitchResponse,
+    # FAR-309 PR B org-global invariant: the kill-switch is the org-global
+    # guardrail safety control — a break-glass account must NEVER be able to
+    # disable it (or read it) even though it is an admin-scoped endpoint.
+    dependencies=[Depends(deny_break_glass_mint)],
+)
 @handle_db_errors("admin.orgs.admin_set_org_guardrails_kill_switch")
 async def admin_set_org_guardrails_kill_switch(
     org_id: uuid.UUID,

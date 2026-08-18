@@ -10,6 +10,7 @@ URLs:
 
 import logging
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -22,6 +23,7 @@ from modulo.api.constants import MSG_DB_OPERATION_FAILED, MSG_FEATURE_NOT_AVAILA
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_logger import append_audit_event
 from modulo.core.node_output_split import node_return
 from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
 from modulo.db.models.eval_definition import EvalDefinition
@@ -565,10 +567,21 @@ async def update_eval_definition(
 @handle_db_errors(_CODE_EVALS_DELETE_EVAL_DEFINITION)
 async def delete_eval_definition(
     eval_id: uuid.UUID,
+    purge: bool = Query(False, description="Hard-remove a soft-deleted guardrail eval definition (step 2)"),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("eval.definition.delete"),
 ) -> None:
-    """Delete an eval definition. Admin only."""
+    """Delete an eval definition. Admin only.
+
+    Two-step soft-delete (FAR-309 PR B): a GUARDRAIL eval definition is
+    SOFT-deleted (``deleted_at``/``deleted_by`` stamped) instead of hard
+    removed, so snapshot pins that reference it keep resolving to the
+    skipped-with-audit path rather than a dangling row. A second admin step
+    (``?purge=true``) hard-removes soft-deleted rows. Non-guardrail evals
+    keep their existing hard delete. Every soft-delete and purge writes an
+    org-scoped audit event (best-effort fail-open-with-log, matching the
+    admin_orgs audit pattern — a failed audit never rolls back the delete).
+    """
     if principal.org_role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admins can delete eval definitions")
 
@@ -585,7 +598,37 @@ async def delete_eval_definition(
             eval_def = result.scalar_one_or_none()
             if eval_def is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_EVAL_DEFINITION_NOT_FOUND)
-            await session.delete(eval_def)
+            # Capture identity BEFORE any mutation — a hard-deleted ORM
+            # instance no longer exposes attributes.
+            eval_id_str = str(eval_def.id)
+            eval_name = eval_def.name
+            is_guardrail = eval_def.eval_type == "guardrail"
+            soft = is_guardrail and not purge
+            if soft:
+                eval_def.deleted_at = datetime.now(UTC)
+                eval_def.deleted_by = principal.account_id
+            else:
+                await session.delete(eval_def)
+            # The two-step soft-delete audit applies to GUARDRAIL rows only —
+            # a non-guardrail eval keeps its pre-PR-B hard delete (no audit
+            # event). ``eval_definition.soft_deleted`` / ``eval_definition.purged``
+            # are the only two event types this seam emits.
+            if is_guardrail:
+                try:
+                    await append_audit_event(
+                        session,
+                        org_id=principal.organisation_id,
+                        event_type="eval_definition.soft_deleted" if soft else "eval_definition.purged",
+                        actor_user_id=principal.account_id,
+                        resource_type="eval_definition",
+                        resource_id=eval_id,
+                        payload_json={"eval_id": eval_id_str, "name": eval_name, "purge": purge},
+                    )
+                except Exception:
+                    _log.exception(
+                        "evals.delete_eval_definition_audit_failed",
+                        extra={"org_id": str(principal.organisation_id), "eval_id": eval_id_str},
+                    )
     except HTTPException:
         raise
     except IntegrityError:

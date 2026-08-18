@@ -20,7 +20,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.eval_engine import EvalDefinition, EvalType
 from modulo.core.guardrails.config import hash_config_set, load_config_set, to_eval_config
@@ -83,6 +83,7 @@ def _pin_dict(**overrides: Any) -> dict[str, Any]:
 
 def _client(role: str | None) -> TestClient:
     app.dependency_overrides.pop(get_current_tenant_user, None)
+    app.dependency_overrides.pop(get_current_user, None)
     app.dependency_overrides[get_settings] = _make_settings
 
     session = _make_mock_session()
@@ -93,12 +94,14 @@ def _client(role: str | None) -> TestClient:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     if role is not None:
-        app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        principal = TenantPrincipal(
             username=role,
             organisation_id=_ORG_ID,
             account_id=_ACCOUNT_ID,
             org_role=role,
         )
+        app.dependency_overrides[get_current_user] = lambda: principal
+        app.dependency_overrides[get_current_tenant_user] = lambda: principal
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -110,6 +113,7 @@ def _clean_overrides() -> None:
     app.dependency_overrides.pop(get_db_session, None)
     app.dependency_overrides.pop(_get_engine, None)
     app.dependency_overrides.pop(get_current_tenant_user, None)
+    app.dependency_overrides.pop(get_current_user, None)
     app.dependency_overrides.pop(get_plan_context, None)
 
 
