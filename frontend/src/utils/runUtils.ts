@@ -16,19 +16,21 @@ export function runStatusBadgeClass(status: string): string {
   return map[status] ?? 'bg-muted text-muted-foreground'
 }
 
-export function triggerTypeLabel(type: string | null | undefined): string {
-  const map: Record<string, string> = {
-    manual: 'Manual',
-    webhook: 'Webhook',
-    cron: 'Scheduled',
-    polling: 'Polling',
-    agent_signal: 'Agent signal',
-    ongoing: 'Ongoing',
-    correction: 'Correction',
-    slack_app_mention: 'Slack mention',
-  }
+const triggerTypeLabelKeys: Record<string, string> = {
+  manual: 'common.trigger_types.manual',
+  webhook: 'common.trigger_types.webhook',
+  cron: 'common.trigger_types.cron',
+  polling: 'common.trigger_types.polling',
+  agent_signal: 'common.trigger_types.agent_signal',
+  ongoing: 'common.trigger_types.ongoing',
+  correction: 'common.trigger_types.correction',
+  slack_app_mention: 'common.trigger_types.slack_app_mention',
+}
+
+export function triggerTypeLabel(type: string | null | undefined, t: (key: string) => string): string {
   if (!type) return '—'
-  return map[type] ?? type
+  const key = triggerTypeLabelKeys[type]
+  return key ? t(key) : type
 }
 
 export function formatRunDate(dateStr: string | null): string {

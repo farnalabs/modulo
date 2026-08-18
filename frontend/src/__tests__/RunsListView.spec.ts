@@ -130,7 +130,7 @@ describe('RunsListView', () => {
     const wrapper = mountView()
     await flushPromises()
     await nextTick()
-    expect(wrapper.text()).toContain('Agent signal')
+    expect(wrapper.text()).toContain('Agent Signal')
     expect(wrapper.text()).not.toContain('agent_signal')
     wrapper.unmount()
   })

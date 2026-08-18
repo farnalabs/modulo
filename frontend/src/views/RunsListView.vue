@@ -84,7 +84,7 @@
             <span v-else>—</span>
           </template>
           <template #cell-trigger_type="{ value }">
-            <span class="text-xs text-muted-foreground">{{ triggerTypeLabel(value as string | null | undefined) }}</span>
+            <span class="text-xs text-muted-foreground">{{ triggerTypeLabel(value as string | null | undefined, t) }}</span>
           </template>
           <template #cell-input_preview="{ row }">
             <span
