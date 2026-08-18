@@ -2832,7 +2832,17 @@ export default {
     "reset": "Reset",
     "remove": "Remove",
     "create": "Create",
-    "deleting": "Deleting..."
+    "deleting": "Deleting...",
+    "trigger_types": {
+      "manual": "Manual",
+      "webhook": "Webhook",
+      "cron": "Cron",
+      "polling": "Polling",
+      "agent_signal": "Agent Signal",
+      "ongoing": "Ongoing",
+      "correction": "Correction",
+      "slack_app_mention": "Slack Mention"
+    }
   },
   "nav": {
     "analytics": "Analytics",
