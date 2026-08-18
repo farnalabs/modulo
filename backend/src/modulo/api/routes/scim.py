@@ -1026,26 +1026,26 @@ def _parse_member_uuid(value: Any) -> uuid.UUID | None:
         return None
 
 
+async def _replace_group_members(session: AsyncSession, group: Any, members_value: Any, org_id: uuid.UUID) -> None:
+    existing = await scim_list_group_members(session, group.id)
+    for em in existing:
+        await scim_remove_group_member(session, group.id, em.account_id)
+    for uid in _iter_member_uuids(members_value):
+        await scim_add_group_member(
+            session,
+            org_id=org_id,
+            team_id=group.id,
+            user_id=uid,
+        )
+
+
 async def _apply_replace_group_op(session: AsyncSession, group: Any, op: Any, org_id: uuid.UUID) -> None:
     if not isinstance(op.value, dict):
         return
     if "displayName" in op.value:
         await scim_update_group(session, group, name=str(op.value["displayName"]))
     if "members" in op.value and isinstance(op.value["members"], list):
-        existing = await scim_list_group_members(session, group.id)
-        for em in existing:
-            await scim_remove_group_member(session, group.id, em.account_id)
-        for m in op.value["members"]:
-            if isinstance(m, dict) and "value" in m:
-                uid = _parse_member_uuid(m["value"])
-                if uid is None:
-                    continue
-                await scim_add_group_member(
-                    session,
-                    org_id=org_id,
-                    team_id=group.id,
-                    user_id=uid,
-                )
+        await _replace_group_members(session, group, op.value["members"], org_id)
 
 
 def _iter_member_uuids(values: Any) -> list[uuid.UUID]:
