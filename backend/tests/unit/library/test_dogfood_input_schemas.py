@@ -9,12 +9,16 @@ the ``validate_payload`` MCP tool.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
 from jsonschema import Draft202012Validator
 
 from modulo.core.seed_data.library_schemas import SCHEMAS
+
+DOGFOOD_SCHEMAS_DIR = Path(__file__).resolve().parents[4] / "devtools" / "dogfood" / "schemas"
 
 
 def _definition(name: str) -> dict[str, Any]:
@@ -70,3 +74,25 @@ def test_invalid_payload_fails_validation(name: str) -> None:
     """A payload missing required / mistyped fields is rejected."""
     validator = Draft202012Validator(_definition(name))
     assert not validator.is_valid(INVALID_SAMPLES[name])
+
+
+def _reference_files() -> list[Path]:
+    if not DOGFOOD_SCHEMAS_DIR.is_dir():
+        pytest.skip(f"Dogfood schema references dir not found: {DOGFOOD_SCHEMAS_DIR}")
+    return sorted(DOGFOOD_SCHEMAS_DIR.glob("*.schema.json"))
+
+
+def test_reference_copies_match_seed_definitions() -> None:
+    """Version-controlled copies under devtools/dogfood/schemas stay in sync."""
+    seeds = {entry["name"]: entry for entry in SCHEMAS}
+    refs = {json.loads(ref.read_text()) for ref in _reference_files()}
+    assert refs, "No dogfood schema reference copies found"
+
+    for data in refs:
+        seed = seeds.get(data["name"])
+        assert seed is not None, f"Reference copy {data['name']} has no matching seed schema"
+        assert data["name"] == seed["name"]
+        assert data["description"] == seed["description"]
+        assert data["definition"] == seed["definition"]
+
+    assert {data["name"] for data in refs} == {"pr-review-input", "ticket-input"}
