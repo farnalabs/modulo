@@ -616,6 +616,20 @@ def _check_sandbox_egress(node: dict[str, Any], nid: str, result: ValidationResu
             f"Sandbox agent node '{nid}' egress allowlist is invalid: {exc}",
             node_id=nid,
         )
+    if egress_policy == "selected":
+        # FAR-296 Phase 3b-3 limitation: ``selected`` currently DENIES ALL egress
+        # (allow_internet_access=False); the allowlist is metadata-only until a
+        # template-side enforcement point exists. Warn (not error) so an operator
+        # expecting specific hosts to be reachable sees the limitation at
+        # save-time instead of discovering a deny_all-equivalent sandbox at run.
+        result.warning(
+            "SANDBOX_EGRESS_SELECTED_METADATA_ONLY",
+            f"Sandbox agent node '{nid}' egress_policy='selected' currently denies "
+            "ALL egress — the egress_allowlist is carried as sandbox metadata and "
+            "is NOT honored at runtime yet (it awaits a template-side enforcement "
+            "point). Functionally equivalent to 'deny_all' until then.",
+            node_id=nid,
+        )
 
 
 def _check_sandbox_resource_limits(node: dict[str, Any], nid: str, result: ValidationResult) -> None:

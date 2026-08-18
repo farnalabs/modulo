@@ -1279,7 +1279,9 @@ async def test_sandbox_egress_invalid_value_is_error():
 
 
 async def test_sandbox_egress_selected_with_allowlist_passes():
-    """egress_policy='selected' WITH a valid host:port allowlist passes (FAR-296 Phase 3b-3)."""
+    """egress_policy='selected' WITH a valid host:port allowlist passes graph
+    validation (FAR-296 Phase 3b-3) — but warns that the allowlist is
+    metadata-only and 'selected' currently denies ALL egress."""
     graph = {
         "nodes": [
             _sandbox_node(
@@ -1291,7 +1293,18 @@ async def test_sandbox_egress_selected_with_allowlist_passes():
     }
     result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
     assert result.is_valid
-    assert not any(i.code.startswith("SANDBOX_EGRESS_") for i in result.issues)
+    assert any(i.code == "SANDBOX_EGRESS_SELECTED_METADATA_ONLY" for i in result.issues)
+    assert not any(i.code.startswith("SANDBOX_EGRESS_") and i.severity == "error" for i in result.issues)
+
+
+async def test_sandbox_egress_non_selected_has_no_metadata_only_warning():
+    """The metadata-only limitation warning fires ONLY for egress_policy='selected'."""
+    for policy in (None, "default", "deny_all"):
+        overrides = {} if policy is None else {"egress_policy": policy}
+        graph = {"nodes": [_sandbox_node(**overrides)], "edges": []}
+        result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+        assert result.is_valid
+        assert not any(i.code == "SANDBOX_EGRESS_SELECTED_METADATA_ONLY" for i in result.issues)
 
 
 async def test_sandbox_egress_selected_without_allowlist_is_error():

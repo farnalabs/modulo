@@ -17,6 +17,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from e2b.exceptions import SandboxException
 from pydantic import ValidationError
 
 from modulo.api.routes.pipelines import PipelineGraphNode
@@ -695,8 +696,11 @@ def test_shared_validator_rejects_unknown_resource_limit_keys():
         _validate_sandbox_resource_limits_config({"id": "n1", "resource_limits": {"cpu_count": -1}})
     with pytest.raises(ValueError, match="expected an object"):
         _validate_sandbox_resource_limits_config({"id": "n1", "resource_limits": [1, 2]})
-    # Valid keys pass.
-    _validate_sandbox_resource_limits_config({"id": "n1", "resource_limits": {"cpu_count": 2, "memory_mb": 512.5}})
+    # Valid keys pass — including cpu_usage_pct (the enforceable percentage cap,
+    # distinct from the metadata-only cpu_count core count).
+    _validate_sandbox_resource_limits_config(
+        {"id": "n1", "resource_limits": {"cpu_count": 2, "cpu_usage_pct": 90, "memory_mb": 512.5}}
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -852,6 +856,46 @@ def _killer_kill_timeouts(sandbox) -> set:
     return {c.kwargs.get("request_timeout") for c in sandbox.kill.call_args_list}
 
 
+def _killed_sandbox_mock(output_json: str = '{"result": "ok"}'):
+    """Sandbox mock that simulates the REAL platform-side kill path.
+
+    After ``sandbox.kill()`` the sandbox is dead: ``files.read`` raises an
+    e2b ``SandboxException`` (output.json becomes unreadable) and the command
+    handle's ``wait()`` raises ``SandboxException`` on the next poll — NOT a
+    Python ``TimeoutError``. This is the path a production resource-cap kill
+    takes; mocking ``TimeoutError`` would route the run through the timeout
+    branch, which the real kill never exercises.
+    """
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = "script stdout"
+    cmd_result.stderr = ""
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=SandboxException("sandbox was killed"))
+
+    state = {"killed": False}
+
+    async def _kill(*_args: Any, **_kwargs: Any) -> None:
+        state["killed"] = True
+
+    def _read(path, format="text", **kwargs):
+        if state["killed"]:
+            raise SandboxException("sandbox is dead")
+        if str(path).endswith("output.json"):
+            return output_json
+        return ""
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=0))
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock(side_effect=_kill)
+    sandbox.get_metrics = AsyncMock(return_value=MagicMock(cpu_used_pct=1.0, mem_used=1, disk_used=1))
+    return sandbox
+
+
 async def test_egress_selected_maps_to_no_internet_and_allowlist_metadata():
     """egress_policy='selected' -> no internet at the boolean level AND the
     host:port allowlist is carried as sandbox metadata for template-side
@@ -881,15 +925,18 @@ def test_egress_selected_without_allowlist_rejected_at_save_time():
 
 
 async def test_resource_killer_kills_when_cpu_exceeds():
-    """The platform-side resource-cap killer kills the sandbox when an
-    observable cap is exceeded (cpu_used_pct > cpu_count) and the run fails
-    with the terminal ScriptBudgetKilledError."""
-    node_def = _script_node_def(resource_limits={"cpu_count": 80}, timeout_seconds=1)
+    """The platform-side resource-cap killer kills the sandbox when the
+    cpu_usage_pct (0-100 PERCENTAGE) cap is exceeded and the run fails with
+    the terminal ScriptBudgetKilledError.
+
+    The command handle raises an e2b SandboxException (the REAL kill path),
+    not a builtin TimeoutError — this test fails on the pre-fix code where the
+    dead-sandbox no-output path misclassified the kill as
+    ScriptInvalidOutputError.
+    """
+    node_def = _script_node_def(resource_limits={"cpu_usage_pct": 80})
     fn = make_sandbox_agent_fn(node_def)
-    sandbox = _script_sandbox_mock()
-    handle = MagicMock()
-    handle.wait = AsyncMock(side_effect=TimeoutError)
-    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox = _killed_sandbox_mock()
     metrics = MagicMock(cpu_used_pct=95.0, mem_used=1024, disk_used=1024)
     sandbox.get_metrics = AsyncMock(return_value=metrics)
 
@@ -904,13 +951,11 @@ async def test_resource_killer_kills_when_cpu_exceeds():
 
 
 async def test_resource_killer_kills_when_memory_exceeds():
-    """memory_mb cap is enforced against the raw mem_used bytes."""
-    node_def = _script_node_def(resource_limits={"memory_mb": 512}, timeout_seconds=1)
+    """memory_mb cap is enforced against the raw mem_used bytes (real
+    SandboxException kill path, like the cpu test)."""
+    node_def = _script_node_def(resource_limits={"memory_mb": 512})
     fn = make_sandbox_agent_fn(node_def)
-    sandbox = _script_sandbox_mock()
-    handle = MagicMock()
-    handle.wait = AsyncMock(side_effect=TimeoutError)
-    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox = _killed_sandbox_mock()
     metrics = MagicMock(cpu_used_pct=10.0, mem_used=1024 * 1024 * 1024, disk_used=1024)
     sandbox.get_metrics = AsyncMock(return_value=metrics)
 
@@ -924,10 +969,38 @@ async def test_resource_killer_kills_when_memory_exceeds():
     assert 10 in _killer_kill_timeouts(sandbox)
 
 
+async def test_resource_killer_cpu_count_alone_never_kills():
+    """cpu_count is a CORE COUNT, metadata-only — never a percentage threshold.
+
+    The pre-fix code compared cpu_used_pct against cpu_count and would kill a
+    2-core sandbox at >2% CPU usage. The fix ignores cpu_count entirely: a
+    2-core sandbox at 95% usage with NO cpu_usage_pct cap must NOT be killed.
+    """
+    node_def = _script_node_def(resource_limits={"cpu_count": 2})
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _script_sandbox_mock()
+    metrics = MagicMock(cpu_used_pct=95.0, mem_used=1024, disk_used=1024)
+    sandbox.get_metrics = AsyncMock(return_value=metrics)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch(_BUDGET_PATCH, 1),
+    ):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    assert 10 not in _killer_kill_timeouts(sandbox)
+
+
 async def test_resource_killer_does_not_kill_within_limits():
-    """Metrics within every configured cap -> no killer kill, node completes."""
+    """Metrics within every configured cap -> no killer kill, node completes.
+
+    Uses a realistic cpu_count=2 (a core count, NOT a percentage) alongside
+    cpu_usage_pct=90: at 40% CPU usage the sandbox stays well under the
+    percentage cap and is not killed (the pre-fix code killed at >2%).
+    """
     node_def = _script_node_def(
-        resource_limits={"cpu_count": 80, "memory_mb": 512, "disk_mb": 1024},
+        resource_limits={"cpu_count": 2, "cpu_usage_pct": 90, "memory_mb": 512, "disk_mb": 1024},
     )
     fn = make_sandbox_agent_fn(node_def)
     sandbox = _script_sandbox_mock()
@@ -951,7 +1024,7 @@ async def test_resource_killer_does_not_kill_within_limits():
 async def test_resource_killer_fails_open_on_metrics_error():
     """get_metrics raising -> the killer degrades gracefully: no kill, no crash
     (the sandbox timeout remains the backstop)."""
-    node_def = _script_node_def(resource_limits={"cpu_count": 80})
+    node_def = _script_node_def(resource_limits={"cpu_usage_pct": 80})
     fn = make_sandbox_agent_fn(node_def)
     sandbox = _script_sandbox_mock()
 

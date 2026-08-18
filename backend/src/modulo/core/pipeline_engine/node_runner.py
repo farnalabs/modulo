@@ -2848,8 +2848,13 @@ def make_sandbox_agent_fn(
                     timeout=sandbox_timeout,
                     allow_internet_access=(egress_policy not in ("deny_all", "selected")),
                     # deny_all/selected -> no internet; default/None -> internet
-                    # allowed (e2b default). The selected-mode allowlist is
-                    # carried as metadata, not an SDK egress control.
+                    # allowed (e2b default). IMPORTANT (FAR-296 Phase 3b-3):
+                    # ``selected`` DENIES ALL egress at this boolean level — the
+                    # host:port egress_allowlist is carried only as metadata and
+                    # is NOT yet honored by any enforcement point (no template-side
+                    # mechanism exists; the e2b SDK has no native allowlist
+                    # control). ``selected`` is functionally equivalent to
+                    # ``deny_all`` until that point lands.
                     metadata=_metadata or None,
                 ),
                 timeout=min(sandbox_timeout, 120),
@@ -3213,10 +3218,21 @@ def make_sandbox_agent_fn(
                     """Platform-side resource-cap killer (FAR-296 Phase 3b-3).
 
                     Polls sandbox.get_metrics() (bounded wait_for), compares the
-                    observable caps (cpu_used_pct vs cpu_count, mem_used vs
-                    memory_mb, disk_used vs disk_mb), and kills the sandbox when a
-                    cap is exceeded. Returns True when the sandbox was killed (the
-                    caller maps the outcome to ``script.budget_killed``).
+                    observable caps, and kills the sandbox when a cap is exceeded.
+                    Returns True when the sandbox was killed (the caller maps the
+                    outcome to ``script.budget_killed``).
+
+                    Observable caps:
+                      - ``cpu_usage_pct`` (0-100 PERCENTAGE) vs ``cpu_used_pct``
+                      - ``memory_mb`` vs ``mem_used`` bytes
+                      - ``disk_mb`` vs ``disk_used`` bytes
+
+                    ``cpu_count`` is a CORE COUNT, NOT a percentage — it is
+                    informational/metadata-only and is NOT enforced here (same as
+                    ``max_processes`` / ``max_fds`` / ``max_sockets``, which the
+                    SDK exposes no observable metric for). Treating a core count
+                    as a percentage threshold would kill a 2-core sandbox at >2%
+                    CPU usage.
                     """
                     nonlocal _budget_killed
                     if not resource_limits or sandbox_mode != "script" or sandbox is None:
@@ -3246,10 +3262,11 @@ def make_sandbox_agent_fn(
                         return False
                     killed = False
                     try:
-                        # Observable caps only. max_processes / max_fds /
-                        # max_sockets are NOT observable via the SDK — they stay
+                        # Observable caps only. cpu_count / max_processes /
+                        # max_fds / max_sockets are NOT enforceable via the SDK
+                        # (no matching observable metric) — they stay
                         # metadata-only (template-side enforcement).
-                        cpu_cap = resource_limits.get("cpu_count")
+                        cpu_cap = resource_limits.get("cpu_usage_pct")
                         if cpu_cap is not None:
                             cpu_used_pct = getattr(metrics, "cpu_used_pct", None)
                             if _is_real_number(cpu_used_pct) and cpu_used_pct > float(cpu_cap):
@@ -3287,9 +3304,23 @@ def make_sandbox_agent_fn(
                     except asyncio.CancelledError:
                         raise
                     except Exception:
+                        # Best-effort kill. The failure is logged but the cap was
+                        # genuinely exceeded — the sandbox MAY REMAIN ALIVE after
+                        # this (the kill timed out / the SDK errored), so the
+                        # budget flag still propagates as a terminal outcome and
+                        # the sandbox teardown in the node's finally block is the
+                        # second kill attempt.
                         _log.exception(
                             "sandbox_agent.resource_kill_failed",
-                            extra={"node_id": node_id},
+                            extra={
+                                "node_id": node_id,
+                                "run_id": run_id,
+                                "budget_killed": True,
+                            },
+                        )
+                        _log.warning(
+                            "sandbox_agent.budget_killed_sandbox_may_remain_alive",
+                            extra={"node_id": node_id, "run_id": run_id},
                         )
                     return True
 
@@ -3632,6 +3663,14 @@ def make_sandbox_agent_fn(
                     # kill, while the sandbox is still alive — the logs endpoint
                     # only serves live sandboxes.
                     _no_output_log_tail = await _fetch_sandbox_log_tail(_sandbox_id)
+                    if _budget_killed:
+                        # FAR-296 Phase 3b-3: the platform-side resource-cap killer
+                        # fired. On the REAL kill path the command handle raises an
+                        # e2b SandboxException (not TimeoutError), which lands here
+                        # with cmd_result non-None and output.json unreadable — the
+                        # kill REASON is known, so never misclassify as
+                        # script.invalid_output / script.side_effect_unknown.
+                        raise ScriptBudgetKilledError(_script_budget_killed_message(node_id)) from None
                     if sandbox_mode == "script" and _script_lease_claimed:
                         # FAR-296 Phase 2 stage-split (2): the script PROCESS
                         # started (lease claimed) and produced no parseable

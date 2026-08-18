@@ -23,7 +23,20 @@ _SANDBOX_MODES = frozenset({"llm", "script"})
 _SANDBOX_EGRESS_POLICIES = frozenset({"default", "deny_all", "selected"})
 _SANDBOX_EGRESS_ALLOWLIST_KEYS = frozenset({"host", "port"})
 _SANDBOX_RESOURCE_LIMIT_KEYS = frozenset(
-    {"cpu_count", "memory_mb", "disk_mb", "max_processes", "max_fds", "max_sockets"}
+    {
+        # Informational / metadata-only (the e2b SDK exposes no enforcement
+        # point): the request CPU core count, max processes/fds/sockets.
+        "cpu_count",
+        "max_processes",
+        "max_fds",
+        "max_sockets",
+        # Enforceable platform-side caps (see node_runner's resource-cap killer):
+        # cpu_usage_pct is a 0-100 PERCENTAGE (distinct from the cpu_count CORE
+        # COUNT above); memory_mb / disk_mb are MiB caps.
+        "cpu_usage_pct",
+        "memory_mb",
+        "disk_mb",
+    }
 )
 
 
@@ -133,10 +146,18 @@ def _validate_sandbox_egress_config(node_def: dict[str, Any]) -> None:
     """Validate a sandbox_agent node's ``egress_policy`` (FAR-296 Phase 3).
 
     Allowed values: ``None`` (default), ``"default"``, ``"deny_all"``,
-    ``"selected"`` (FAR-296 Phase 3b-3: a host:port allowlist carried as
-    metadata). Any other value raises ``ValueError`` — this is the single
-    shared gate so save-time (Pydantic, GraphValidator, MCP) and run-time
-    (node runner) agree on what an egress policy means.
+    ``"selected"`` (FAR-296 Phase 3b-3). Any other value raises
+    ``ValueError`` — this is the single shared gate so save-time (Pydantic,
+    GraphValidator, MCP) and run-time (node runner) agree on what an egress
+    policy means.
+
+    IMPORTANT (FAR-296 Phase 3b-3 limitation): ``selected`` currently DENIES
+    ALL egress at runtime (``allow_internet_access=False``) and only carries
+    the host:port allowlist as sandbox metadata — the allowlist is NOT yet
+    honored by any enforcement point (the e2b SDK has no native allowlist
+    control; a template-side mechanism does not exist yet). Until that point
+    lands, ``selected`` is functionally equivalent to ``deny_all`` and must
+    not be advertised as opening specific hosts.
     """
     node_id = node_def.get("id")
     egress_policy = node_def.get("egress_policy")
@@ -158,6 +179,11 @@ def _validate_sandbox_egress_allowlist_config(egress_policy: str | None, egress_
 
     Each entry must be a dict with exactly ``host`` (non-empty str) and
     ``port`` (int, 1-65535); unknown keys raise ``ValueError``.
+
+    LIMITATION: the allowlist is metadata-only today. ``selected`` denies all
+    egress at runtime (``allow_internet_access=False``) and the allowlist is
+    carried as sandbox metadata awaiting a FUTURE template-side enforcement
+    point — it is NOT honored at runtime yet (FAR-296 Phase 3b-3).
     """
     if egress_policy == "selected":
         if not isinstance(egress_allowlist, list) or not egress_allowlist:
