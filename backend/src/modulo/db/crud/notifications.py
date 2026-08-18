@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
-from sqlalchemy import ColumnElement, delete, func, select
+from sqlalchemy import ColumnElement, Select, delete, func, select
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -35,7 +36,7 @@ def _visible_to_user_clause(user_id: uuid.UUID) -> ColumnElement[bool]:
     )
 
 
-def apply_prefs_filter(query, account_id: uuid.UUID):
+def apply_prefs_filter(query: Select[Any], account_id: uuid.UUID) -> Select[Any]:
     """Restrict a notifications query to categories the user has NOT opted out of.
 
     Shared by every notification read path (dashboard list, full list, count,
@@ -248,7 +249,7 @@ async def count_notifications_for_user(
 
     try:
         result = await session.execute(q)
-        return result.scalar_one()
+        return int(result.scalar_one())
     except ProgrammingError:
         return 0
 
@@ -338,7 +339,7 @@ async def get_unread_count(
     q = apply_prefs_filter(q, account_id=user_id)
     try:
         result = await session.execute(q)
-        return result.scalar_one()
+        return int(result.scalar_one())
     except ProgrammingError:
         return 0
 

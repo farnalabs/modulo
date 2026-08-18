@@ -24,6 +24,13 @@ the tables its new FKs reference (``organisations``, ``accounts``) —
 re-applied idempotently right before ``SET ROLE`` (the pre-alembic bootstrap
 runs on a fresh DB where those tables do not exist yet).
 
+The ceremony is conditional on the roles existing (checked via ``pg_roles``):
+on a fresh DB where ``alembic upgrade heads`` runs BEFORE the app bootstraps
+roles (e.g. the BDD suite), the GRANTs / ``SET ROLE`` / owner assertion are
+skipped and the table is created by the migration caller. When the roles exist
+(production, where bootstrap runs before alembic), the full ``modulo_migrate``
+ownership ceremony runs as described above.
+
 RLS: ENABLE + FORCE ROW LEVEL SECURITY (the owner is ``modulo_migrate`` and
 must NOT bypass RLS). Policy split (the read-time model):
   * ``rls_org_isolation``      — org-scope SELECT USING (organisation_id =
@@ -78,16 +85,27 @@ def _assert_owner_is_migrate(bind: sa.Connection) -> None:
         )
 
 
+def _role_exists(bind: sa.Connection, role: str) -> bool:
+    """Return True when the Postgres role exists (fresh dev/BDD DBs have none)."""
+    return (
+        bind.execute(sa.text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}).scalar_one_or_none()
+        is not None
+    )
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     pg = _is_postgres(bind)
 
     if pg:
         op.execute("SET search_path TO public")
-        op.execute(f"GRANT CREATE ON SCHEMA public TO {_MIGRATE_ROLE}")
-        op.execute(f"GRANT REFERENCES ON TABLE public.organisations TO {_MIGRATE_ROLE}")
-        op.execute(f"GRANT REFERENCES ON TABLE public.accounts TO {_MIGRATE_ROLE}")
-        op.execute(f"SET ROLE {_MIGRATE_ROLE}")
+        migrate_role = _role_exists(bind, _MIGRATE_ROLE)
+        app_role = _role_exists(bind, _APP_ROLE)
+        if migrate_role:
+            op.execute(f"GRANT CREATE ON SCHEMA public TO {_MIGRATE_ROLE}")
+            op.execute(f"GRANT REFERENCES ON TABLE public.organisations TO {_MIGRATE_ROLE}")
+            op.execute(f"GRANT REFERENCES ON TABLE public.accounts TO {_MIGRATE_ROLE}")
+            op.execute(f"SET ROLE {_MIGRATE_ROLE}")
 
     op.create_table(
         "notification_preferences",
@@ -110,8 +128,9 @@ def upgrade() -> None:
     op.create_index("ix_notification_preferences_organisation_id", "notification_preferences", ["organisation_id"])
 
     if pg:
-        op.execute("RESET ROLE")
-        _assert_owner_is_migrate(bind)
+        if migrate_role:
+            op.execute("RESET ROLE")
+            _assert_owner_is_migrate(bind)
         op.execute("ALTER TABLE notification_preferences ENABLE ROW LEVEL SECURITY")
         op.execute("ALTER TABLE notification_preferences FORCE ROW LEVEL SECURITY")
         op.execute(f"CREATE POLICY rls_org_isolation ON notification_preferences FOR SELECT USING ({_ORG_SCOPE})")
@@ -125,7 +144,8 @@ def upgrade() -> None:
         op.execute(
             f"CREATE POLICY rls_user_isolation_delete ON notification_preferences FOR DELETE USING ({_USER_SCOPE})"
         )
-        op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON notification_preferences TO {_APP_ROLE}")
+        if app_role:
+            op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON notification_preferences TO {_APP_ROLE}")
 
 
 def downgrade() -> None:

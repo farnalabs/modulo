@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -108,7 +108,7 @@ async def _load_dashboard_level(session: AsyncSession, account_id: uuid.UUID) ->
     if account is None:
         return "warning"
     prefs = account.preferences if isinstance(account.preferences, dict) else {}
-    return prefs.get(_DASHBOARD_LEVEL_KEY, "warning")
+    return cast(str, prefs.get(_DASHBOARD_LEVEL_KEY, "warning"))
 
 
 def _notification_to_response(n: Notification) -> NotificationResponse:

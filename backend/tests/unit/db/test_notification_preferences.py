@@ -82,7 +82,7 @@ def test_apply_prefs_filter_adds_opt_out_subquery() -> None:
 
 
 async def test_empty_opt_outs_returns_empty_set(session: AsyncSession) -> None:
-    assert await get_opted_out_categories(session, org_id=_ORG, account_id=_USER) == set()
+    assert not await get_opted_out_categories(session, org_id=_ORG, account_id=_USER)
 
 
 async def test_set_then_get_round_trip(session: AsyncSession) -> None:
@@ -100,7 +100,7 @@ async def test_opt_in_false_removes_row(session: AsyncSession) -> None:
     await set_notification_preferences(session, org_id=_ORG, account_id=_USER, opt_outs={"run.failed": True})
     await set_notification_preferences(session, org_id=_ORG, account_id=_USER, opt_outs={"run.failed": False})
     await session.commit()
-    assert await get_opted_out_categories(session, org_id=_ORG, account_id=_USER) == set()
+    assert not await get_opted_out_categories(session, org_id=_ORG, account_id=_USER)
 
 
 async def test_partial_update_leaves_untouched_keys(session: AsyncSession) -> None:
@@ -116,4 +116,4 @@ async def test_opt_outs_are_scoped_per_org(session: AsyncSession) -> None:
     other_org = uuid.UUID("00000000-0000-0000-0000-00000000ffff")
     await set_notification_preferences(session, org_id=_ORG, account_id=_USER, opt_outs={"run.failed": True})
     await session.commit()
-    assert await get_opted_out_categories(session, org_id=other_org, account_id=_USER) == set()
+    assert not await get_opted_out_categories(session, org_id=other_org, account_id=_USER)
