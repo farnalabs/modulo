@@ -1,7 +1,7 @@
 """Unit tests for the FAR-309 PR A elevated guardrail-config read.
 
 The standard ``GET /api/v1/guardrails/config`` (``eval.list``, viewer-visible)
-must NOT leak the deny-rule internals â€” regex patterns, JSON schemas, and
+must NOT leak the deny-rule internals — regex patterns, JSON schemas, and
 redaction field paths are masked. The elevated ``GET
 /api/v1/guardrails/config/elevated`` requires ``guardrail.manage`` (admin) and
 returns the FULL unmasked config. Non-admins are denied 403 on the elevated
@@ -85,7 +85,7 @@ def _pin() -> GuardrailPin:
 
 
 def _proposed_pin() -> GuardrailPin:
-    """A pin with a PENDING proposal â€” the proposal is what the operator is
+    """A pin with a PENDING proposal — the proposal is what the operator is
     reviewing, so the standard read must mask it and the elevated read must
     return it unmasked."""
     return GuardrailPin(
@@ -162,9 +162,9 @@ def _patch_route_deps(pin: GuardrailPin | None = None) -> Generator[None, None, 
 
 
 def test_standard_read_masks_sensitive_values(runner_client: TestClient) -> None:
-    """The standard read (``eval.list``, runner-visible â€” the LOWEST role that
+    """The standard read (``eval.list``, runner-visible — the LOWEST role that
     can reach it) exposes the guardrail topology but masks the deny-rule
-    internals â€” the real regex pattern and JSON schema must never appear in the
+    internals — the real regex pattern and JSON schema must never appear in the
     returned YAML."""
     with _patch_route_deps():
         resp = runner_client.get("/api/v1/guardrails/config")
@@ -185,7 +185,7 @@ def test_standard_read_masks_sensitive_values(runner_client: TestClient) -> None
 
 def test_standard_read_denied_for_viewer(viewer_client: TestClient) -> None:
     """Viewers cannot reach even the standard read (``eval.list`` requires
-    runner) â€” the guardrail config is never exposed to the lowest role."""
+    runner) — the guardrail config is never exposed to the lowest role."""
     with _patch_route_deps():
         resp = viewer_client.get("/api/v1/guardrails/config")
 
@@ -193,7 +193,7 @@ def test_standard_read_denied_for_viewer(viewer_client: TestClient) -> None:
 
 
 def test_standard_read_masks_pending_proposal(runner_client: TestClient) -> None:
-    """A PENDING proposal is what a non-admin operator is reviewing â€” the
+    """A PENDING proposal is what a non-admin operator is reviewing — the
     standard read must mask its sensitive internals just like the applied
     snapshot (the pattern/schema must never appear)."""
     with _patch_route_deps(pin=_proposed_pin()):
@@ -210,7 +210,7 @@ def test_standard_read_masks_pending_proposal(runner_client: TestClient) -> None
 
 
 def test_elevated_read_returns_full_unmasked_proposal_for_admin(admin_client: TestClient) -> None:
-    """The elevated endpoint returns the PENDING PROPOSAL unmasked â€” the
+    """The elevated endpoint returns the PENDING PROPOSAL unmasked — the
     operator reviewing/approving it needs the actual rule bodies."""
     with _patch_route_deps(pin=_proposed_pin()):
         resp = admin_client.get("/api/v1/guardrails/config/elevated")
@@ -225,7 +225,7 @@ def test_elevated_read_returns_full_unmasked_proposal_for_admin(admin_client: Te
 
 
 def test_standard_read_masks_for_admins_too(admin_client: TestClient) -> None:
-    """Even an admin hitting the STANDARD read gets the masked view â€” the
+    """Even an admin hitting the STANDARD read gets the masked view — the
     unmasked config is only available via the elevated endpoint."""
     with _patch_route_deps():
         resp = admin_client.get("/api/v1/guardrails/config")
@@ -236,7 +236,7 @@ def test_standard_read_masks_for_admins_too(admin_client: TestClient) -> None:
 
 def test_elevated_read_returns_full_unmasked_config_for_admin(admin_client: TestClient) -> None:
     """An admin (``guardrail.manage``) gets the FULL config from the elevated
-    endpoint â€” the actual regex pattern, JSON schema, and redaction paths."""
+    endpoint — the actual regex pattern, JSON schema, and redaction paths."""
     with _patch_route_deps():
         resp = admin_client.get("/api/v1/guardrails/config/elevated")
 
