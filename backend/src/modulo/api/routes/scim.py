@@ -1019,6 +1019,89 @@ async def replace_group(
     return _group_to_scim(group, members, base_url)
 
 
+def _parse_member_uuid(value: Any) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(str(value))
+    except ValueError:
+        return None
+
+
+async def _apply_replace_group_op(session: AsyncSession, group: Any, op: Any, org_id: uuid.UUID) -> None:
+    if not isinstance(op.value, dict):
+        return
+    if "displayName" in op.value:
+        await scim_update_group(session, group, name=str(op.value["displayName"]))
+    if "members" in op.value and isinstance(op.value["members"], list):
+        existing = await scim_list_group_members(session, group.id)
+        for em in existing:
+            await scim_remove_group_member(session, group.id, em.account_id)
+        for m in op.value["members"]:
+            if isinstance(m, dict) and "value" in m:
+                uid = _parse_member_uuid(m["value"])
+                if uid is None:
+                    continue
+                await scim_add_group_member(
+                    session,
+                    org_id=org_id,
+                    team_id=group.id,
+                    user_id=uid,
+                )
+
+
+async def _apply_add_group_op(session: AsyncSession, group: Any, op: Any, org_id: uuid.UUID) -> None:
+    if op.path == "members" or op.path is None:
+        values = op.value
+        if isinstance(values, dict):
+            values = [values]
+        if isinstance(values, list):
+            for m in values:
+                if isinstance(m, dict) and "value" in m:
+                    uid = _parse_member_uuid(m["value"])
+                    if uid is None:
+                        continue
+                    await scim_add_group_member(
+                        session,
+                        org_id=org_id,
+                        team_id=group.id,
+                        user_id=uid,
+                    )
+
+
+async def _apply_remove_group_op(session: AsyncSession, group: Any, op: Any) -> None:
+    if op.path and op.path.startswith("members"):
+        # Extract user ID from path: members[value eq "uuid"]
+        import re as _re
+
+        m = _re.search(r'value\s+eq\s+"([^"]+)"', op.path)
+        if m:
+            uid = _parse_member_uuid(m.group(1))
+            if uid is not None:
+                await scim_remove_group_member(session, group.id, uid)
+    elif op.value:
+        if isinstance(op.value, dict) and "value" in op.value:
+            uid = _parse_member_uuid(op.value["value"])
+            if uid is not None:
+                await scim_remove_group_member(session, group.id, uid)
+        elif isinstance(op.value, list):
+            for item in op.value:
+                if isinstance(item, dict) and "value" in item:
+                    uid = _parse_member_uuid(item["value"])
+                    if uid is not None:
+                        await scim_remove_group_member(session, group.id, uid)
+
+
+async def _build_group_member_refs(session: AsyncSession, group: Any, base_url: str) -> list[dict[str, str]]:
+    memberships = await scim_list_group_members(session, group.id)
+    return [
+        {
+            "value": str(m.account_id),
+            "$ref": f"{base_url}/scim/v2/Users/{m.account_id}",
+            "type": "User",
+        }
+        for m in memberships
+    ]
+
+
 @router.patch("/Groups/{group_id}", dependencies=[Depends(require_scim_feature)])
 async def patch_group(
     group_id: uuid.UUID,
@@ -1040,81 +1123,14 @@ async def patch_group(
                         status.HTTP_400_BAD_REQUEST,
                         f"Unsupported PATCH operation '{op.op}'. Supported: replace, remove, add",
                     )
-                if op.op == "replace" and isinstance(op.value, dict):
-                    if "displayName" in op.value:
-                        await scim_update_group(session, group, name=str(op.value["displayName"]))
-                    if "members" in op.value and isinstance(op.value["members"], list):
-                        existing = await scim_list_group_members(session, group.id)
-                        for em in existing:
-                            await scim_remove_group_member(session, group.id, em.account_id)
-                        for m in op.value["members"]:
-                            if isinstance(m, dict) and "value" in m:
-                                try:
-                                    uid = uuid.UUID(str(m["value"]))
-                                except ValueError:
-                                    continue
-                                await scim_add_group_member(
-                                    session,
-                                    org_id=principal.organisation_id,
-                                    team_id=group.id,
-                                    user_id=uid,
-                                )
+                if op.op == "replace":
+                    await _apply_replace_group_op(session, group, op, principal.organisation_id)
                 elif op.op == "add":
-                    if op.path == "members" or op.path is None:
-                        values = op.value
-                        if isinstance(values, dict):
-                            values = [values]
-                        if isinstance(values, list):
-                            for m in values:
-                                if isinstance(m, dict) and "value" in m:
-                                    try:
-                                        uid = uuid.UUID(str(m["value"]))
-                                    except ValueError:
-                                        continue
-                                    await scim_add_group_member(
-                                        session,
-                                        org_id=principal.organisation_id,
-                                        team_id=group.id,
-                                        user_id=uid,
-                                    )
+                    await _apply_add_group_op(session, group, op, principal.organisation_id)
                 elif op.op == "remove":
-                    if op.path and op.path.startswith("members"):
-                        # Extract user ID from path: members[value eq "uuid"]
-                        import re as _re
-
-                        m = _re.search(r'value\s+eq\s+"([^"]+)"', op.path)
-                        if m:
-                            uid_str = m.group(1)
-                            try:
-                                uid = uuid.UUID(uid_str)
-                            except ValueError:
-                                continue
-                            await scim_remove_group_member(session, group.id, uid)
-                    elif op.value:
-                        if isinstance(op.value, dict) and "value" in op.value:
-                            try:
-                                uid = uuid.UUID(str(op.value["value"]))
-                            except ValueError:
-                                continue
-                            await scim_remove_group_member(session, group.id, uid)
-                        elif isinstance(op.value, list):
-                            for item in op.value:
-                                if isinstance(item, dict) and "value" in item:
-                                    try:
-                                        uid = uuid.UUID(str(item["value"]))
-                                    except ValueError:
-                                        continue
-                                    await scim_remove_group_member(session, group.id, uid)
+                    await _apply_remove_group_op(session, group, op)
             base_url = _get_base_url(settings)
-            memberships = await scim_list_group_members(session, group.id)
-            members = [
-                {
-                    "value": str(m.account_id),
-                    "$ref": f"{base_url}/scim/v2/Users/{m.account_id}",
-                    "type": "User",
-                }
-                for m in memberships
-            ]
+            members = await _build_group_member_refs(session, group, base_url)
     except HTTPException:
         _log.warning("SCIM patch_group: re-raising HTTPException")
         raise
