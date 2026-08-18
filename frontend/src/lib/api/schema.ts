@@ -12026,6 +12026,12 @@ export interface components {
             role?: string | null;
             /** Autonomy Recommendation */
             autonomy_recommendation?: string | null;
+            /**
+             * Idempotent
+             * @description Whether the node is logically safe to re-run. When false, retries of any run containing this node are suppressed.
+             * @default true
+             */
+            idempotent: boolean;
             /** Composite Ref */
             composite_ref?: string | null;
             /** Composite Parameter Values */

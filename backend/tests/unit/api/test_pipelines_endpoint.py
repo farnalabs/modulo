@@ -1483,6 +1483,55 @@ async def test_graph_references_reject_unknown_manual_schema() -> None:
 
 
 # ---------------------------------------------------------------------------
+# PipelineGraphNode model — FAR-295 idempotent flag (all executor types)
+# ---------------------------------------------------------------------------
+
+
+def _minimal_node(**overrides: Any) -> dict[str, Any]:
+    node = {
+        "id": str(uuid.uuid4()),
+        "node_type": "agent",
+        "agent_id": str(uuid.uuid4()),
+        "position": {"x": 0.0, "y": 0.0},
+    }
+    node.update(overrides)
+    return node
+
+
+def test_graph_node_idempotent_defaults_to_true() -> None:
+    """The idempotent flag defaults to true on EVERY executor type — a node
+    author must opt out explicitly (idempotent=false) to suppress retries."""
+    assert PipelineGraphNode.model_validate(_minimal_node()).idempotent is True
+    common = {"id": str(uuid.uuid4()), "position": {"x": 0.0, "y": 0.0}}
+    typed_nodes = [
+        {**common, "node_type": "agent", "agent_id": str(uuid.uuid4())},
+        {**common, "node_type": "manual", "label": "manual step", "output_schema_id": str(uuid.uuid4())},
+        {**common, "node_type": "composite", "composite_ref": str(uuid.uuid4())},
+        {
+            **common,
+            "node_type": "sandbox_agent",
+            "template_id": "opencode",
+            "agent_command": "opencode run",
+            "agent_prompt": "do the thing",
+        },
+    ]
+    for node_dict in typed_nodes:
+        typed = PipelineGraphNode.model_validate(node_dict)
+        assert typed.idempotent is True, f"{node_dict['node_type']} should default idempotent to true"
+
+
+def test_graph_node_idempotent_explicit_false_and_roundtrip() -> None:
+    """idempotent=false is accepted and survives the JSON round-trip used by
+    the graph save path (node.model_dump(mode='json'))."""
+    node = PipelineGraphNode.model_validate(_minimal_node(idempotent=False))
+    assert node.idempotent is False
+    dumped = node.model_dump(mode="json")
+    assert dumped["idempotent"] is False
+    # Re-validating the dumped dict round-trips the flag.
+    assert PipelineGraphNode.model_validate(dumped).idempotent is False
+
+
+# ---------------------------------------------------------------------------
 # PATCH /api/v1/pipelines/{id}
 # ---------------------------------------------------------------------------
 
