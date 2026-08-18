@@ -86,6 +86,19 @@ class TestResolveRequired:
         assert resolve_required("run.trigger") == "runner"
         assert resolve_required("metrics.ingest") == "viewer"
         assert resolve_required("org.email.manage") == "admin"
+        assert resolve_required("guardrail.manage") == "admin"
+
+    def test_guardrail_manage_registered_admin_level(self) -> None:
+        """FAR-309 PR A: ``guardrail.manage`` is a registered admin-level key
+        (mirrors ``org.guardrails.kill_switch.manage``) gating guardrail
+        definition/binding management and the elevated config read."""
+        assert PERMISSIONS["guardrail.manage"] == "admin"
+        assert resolve_required("guardrail.manage") == "admin"
+        # Admin may assert it; operator/runner/viewer are denied.
+        assert assert_org_role("admin", "admin", "guardrail.manage") is None
+        for low_role in ("operator", "runner", "viewer"):
+            with pytest.raises(PermissionDenied):
+                assert_org_role(low_role, "admin", "guardrail.manage")
 
     def test_unknown_key_raises_configuration_error(self) -> None:
         with pytest.raises(PermissionConfigurationError):
