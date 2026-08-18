@@ -31,6 +31,10 @@ def _make_run(**overrides: object) -> MagicMock:
     run.total_tokens = None
     run.node_token_usage = None
     run.cost_breakdown = None
+    run.trigger_id = None
+    run.account_id = None
+    run.heartbeat_at = None
+    run.work_item_refs = None
     run.created_at = datetime(2026, 8, 1, 10, 0, 0, tzinfo=UTC)
     run.started_at = datetime(2026, 8, 1, 10, 1, 0, tzinfo=UTC)
     run.completed_at = datetime(2026, 8, 1, 10, 5, 30, tzinfo=UTC)

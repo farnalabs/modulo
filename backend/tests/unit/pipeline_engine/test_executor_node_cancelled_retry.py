@@ -331,6 +331,59 @@ async def test_execute_terminal_fails_node_cancellation_when_retries_exhausted()
     assert not any("status='pending'" in s for s in statements)
 
 
+async def test_execute_non_idempotent_graph_suppresses_transient_retry():
+    """FAR-295: a graph declaring a node with ``idempotent: false`` must NOT be
+    re-dispatched on a transient NodeCancelledError even while retry budget
+    remains — the re-run would re-execute that node's external side effect. The
+    run terminal-fails via the single finalization path (no re-raise, no fenced
+    pending-reset) with error_code node_cancelled and an error_detail that names
+    the idempotency suppression; the run_failed publish carries the reason."""
+    run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
+    snapshot = _make_snapshot(graph_json={"nodes": [{"id": "node-a", "idempotent": False}], "edges": []})
+    statements: list[str] = []
+    session = _make_session(snapshot, statements=statements)
+    factory = _make_session_factory(session)
+    compiled = _mock_compiled_raising(NodeCancelledError("node-a"))
+    registry = _mock_registry()
+    broker = registry.get_or_create.return_value
+    settings = MagicMock(saq_run_retries=5)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+        patch("modulo.settings.get_settings", return_value=settings),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        result = await executor.execute(
+            run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
+        )
+
+    # Terminal-failed (execute returned normally) — NOT re-raised for retry.
+    assert result is run
+    # No fenced pending-reset was issued (no re-dispatch).
+    assert not any("status='pending'" in s for s in statements)
+    # Finalized with the transient code and an error_detail that explains the
+    # idempotency suppression (the retry budget was NOT exhausted).
+    call = mock_finalize.await_args
+    assert call is not None
+    assert call.kwargs["status"] == "failed"
+    assert call.kwargs.get("error_code") == "node_cancelled"
+    detail = call.kwargs["error_detail"]
+    assert "idempotent=false" in detail
+    assert "retry suppressed" in detail
+    # Live run_failed publish for WS subscribers.
+    run_failed = [c.args for c in broker.publish.call_args_list if c.args and c.args[0] == "run_failed"]
+    assert run_failed
+    assert run_failed[0][1]["error"] == "node_cancelled"
+
+
 async def test_execute_terminal_fail_roundtrips_sandbox_diagnostics():
     """FAR-197 review fix (PR #1317 CHANGES_REQUESTED): the retry-exhausted
     terminal-fail write surface used to truncate the error_detail at 500 chars,

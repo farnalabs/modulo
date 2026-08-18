@@ -112,6 +112,10 @@ def get_run(run_id, client, request):
         ),
         patch("modulo.api.routes.runs._do_get_child_run_rollup", return_value=(Decimal("0.00"), 0)),
         patch("modulo.api.routes.runs._do_get_otel_endpoint", return_value=None),
+        patch(
+            "modulo.api.routes.runs._do_get_run_observability",
+            return_value=(None, None, None),
+        ),
     ):
         resp = client.get(f"/api/v1/runs/{run_id}")
     request.node._resp = resp

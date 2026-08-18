@@ -111,6 +111,13 @@ def _make_run(
     r.total_tokens = total_tokens
     r.node_token_usage = node_token_usage
     r.cost_breakdown = cost_breakdown
+    # Active-run observability attributes (FAR-307)
+    r.trigger_type = "manual"
+    r.trigger_id = None
+    r.account_id = None
+    r.heartbeat_at = None
+    r.work_item_refs = None
+    r.parent_run_id = None
     return r
 
 
@@ -1862,3 +1869,267 @@ class TestGetRunIO:
 
         assert resp.status_code == 200
         assert resp.json()["node_labels"] == {}
+
+
+# ---------------------------------------------------------------------------
+# Active-run observability (FAR-307)
+# ---------------------------------------------------------------------------
+
+
+def _make_run_event(seq: int, event_type: str, payload: dict[str, Any], ts: datetime) -> MagicMock:
+    evt = MagicMock()
+    evt.seq = seq
+    evt.event_type = event_type
+    evt.payload = payload
+    evt.timestamp = ts
+    return evt
+
+
+class TestGetRunObservability:
+    """GET /api/v1/runs/{run_id} — active-run observability fields."""
+
+    def test_detail_exposes_observability_fields(self, client: TestClient) -> None:
+        run = _make_run(status="running")
+        run.heartbeat_at = datetime.now(UTC)
+        run.work_item_refs = [{"kind": "pr", "ref": "https://github.com/x/y/pull/1", "source": "github"}]
+        run.trigger_id = uuid.uuid4()
+        capacity = {"active_runs": 2, "concurrency_limit": 5, "waiting": False}
+        child_runs = [{"run_id": str(uuid.uuid4()), "run_number": 2, "status": "complete", "pipeline_name": "P"}]
+
+        with (
+            patch("modulo.api.routes.runs._do_get_run", return_value=run),
+            patch("modulo.api.routes.runs._do_get_child_run_rollup", return_value=(Decimal(0), 0)),
+            patch("modulo.api.routes.runs._do_get_otel_endpoint", return_value=""),
+            patch(
+                "modulo.api.routes.runs._do_get_run_observability",
+                return_value=("duncan@modulo.run", capacity, child_runs),
+            ),
+            patch("modulo.api.routes.runs.set_rls_org"),
+        ):
+            resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["trigger_actor"] == "duncan@modulo.run"
+        assert body["trigger_id"] == str(run.trigger_id)
+        assert body["heartbeat_at"] == run.heartbeat_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
+        assert body["work_item_refs"] == run.work_item_refs
+        assert body["child_runs"] == child_runs
+        assert body["capacity"] == capacity
+
+    def test_detail_observability_none_when_absent(self, client: TestClient) -> None:
+        run = _make_run(status="running")
+        run.heartbeat_at = None
+        run.work_item_refs = None
+        run.trigger_id = None
+
+        with (
+            patch("modulo.api.routes.runs._do_get_run", return_value=run),
+            patch("modulo.api.routes.runs._do_get_child_run_rollup", return_value=(Decimal(0), 0)),
+            patch("modulo.api.routes.runs._do_get_otel_endpoint", return_value=""),
+            patch("modulo.api.routes.runs._do_get_run_observability", return_value=(None, None, None)),
+            patch("modulo.api.routes.runs.set_rls_org"),
+        ):
+            resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["trigger_actor"] is None
+        assert body["trigger_id"] is None
+        assert body["heartbeat_at"] is None
+        assert body["work_item_refs"] is None
+        assert body["child_runs"] is None
+        assert body["capacity"] is None
+
+
+class TestResolveCapacityAdmissionGate:
+    """``_resolve_capacity`` must mirror the dispatch admission-gate semantics.
+
+    Regression for the review finding: the capacity count included pending
+    runs (``ACTIVE_RUN_STATUSES`` contains ``pending``) and the viewed run
+    itself, so a pending run with room available (limit=3, two running) was
+    reported as ``waiting=True`` even though dispatch would admit it at once.
+    """
+
+    async def test_pending_run_not_waiting_when_room_is_available(self, mock_session: AsyncMock) -> None:
+        run = _make_run(status="pending")
+        count = AsyncMock(return_value=2)
+        with (
+            patch("modulo.api.routes.runs.count_active_runs_for_org", count),
+            patch("modulo.api.routes.runs.get_org_run_concurrency_limit", AsyncMock(return_value=3)),
+        ):
+            capacity = await runs_module._resolve_capacity(mock_session, _ORG_ID, run)
+
+        assert capacity["waiting"] is False
+        count.assert_awaited_once_with(mock_session, _ORG_ID, include_pending=False, exclude_run_id=run.id)
+
+    async def test_pending_run_waiting_when_at_limit(self, mock_session: AsyncMock) -> None:
+        run = _make_run(status="pending")
+        with (
+            patch("modulo.api.routes.runs.count_active_runs_for_org", AsyncMock(return_value=3)),
+            patch("modulo.api.routes.runs.get_org_run_concurrency_limit", AsyncMock(return_value=3)),
+        ):
+            capacity = await runs_module._resolve_capacity(mock_session, _ORG_ID, run)
+
+        assert capacity["active_runs"] == 3
+        assert capacity["waiting"] is True
+
+    async def test_running_run_never_waiting(self, mock_session: AsyncMock) -> None:
+        run = _make_run(status="running")
+        with (
+            patch("modulo.api.routes.runs.count_active_runs_for_org", AsyncMock(return_value=3)),
+            patch("modulo.api.routes.runs.get_org_run_concurrency_limit", AsyncMock(return_value=3)),
+        ):
+            capacity = await runs_module._resolve_capacity(mock_session, _ORG_ID, run)
+
+        assert capacity["waiting"] is False
+
+
+class TestGetRunEventsLifecycle:
+    """GET /api/v1/runs/{run_id}/events — node lifecycle events surfaced."""
+
+    def test_events_include_lifecycle_events(self, client: TestClient) -> None:
+        run = _make_run(status="running")
+        ts = datetime.now(UTC)
+        events = [
+            _make_run_event(1, "node.stdout_chunk", {"node_id": "a", "text": "hi"}, ts),
+            _make_run_event(2, "node_started", {"node_id": "a"}, ts),
+            _make_run_event(3, "node_completed", {"node_id": "a"}, ts),
+            _make_run_event(4, "node_failed", {"node_id": "b", "error": "boom"}, ts),
+        ]
+        broker = MagicMock()
+        broker.replay_since.return_value = events
+        registry = MagicMock()
+        registry.get.return_value = broker
+
+        with (
+            patch("modulo.api.routes.runs._do_get_run", return_value=run),
+            patch("modulo.api.routes.runs.get_registry", return_value=registry),
+            patch("modulo.api.routes.runs.set_rls_org"),
+        ):
+            resp = client.get(f"/api/v1/runs/{_RUN_ID}/events")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        types = [e["event_type"] for e in body["events"]]
+        assert "node_started" in types
+        assert "node_completed" in types
+        assert "node_failed" in types
+        assert "node.stdout_chunk" in types
+        assert len(body["events"]) == 4
+
+    def test_events_filter_by_node_id(self, client: TestClient) -> None:
+        run = _make_run(status="running")
+        ts = datetime.now(UTC)
+        events = [
+            _make_run_event(1, "node_started", {"node_id": "a"}, ts),
+            _make_run_event(2, "node_started", {"node_id": "b"}, ts),
+        ]
+        broker = MagicMock()
+        broker.replay_since.return_value = events
+        registry = MagicMock()
+        registry.get.return_value = broker
+
+        with (
+            patch("modulo.api.routes.runs._do_get_run", return_value=run),
+            patch("modulo.api.routes.runs.get_registry", return_value=registry),
+            patch("modulo.api.routes.runs.set_rls_org"),
+        ):
+            resp = client.get(f"/api/v1/runs/{_RUN_ID}/events?node_id=a")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert [e["event_type"] for e in body["events"]] == ["node_started"]
+        assert all(e["payload"]["node_id"] == "a" for e in body["events"])
+
+
+class TestListRunsObservability:
+    """GET /api/v1/runs — active-run observability fields on each item."""
+
+    def test_list_items_include_observability_fields(self, client: TestClient, mock_session) -> None:
+        run = _make_run(status="running")
+        run.heartbeat_at = datetime.now(UTC)
+
+        page = MagicMock()
+        page.items = [run]
+        page.total = 1
+        page.page = 1
+        page.page_size = 20
+        page.next_cursor = None
+        page.has_more = False
+
+        with (
+            patch("modulo.api.routes.runs.db_list_runs", return_value=page),
+            patch("modulo.api.routes.runs.get_child_run_rollup", return_value={}),
+            patch("modulo.api.routes.runs.count_active_runs_for_org", AsyncMock(return_value=0)),
+            patch("modulo.api.routes.runs.get_org_run_concurrency_limit", AsyncMock(return_value=5)),
+            patch("modulo.api.routes.runs.set_rls_org"),
+        ):
+            resp = client.get("/api/v1/runs")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["items"]) == 1
+        item = body["items"][0]
+        assert item["heartbeat_at"] == run.heartbeat_at.isoformat()
+        assert "trigger_actor" in item
+        assert item["capacity"] == {
+            "active_runs": 0,
+            "concurrency_limit": 5,
+            "waiting": False,
+        }
+
+    def test_list_pending_run_not_waiting_when_room_is_available(self, client: TestClient, mock_session) -> None:
+        run = _make_run(status="pending")
+        page = MagicMock()
+        page.items = [run]
+        page.total = 1
+        page.page = 1
+        page.page_size = 20
+        page.next_cursor = None
+        page.has_more = False
+
+        with (
+            patch("modulo.api.routes.runs.db_list_runs", return_value=page),
+            patch("modulo.api.routes.runs.get_child_run_rollup", return_value={}),
+            patch("modulo.api.routes.runs.count_active_runs_for_org", AsyncMock(return_value=2)),
+            patch("modulo.api.routes.runs.get_org_run_concurrency_limit", AsyncMock(return_value=3)),
+            patch("modulo.api.routes.runs.set_rls_org"),
+        ):
+            resp = client.get("/api/v1/runs")
+
+        assert resp.status_code == 200
+        item = resp.json()["items"][0]
+        assert item["status"] == "pending"
+        assert item["capacity"] == {
+            "active_runs": 2,
+            "concurrency_limit": 3,
+            "waiting": False,
+        }
+
+    def test_list_pending_run_waiting_when_at_limit(self, client: TestClient, mock_session) -> None:
+        run = _make_run(status="pending")
+        page = MagicMock()
+        page.items = [run]
+        page.total = 1
+        page.page = 1
+        page.page_size = 20
+        page.next_cursor = None
+        page.has_more = False
+
+        with (
+            patch("modulo.api.routes.runs.db_list_runs", return_value=page),
+            patch("modulo.api.routes.runs.get_child_run_rollup", return_value={}),
+            patch("modulo.api.routes.runs.count_active_runs_for_org", AsyncMock(return_value=3)),
+            patch("modulo.api.routes.runs.get_org_run_concurrency_limit", AsyncMock(return_value=3)),
+            patch("modulo.api.routes.runs.set_rls_org"),
+        ):
+            resp = client.get("/api/v1/runs")
+
+        assert resp.status_code == 200
+        item = resp.json()["items"][0]
+        assert item["capacity"] == {
+            "active_runs": 3,
+            "concurrency_limit": 3,
+            "waiting": True,
+        }

@@ -3553,10 +3553,11 @@ export interface paths {
         };
         /**
          * Get Run Events
-         * @description Return live chunk events for a run since a sequence number.
+         * @description Return live events for a run since a sequence number.
          *
-         *     Only ``node.stdout_chunk`` / ``node.stderr_chunk`` events (the live-output
-         *     surface published by sandbox_agent nodes) are returned. Optionally filter
+         *     Returns ``node.stdout_chunk`` / ``node.stderr_chunk`` (the live-output
+         *     surface published by sandbox_agent nodes) plus the node lifecycle events
+         *     ``node_started`` / ``node_completed`` / ``node_failed``. Optionally filter
          *     to a single ``node_id``. The run's org-scoped existence is validated first
          *     so callers can never observe another org's run events.
          */
@@ -13266,6 +13267,24 @@ export interface components {
             /** Guardrail Summary */
             guardrail_summary?: {
                 [key: string]: number;
+            } | null;
+            /** Trigger Actor */
+            trigger_actor?: string | null;
+            /** Trigger Id */
+            trigger_id?: string | null;
+            /** Heartbeat At */
+            heartbeat_at?: string | null;
+            /** Work Item Refs */
+            work_item_refs?: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Child Runs */
+            child_runs?: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Capacity */
+            capacity?: {
+                [key: string]: unknown;
             } | null;
         };
         /** RunSummary */
