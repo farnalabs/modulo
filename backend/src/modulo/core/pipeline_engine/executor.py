@@ -2331,122 +2331,44 @@ class PipelineExecutor:
             # for the fenced pending-reset; a superseded original, a watchdog
             # stall, or a requested cancellation SKIP the reset (the run is
             # owned elsewhere / terminal / cancelled — never demote it).
+            # The gate/requeue/superseded/terminal decision chain lives in
+            # ``_decide_transient_failure`` — this handler is a thin dispatcher.
+            # For requeue/superseded the helper already performed the fenced
+            # pending-reset + cleanup, and the bare re-raise below propagates out
+            # of execute() BEFORE the post-stream try/finally, exactly as today.
             _log.warning(
                 "pipeline.node_cancelled_transient",
                 extra={"run_id": str(run_id), "exc_type": type(exc).__name__},
             )
-            from modulo.settings import get_settings
-
-            retries = int(get_settings().saq_run_retries)
-            node_attempt_count, current_token, run_markers, cancellation_requested = await self._load_transient_state(
-                run_id=run_id, org_id=org_id
-            )
-
-            superseded = (
-                self._claim_token is not None and current_token is not None and current_token != self._claim_token
-            )
-            stalled = bool(self._stall_requested is not None and self._stall_requested.is_set())
-
-            # FAR-228 guard B (retry-suppression — THE INCIDENT FIX): before any
-            # state mutation, check whether the run ALREADY delivered (a prior
-            # attempt's marker carries delivery_done=True) for THIS node. If so,
-            # a transient retry is suppressed: the run completes COMPLETE with
-            # error_code harness.idempotency_gate instead of burning the retry
-            # budget and re-sending the side effect. ORDERING INVARIANT: computed
-            # AFTER superseded/stalled (above) and BEFORE any mutation —
-            # final_status/error_code are first mutated only in the
-            # retries-exhausted branch below. `markers` is the ALREADY-LOADED
-            # current_run.raw_output_markers — no fresh SELECT.
-            gate_ok = self._idempotency_gate_ok(
+            transient = await self._decide_transient_failure(
                 exc=exc,
-                run_markers=run_markers,
                 run_id=run_id,
-                superseded=superseded,
-                stalled=stalled,
-                cancellation_requested=cancellation_requested,
+                org_id=org_id,
+                graph_json=graph_json,
+                graph_idempotent=graph_idempotent,
                 single_sandbox_node=single_sandbox_node,
+                model_backend_hub=model_backend_hub,
+                connector_hub=connector_hub,
+                broker=broker,
+                completed_node_outputs=completed_node_outputs,
+                stall_requested=self._stall_requested,
             )
-            # Only SandboxNodeFailedError carries a node_id — the gate is
-            # keyed on it, so a None node_id (plain NodeCancelledError) can
-            # never suppress.
-            _gated_node_id = exc.node_id if isinstance(exc, SandboxNodeFailedError) else None
-            # FAR-296 Phase 2: before ANY requeue of a script-mode run, prove no
-            # script process could still be alive (stale-claim lease probe).
-            # A stale ``script_executing`` lease means a script may have run —
-            # requeue is forbidden (exactly-once). Only when the probe proves no
-            # live lease does the run stay eligible for the fenced reset below.
-            # NOTE: the probe is computed BEFORE the gate/retry chain below so
-            # the idempotency gate stays the FIRST branch (it must suppress the
-            # pending-reset when a delivery marker is present), and so the
-            # pending-reset branch remains reachable for BOTH script-mode and
-            # non-script-mode graphs (a stale lease simply disqualifies it).
-            script_lease_ok = await self._script_lease_ok(run_id=run_id, org_id=org_id, graph_json=graph_json)
-            if gate_ok and _gated_node_id is not None:
-                _log.warning(
-                    "pipeline.idempotency_gate.suppressed_retry",
-                    extra={"run_id": str(run_id), "node_id": _gated_node_id},
-                )
-                gate_suppressed = True
-                final_status = "complete"
-                error_code = "harness.idempotency_gate"
-                error_detail = "delivery already sent; transient retry suppressed by idempotency gate"
-                completed_node_outputs[_gated_node_id] = _idempotency_gate_skipped_envelope(_gated_node_id)
+            if transient["decision"] == "gate":
                 # SKIP the pending-reset, the re-raise and the run_failed publish
-                # below — fall through to the existing finalization with
+                # — fall through to the existing finalization with
                 # final_status="complete". run_completed is published after the
                 # eval-skip point (below), while the broker is still open.
-            elif (
-                node_attempt_count < retries and not superseded and not stalled and script_lease_ok and graph_idempotent
-            ):
-                # Fenced pending-reset: a conditional UPDATE guarded by OUR
-                # captured claim token + status='running' so a superseded
-                # original cannot demote the successor's running row, a stalled
-                # (watchdog-cancelled) executor cannot resurrect a run the
-                # watchdog just failed, and a cancellation cannot be reversed.
-                await self._fenced_pending_reset(run_id=run_id, org_id=org_id)
-                # The re-raise below propagates out of execute() BEFORE the
-                # post-stream try/finally, so run its cleanup here: clear the
-                # cancellation check + hubs and close the run's broker so the
-                # retry re-entry gets a fresh broker and no stale contextvars.
-                await self._cleanup_run_resources(
-                    model_backend_hub=model_backend_hub, connector_hub=connector_hub, run_id=run_id
+                gate_suppressed = True
+                completed_node_outputs[transient["gated_node_id"]] = _idempotency_gate_skipped_envelope(
+                    transient["gated_node_id"]
                 )
+            elif transient["decision"] in ("requeue", "superseded"):
                 raise
-            elif superseded or stalled:
-                # Superseded or watchdog-stalled: the run is owned by a
-                # successor or was already terminal-failed by the zombie
-                # watchdog — never reset it to pending and never terminal-fail
-                # it here. Clean up and re-raise so the SAQ job retries (its
-                # next claim will lose against the live/superseded row).
-                await self._cleanup_run_resources(
-                    model_backend_hub=model_backend_hub, connector_hub=connector_hub, run_id=run_id
-                )
-                raise
-            else:
-                # Retries exhausted — terminal failure with a MEANINGFUL code
-                # (not the raw langgraph class name). Publish the run_failed
-                # event so WS subscribers get a live failure notification,
-                # consistent with every other terminal-failure path in this
-                # file.
-                #
-                # Write cap: 5000, NOT 500 — the transient node-cancelled
-                # detail is the only place the FAR-197 no-output.json
-                # diagnostic (stdout/stderr tails, the E2B log tail where the
-                # kill reason lives) reaches the user. It is bounded by the
-                # builder to fit the 5000-char sanitizer/column cap
-                # (runs.error_detail is String(5000)), and every detail read
-                # surface (run-detail REST + MCP) presents at limit=5000; list
-                # surfaces truncate to 200 by design. A 500-char write cap cut
-                # the stderr + log tails entirely for large-output failures.
-                error_code, error_detail = self._transient_failure_detail(
-                    exc=exc,
-                    script_lease_ok=script_lease_ok,
-                    graph_idempotent=graph_idempotent,
-                    node_attempt_count=node_attempt_count,
-                    retries=retries,
-                )
-                final_status = "failed"
-                broker.publish("run_failed", {"error": error_code, "detail": error_detail})
+            # terminal (retries exhausted) — or gate, whose decision dict carries
+            # the same final_status / error_code / error_detail it set above.
+            final_status = transient["final_status"]
+            error_code = transient["error_code"]
+            error_detail = transient["error_detail"]
         except Exception as exc:
             import traceback
 
@@ -2495,35 +2417,28 @@ class PipelineExecutor:
                 limit=5000,
             )
 
-        try:
-            # The post-stream tail (eval-suite checks, agent_signal firing,
-            # gated run_completed publish) owns its own try/except
-            # (pipeline.post_stream_error); it can also mutate final_status /
-            # error_code / error_detail (EvalSuiteBlockedError), so its
-            # returned values are rebound here.
-            final_status, error_code, error_detail = await self._run_post_stream_tail(
-                run_id=run_id,
-                org_id=org_id,
-                pipeline_id=pipeline_id,
-                final_status=final_status,
-                error_code=error_code,
-                error_detail=error_detail,
-                completed_node_outputs=completed_node_outputs,
-                broker=broker,
-                gate_suppressed=gate_suppressed,
-            )
-        finally:
-            # Close broker after all post-stream work (suite checks, signals).
-            set_cancellation_check(None)
-            set_audit_hook(None)
-            set_model_backend_hub(None)
-            set_connector_hub(None)
-            if model_backend_hub is not None:
-                await _teardown_hub(model_backend_hub)
-            if connector_hub is not None:
-                await _teardown_hub(connector_hub)
-            if final_status != "awaiting_human":
-                get_registry().close(run_id)
+        # The post-stream tail (eval-suite checks, agent_signal firing, gated
+        # run_completed publish) owns its own try/except
+        # (pipeline.post_stream_error); it can also mutate final_status /
+        # error_code / error_detail (EvalSuiteBlockedError), so its returned
+        # values are rebound here. The tail + the resource teardown
+        # (contextvars, hubs, broker registry close) live in
+        # ``_run_post_stream_and_teardown`` — the teardown runs in a finally so
+        # it fires even when the tail re-raises (e.g. CancelledError), matching
+        # the original inline block.
+        final_status, error_code, error_detail = await self._run_post_stream_and_teardown(
+            run_id=run_id,
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            final_status=final_status,
+            error_code=error_code,
+            error_detail=error_detail,
+            completed_node_outputs=completed_node_outputs,
+            broker=broker,
+            gate_suppressed=gate_suppressed,
+            model_backend_hub=model_backend_hub,
+            connector_hub=connector_hub,
+        )
 
         # Mark complete/failed/cancelled/awaiting_human — the SINGLE
         # finalization path (PR A2). finalize_cost merges the accumulated
@@ -2546,6 +2461,157 @@ class PipelineExecutor:
             completed_node_outputs=completed_node_outputs,
             node_ids=node_ids,
         )
+
+    async def _decide_transient_failure(
+        self,
+        *,
+        exc: NodeCancelledError | SandboxNodeFailedError,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        graph_json: dict[str, Any],
+        graph_idempotent: bool,
+        single_sandbox_node: bool,
+        model_backend_hub: ModelBackendHub | None,
+        connector_hub: Any | None,
+        broker: RunEventBroker,
+        completed_node_outputs: dict[str, Any],
+        stall_requested: asyncio.Event | None,
+    ) -> dict[str, Any]:
+        """Decide how a transient node-cancelled / sandbox-failed run recovers.
+
+        Extracted from ``execute``'s ``except (NodeCancelledError,
+        SandboxNodeFailedError)`` handler. Loads the transient state, computes
+        superseded / stalled / gate_ok / script_lease_ok, then returns a
+        decision dict. The caller (``execute``) performs the side effects that
+        must stay in its scope — the idempotency-gate envelope write and the
+        bare re-raise for requeue / superseded (which propagates out of
+        execute() before the post-stream try/finally). Mutations that are safe
+        to perform here (the fenced pending-reset + cleanup) happen in this
+        method so the re-raise path stays identical to the inline chain.
+
+        Returns one of:
+        - ``{"decision": "gate", ...}`` — idempotency gate suppressed the
+          transient retry (delivery already sent); the run completes COMPLETE.
+        - ``{"decision": "requeue"}`` — retry budget remains; the run was
+          fenced back to pending and the execution environment cleaned up so
+          the SAQ job re-entry gets a fresh broker.
+        - ``{"decision": "superseded"}`` — the run is owned by a successor or
+          was already terminal-failed by the zombie watchdog; cleaned up, never
+          reset, never terminal-failed here.
+        - ``{"decision": "terminal", ...}`` — retries exhausted; the run_failed
+          event was published and the caller terminal-fails with the returned
+          code/detail.
+        """
+        from modulo.settings import get_settings
+
+        retries = int(get_settings().saq_run_retries)
+        node_attempt_count, current_token, run_markers, cancellation_requested = await self._load_transient_state(
+            run_id=run_id, org_id=org_id
+        )
+
+        superseded = self._claim_token is not None and current_token is not None and current_token != self._claim_token
+        stalled = bool(stall_requested is not None and stall_requested.is_set())
+
+        # FAR-228 guard B (retry-suppression — THE INCIDENT FIX): before any
+        # state mutation, check whether the run ALREADY delivered (a prior
+        # attempt's marker carries delivery_done=True) for THIS node. If so,
+        # a transient retry is suppressed: the run completes COMPLETE with
+        # error_code harness.idempotency_gate instead of burning the retry
+        # budget and re-sending the side effect. ORDERING INVARIANT: computed
+        # AFTER superseded/stalled (above) and BEFORE any mutation —
+        # final_status/error_code are first mutated only in the
+        # retries-exhausted branch below. `markers` is the ALREADY-LOADED
+        # current_run.raw_output_markers — no fresh SELECT.
+        gate_ok = self._idempotency_gate_ok(
+            exc=exc,
+            run_markers=run_markers,
+            run_id=run_id,
+            superseded=superseded,
+            stalled=stalled,
+            cancellation_requested=cancellation_requested,
+            single_sandbox_node=single_sandbox_node,
+        )
+        # Only SandboxNodeFailedError carries a node_id — the gate is
+        # keyed on it, so a None node_id (plain NodeCancelledError) can
+        # never suppress.
+        _gated_node_id = exc.node_id if isinstance(exc, SandboxNodeFailedError) else None
+        # FAR-296 Phase 2: before ANY requeue of a script-mode run, prove no
+        # script process could still be alive (stale-claim lease probe).
+        # A stale ``script_executing`` lease means a script may have run —
+        # requeue is forbidden (exactly-once). Only when the probe proves no
+        # live lease does the run stay eligible for the fenced reset below.
+        # NOTE: the probe is computed BEFORE the gate/retry chain below so
+        # the idempotency gate stays the FIRST branch (it must suppress the
+        # pending-reset when a delivery marker is present), and so the
+        # pending-reset branch remains reachable for BOTH script-mode and
+        # non-script-mode graphs (a stale lease simply disqualifies it).
+        script_lease_ok = await self._script_lease_ok(run_id=run_id, org_id=org_id, graph_json=graph_json)
+        if gate_ok and _gated_node_id is not None:
+            _log.warning(
+                "pipeline.idempotency_gate.suppressed_retry",
+                extra={"run_id": str(run_id), "node_id": _gated_node_id},
+            )
+            return {
+                "decision": "gate",
+                "final_status": "complete",
+                "error_code": "harness.idempotency_gate",
+                "error_detail": "delivery already sent; transient retry suppressed by idempotency gate",
+                "gated_node_id": _gated_node_id,
+            }
+        if node_attempt_count < retries and not superseded and not stalled and script_lease_ok and graph_idempotent:
+            # Fenced pending-reset: a conditional UPDATE guarded by OUR
+            # captured claim token + status='running' so a superseded
+            # original cannot demote the successor's running row, a stalled
+            # (watchdog-cancelled) executor cannot resurrect a run the
+            # watchdog just failed, and a cancellation cannot be reversed.
+            await self._fenced_pending_reset(run_id=run_id, org_id=org_id)
+            # The caller's re-raise propagates out of execute() BEFORE the
+            # post-stream try/finally, so run its cleanup here: clear the
+            # cancellation check + hubs and close the run's broker so the
+            # retry re-entry gets a fresh broker and no stale contextvars.
+            await self._cleanup_run_resources(
+                model_backend_hub=model_backend_hub, connector_hub=connector_hub, run_id=run_id
+            )
+            return {"decision": "requeue"}
+        if superseded or stalled:
+            # Superseded or watchdog-stalled: the run is owned by a
+            # successor or was already terminal-failed by the zombie
+            # watchdog — never reset it to pending and never terminal-fail
+            # it here. Clean up so the SAQ job retry re-entry gets a fresh
+            # broker and no stale contextvars (the caller re-raises).
+            await self._cleanup_run_resources(
+                model_backend_hub=model_backend_hub, connector_hub=connector_hub, run_id=run_id
+            )
+            return {"decision": "superseded"}
+        # Retries exhausted — terminal failure with a MEANINGFUL code
+        # (not the raw langgraph class name). Publish the run_failed
+        # event so WS subscribers get a live failure notification,
+        # consistent with every other terminal-failure path in this
+        # file.
+        #
+        # Write cap: 5000, NOT 500 — the transient node-cancelled
+        # detail is the only place the FAR-197 no-output.json
+        # diagnostic (stdout/stderr tails, the E2B log tail where the
+        # kill reason lives) reaches the user. It is bounded by the
+        # builder to fit the 5000-char sanitizer/column cap
+        # (runs.error_detail is String(5000)), and every detail read
+        # surface (run-detail REST + MCP) presents at limit=5000; list
+        # surfaces truncate to 200 by design. A 500-char write cap cut
+        # the stderr + log tails entirely for large-output failures.
+        error_code, error_detail = self._transient_failure_detail(
+            exc=exc,
+            script_lease_ok=script_lease_ok,
+            graph_idempotent=graph_idempotent,
+            node_attempt_count=node_attempt_count,
+            retries=retries,
+        )
+        broker.publish("run_failed", {"error": error_code, "detail": error_detail})
+        return {
+            "decision": "terminal",
+            "final_status": "failed",
+            "error_code": error_code,
+            "error_detail": error_detail,
+        }
 
     async def _load_execution_context(
         self,
@@ -3112,77 +3178,26 @@ class PipelineExecutor:
             if final_status == "complete" and error_code != "harness.idempotency_gate":
                 async with self._session_factory() as session, session.begin():
                     await set_rls_org(session, org_id)
-                    try:
-                        await self._check_eval_suites(session, run_id, pipeline_id)
-                    except EvalSuiteBlockedError as exc:
-                        final_status = "failed"
-                        error_code = "eval_suite_blocked"
-                        error_detail = _sanitize_detail(exc, limit=5000)
-                        broker.publish("run_failed", {"error": "eval_suite_blocked", "detail": error_detail})
-                        _log.warning(
-                            "eval.suite_blocked",
-                            extra={
-                                "run_id": str(run_id),
-                                "suite_id": exc.suite_id,
-                                "score": exc.score,
-                            },
-                        )
-                        try:
-                            await append_audit_event(
-                                session,
-                                org_id=org_id,
-                                event_type="eval.suite_blocked",
-                                resource_type="run",
-                                resource_id=run_id,
-                                payload_json={
-                                    "error_detail": _sanitize_detail(error_detail, limit=5000),
-                                    "suite_id": exc.suite_id,
-                                    "score": exc.score,
-                                },
-                            )
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception:
-                            _log.exception("audit.eval_suite_blocked_failed", extra={"run_id": str(run_id)})
-
+                    final_status, error_code, error_detail = await self._check_eval_suites_for_run(
+                        session=session,
+                        run_id=run_id,
+                        org_id=org_id,
+                        pipeline_id=pipeline_id,
+                        final_status=final_status,
+                        error_code=error_code,
+                        error_detail=error_detail,
+                        broker=broker,
+                    )
                 # Fire agent_signal triggers for each completed node.
-                if completed_node_outputs:
-                    async with self._session_factory() as session, session.begin():
-                        await set_rls_org(session, org_id)
-                        for node_id, node_output in completed_node_outputs.items():
-                            # FAR-228: a node whose output_json carries the
-                            # idempotency_gate marker is a SKIPPED delivery (guard
-                            # A/B) — it must not re-fire child pipelines. Keyed ONLY
-                            # on the marker, never on status == "skipped"
-                            # (template-error skips fire today).
-                            if _node_output_has_idempotency_gate(node_output):
-                                continue
-                            try:
-                                signal_results = await fire_agent_signal(
-                                    session,
-                                    org_id=org_id,
-                                    source_run_id=run_id,
-                                    source_pipeline_id=pipeline_id,
-                                    completed_node_id=node_id,
-                                    node_output=node_output,
-                                )
-                                for sr in signal_results:
-                                    _log.info(
-                                        "agent_signal.%s trigger=%s run=%s",
-                                        sr["status"],
-                                        sr.get("trigger_id", "?"),
-                                        sr.get("run_id", "?"),
-                                    )
-                            except asyncio.CancelledError:
-                                raise
-                            except Exception:
-                                _log.exception(
-                                    "agent_signal.failed",
-                                    extra={
-                                        "run_id": str(run_id),
-                                        "node_id": node_id,
-                                    },
-                                )
+                async with self._session_factory() as session, session.begin():
+                    await set_rls_org(session, org_id)
+                    await self._fire_agent_signals(
+                        session=session,
+                        org_id=org_id,
+                        run_id=run_id,
+                        pipeline_id=pipeline_id,
+                        completed_node_outputs=completed_node_outputs,
+                    )
             if gate_suppressed:
                 # FAR-228: a gated run completed WITHOUT re-executing the node
                 # (guard B suppressed the transient retry). Publish run_completed
@@ -3195,6 +3210,177 @@ class PipelineExecutor:
         except Exception:
             _log.exception("pipeline.post_stream_error", extra={"run_id": str(run_id)})
         return final_status, error_code, error_detail
+
+    async def _run_post_stream_and_teardown(
+        self,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+        final_status: str,
+        error_code: str | None,
+        error_detail: str | None,
+        completed_node_outputs: dict[str, Any],
+        broker: RunEventBroker,
+        gate_suppressed: bool,
+        model_backend_hub: ModelBackendHub | None,
+        connector_hub: Any | None,
+    ) -> tuple[str, str | None, str | None]:
+        """Run the post-stream tail then tear down the run's execution environment.
+
+        The teardown (contextvars, hub teardown, broker registry close) runs in
+        a ``finally`` so it fires even when the tail re-raises (e.g. a
+        ``CancelledError``), preserving the original inline try/finally
+        semantics in ``execute``. Returns the (possibly mutated) triplet from
+        the tail.
+        """
+        try:
+            final_status, error_code, error_detail = await self._run_post_stream_tail(
+                run_id=run_id,
+                org_id=org_id,
+                pipeline_id=pipeline_id,
+                final_status=final_status,
+                error_code=error_code,
+                error_detail=error_detail,
+                completed_node_outputs=completed_node_outputs,
+                broker=broker,
+                gate_suppressed=gate_suppressed,
+            )
+        finally:
+            # Close broker after all post-stream work (suite checks, signals).
+            set_cancellation_check(None)
+            set_audit_hook(None)
+            set_model_backend_hub(None)
+            set_connector_hub(None)
+            if model_backend_hub is not None:
+                await _teardown_hub(model_backend_hub)
+            if connector_hub is not None:
+                await _teardown_hub(connector_hub)
+            if final_status != "awaiting_human":
+                get_registry().close(run_id)
+        return final_status, error_code, error_detail
+
+    async def _check_eval_suites_for_run(
+        self,
+        *,
+        session: AsyncSession,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+        final_status: str,
+        error_code: str | None,
+        error_detail: str | None,
+        broker: RunEventBroker,
+    ) -> tuple[str, str | None, str | None]:
+        """Check eval-suite thresholds for a completed run, terminal-failing when blocked.
+
+        Runs only for completed, non-gated runs (FAR-228: a gated run's
+        delivery was already made by a PRIOR attempt; running evals against the
+        skip envelope would be wrong). On ``EvalSuiteBlockedError`` the run is
+        terminal-failed as ``eval_suite_blocked`` with the audit event recorded
+        here. Returns the (possibly mutated) triplet.
+        """
+        if final_status != "complete" or error_code == "harness.idempotency_gate":
+            return final_status, error_code, error_detail
+        try:
+            await self._check_eval_suites(session, run_id, pipeline_id)
+        except EvalSuiteBlockedError as exc:
+            final_status = "failed"
+            error_code = "eval_suite_blocked"
+            error_detail = _sanitize_detail(exc, limit=5000)
+            broker.publish("run_failed", {"error": "eval_suite_blocked", "detail": error_detail})
+            _log.warning(
+                "eval.suite_blocked",
+                extra={
+                    "run_id": str(run_id),
+                    "suite_id": exc.suite_id,
+                    "score": exc.score,
+                },
+            )
+            try:
+                await append_audit_event(
+                    session,
+                    org_id=org_id,
+                    event_type="eval.suite_blocked",
+                    resource_type="run",
+                    resource_id=run_id,
+                    payload_json={
+                        "error_detail": _sanitize_detail(error_detail, limit=5000),
+                        "suite_id": exc.suite_id,
+                        "score": exc.score,
+                    },
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception("audit.eval_suite_blocked_failed", extra={"run_id": str(run_id)})
+        return final_status, error_code, error_detail
+
+    async def _fire_agent_signals(
+        self,
+        *,
+        session: AsyncSession,
+        org_id: uuid.UUID,
+        run_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+        completed_node_outputs: dict[str, Any],
+    ) -> None:
+        """Fire agent_signal triggers for each completed node.
+
+        FAR-228: a node whose output_json carries the idempotency_gate marker
+        is a SKIPPED delivery (guard A/B) — it must not re-fire child
+        pipelines. Keyed ONLY on the marker, never on status == "skipped"
+        (template-error skips fire today).
+        """
+        for node_id, node_output in completed_node_outputs.items():
+            if _node_output_has_idempotency_gate(node_output):
+                continue
+            await self._fire_agent_signal_for_node(
+                session=session,
+                org_id=org_id,
+                run_id=run_id,
+                pipeline_id=pipeline_id,
+                node_id=node_id,
+                node_output=node_output,
+            )
+
+    async def _fire_agent_signal_for_node(
+        self,
+        *,
+        session: AsyncSession,
+        org_id: uuid.UUID,
+        run_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+        node_id: str,
+        node_output: Any,
+    ) -> None:
+        """Fire one node's agent_signal triggers, failure-isolated + logged."""
+        try:
+            signal_results = await fire_agent_signal(
+                session,
+                org_id=org_id,
+                source_run_id=run_id,
+                source_pipeline_id=pipeline_id,
+                completed_node_id=node_id,
+                node_output=node_output,
+            )
+            for sr in signal_results:
+                _log.info(
+                    "agent_signal.%s trigger=%s run=%s",
+                    sr["status"],
+                    sr.get("trigger_id", "?"),
+                    sr.get("run_id", "?"),
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception(
+                "agent_signal.failed",
+                extra={
+                    "run_id": str(run_id),
+                    "node_id": node_id,
+                },
+            )
 
     async def _check_eval_suites(
         self,
