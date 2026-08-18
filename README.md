@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://github.com/farnalabs/modulo/actions"><img src="https://img.shields.io/github/actions/workflow/status/farnalabs/modulo/ci.yml?branch=main&amp;label=CI&amp;logo=github" alt="CI"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-BSL%201.1-blue" alt="License"/></a>
-  <a href="https://github.com/farnalabs/modulo/tree/main/docs"><img src="https://img.shields.io/badge/docs-github-blue" alt="Docs"/></a>
+  <a href="https://modulo.run/docs"><img src="https://img.shields.io/badge/docs-modulo.run-blue" alt="Docs"/></a>
   <a href="https://app.modulo.run"><img src="https://img.shields.io/badge/app-app.modulo.run-blue" alt="App"/></a>
 </p>
 
