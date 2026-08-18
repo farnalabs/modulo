@@ -49,6 +49,7 @@
             { key: 'status', label: $t('views.RunsListView.status'), sortable: true },
             { key: 'error', label: $t('views.RunsListView.error'), sortable: true },
             { key: 'trigger_type', label: $t('views.RunsListView.trigger'), sortable: true },
+            { key: 'input_preview', label: $t('views.RunsListView.input'), sortable: false },
             { key: 'run_number', label: '#', numeric: true, sortable: true },
             { key: 'started_at', label: $t('views.RunsListView.start'), sortable: true },
             { key: 'completed_at', label: $t('views.RunsListView.end'), sortable: true },
@@ -84,6 +85,15 @@
           </template>
           <template #cell-trigger_type="{ value }">
             <span class="text-xs text-muted-foreground capitalize">{{ value || '—' }}</span>
+          </template>
+          <template #cell-input_preview="{ row }">
+            <span
+              v-if="inputPayloadText(row.input_payload as Record<string, unknown> | null | undefined)"
+              class="block max-w-[260px] truncate font-mono text-xs text-muted-foreground"
+              :title="inputPayloadText(row.input_payload as Record<string, unknown> | null | undefined)"
+              :data-testid="`runs-list-input-${row.run_id}`"
+            >{{ inputPayloadText(row.input_payload as Record<string, unknown> | null | undefined) }}</span>
+            <span v-else class="text-muted-foreground">—</span>
           </template>
           <template #cell-run_number="{ value }">
             <span class="tabular-nums">{{ value ?? '—' }}</span>
@@ -404,6 +414,15 @@ function formatDuration(startIso: string | null | undefined, endIso: string | nu
 
 function formatElapsed(startIso: string): string {
   return `${formatDuration(startIso, new Date(now.value).toISOString())} ${t('views.RunsListView.elapsed')}`
+}
+
+function inputPayloadText(payload: Record<string, unknown> | null | undefined): string {
+  if (!payload || typeof payload !== 'object' || Object.keys(payload).length === 0) return ''
+  try {
+    return JSON.stringify(payload)
+  } catch {
+    return String(payload)
+  }
 }
 
 </script>

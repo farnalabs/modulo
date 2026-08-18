@@ -244,6 +244,7 @@ async def _do_list_runs(
                     "child_runs_count": child_count,
                     "aggregate_cost_usd": _quantize_cost_rollup(own_cost + child_cost),
                     "account_id": str(run.account_id) if run.account_id else None,
+                    "input_payload": _mask_output_value(run.input_payload) if run.input_payload else None,
                 }
             )
     return {

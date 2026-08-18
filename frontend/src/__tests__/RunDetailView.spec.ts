@@ -3,6 +3,9 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 import { nextTick } from 'vue'
 
+let mockRunStatus = 'complete'
+let mockInputPayload: Record<string, unknown> | null = null
+
 vi.mock('../lib/api/client', () => {
   const mockPost = vi.fn().mockImplementation((url: string) => {
     if (url === '/api/v1/runs/{run_id}/nodes/{node_id}/prompt/reveal') {
@@ -29,7 +32,7 @@ vi.mock('../lib/api/client', () => {
             data: {
               run_id: 'test-run-id',
               pipeline_id: 'test-pipeline',
-              status: 'complete',
+              status: mockRunStatus,
               total_cost_usd: 1.23,
               token_consumption: null,
               node_token_usage: { 'node-a': { input_tokens: 10, output_tokens: 20, total_tokens: 30 } },
@@ -42,6 +45,7 @@ vi.mock('../lib/api/client', () => {
           return Promise.resolve({
             data: {
               outputs_json: { 'node-a': { input: { q: 'hello' }, output: 'response' } },
+              input_payload: mockInputPayload,
               node_telemetry: {
                 'node-a': {
                   status: 'complete',
@@ -117,6 +121,8 @@ const router = createRouter({
 describe('RunDetailView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockRunStatus = 'complete'
+    mockInputPayload = null
   })
 
   function createWrapper() {
@@ -783,5 +789,45 @@ describe('RunDetailView', () => {
     } finally {
       ;(api.GET as any).mockImplementation(originalImpl)
     }
+  })
+
+  it('shows the input payload for a running run (parameters provided when scheduled)', async () => {
+    const { api } = await import('../lib/api/client')
+    mockRunStatus = 'running'
+    mockInputPayload = { task: 'fix bug', pr_number: 42 }
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') {
+        return Promise.resolve({
+          data: {
+            run_id: 'test-run-id',
+            pipeline_id: 'test-pipeline',
+            status: mockRunStatus,
+            total_cost_usd: 1.23,
+            token_consumption: null,
+            node_token_usage: null,
+            trace_id: null,
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/runs/{run_id}/io') {
+        return Promise.resolve({
+          data: { outputs_json: null, input_payload: mockInputPayload },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+    const section = wrapper.find('[data-testid="run-detail-input-payload"]')
+    expect(section.exists()).toBe(true)
+    expect(section.text()).toContain('Run Input')
+    expect(section.text()).toContain('fix bug')
+    wrapper.unmount()
   })
 })
