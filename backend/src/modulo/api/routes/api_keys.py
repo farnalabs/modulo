@@ -471,7 +471,7 @@ async def mcp_config_endpoint(
                 "modulo": {
                     "url": mcp_url,
                     "apiKey": "mk_<your-api-key>",
-                    "description": "Governed orchestration for your agentic SDLC",
+                    "description": "Agent governance for your agentic SDLC",
                 }
             }
         }

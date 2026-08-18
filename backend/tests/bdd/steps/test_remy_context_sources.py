@@ -27,7 +27,7 @@ def ctx() -> dict[str, Any]:
         "org_skills": [],
         "user_skills": [],
         "product_primer": "",
-        "product_docs_content": "Modulo is an AI-powered SDLC orchestration platform.",
+        "product_docs_content": "Modulo is an AI-powered SDLC governance platform.",
         "sys_prompt": "",
         "org_id": uuid.UUID("00000000-0000-0000-0000-000000000001"),
         "user_id": uuid.UUID("00000000-0000-0000-0000-000000000002"),
@@ -44,7 +44,7 @@ def configured_org_with_remy(ctx) -> None:
 
 @given("the organisation has a product primer configured")
 def org_has_product_primer(ctx) -> None:
-    ctx["product_primer"] = "Modulo is an AI-powered SDLC orchestration platform."
+    ctx["product_primer"] = "Modulo is an AI-powered SDLC governance platform."
 
 
 @given(parsers.parse('the "{source_key}" context source is set to "{mode}"'))

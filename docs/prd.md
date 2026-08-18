@@ -642,7 +642,7 @@ Every LLM call, every connector operation, and every trigger event emits a span.
 
 ### 6.20 Agent Dispatch Model
 
-Modulo dispatches work to external agent runtimes in sandboxes, then evaluates the output. Modulo is the SDLC orchestration layer — it owns dispatch, auth, audit, cost tracking, eval gates, and HITL — not the agent loop itself.
+Modulo dispatches work to external agent runtimes in sandboxes, then evaluates the output. Modulo is the SDLC governance layer — it owns dispatch, auth, audit, cost tracking, eval gates, and HITL — not the agent loop itself.
 
 #### Sandbox templates vs agent runtimes
 
@@ -3199,7 +3199,7 @@ The primer is a Markdown block injected before page context:
 #### 8.30.1.1 Product Overview
 
 ### What is Modulo
-Governed orchestration for AI-powered SDLC pipelines — automated workflows that
+Agent governance for AI-powered SDLC pipelines — automated workflows that
 connect tools like GitHub, Linear, Notion, Jira, and Slack. Pipelines are built
 from composable AI agents, run with human-in-the-loop gates, evaluated,
 and improved continuously.
