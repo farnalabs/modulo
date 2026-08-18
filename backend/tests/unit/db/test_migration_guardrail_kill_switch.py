@@ -67,8 +67,8 @@ class TestKillSwitchMigration:
     def test_kill_switch_owned_by_0108_not_0113(self) -> None:
         # The kill-switch flag shipped in PR A's reconciliation (0108), not in
         # the guardrail-summary migration (0113, which only adds
-        # runs.guardrail_summary_json), the FAR-296 run-API-key migration
-        # (0114), nor the FAR-247 notification-preferences head (0115).
+        # runs.guardrail_summary_json) nor the FAR-296 run-API-key head (0114)
+        # nor the FAR-247 notification-preferences head (0115).
         source_0113 = _source(_MIGRATION_0113)
         assert "guardrails_kill_switch" not in source_0113
         assert "guardrail_summary_json" in source_0113

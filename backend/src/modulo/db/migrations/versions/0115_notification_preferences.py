@@ -126,6 +126,7 @@ def upgrade() -> None:
         ),
     )
     op.create_index("ix_notification_preferences_organisation_id", "notification_preferences", ["organisation_id"])
+    op.create_index("ix_notification_preferences_account_id", "notification_preferences", ["account_id"])
 
     if pg:
         if migrate_role:
@@ -160,4 +161,5 @@ def downgrade() -> None:
         op.execute("ALTER TABLE notification_preferences DISABLE ROW LEVEL SECURITY")
 
     op.drop_index("ix_notification_preferences_organisation_id", table_name="notification_preferences")
+    op.drop_index("ix_notification_preferences_account_id", table_name="notification_preferences")
     op.drop_table("notification_preferences")
