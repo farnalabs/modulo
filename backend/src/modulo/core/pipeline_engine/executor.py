@@ -851,7 +851,7 @@ async def org_sandbox_capacity_free(
 def _compute_otel_run_context(
     config: dict[str, Any],
     bridge: Any,
-) -> tuple[str | None, Any | None, Any | None]:
+) -> tuple[str | None, Any | None]:
     """FAR-198: compute the run's deterministic OTel trace id and root span.
 
     The root span is created via the bridge (spans created by the bridge
@@ -862,10 +862,9 @@ def _compute_otel_run_context(
     thread_id = (config.get("configurable") or {}).get("thread_id")
     run_trace_id = trace_id_for_thread(thread_id) if thread_id else None
     run_root_span = None
-    run_root_token = None
     if thread_id:
         run_root_span = bridge.start_run_root(thread_id)
-    return run_trace_id, run_root_span, run_root_token
+    return run_trace_id, run_root_span
 
 
 def _record_chain_end_output(
@@ -3642,13 +3641,11 @@ class PipelineExecutor:
         # the bridge (its spans inherit it) AND attached to the current
         # context (spans created outside the bridge inherit it too). Both are
         # cleaned up in the finally block below.
-        run_trace_id, run_root_span, _run_root_token = _compute_otel_run_context(
+        run_trace_id, run_root_span = _compute_otel_run_context(
             config,
             self._otel_bridge,
         )
-        run_root_token = _run_root_token
-        if run_root_span is not None and _run_root_token is None:
-            run_root_token = context_api.attach(set_span_in_context(run_root_span))
+        run_root_token = context_api.attach(set_span_in_context(run_root_span)) if run_root_span is not None else None
         try:
             async for lg_event in compiled.astream_events(initial_state, lg_config, version="v2"):
                 if guard is not None:
