@@ -71,6 +71,11 @@ from modulo.core.cost_controller.breakdown.constants import (
 )
 from modulo.core.cost_controller.breakdown.metrics import record_out_of_band
 from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult, EvalType
+from modulo.core.node_output_split import (
+    DEFAULT_NODE_TYPE,
+    SPLITTABLE_NODE_TYPES,
+    resolve_node_contract_output,
+)
 from modulo.core.pipeline_engine.decorator import cancellable_node
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
 from modulo.core.pipeline_engine.input_truncation import truncate_input
@@ -1460,6 +1465,69 @@ def _build_llm_judge_callable(
     return _judge
 
 
+def _resolve_gate_eval_target(
+    state: dict[str, Any],
+    node_id: str | None,
+    node_type_map: dict[str, str] | None,
+) -> Any:
+    """Resolve the output a HITL gate's eval should validate (FAR-311).
+
+    Gate evals are node-scoped to the edge's SOURCE node, but LangGraph merges
+    each node's envelope into the state at its TOP-LEVEL keys — the node id is
+    not a state key — so ``state["output"]`` holds the outer ``output``
+    envelope (telemetry for a sandbox_agent: status/summary/cost, no pr_url /
+    changed_files) and ``state["artifacts"]`` accumulates every completed
+    node's artifact. The source node's own artifact is located by its
+    ``node_id`` (not position — parallel fan-out concatenates artifacts in
+    completion order, so the last artifact may belong to a sibling). That
+    artifact's ``output.output_json`` is the sandbox agent's CONTRACT return;
+    re-assembling the envelope and running it through ``split_node_output``
+    yields the SAME contract output the standalone ``_run_post_node_evals``
+    path validates (FAR-311).
+
+    Falls back to the whole *state* when the shape cannot be resolved (no type
+    map, unknown node type, or a state with no envelope keys) so legacy
+    non-graph states keep their historical behaviour.
+    """
+    if not isinstance(state, dict) or not node_id or not node_type_map:
+        return state
+    node_type = node_type_map.get(node_id) or DEFAULT_NODE_TYPE
+    if node_type not in SPLITTABLE_NODE_TYPES:
+        return state
+    artifacts = state.get("artifacts")
+    matching = (
+        [a for a in artifacts if isinstance(a, dict) and a.get("node_id") == node_id]
+        if isinstance(artifacts, list)
+        else []
+    )
+    if not matching and "output" not in state:
+        return state
+    envelope: dict[str, Any] = {}
+    if matching:
+        # The source node's most recent artifact (a reject/correction re-run
+        # appends another entry under the same node_id). Its ``output`` is the
+        # source's OWN output — for an ``agent`` source the contract return is
+        # ``envelope["output"]``, so it must come from the matched artifact
+        # (``state["output"]`` is last-write-wins across a fan-out and can
+        # belong to a sibling).
+        matched = matching[-1]
+        envelope["artifacts"] = [matched]
+        if "output" in matched:
+            envelope["output"] = matched["output"]
+        elif "output" in state:
+            envelope["output"] = state["output"]
+    elif "output" in state:
+        envelope["output"] = state["output"]
+    found, contract_output = resolve_node_contract_output(envelope, node_type)
+    if found:
+        return contract_output
+    _log.debug(
+        "hitl_gate.eval.missing_contract_output",
+        extra={"node_id": str(node_id), "node_type": node_type},
+    )
+    return state
+
+
 def make_hitl_gate_fn(
     hitl_gate_config: dict[str, Any],
     *,
@@ -1467,6 +1535,7 @@ def make_hitl_gate_fn(
     eval_definitions: Sequence[EvalDefinition] | None = None,
     session_factory: Callable[..., Any] | None = None,
     org_id: uuid.UUID | None = None,
+    node_type_map: dict[str, str] | None = None,
 ) -> Any:
     """Return a node function that raises a HITL interrupt.
 
@@ -1484,6 +1553,13 @@ def make_hitl_gate_fn(
       against the current state *after* the condition check but *before*
       the interrupt.  Any eval with ``failure_behaviour='block'`` that
       fails raises ``EvalBlockedError``, preventing the interrupt.
+
+      Evals target the SOURCE node's CONTRACT output (the agent's actual
+      return) when ``node_type_map`` is provided — the same target the
+      standalone ``_run_post_node_evals`` path validates — rather than the
+      whole merged state (whose ``output`` key holds the outer envelope /
+      telemetry for a sandbox_agent).  Without a type map the whole state is
+      used as before.
 
       If ``session_factory`` is provided, eval results are persisted to
       the ``eval_results`` table so that post-run suite-level threshold
@@ -1610,7 +1686,11 @@ def make_hitl_gate_fn(
                             hub,
                             str(eval_def.config["model_backend_id"]),
                         )
-                eval_result = engine.evaluate(state, eval_def, llm_judge_callable=llm_judge_callable)
+                eval_result = engine.evaluate(
+                    _resolve_gate_eval_target(state, eval_def.node_id, node_type_map),
+                    eval_def,
+                    llm_judge_callable=llm_judge_callable,
+                )
                 eval_results_by_name[eval_def.name] = eval_result
                 _log.info(
                     "hitl_gate.eval_result",
