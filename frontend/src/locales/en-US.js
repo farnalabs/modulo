@@ -857,6 +857,7 @@ export default {
       "status": "Status",
       "error": "Error",
       "trigger": "Trigger",
+      "input": "Input",
       "start": "Start",
       "end": "End",
       "duration": "Duration",

@@ -168,6 +168,29 @@ describe('RunsListView', () => {
     wrapper.unmount()
   })
 
+  it('renders an input payload preview for runs with parameters', async () => {
+    mockResponses['/api/v1/runs'] = listWith([
+      { ...baseRun, status: 'running', input_payload: { task: 'fix bug', pr_number: 42 } },
+    ])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    const cell = wrapper.find('[data-testid="runs-list-input-run1"]')
+    expect(cell.exists()).toBe(true)
+    expect(cell.text()).toContain('fix bug')
+    expect(cell.attributes('title')).toContain('pr_number')
+    wrapper.unmount()
+  })
+
+  it('shows a dash when a run has no input payload', async () => {
+    mockResponses['/api/v1/runs'] = listWith([baseRun])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="runs-list-input-run1"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('renders duration formatted from start and end timestamps', async () => {
     mockResponses['/api/v1/runs'] = listWith([baseRun])
     const wrapper = mountView()

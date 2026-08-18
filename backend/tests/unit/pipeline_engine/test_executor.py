@@ -2470,3 +2470,123 @@ def test_failure_event_matches_excludes_never_retryable_script_codes():
         ("script.no_output", "contract.no_output"),
     ]:
         assert _failure_event_matches({"failure"}, "failed", code, mapped, None) is False, (code, mapped)
+
+
+# ---------------------------------------------------------------------------
+# FAR-296 Phase 3b: per-run runner-role API-key revocation at finalization
+# ---------------------------------------------------------------------------
+
+
+def _begin_cm() -> AsyncMock:
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    return begin_cm
+
+
+def _finalize_args(run_id: uuid.UUID, org_id: uuid.UUID) -> dict[str, Any]:
+    return {
+        "run_id": run_id,
+        "org_id": org_id,
+        "pipeline_id": uuid.uuid4(),
+        "node_type_map": {},
+        "final_status": "complete",
+        "error_code": None,
+        "error_detail": None,
+        "node_token_usage": {},
+        "completed_node_outputs": {},
+        "node_ids": set(),
+    }
+
+
+@pytest.mark.asyncio
+async def test_revoke_run_api_key_helper_uses_session_factory():
+    """_revoke_run_api_key opens a session, sets RLS, and calls revoke_run_api_key.
+
+    A failure inside the helper is swallowed (failure-isolated) — it never
+    propagates to the caller.
+    """
+    session = AsyncMock(spec=AsyncSession)
+    session.begin = MagicMock(return_value=_begin_cm())
+    factory = _make_session_factory(session)
+    executor = PipelineExecutor(MagicMock())
+    executor._session_factory = factory  # type: ignore[assignment]
+
+    run_id = uuid.uuid4()
+    org_id = uuid.uuid4()
+    with patch("modulo.auth.api_key.revoke_run_api_key", new=AsyncMock(return_value=1)) as revoke_mock:
+        await executor._revoke_run_api_key(run_id=run_id, org_id=org_id)
+
+    revoke_mock.assert_awaited_once()
+    assert revoke_mock.await_args.kwargs["run_id"] == run_id
+    assert revoke_mock.await_args.kwargs["org_id"] == org_id
+
+
+@pytest.mark.asyncio
+async def test_revoke_run_api_key_helper_failure_is_swallowed():
+    """A revocation failure is logged and swallowed — it never propagates."""
+
+    async def _raise_boom(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("revoke boom")
+
+    session = AsyncMock(spec=AsyncSession)
+    session.begin = MagicMock(return_value=_begin_cm())
+    factory = _make_session_factory(session)
+    executor = PipelineExecutor(MagicMock())
+    executor._session_factory = factory  # type: ignore[assignment]
+
+    with patch("modulo.auth.api_key.revoke_run_api_key", new=_raise_boom):
+        await executor._revoke_run_api_key(run_id=uuid.uuid4(), org_id=uuid.uuid4())
+
+
+@pytest.mark.asyncio
+async def test_finalize_run_after_stream_revokes_run_api_key():
+    """Finalization revokes the per-run runner-role API key (FAR-296 Phase 3b)."""
+    run_id = uuid.uuid4()
+    org_id = uuid.uuid4()
+    session = AsyncMock(spec=AsyncSession)
+    session.begin = MagicMock(return_value=_begin_cm())
+    factory = _make_session_factory(session)
+    executor = PipelineExecutor(MagicMock())
+    executor._session_factory = factory  # type: ignore[assignment]
+
+    with (
+        patch.object(executor, "_compute_run_work_intact", return_value=None),
+        patch.object(executor, "_run_post_terminal_evidence_probes", new=AsyncMock()),
+        patch.object(executor, "_revoke_run_api_key", new=AsyncMock()) as revoke_mock,
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=MagicMock())),
+    ):
+        final_run = await executor._finalize_run_after_stream(**_finalize_args(run_id, org_id))
+
+    assert final_run is not None
+    revoke_mock.assert_awaited_once()
+    assert revoke_mock.await_args.kwargs["run_id"] == run_id
+    assert revoke_mock.await_args.kwargs["org_id"] == org_id
+
+
+@pytest.mark.asyncio
+async def test_finalize_run_after_stream_revocation_failure_is_isolated():
+    """A revocation failure never crashes finalization — the run still returns."""
+
+    async def _raise_boom(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("revoke boom")
+
+    run_id = uuid.uuid4()
+    org_id = uuid.uuid4()
+    session = AsyncMock(spec=AsyncSession)
+    session.begin = MagicMock(return_value=_begin_cm())
+    factory = _make_session_factory(session)
+    executor = PipelineExecutor(MagicMock())
+    executor._session_factory = factory  # type: ignore[assignment]
+
+    with (
+        patch.object(executor, "_compute_run_work_intact", return_value=None),
+        patch.object(executor, "_run_post_terminal_evidence_probes", new=AsyncMock()),
+        patch.object(executor, "_revoke_run_api_key", new=_raise_boom),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=MagicMock())),
+    ):
+        final_run = await executor._finalize_run_after_stream(**_finalize_args(run_id, org_id))
+
+    assert final_run is not None

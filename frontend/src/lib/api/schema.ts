@@ -3438,7 +3438,8 @@ export interface paths {
          *     column) are byte-identical to today's envelope shape, and P1+ runs expose
          *     the split surfaces. Telemetry-only nodes (e.g. ``skipped`` recovery
          *     markers without an ``outputs_json`` entry) still appear under
-         *     ``node_telemetry``. Both surfaces are masked for secrets.
+         *     ``node_telemetry``. All surfaces — input payload, outputs, telemetry —
+         *     are masked for secrets.
          */
         get: operations["get_run_io_endpoint_api_v1_runs__run_id__io_get"];
         put?: never;

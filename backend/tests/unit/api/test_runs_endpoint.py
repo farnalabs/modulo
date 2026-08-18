@@ -1092,6 +1092,56 @@ def test_list_runs_error_detail_none_for_success(client: TestClient) -> None:
     assert item["error_detail"] is None
 
 
+def test_list_runs_includes_masked_input_payload(client: TestClient) -> None:
+    run_id = uuid.uuid4()
+    run = _make_listable_run(run_id)
+    run.input_payload = {"task": "fix bug", "api_key": "sk-secret"}
+
+    with (
+        patch(
+            "modulo.api.routes.runs.db_list_runs",
+            new_callable=AsyncMock,
+            return_value=_make_page([run], 1),
+        ),
+        patch(
+            "modulo.api.routes.runs.get_child_run_rollup",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get("/api/v1/runs")
+
+    assert resp.status_code == 200
+    item = resp.json()["items"][0]
+    assert item["input_payload"]["task"] == "fix bug"
+    assert item["input_payload"]["api_key"] == SENSITIVE_VALUE_MASK
+
+
+def test_list_runs_input_payload_none_when_absent(client: TestClient) -> None:
+    run_id = uuid.uuid4()
+    run = _make_listable_run(run_id)
+    run.input_payload = None
+
+    with (
+        patch(
+            "modulo.api.routes.runs.db_list_runs",
+            new_callable=AsyncMock,
+            return_value=_make_page([run], 1),
+        ),
+        patch(
+            "modulo.api.routes.runs.get_child_run_rollup",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get("/api/v1/runs")
+
+    assert resp.status_code == 200
+    assert resp.json()["items"][0]["input_payload"] is None
+
+
 def test_run_response_all_new_fields_present_in_trigger_endpoint(client: TestClient) -> None:
     pipeline = _make_pipeline()
     run = _make_run(status="pending")
@@ -1716,7 +1766,7 @@ class TestGetRunIO:
 
     def test_io_masks_both_surfaces(self, client: TestClient) -> None:
         run = _make_io_run(
-            input_payload={"prompt": "Hello"},
+            input_payload={"task": "fix bug", "api_key": "sk-secret"},
             outputs_json={"planner": {"api_key": "sk-out-secret", "result": "ok"}},
             node_telemetry_json={
                 "planner": {
@@ -1736,6 +1786,8 @@ class TestGetRunIO:
 
         assert resp.status_code == 200
         body = resp.json()
+        assert body["input_payload"]["task"] == "fix bug"
+        assert body["input_payload"]["api_key"] == SENSITIVE_VALUE_MASK
         assert body["outputs_json"]["planner"]["api_key"] == SENSITIVE_VALUE_MASK
         assert body["outputs_json"]["planner"]["result"] == "ok"
         telemetry = body["node_telemetry"]["planner"]
