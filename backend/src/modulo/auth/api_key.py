@@ -21,7 +21,9 @@ import hashlib
 import hmac
 import logging
 import secrets
+import time
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
@@ -29,6 +31,9 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.api_key import OrgApiKey
+from modulo.db.models.organisation import Organisation
+from modulo.db.models.run import TERMINAL_STATUSES, Run
+from modulo.db.rls import set_rls_org
 
 _log = logging.getLogger(__name__)
 
@@ -170,6 +175,73 @@ async def revoke_run_api_key(
         ),
     )
     return result.rowcount or 0
+
+
+async def revoke_run_api_key_sweep(
+    session_factory: Callable[..., Any],
+    *,
+    org_ids: list[uuid.UUID] | None = None,
+    batch_size: int = 50,
+    budget_seconds: float = 30.0,
+) -> dict[str, int]:
+    """Compensating revocation sweep for per-run runner-role API keys (FAR-296 Phase 3b-2).
+
+    Finds per-run keys (``run_id`` NOT NULL, ``revoked_at`` IS NULL) whose runs
+    are TERMINAL but were terminalized by a NON-executor path (dispatcher_reconcile
+    raw-SQL terminalizers, saq_hooks._mark_run_failed, transition_run,
+    request_cancellation) and revokes them. The executor path already revokes at
+    finalization; this sweep is the compensating backstop so keys don't leak.
+
+    Bounded: ``batch_size`` keys per org, ``budget_seconds`` wall-clock budget,
+    never raises. Runs system-scoped (no ``set_rls_org`` at the top level — the
+    BYPASSRLS worker precedent, matching the other system crons); the sweep
+    processes each org under its own RLS context when ``org_ids`` is None
+    (self-selects all orgs).
+
+    Returns ``{"scanned", "revoked", "errors"}``.
+    """
+    deadline = time.monotonic() + budget_seconds
+    scanned = 0
+    revoked = 0
+    errors = 0
+    try:
+        if org_ids is None:
+            async with session_factory() as session:
+                result = await session.execute(select(Organisation.id))
+                org_ids = list(result.scalars())
+        for org_id in org_ids:
+            if time.monotonic() > deadline:
+                break
+            try:
+                async with session_factory() as session, session.begin():
+                    await set_rls_org(session, org_id)
+                    key_rows = (
+                        await session.execute(
+                            select(OrgApiKey.id, OrgApiKey.run_id)
+                            .join(Run, Run.id == OrgApiKey.run_id)
+                            .where(
+                                OrgApiKey.organisation_id == org_id,
+                                OrgApiKey.run_id.is_not(None),
+                                OrgApiKey.revoked_at.is_(None),
+                                Run.status.in_(sorted(TERMINAL_STATUSES)),
+                            )
+                            .limit(batch_size)
+                        )
+                    ).all()
+                    for _key_id, key_run_id in key_rows:
+                        scanned += 1
+                        revoked += await revoke_run_api_key(session, run_id=key_run_id, org_id=org_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                errors += 1
+                _log.exception("api_key.revoke_run_sweep_org_failed", extra={"org_id": str(org_id)})
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        errors += 1
+        _log.exception("api_key.revoke_run_sweep_failed")
+    return {"scanned": scanned, "revoked": revoked, "errors": errors}
 
 
 async def validate_api_key(

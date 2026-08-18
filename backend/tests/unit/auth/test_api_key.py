@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -20,10 +21,12 @@ from modulo.auth.api_key import (
     mint_run_api_key,
     revoke_api_key,
     revoke_run_api_key,
+    revoke_run_api_key_sweep,
     update_api_key,
     validate_api_key,
 )
 from modulo.db.models.api_key import OrgApiKey
+from modulo.db.models.run import TERMINAL_STATUSES
 
 # ---------------------------------------------------------------------------
 # generate_api_key
@@ -572,6 +575,134 @@ async def test_revoke_run_api_key_zero_rows_returns_zero() -> None:
 
     revoked = await revoke_run_api_key(session, run_id=uuid.uuid4(), org_id=uuid.uuid4())
     assert revoked == 0
+
+
+# ---------------------------------------------------------------------------
+# revoke_run_api_key_sweep (FAR-296 Phase 3b-2 compensating revocation)
+# ---------------------------------------------------------------------------
+
+
+class _SweepBegin:
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+
+class _SweepSession:
+    """Minimal session double for ``revoke_run_api_key_sweep``.
+
+    ``begin()`` returns a no-op async context manager; ``in_transaction()`` is
+    True so ``set_rls_org``'s active-transaction guard passes; ``get_bind()``
+    reports a non-Postgres dialect so RLS goes through ``session.info`` (no
+    ``set_config`` SQL); ``execute`` pops canned results in order and records
+    every statement for assertion.
+    """
+
+    def __init__(self, results: list[Any]) -> None:
+        self._results = list(results)
+        self.executed: list[tuple[Any, Any]] = []
+        self.info: dict[str, Any] = {}
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+    def begin(self) -> _SweepBegin:
+        return _SweepBegin()
+
+    def in_transaction(self) -> bool:
+        return True
+
+    def get_bind(self) -> Any:
+        bind = MagicMock()
+        bind.dialect.name = "sqlite"
+        return bind
+
+    async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
+        self.executed.append((stmt, params))
+        if "set_config" in str(stmt):
+            return MagicMock()
+        if not self._results:
+            return MagicMock()
+        return self._results.pop(0)
+
+
+def _sweep_keys_result(rows: list[tuple[uuid.UUID, uuid.UUID]]) -> MagicMock:
+    r = MagicMock()
+    r.all.return_value = rows
+    return r
+
+
+def _sweep_revoke_result(rowcount: int) -> MagicMock:
+    r = MagicMock()
+    r.rowcount = rowcount
+    return r
+
+
+@pytest.mark.asyncio
+async def test_revoke_run_api_key_sweep_revokes_terminal_run_keys() -> None:
+    """A terminal run's un-revoked per-run key is revoked and counted."""
+    org_id = uuid.uuid4()
+    key_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    session = _SweepSession([_sweep_keys_result([(key_id, run_id)]), _sweep_revoke_result(1)])
+    session_factory = MagicMock(return_value=session)
+
+    result = await revoke_run_api_key_sweep(session_factory, org_ids=[org_id])
+
+    assert result == {"scanned": 1, "revoked": 1, "errors": 0}
+    # set_rls_org ran under the per-org RLS context (non-Postgres path).
+    assert session.info.get("org_id") == org_id
+    keys_stmt = session.executed[0][0]
+    compiled = str(keys_stmt.compile(compile_kwargs={"literal_binds": True}))
+    assert "org_api_keys" in compiled
+    assert "runs" in compiled
+    # The sweep selects ALL un-revoked keys for terminal runs — the run_id
+    # appears only in the JOIN (runs.id = org_api_keys.run_id), never as a
+    # WHERE literal, because the sweep revokes every leaked key in one pass.
+    assert "JOIN runs ON runs.id = org_api_keys.run_id" in compiled
+
+
+@pytest.mark.asyncio
+async def test_revoke_run_api_key_sweep_skips_non_terminal_runs() -> None:
+    """The keys-driven query filters by TERMINAL_STATUSES — an ACTIVE run
+    (e.g. ``running``) is never selected for revocation, so its key survives
+    the sweep. The WHERE clause must contain every terminal status and no
+    non-terminal status."""
+    org_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    session = _SweepSession([_sweep_keys_result([(uuid.uuid4(), run_id)]), _sweep_revoke_result(0)])
+    session_factory = MagicMock(return_value=session)
+
+    result = await revoke_run_api_key_sweep(session_factory, org_ids=[org_id])
+
+    assert result == {"scanned": 1, "revoked": 0, "errors": 0}
+    stmt = session.executed[0][0]
+    compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+    for status in sorted(TERMINAL_STATUSES):
+        assert f"'{status}'" in compiled
+    for status in ("running", "pending", "awaiting_human", "claimed"):
+        assert f"'{status}'" not in compiled
+
+
+@pytest.mark.asyncio
+async def test_revoke_run_api_key_sweep_never_raises() -> None:
+    """A session failure on the keys-driven query is swallowed and counted in
+    ``errors`` — the sweep never raises."""
+    org_id = uuid.uuid4()
+    session = _SweepSession([])
+    session.execute = AsyncMock(side_effect=RuntimeError("db boom"))
+    session_factory = MagicMock(return_value=session)
+
+    result = await revoke_run_api_key_sweep(session_factory, org_ids=[org_id])
+
+    assert result["scanned"] == 0
+    assert result["revoked"] == 0
+    assert result["errors"] == 1
 
 
 # ---------------------------------------------------------------------------
