@@ -326,5 +326,5 @@ class TestModelMigrationConsistency:
         # (b) the ORM model loses a column a migration still creates.
         model_missing = {table: set(cols) for table, cols in model_columns.items()}
         model_missing["runs"].discard("guardrail_summary_json")
-        with pytest.raises(AssertionError, match="is missing trust column guardrail_summary_json"):
+        with pytest.raises(AssertionError, match="model runs is missing trust column guardrail_summary_json"):
             _assert_drift_free(model_missing, real_migration_columns)
