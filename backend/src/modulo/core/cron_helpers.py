@@ -216,6 +216,9 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     "streak_capped": 0,
     "streak_alerts": 0,
     "streak_notify_failed": 0,
+    "run_api_key_scanned": 0,
+    "run_api_key_revoked": 0,
+    "run_api_key_errors": 0,
 }
 
 
@@ -241,6 +244,9 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["streak_capped"] = stats.get("streak_capped", 0)
     _dispatcher_reconcile_stats["streak_alerts"] = stats.get("streak_alerts", 0)
     _dispatcher_reconcile_stats["streak_notify_failed"] = stats.get("streak_notify_failed", 0)
+    _dispatcher_reconcile_stats["run_api_key_scanned"] = stats.get("run_api_key_scanned", 0)
+    _dispatcher_reconcile_stats["run_api_key_revoked"] = stats.get("run_api_key_revoked", 0)
+    _dispatcher_reconcile_stats["run_api_key_errors"] = stats.get("run_api_key_errors", 0)
 
 
 # Shared Redis key for dispatcher_reconcile outcome stats (cross-process).
@@ -3385,6 +3391,9 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         "streak_capped": 0,
         "streak_alerts": 0,
         "streak_notify_failed": 0,
+        "run_api_key_scanned": 0,
+        "run_api_key_revoked": 0,
+        "run_api_key_errors": 0,
     }
     # Runs terminalised by this tick's terminalizers — (run_id, org_id) — whose
     # compensating daily fact must be recorded once the per-org transactions
@@ -3549,6 +3558,26 @@ async def _run_reconcile_sweeps(redis_client: AsyncRedis, summary: dict[str, Any
         raise
     except Exception:
         _log.warning("dispatcher_reconcile.streak_sweep_failed", exc_info=True)
+    try:
+        from modulo.auth.api_key import revoke_run_api_key_sweep
+
+        revoked_keys = await revoke_run_api_key_sweep(_open_factory())
+        summary["run_api_key_scanned"] = revoked_keys.get("scanned", 0)
+        summary["run_api_key_revoked"] = revoked_keys.get("revoked", 0)
+        summary["run_api_key_errors"] = revoked_keys.get("errors", 0)
+        if revoked_keys.get("revoked") or revoked_keys.get("errors"):
+            _log.info(
+                "dispatcher_reconcile.run_api_key_sweep",
+                extra={
+                    "scanned": revoked_keys.get("scanned", 0),
+                    "revoked": revoked_keys.get("revoked", 0),
+                    "errors": revoked_keys.get("errors", 0),
+                },
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("dispatcher_reconcile.run_api_key_sweep_failed", exc_info=True)
 
 
 async def _update_reconcile_telemetry(summary: dict[str, Any]) -> None:

@@ -147,13 +147,17 @@ def test_is_retryable_transient_codes_true():
         assert is_retryable(code) is True, code
 
 
-def test_non_idempotent_code_is_never_retryable():
-    """FAR-295: harness.non_idempotent is a TERMINAL code — a run containing a
-    node with ``idempotent: false`` is never retried (re-running the pipeline
-    would duplicate the node's external side effect)."""
-    assert ERROR_CODE_REGISTRY["harness.non_idempotent"].error_class == "harness"
-    assert ERROR_CODE_REGISTRY["harness.non_idempotent"].retryable is False
-    assert is_retryable("harness.non_idempotent") is False
+def test_non_idempotent_suppression_is_dispatch_site_guard():
+    """FAR-295 (merged with #1587): the non-idempotent retry suppression is
+    enforced at the executor dispatch site via the graph_idempotent guard, not
+    by a dedicated registry code. ``node_cancelled`` stays retryable in the
+    registry (policy-level), and the executor guard is what prevents the
+    re-dispatch of a run whose graph contains a node with ``idempotent: false``."""
+    from modulo.core.pipeline_engine.executor import _graph_is_idempotent
+
+    assert _graph_is_idempotent({"nodes": [{"id": "node-a", "idempotent": False}]}) is False
+    assert is_retryable("node_cancelled") is True
+    assert "harness.non_idempotent" not in ERROR_CODE_REGISTRY
 
 
 def test_is_retryable_provider_transient_codes():

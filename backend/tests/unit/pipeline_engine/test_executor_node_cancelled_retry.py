@@ -335,8 +335,9 @@ async def test_execute_non_idempotent_graph_suppresses_transient_retry():
     """FAR-295: a graph declaring a node with ``idempotent: false`` must NOT be
     re-dispatched on a transient NodeCancelledError even while retry budget
     remains — the re-run would re-execute that node's external side effect. The
-    run terminal-fails with the clear harness.non_idempotent code (no re-raise,
-    no fenced pending-reset), and the run_failed publish carries the reason."""
+    run terminal-fails via the single finalization path (no re-raise, no fenced
+    pending-reset) with error_code node_cancelled and an error_detail that names
+    the idempotency suppression; the run_failed publish carries the reason."""
     run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
     snapshot = _make_snapshot(graph_json={"nodes": [{"id": "node-a", "idempotent": False}], "edges": []})
     statements: list[str] = []
@@ -368,16 +369,19 @@ async def test_execute_non_idempotent_graph_suppresses_transient_retry():
     assert result is run
     # No fenced pending-reset was issued (no re-dispatch).
     assert not any("status='pending'" in s for s in statements)
-    # Finalized with the clear FAR-295 code.
+    # Finalized with the transient code and an error_detail that explains the
+    # idempotency suppression (the retry budget was NOT exhausted).
     call = mock_finalize.await_args
     assert call is not None
     assert call.kwargs["status"] == "failed"
-    assert call.kwargs.get("error_code") == "harness.non_idempotent"
-    assert call.kwargs["error_detail"].startswith("Run contains a node with idempotent: false")
+    assert call.kwargs.get("error_code") == "node_cancelled"
+    detail = call.kwargs["error_detail"]
+    assert "idempotent=false" in detail
+    assert "retry suppressed" in detail
     # Live run_failed publish for WS subscribers.
     run_failed = [c.args for c in broker.publish.call_args_list if c.args and c.args[0] == "run_failed"]
     assert run_failed
-    assert run_failed[0][1]["error"] == "harness.non_idempotent"
+    assert run_failed[0][1]["error"] == "node_cancelled"
 
 
 async def test_execute_terminal_fail_roundtrips_sandbox_diagnostics():

@@ -20,6 +20,7 @@ from modulo.core.pipeline_engine import executor as executor_module
 from modulo.core.pipeline_engine.executor import (
     PipelineExecutor,
     RunRetryPolicyError,
+    _graph_is_idempotent,
     _retry_after_policy,
     _retry_backoff_seconds,
 )
@@ -247,6 +248,181 @@ def test_retry_after_policy_stall_error_code_on_failed_status():
 
 
 # ---------------------------------------------------------------------------
+# _graph_is_idempotent — FAR-295 (idempotent flag gates every retry path)
+# ---------------------------------------------------------------------------
+
+
+def _graph_with_idempotent(*values: bool | None) -> dict[str, Any]:
+    """Build a graph whose nodes carry the given ``idempotent`` values."""
+    nodes = []
+    for i, value in enumerate(values):
+        node: dict[str, Any] = {"id": f"node-{i}", "node_type": "agent", "role": None}
+        if value is not None:
+            node["idempotent"] = value
+        nodes.append(node)
+    return {"nodes": nodes, "edges": []}
+
+
+def test_graph_is_idempotent_when_field_missing():
+    # Legacy graphs (persisted before the field existed) must stay retryable.
+    assert _graph_is_idempotent(_graph_with_idempotent()) is True
+    assert _graph_is_idempotent(_graph_with_idempotent(None)) is True
+    assert _graph_is_idempotent(_graph_with_idempotent(None, None)) is True
+
+
+def test_graph_is_idempotent_when_all_explicit_true():
+    assert _graph_is_idempotent(_graph_with_idempotent(True, True)) is True
+
+
+def test_graph_is_idempotent_false_when_any_node_non_idempotent():
+    assert _graph_is_idempotent(_graph_with_idempotent(False)) is False
+    assert _graph_is_idempotent(_graph_with_idempotent(True, False)) is False
+    assert _graph_is_idempotent(_graph_with_idempotent(False, True, None)) is False
+
+
+def test_graph_is_idempotent_defaults_for_malformed_input():
+    assert _graph_is_idempotent(None) is True
+    assert _graph_is_idempotent({}) is True
+    assert _graph_is_idempotent({"nodes": None}) is True
+    assert _graph_is_idempotent({"nodes": ["not-a-dict"]}) is True
+
+
+async def test_execute_retry_policy_never_redispatch_non_idempotent_graph():
+    """FAR-295: a graph containing a node with idempotent=false is NEVER
+    re-dispatched by the run-level retry_policy even when the policy would
+    otherwise retry the failure — re-running would double-execute the
+    side-effecting node. Mirrors the FAR-210 correction-run exclusion.
+
+    Prove-the-fix: without the ``graph_idempotent`` guard at the dispatch site,
+    execute() re-raises RunRetryPolicyError and resets the run to pending; with
+    the guard, the run terminal-fails via the single finalization path (no
+    pending-reset, no backoff sleep)."""
+    run = _make_run(node_attempt_count=1, claim_token="tok-claim-abc")
+    snapshot = _make_snapshot(
+        graph_json={
+            "nodes": [
+                {"id": "node-a", "node_type": "sandbox_agent", "idempotent": False},
+            ],
+            "edges": [],
+        }
+    )
+    statements: list[str] = []
+    retry_policy = {"on": ["failure"], "max_retries": 2}
+    session = _make_session(snapshot, statements=statements, retry_policy=retry_policy)
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    settings = MagicMock(saq_run_retries=5)
+    compiled = _make_failure_compiled()
+
+    sleep_mock = AsyncMock()
+    with ExitStack() as stack:
+        mock_finalize = _enter_execute_patches(stack, factory, run, compiled, registry, settings)
+        # The non-idempotent graph is excluded, so the backoff sleep must NOT fire.
+        stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
+        executor = PipelineExecutor(MagicMock())
+        result = await executor.execute(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            input_payload={},
+            claim_token="tok-claim-abc",
+        )
+    # No re-dispatch: no RunRetryPolicyError escaped, no backoff sleep ran.
+    sleep_mock.assert_not_awaited()
+    # No fenced pending-reset was issued.
+    resets = [s for s in statements if "status='pending'" in s]
+    assert resets == []
+    # Terminal failure via the single finalization path.
+    mock_finalize.assert_awaited_once()
+    assert mock_finalize.await_args.kwargs["status"] == "failed"
+    assert mock_finalize.await_args.kwargs["error_code"] == "_GenericFailureError"
+    assert result is not None
+
+
+async def test_execute_retry_policy_still_redispatch_idempotent_graph():
+    """FAR-295 sanity: a graph whose nodes are all idempotent (or carry no
+    idempotent flag) keeps the pre-existing retry_policy re-dispatch behaviour —
+    the guard must stay surgical and not disable retries for normal graphs."""
+    run = _make_run(node_attempt_count=1, claim_token="tok-claim-abc")
+    snapshot = _make_snapshot(
+        graph_json={
+            "nodes": [
+                {"id": "node-a", "node_type": "agent", "idempotent": True},
+            ],
+            "edges": [],
+        }
+    )
+    statements: list[str] = []
+    retry_policy = {"on": ["failure"], "max_retries": 2}
+    session = _make_session(snapshot, statements=statements, retry_policy=retry_policy)
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    settings = MagicMock(saq_run_retries=5)
+    compiled = _make_failure_compiled()
+
+    with ExitStack() as stack:
+        mock_finalize = _enter_execute_patches(stack, factory, run, compiled, registry, settings)
+        stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=AsyncMock()))
+        executor = PipelineExecutor(MagicMock())
+        with pytest.raises(RunRetryPolicyError) as exc_info:
+            await executor.execute(
+                run_id=run.id,
+                org_id=uuid.uuid4(),
+                input_payload={},
+                claim_token="tok-claim-abc",
+            )
+    assert exc_info.value.status == "failed"
+    # Fenced pending-reset issued (retry still happens for an idempotent graph).
+    reset_stmt = next(s for s in statements if "status='pending'" in s)
+    assert "claim_token=:tok" in reset_stmt
+    mock_finalize.assert_not_awaited()
+
+
+async def test_execute_transient_retry_suppressed_on_non_idempotent_graph():
+    """FAR-295: a transient SandboxNodeFailedError on a graph containing a
+    non-idempotent node terminal-fails instead of fenced-resetting + requeueing.
+    The error_detail explains that the retry was suppressed by idempotency, and
+    no pending-reset / SAQ re-raise occurs."""
+    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+
+    run = _make_run(node_attempt_count=1, claim_token="tok-claim-abc")
+    snapshot = _make_snapshot(
+        graph_json={
+            "nodes": [
+                {"id": "node-a", "node_type": "sandbox_agent", "idempotent": False},
+            ],
+            "edges": [],
+        }
+    )
+    statements: list[str] = []
+    session = _make_session(snapshot, statements=statements)
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    settings = MagicMock(saq_run_retries=5)
+    compiled = _mock_compiled_raising(SandboxNodeFailedError("sandbox infra boom"))
+
+    with ExitStack() as stack:
+        mock_finalize = _enter_execute_patches(stack, factory, run, compiled, registry, settings)
+        executor = PipelineExecutor(MagicMock())
+        result = await executor.execute(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            input_payload={},
+            claim_token="tok-claim-abc",
+        )
+    # No fenced pending-reset — the transient retry was suppressed.
+    resets = [s for s in statements if "status='pending'" in s]
+    assert resets == []
+    # Terminal failure with a message that names the idempotency suppression.
+    mock_finalize.assert_awaited_once()
+    assert mock_finalize.await_args.kwargs["status"] == "failed"
+    assert mock_finalize.await_args.kwargs["error_code"] == "node_cancelled"
+    detail = mock_finalize.await_args.kwargs["error_detail"]
+    assert "idempotent=false" in detail
+    assert "retry suppressed" in detail
+    assert result is not None
+
+
+# ---------------------------------------------------------------------------
 # RunRetryPolicyError — subclasses NodeCancelledError (transient to the caller)
 # ---------------------------------------------------------------------------
 
@@ -320,30 +496,30 @@ async def test_execute_retry_policy_resets_pending_and_reraises():
     registry.close.assert_called()
 
 
-def test_graph_has_non_idempotent_node():
+def test_graph_non_idempotent_flag_semantics():
     """FAR-295: the graph helper flags ONLY an explicit boolean False — anything
     else (absent, True, or a malformed non-bool) stays idempotent so a retry is
     never fail-opened by a type mixup."""
-    from modulo.core.pipeline_engine.executor import _graph_has_non_idempotent_node
+    from modulo.core.pipeline_engine.executor import _graph_is_idempotent
 
-    assert _graph_has_non_idempotent_node(None) is False
-    assert _graph_has_non_idempotent_node({"nodes": []}) is False
-    assert _graph_has_non_idempotent_node({"nodes": [{"id": "node-a"}]}) is False
-    assert _graph_has_non_idempotent_node({"nodes": [{"id": "node-a", "idempotent": True}]}) is False
-    assert _graph_has_non_idempotent_node({"nodes": [{"id": "node-a", "idempotent": False}]}) is True
+    assert _graph_is_idempotent(None) is True
+    assert _graph_is_idempotent({"nodes": []}) is True
+    assert _graph_is_idempotent({"nodes": [{"id": "node-a"}]}) is True
+    assert _graph_is_idempotent({"nodes": [{"id": "node-a", "idempotent": True}]}) is True
+    assert _graph_is_idempotent({"nodes": [{"id": "node-a", "idempotent": False}]}) is False
     mixed = {"nodes": [{"id": "node-a", "idempotent": True}, {"id": "node-b", "idempotent": False}]}
-    assert _graph_has_non_idempotent_node(mixed) is True
+    assert _graph_is_idempotent(mixed) is False
     # A malformed non-bool value must NOT count as non-idempotent — it stays
     # retryable here (save-time validation rejects the graph before it runs).
-    assert _graph_has_non_idempotent_node({"nodes": [{"id": "node-a", "idempotent": "false"}]}) is False
+    assert _graph_is_idempotent({"nodes": [{"id": "node-a", "idempotent": "false"}]}) is True
 
 
 async def test_execute_retry_policy_suppressed_for_non_idempotent_graph():
     """FAR-295: a pipeline retry_policy must NOT re-dispatch a run whose graph
     declares a node with ``idempotent: false`` — the re-run would re-execute that
-    node's external side effect. The run terminal-fails with the clear
-    harness.non_idempotent code: no RunRetryPolicyError, no fenced pending-reset,
-    and a live run_failed publish."""
+    node's external side effect. The run terminal-fails via the single
+    finalization path with the generic failure code: no RunRetryPolicyError, no
+    fenced pending-reset."""
     run = _make_run(node_attempt_count=1, claim_token="tok-claim-abc")
     snapshot = _make_snapshot(graph_json={"nodes": [{"id": "node-a", "idempotent": False}], "edges": []})
     statements: list[str] = []
@@ -351,7 +527,6 @@ async def test_execute_retry_policy_suppressed_for_non_idempotent_graph():
     session = _make_session(snapshot, statements=statements, retry_policy=retry_policy)
     factory = _make_session_factory(session)
     registry = _mock_registry()
-    broker = registry.get_or_create.return_value
     settings = MagicMock(saq_run_retries=5)
     compiled = _make_failure_compiled()
 
@@ -377,17 +552,12 @@ async def test_execute_retry_policy_suppressed_for_non_idempotent_graph():
     # no fenced pending-reset was issued.
     assert result is not None
     assert not any("status='pending'" in s for s in statements)
-    # Terminal failure via the single finalization path with the clear code.
+    # Terminal failure via the single finalization path with the generic code —
+    # the non-idempotent graph is excluded from re-dispatch, not remapped to a
+    # dedicated error code.
     mock_finalize.assert_awaited_once()
     assert mock_finalize.await_args.kwargs["status"] == "failed"
-    assert mock_finalize.await_args.kwargs["error_code"] == "harness.non_idempotent"
-    # Live run_failed publish so WS subscribers see the suppression reason.
-    # (_stream_graph's generic catch publishes the raw exception class first;
-    # the authoritative terminal publish below carries the FAR-295 code.)
-    run_failed = [c.args for c in broker.publish.call_args_list if c.args and c.args[0] == "run_failed"]
-    assert run_failed
-    assert run_failed[-1][1]["error"] == "harness.non_idempotent"
-    assert "idempotent: false" in run_failed[-1][1]["detail"]
+    assert mock_finalize.await_args.kwargs["error_code"] == "_GenericFailureError"
 
 
 class _GenericFailureError(Exception):
