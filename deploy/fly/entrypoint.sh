@@ -10,8 +10,7 @@ set -e
 #
 # PR C (plan F1/F8): SAQ workers ALWAYS run (runs + system) — the system worker
 # owns the scheduler (fire_due_triggers) + reconcile + system crons.
-#   * Scheduler: SAQ fire_due_triggers is the ONLY scheduler; Celery beat is
-#     gone (removed in PR C).
+#   * Scheduler: SAQ fire_due_triggers is the ONLY scheduler.
 #   * The system SAQ worker is FAIL-CLOSED: the container refuses to boot if
 #     SAQ_AUTH_PASSWORD / SAQ_AUTH_USERNAME are unset (checked via the SETTINGS
 #     VALUES, not raw env).
@@ -182,12 +181,11 @@ if [ "$FLY_PROCESS_GROUP" = "worker" ]; then
     fi
 
     # -----------------------------------------------------------------------
-    # Celery — REMOVED in PR C. The SAQ system worker owns the scheduler
-    # (fire_due_triggers) + reconcile + system crons; there is no Celery worker
-    # or beat to start. Single scheduler invariant: SAQ fire_due_triggers is the
+    # The SAQ system worker owns the scheduler (fire_due_triggers) + reconcile +
+    # system crons. Single scheduler invariant: SAQ fire_due_triggers is the
     # ONLY scheduler.
     # -----------------------------------------------------------------------
-    echo "=== Celery removed (PR C cutover) — SAQ system worker owns the scheduler ==="
+    echo "=== SAQ system worker owns the scheduler ==="
 
     # -----------------------------------------------------------------------
     # SAQ workers — restart/backoff wrapper + sliding-window crash guard + PID
