@@ -62,3 +62,129 @@ describe('useUiCommandExecutor lock listener cleanup', () => {
     expect(channel!.listeners.filter(l => l.type === 'message')).toHaveLength(1)
   })
 })
+
+describe('useUiCommandExecutor select → combobox / scoped option lookup', () => {
+  // A BroadcastChannel that grants every lock-request immediately (simulating a
+  // second tab responding) so the select command can run to completion. The
+  // existing describe above tests the lock-timeout path with a non-responding
+  // channel; this one exercises the success path.
+  class GrantingBroadcastChannel {
+    name: string
+    listeners: Array<(e: MessageEvent) => void>
+
+    constructor(name: string) {
+      this.name = name
+      this.listeners = []
+    }
+
+    addEventListener(type: string, handler: EventListener) {
+      if (type === 'message') this.listeners.push(handler as (e: MessageEvent) => void)
+    }
+
+    removeEventListener(type: string, handler: EventListener) {
+      if (type === 'message') this.listeners = this.listeners.filter(l => l !== handler)
+    }
+
+    postMessage(msg: unknown) {
+      const data = msg as { type?: string; msgId?: string }
+      if (data.type === 'lock-request') {
+        for (const h of this.listeners) {
+          h({ data: { type: 'lock-response', msgId: data.msgId, granted: true, holder: null } } as MessageEvent)
+        }
+      }
+    }
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal('BroadcastChannel', GrantingBroadcastChannel)
+    vi.resetModules()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    vi.resetModules()
+    document.body.innerHTML = ''
+  })
+
+  it('select resolves a teleported combobox option after opening the popover', async () => {
+    const { executeCommandBatch, setActionSpeed } = await import('../composables/useUiCommandExecutor')
+    setActionSpeed('lightning')
+
+    const trigger = document.createElement('button')
+    trigger.setAttribute('role', 'combobox')
+    trigger.setAttribute('data-testid', 'cb-trigger')
+    trigger.textContent = 'Pick one'
+    document.body.appendChild(trigger)
+
+    // The option does not exist until the trigger is clicked — simulating a
+    // teleported overlay that only renders at body level once the popover
+    // opens. Without the click-to-open fix the option is never in the DOM, so
+    // this fails (the pre-fix code queried el.querySelector on the trigger).
+    const option = document.createElement('span')
+    option.setAttribute('data-value', 'alpha')
+    option.textContent = 'Alpha'
+    option.addEventListener('click', () => {
+      option.dataset.clicked = 'true'
+    })
+    trigger.addEventListener('click', () => {
+      const listbox = document.createElement('div')
+      listbox.setAttribute('role', 'listbox')
+      listbox.appendChild(option)
+      document.body.appendChild(listbox)
+    })
+
+    const results = await executeCommandBatch([
+      { id: '1', name: 'select', args: { selector: '[data-testid="cb-trigger"]', value: 'alpha' } },
+    ])
+
+    expect(results[0].success).toBe(true)
+    expect(option.dataset.clicked).toBe('true')
+  })
+
+  it('select prefers the trigger/overlay option over a stray page-level data-value', async () => {
+    const { executeCommandBatch, setActionSpeed } = await import('../composables/useUiCommandExecutor')
+    setActionSpeed('lightning')
+
+    // A stray [data-value] elsewhere on the page, unrelated to the trigger and
+    // NOT inside any listbox/menu overlay. A document-scoped query would match
+    // this element first (it appears earlier in the document).
+    const stray = document.createElement('span')
+    stray.setAttribute('data-value', 'alpha')
+    stray.textContent = 'stray'
+    stray.addEventListener('click', () => {
+      stray.dataset.clicked = 'true'
+    })
+    document.body.appendChild(stray)
+
+    const trigger = document.createElement('button')
+    trigger.setAttribute('role', 'combobox')
+    trigger.setAttribute('data-testid', 'cb-trigger')
+    trigger.textContent = 'Pick one'
+    document.body.appendChild(trigger)
+
+    // The real option only exists once the popover opens (teleported overlay
+    // rendered as role="listbox" at body level, appended after the stray).
+    const option = document.createElement('span')
+    option.setAttribute('data-value', 'alpha')
+    option.textContent = 'Alpha'
+    option.addEventListener('click', () => {
+      option.dataset.clicked = 'true'
+    })
+    trigger.addEventListener('click', () => {
+      const listbox = document.createElement('div')
+      listbox.setAttribute('role', 'listbox')
+      listbox.appendChild(option)
+      document.body.appendChild(listbox)
+    })
+
+    const results = await executeCommandBatch([
+      { id: '1', name: 'select', args: { selector: '[data-testid="cb-trigger"]', value: 'alpha' } },
+    ])
+
+    expect(results[0].success).toBe(true)
+    // The scoped query must click the listbox option, not the stray element.
+    expect(option.dataset.clicked).toBe('true')
+    expect(stray.dataset.clicked).toBeUndefined()
+  })
+})

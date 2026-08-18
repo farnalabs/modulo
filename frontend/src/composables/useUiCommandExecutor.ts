@@ -453,6 +453,31 @@ async function fillElement(el: Element, value: string): Promise<UiCommandResult>
   return { id: `fill-${Date.now()}`, name: 'fill', success: false, error: `Unsupported element: ${tag}` }
 }
 
+/**
+ * Locate the option with the given `data-value` for a select/combobox trigger.
+ *
+ * Scoping order (so a stray `[data-value]` elsewhere on the page is never
+ * picked over the trigger's own option):
+ *  1. the trigger's own subtree (non-teleported selects / inline listboxes)
+ *  2. any open overlay rendered as `role="listbox"`/`role="menu"` (teleported
+ *     popovers: reka-ui, PrimeVue, shadcn-vue content)
+ *  3. document-wide — ONLY for comboboxes whose teleported overlay renders its
+ *     options without a listbox container.
+ */
+function findSelectOption(trigger: Element, value: string, isCombobox: boolean): HTMLElement | null {
+  const valueSelector = `[data-value="${CSS.escape(value)}"]`
+  const scoped = trigger.querySelector<HTMLElement>(valueSelector)
+  if (scoped) return scoped
+
+  const overlays = document.querySelectorAll<HTMLElement>('[role="listbox"], [role="menu"]')
+  for (const overlay of overlays) {
+    const option = overlay.querySelector<HTMLElement>(valueSelector)
+    if (option) return option
+  }
+
+  return isCombobox ? document.querySelector<HTMLElement>(valueSelector) : null
+}
+
 async function select(selector: string, value: string): Promise<UiCommandResult> {
   if (!(await acquireElementLock(selector))) {
     return { id: `select-${Date.now()}`, name: 'select', success: false, error: `Could not acquire lock for element: ${selector}` }
@@ -466,18 +491,19 @@ async function select(selector: string, value: string): Promise<UiCommandResult>
 
     // A combobox trigger renders its options in a teleported overlay at body
     // level, never inside the trigger. Open the popover first (click + wait),
-    // then query for the option document-scoped — mirroring the click() path.
+    // then query for the option — mirroring the click() path.
     const isCombobox = el.getAttribute('role') === 'combobox' || !!el.closest('[role="combobox"]')
     if (isCombobox) {
       (el as HTMLElement).click()
       await new Promise(r => setTimeout(r, 300))
     }
 
-    // Options may live at body level (teleported overlay) or inside the
-    // trigger's own listbox — query document-scoped so both resolve.
-    const option = document.querySelector(
-      `[data-value="${CSS.escape(value)}"]`,
-    ) as HTMLElement | null
+    // Options may live inside the trigger's own subtree or in a teleported
+    // overlay at body level. Scope the query so a stray `[data-value]` element
+    // elsewhere on the page is never picked: prefer the trigger's own subtree,
+    // then any open listbox/menu overlay, and fall back to a document-scoped
+    // query only for teleported comboboxes.
+    const option = findSelectOption(el, value, isCombobox)
     if (option) {
       option.click()
       return { id: `select-${Date.now()}`, name: 'select', success: true }

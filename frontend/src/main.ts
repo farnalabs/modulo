@@ -5,6 +5,7 @@ import router from './router'
 import i18n from './i18n'
 import PrimeVue from 'primevue/config'
 import Aura from '@primeuix/themes/aura'
+import { applyPrimeVueTokenBridge } from './lib/primevue-theme'
 import { useLocaleStore } from './stores/localeStore'
 import { createErrorTracker } from './lib/error-tracking'
 import { loadMonitorConfig, loadBackends } from './monitor'
@@ -14,6 +15,11 @@ import './style.css'
 import 'overlayscrollbars/styles/overlayscrollbars.css'
 
 async function main() {
+  // PrimeVue components consume `--p-*` design tokens; map our semantic CSS
+  // variables onto them on the document root (ADR 024 Decision 4). Must run
+  // once at bootstrap, after style.css has loaded (module-level import above).
+  applyPrimeVueTokenBridge()
+
   const app = createApp(App)
   const pinia = createPinia()
   app.use(pinia)

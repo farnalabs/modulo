@@ -5,6 +5,7 @@ import Aura from '@primeuix/themes/aura'
 import { toNormalizeVariable, toVariables } from '@primeuix/styled'
 import {
   PRIMEVUE_TOKEN_BRIDGE,
+  applyPrimeVueTokenBridge,
   primeVueTokenName,
   sourceTokenName,
 } from '../lib/primevue-theme'
@@ -76,5 +77,23 @@ describe('PrimeVue token bridge guard', () => {
     expect(PRIMEVUE_TOKEN_BRIDGE.length).toBeGreaterThan(10)
     const sources = PRIMEVUE_TOKEN_BRIDGE.map((e) => e.source)
     expect(new Set(sources).size).toBe(sources.length)
+
+    // Actually invoke the bridge on a real element and assert the DOM mapping,
+    // so the central deliverable of ADR 024 Decision 4 is proven to do what it
+    // claims: every target `--p-*` variable written as `hsl(var(--<source>))`.
+    // Several sources intentionally share a target (e.g. card/popover → surface),
+    // so later entries override earlier ones for the same `--p-*` variable —
+    // mirror that loop to compute the expected DOM, exactly as the bridge runs.
+    const root = document.createElement('div')
+    applyPrimeVueTokenBridge(root)
+    const expected = new Map<string, string>()
+    for (const entry of PRIMEVUE_TOKEN_BRIDGE) {
+      expected.set(entry.target, `hsl(var(${sourceTokenName(entry)}))`)
+    }
+    for (const [target, value] of expected) {
+      expect(root.style.getPropertyValue(`--p-${target}`)).toBe(value)
+    }
+    // Spot-check one full mapping for readability of failures.
+    expect(root.style.getPropertyValue('--p-primary-color')).toBe('hsl(var(--primary))')
   })
 })
