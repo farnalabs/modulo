@@ -11,7 +11,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, select, text
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.exc import TimeoutError as SA_TimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -55,6 +55,7 @@ from modulo.db.crud.observability import get_otel_config
 from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 from modulo.db.crud.run import (
+    count_active_runs_for_org,
     create_run,
     get_child_run_rollup,
     get_org_run_concurrency_limit,
@@ -70,7 +71,7 @@ from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES, Run
+from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.models.trigger import Trigger
 from modulo.db.rls import set_rls_org
 from modulo.otel_bridge import trace_id_for_thread
@@ -196,6 +197,26 @@ async def _do_get_otel_endpoint(
         return ""
 
 
+def _select_trigger_actor(
+    run: Run,
+    account_labels: dict[uuid.UUID, str],
+    trigger_labels: dict[uuid.UUID, str],
+) -> str | None:
+    """Pick the actor label for a run from preloaded account/trigger labels.
+
+    Manual runs use the triggering account's label (email or display_name);
+    trigger-driven runs (webhook/cron/polling/agent_signal/ongoing/
+    slack_app_mention) use the owning trigger's type. Returns None when neither
+    applies. Shared by the detail path (row-by-row DB lookups) and the list
+    path (bulk-preloaded labels) so the selection logic cannot drift.
+    """
+    if run.trigger_type == "manual" and run.account_id is not None:
+        return account_labels.get(run.account_id)
+    if run.trigger_id is not None:
+        return trigger_labels.get(run.trigger_id)
+    return None
+
+
 async def _resolve_trigger_actor(session: AsyncSession, run: Run) -> str | None:
     """Resolve a human-readable actor label for a run.
 
@@ -204,19 +225,19 @@ async def _resolve_trigger_actor(session: AsyncSession, run: Run) -> str | None:
     ongoing/slack_app_mention), returns the owning trigger's type as the actor
     label. Returns None when no account or trigger can be resolved.
     """
+    account_labels: dict[uuid.UUID, str] = {}
     if run.trigger_type == "manual" and run.account_id is not None:
         account_result = await session.execute(select(Account).where(Account.id == run.account_id))
         account = account_result.scalar_one_or_none()
         if account is not None:
-            return account.email or account.display_name
-        return None
+            account_labels[run.account_id] = account.email or account.display_name
+    trigger_labels: dict[uuid.UUID, str] = {}
     if run.trigger_id is not None:
         trigger_result = await session.execute(select(Trigger).where(Trigger.id == run.trigger_id))
         trigger = trigger_result.scalar_one_or_none()
         if trigger is not None:
-            return trigger.trigger_type
-        return None
-    return None
+            trigger_labels[run.trigger_id] = trigger.trigger_type
+    return _select_trigger_actor(run, account_labels, trigger_labels)
 
 
 async def _resolve_capacity(session: AsyncSession, org_id: uuid.UUID, run: Run) -> dict[str, Any]:
@@ -224,11 +245,18 @@ async def _resolve_capacity(session: AsyncSession, org_id: uuid.UUID, run: Run) 
 
     Returns ``{active_runs, concurrency_limit, waiting}`` where ``waiting`` is
     True when this pending run is queued at/above the org's concurrency limit.
+
+    The count uses the same admission-gate semantics as dispatch
+    (``count_active_runs_for_org(include_pending=False)``): a pending run does
+    not hold capacity, and the run itself is excluded so it never reports
+    itself as consuming a slot.
     """
-    count_result = await session.execute(
-        select(func.count()).select_from(Run).where(Run.organisation_id == org_id, Run.status.in_(ACTIVE_RUN_STATUSES))
+    active_count = await count_active_runs_for_org(
+        session,
+        org_id,
+        include_pending=False,
+        exclude_run_id=run.id,
     )
-    active_count = int(count_result.scalar_one() or 0)
     limit = await get_org_run_concurrency_limit(session, org_id)
     waiting = run.status == "pending" and limit is not None and active_count >= limit
     return {"active_runs": active_count, "concurrency_limit": limit, "waiting": waiting}
@@ -299,7 +327,10 @@ async def _do_list_runs(
 
         # Active-run observability (FAR-307). Capacity is computed ONCE per
         # request (one active-count query + one limit read) and reused for
-        # every item; `waiting` is derived per item from its own status.
+        # every item; `waiting` is derived per item from its own status. The
+        # count uses admission-gate semantics (pending runs do not hold
+        # capacity), matching dispatch, so queued pending runs are never shown
+        # as waiting on account of other pending runs.
         account_ids = {run.account_id for run in result.items if run.account_id is not None}
         trigger_ids = {run.trigger_id for run in result.items if run.trigger_id is not None}
         account_labels: dict[uuid.UUID, str] = {}
@@ -312,15 +343,7 @@ async def _do_list_runs(
             trigger_result = await session.execute(select(Trigger).where(Trigger.id.in_(trigger_ids)))
             for trigger in trigger_result.scalars().all():
                 trigger_labels[trigger.id] = trigger.trigger_type
-        active_count_result = await session.execute(
-            select(func.count())
-            .select_from(Run)
-            .where(
-                Run.organisation_id == user.organisation_id,
-                Run.status.in_(ACTIVE_RUN_STATUSES),
-            )
-        )
-        active_count = int(active_count_result.scalar_one() or 0)
+        active_count = await count_active_runs_for_org(session, user.organisation_id, include_pending=False)
         concurrency_limit = await get_org_run_concurrency_limit(session, user.organisation_id)
 
         items = []
@@ -330,12 +353,7 @@ async def _do_list_runs(
             child_cost = _quantize_cost_rollup(child_cost)
             own_cost = run.total_cost_usd if run.total_cost_usd is not None else _COST_ROLLUP_ZERO
             _error_code, error_detail = present_error(run.error_code, run.error_detail, limit=200)
-            if run.trigger_type == "manual" and run.account_id is not None:
-                trigger_actor = account_labels.get(run.account_id)
-            elif run.trigger_id is not None:
-                trigger_actor = trigger_labels.get(run.trigger_id)
-            else:
-                trigger_actor = None
+            trigger_actor = _select_trigger_actor(run, account_labels, trigger_labels)
             capacity = {
                 "active_runs": active_count,
                 "concurrency_limit": concurrency_limit,
@@ -532,8 +550,11 @@ class RunResponse(BaseModel):
     # expected_skips / unexpected_skips). NULL when the run had no guardrails
     # bound, or on pre-migration runs.
     guardrail_summary: dict[str, int] | None = None
-    # Active-run observability (FAR-307). Populated only on the detail
-    # endpoint for active runs; always None on list/trigger responses.
+    # Active-run observability (FAR-307). `trigger_actor`, `heartbeat_at`, and
+    # `capacity` are populated on every list item and on detail for active
+    # runs; `work_item_refs` and `child_runs` are populated only on detail.
+    # The trigger response surfaces `trigger_id`/`heartbeat_at` from the
+    # created run row (getattr fallbacks in `_build_run_response`).
     trigger_actor: str | None = None
     trigger_id: uuid.UUID | None = None
     heartbeat_at: datetime | None = None

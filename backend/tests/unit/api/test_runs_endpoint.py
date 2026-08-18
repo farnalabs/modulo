@@ -1891,6 +1891,49 @@ class TestGetRunObservability:
         assert body["capacity"] is None
 
 
+class TestResolveCapacityAdmissionGate:
+    """``_resolve_capacity`` must mirror the dispatch admission-gate semantics.
+
+    Regression for the review finding: the capacity count included pending
+    runs (``ACTIVE_RUN_STATUSES`` contains ``pending``) and the viewed run
+    itself, so a pending run with room available (limit=3, two running) was
+    reported as ``waiting=True`` even though dispatch would admit it at once.
+    """
+
+    async def test_pending_run_not_waiting_when_room_is_available(self, mock_session: AsyncMock) -> None:
+        run = _make_run(status="pending")
+        count = AsyncMock(return_value=2)
+        with (
+            patch("modulo.api.routes.runs.count_active_runs_for_org", count),
+            patch("modulo.api.routes.runs.get_org_run_concurrency_limit", AsyncMock(return_value=3)),
+        ):
+            capacity = await runs_module._resolve_capacity(mock_session, _ORG_ID, run)
+
+        assert capacity["waiting"] is False
+        count.assert_awaited_once_with(mock_session, _ORG_ID, include_pending=False, exclude_run_id=run.id)
+
+    async def test_pending_run_waiting_when_at_limit(self, mock_session: AsyncMock) -> None:
+        run = _make_run(status="pending")
+        with (
+            patch("modulo.api.routes.runs.count_active_runs_for_org", AsyncMock(return_value=3)),
+            patch("modulo.api.routes.runs.get_org_run_concurrency_limit", AsyncMock(return_value=3)),
+        ):
+            capacity = await runs_module._resolve_capacity(mock_session, _ORG_ID, run)
+
+        assert capacity["active_runs"] == 3
+        assert capacity["waiting"] is True
+
+    async def test_running_run_never_waiting(self, mock_session: AsyncMock) -> None:
+        run = _make_run(status="running")
+        with (
+            patch("modulo.api.routes.runs.count_active_runs_for_org", AsyncMock(return_value=3)),
+            patch("modulo.api.routes.runs.get_org_run_concurrency_limit", AsyncMock(return_value=3)),
+        ):
+            capacity = await runs_module._resolve_capacity(mock_session, _ORG_ID, run)
+
+        assert capacity["waiting"] is False
+
+
 class TestGetRunEventsLifecycle:
     """GET /api/v1/runs/{run_id}/events — node lifecycle events surfaced."""
 
@@ -1964,12 +2007,11 @@ class TestListRunsObservability:
         page.next_cursor = None
         page.has_more = False
 
-        mock_session.execute.return_value.scalar_one.return_value = 0
-
         with (
             patch("modulo.api.routes.runs.db_list_runs", return_value=page),
             patch("modulo.api.routes.runs.get_child_run_rollup", return_value={}),
-            patch("modulo.api.routes.runs.get_org_run_concurrency_limit", return_value=5),
+            patch("modulo.api.routes.runs.count_active_runs_for_org", AsyncMock(return_value=0)),
+            patch("modulo.api.routes.runs.get_org_run_concurrency_limit", AsyncMock(return_value=5)),
             patch("modulo.api.routes.runs.set_rls_org"),
         ):
             resp = client.get("/api/v1/runs")
@@ -1984,4 +2026,59 @@ class TestListRunsObservability:
             "active_runs": 0,
             "concurrency_limit": 5,
             "waiting": False,
+        }
+
+    def test_list_pending_run_not_waiting_when_room_is_available(self, client: TestClient, mock_session) -> None:
+        run = _make_run(status="pending")
+        page = MagicMock()
+        page.items = [run]
+        page.total = 1
+        page.page = 1
+        page.page_size = 20
+        page.next_cursor = None
+        page.has_more = False
+
+        with (
+            patch("modulo.api.routes.runs.db_list_runs", return_value=page),
+            patch("modulo.api.routes.runs.get_child_run_rollup", return_value={}),
+            patch("modulo.api.routes.runs.count_active_runs_for_org", AsyncMock(return_value=2)),
+            patch("modulo.api.routes.runs.get_org_run_concurrency_limit", AsyncMock(return_value=3)),
+            patch("modulo.api.routes.runs.set_rls_org"),
+        ):
+            resp = client.get("/api/v1/runs")
+
+        assert resp.status_code == 200
+        item = resp.json()["items"][0]
+        assert item["status"] == "pending"
+        assert item["capacity"] == {
+            "active_runs": 2,
+            "concurrency_limit": 3,
+            "waiting": False,
+        }
+
+    def test_list_pending_run_waiting_when_at_limit(self, client: TestClient, mock_session) -> None:
+        run = _make_run(status="pending")
+        page = MagicMock()
+        page.items = [run]
+        page.total = 1
+        page.page = 1
+        page.page_size = 20
+        page.next_cursor = None
+        page.has_more = False
+
+        with (
+            patch("modulo.api.routes.runs.db_list_runs", return_value=page),
+            patch("modulo.api.routes.runs.get_child_run_rollup", return_value={}),
+            patch("modulo.api.routes.runs.count_active_runs_for_org", AsyncMock(return_value=3)),
+            patch("modulo.api.routes.runs.get_org_run_concurrency_limit", AsyncMock(return_value=3)),
+            patch("modulo.api.routes.runs.set_rls_org"),
+        ):
+            resp = client.get("/api/v1/runs")
+
+        assert resp.status_code == 200
+        item = resp.json()["items"][0]
+        assert item["capacity"] == {
+            "active_runs": 3,
+            "concurrency_limit": 3,
+            "waiting": True,
         }
