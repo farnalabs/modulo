@@ -2737,7 +2737,11 @@ class TestTransientFailureDetail:
 
     def test_script_lease_unknown_is_needs_human_code(self) -> None:
         code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(
-            exc=NodeCancelledError("node-a"), script_lease_ok=False
+            exc=NodeCancelledError("node-a"),
+            script_lease_ok=False,
+            graph_idempotent=True,
+            node_attempt_count=1,
+            retries=1,
         )
         assert code == "script.side_effect_unknown"
         assert "side effect unknown" in detail
@@ -2745,7 +2749,11 @@ class TestTransientFailureDetail:
 
     def test_node_cancelled_error_detail(self) -> None:
         code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(
-            exc=NodeCancelledError("killed"), script_lease_ok=True
+            exc=NodeCancelledError("killed"),
+            script_lease_ok=True,
+            graph_idempotent=True,
+            node_attempt_count=1,
+            retries=1,
         )
         assert code == "node_cancelled"
         assert detail.startswith("Sandbox node cancelled (transient) after retries exhausted:")
@@ -2753,6 +2761,17 @@ class TestTransientFailureDetail:
 
     def test_sandbox_node_failed_error_detail(self) -> None:
         exc = SandboxNodeFailedError("stalled", node_id="node-a")
-        code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(exc=exc, script_lease_ok=True)
+        code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(
+            exc=exc, script_lease_ok=True, graph_idempotent=True, node_attempt_count=1, retries=1
+        )
         assert code == "node_cancelled"
         assert "Sandbox node failed (transient) after retries exhausted: stalled" in detail
+
+    def test_non_idempotent_graph_retry_suppression_detail(self) -> None:
+        exc = SandboxNodeFailedError("side-effect fail", node_id="node-a")
+        code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(
+            exc=exc, script_lease_ok=True, graph_idempotent=False, node_attempt_count=0, retries=1
+        )
+        assert code == "node_cancelled"
+        assert "retry suppressed because a node in the graph is non-idempotent" in detail
+        assert "idempotent=false" in detail
