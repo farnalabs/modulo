@@ -162,9 +162,9 @@ auto-seeds an admin user based on the `MODULO_USERS` environment variable.
 |---|---|---|---|
 | `SECRET_KEY` | Yes | — | JWT signing key (min 32 bytes) |
 | `FERNET_KEY` | Yes | — | Fernet encryption key for credentials (valid urlsafe-base64 key, min 32 bytes) |
-| `DATABASE_URL` | Yes | `postgresql+asyncpg://modulo:modulo@localhost:5434/modulo` | Database connection string (no default; the SQLite URL applies only when `MODULO_DB=sqlite`) |
+| `DATABASE_URL` | Yes | — | Database connection string (required, no static default); the SQLite URL applies only when `MODULO_DB=sqlite` |
 | `MODULO_DB` | No | `postgres` | Database dialect (`postgres`, `sqlite`, `mariadb`) |
-| `REDIS_URL` | No | `redis://localhost:6380/0` | Redis connection for the SAQ broker (required in production) |
+| `REDIS_URL` | No | `redis://localhost:6379/0` | Redis connection for the SAQ broker (required in production) |
 | `MODULO_PUBLIC_URL` | No | `http://localhost:8000` | Public-facing URL for OIDC/SAML callbacks |
 | `MODULO_USERS` | No | — | Seed admin users (`username:password`) |
 
