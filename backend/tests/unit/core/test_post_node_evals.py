@@ -162,16 +162,20 @@ class TestPostNodeEvalsValidateContractOutput:
             {"status": "completed", "pr_url": "https://github.com/farnalabs/modulo/pull/123", "changed_files": ["a.py"]}
         )
         executor = _executor()
-        # failure_behaviour='block' — a failure would raise EvalBlockedError,
-        # so reaching the end of the call without an exception proves a pass.
-        await executor._run_post_node_evals(
-            "reviewer",
-            envelope,
-            {"reviewer": [_key_eval_def()]},
-            uuid.uuid4(),
-            None,
-            node_type_map={"reviewer": "sandbox_agent"},
-        )
+        # failure_behaviour='block' — a failure raises EvalBlockedError (the
+        # contract output carries pr_url + changed_files, so it must pass the
+        # schema). Any EvalBlockedError here means the pass is broken.
+        try:
+            await executor._run_post_node_evals(
+                "reviewer",
+                envelope,
+                {"reviewer": [_key_eval_def()]},
+                uuid.uuid4(),
+                None,
+                node_type_map={"reviewer": "sandbox_agent"},
+            )
+        except EvalBlockedError as exc:
+            pytest.fail(f"expected the pr_url-requiring eval to pass against the contract output, got: {exc}")
 
     def test_outer_envelope_output_is_not_what_the_engine_validates(self) -> None:
         """The same schema applied to the outer envelope ``output`` MUST fail —
