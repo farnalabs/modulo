@@ -2888,6 +2888,12 @@ export default {
       "schema": "Output rejected",
       "no_output": "No output"
     },
+    "script": {
+      "failed": "Script failed",
+      "invalid_output": "Invalid script output",
+      "side_effect_unknown": "Script side effects unknown",
+      "session_lost": "Script session lost"
+    },
     "harness": {
       "unknown": "Unknown error",
       "db": { "connection_lost": "Database connection lost" },

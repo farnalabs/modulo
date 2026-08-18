@@ -71,7 +71,7 @@
         <div v-else class="space-y-4">
           <div class="card p-4">
             <h2 class="mb-3 text-base font-semibold">{{ $t('views.AnalyticsView.chart_title') }}</h2>
-            <AnalyticsChart :series="store.buckets" :measure="store.measure" :group-by="store.groupBy" />
+            <AnalyticsChart :series="store.buckets" :measure="store.measure" :group-by="store.groupBy" :dimension="store.filters.dimension" />
           </div>
 
           <div class="card p-4" data-testid="analytics-table">
@@ -124,6 +124,7 @@ import ErrorAlert from "../components/shared/ErrorAlert.vue";
 import AnalyticsChart from "../components/analytics/AnalyticsChart.vue";
 import AnalyticsFilterBar from "../components/analytics/AnalyticsFilterBar.vue";
 import { formatApiError } from "../lib/api/formatError";
+import { errorCodeLabel } from "../utils/runUtils";
 import {
   useAnalyticsStore,
   computeTrendDelta,
@@ -179,7 +180,10 @@ const tableRows = computed<TableRow[]>(() => {
   const previous = dimensioned ? aggregateByKey(previousBuckets) : previousBuckets;
   const measure = store.measure;
   return current.map((bucket, index) => {
-    const label = bucket.key ?? formatBucketDate(bucket.date);
+    const label =
+      bucket.key != null && store.filters.dimension === "error_code"
+        ? errorCodeLabel(bucket.key, t)
+        : (bucket.key ?? formatBucketDate(bucket.date));
     // Windows are equal-length: match dimensioned buckets by key and
     // undimensioned buckets by offset within the window.
     const prev =
