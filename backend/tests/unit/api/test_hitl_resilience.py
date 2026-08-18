@@ -176,8 +176,167 @@ class TestListRunPendingGatesSQLAlchemyError:
 class TestListOrgPendingGatesSQLAlchemyError:
     @patch(
         "modulo.api.routes.hitl.HITLManager.list_pending",
-        new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")),
+        new=AsyncMock(side_effect=SQLAlchemyError("mock", "", "")),
     )
     def test_list_org_pending_gates_returns_503(self, client: TestClient) -> None:
         resp = client.get("/api/v1/hitl/pending")
         assert resp.status_code == 503
+
+
+class TestGateResponseLabel:
+    def test_gate_to_response_passes_label_through(self) -> None:
+        from modulo.api.routes.hitl import _gate_to_response
+
+        claim = MagicMock()
+        claim.run_id = _RUN_ID
+        claim.gate_id = "hitl_gate_planner_deploy"
+        claim.pipeline_id = uuid.uuid4()
+        claim.account_id = _USER_ID
+        claim.claimed_at = None
+        claim.expires_at = None
+        claim.decision = None
+        claim.decision_at = None
+
+        resp = _gate_to_response(claim, pipeline_name="My Pipeline", label="Deploy gate")
+
+        assert resp.gate_id == "hitl_gate_planner_deploy"
+        assert resp.label == "Deploy gate"
+
+    def test_gate_to_response_label_defaults_to_none(self) -> None:
+        from modulo.api.routes.hitl import _gate_to_response
+
+        claim = MagicMock()
+        claim.run_id = _RUN_ID
+        claim.gate_id = "hitl_gate_planner_deploy"
+        claim.pipeline_id = uuid.uuid4()
+        claim.account_id = _USER_ID
+        claim.claimed_at = None
+        claim.expires_at = None
+        claim.decision = None
+        claim.decision_at = None
+
+        resp = _gate_to_response(claim)
+
+        assert resp.label is None
+
+    def test_build_gate_label_map_from_snapshot_edges(self) -> None:
+        from modulo.api.routes.hitl import _build_gate_label_map
+
+        graph = {
+            "edges": [
+                {"source": "planner", "target": "deploy", "hitl_gate_config": {"label": "Deploy gate"}},
+                {"source_node_id": "a", "target_node_id": "b", "hitl_gate_config": {"label": "Review gate"}},
+                {"source": "e", "target": "f", "hitl_gate_config": {"label": ""}},
+                {"source": "g", "target": "h"},
+                {"hitl_gate_config": {"label": "no-edge-keys"}},
+                "not-a-dict",
+            ]
+        }
+
+        assert _build_gate_label_map(graph) == {
+            "hitl_gate_planner_deploy": "Deploy gate",
+            "hitl_gate_a_b": "Review gate",
+        }
+
+
+class TestListRunPendingGatesLabelResolution:
+    def test_list_run_pending_gates_resolves_gate_label(self, client: TestClient) -> None:
+        from collections.abc import AsyncGenerator
+
+        mock_session = AsyncMock()
+        configure_mock_session(mock_session, allow_empty_execute=True)
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_session.begin = MagicMock(return_value=begin_cm)
+        mock_session.get = AsyncMock(return_value=None)
+
+        run = MagicMock()
+        run.id = _RUN_ID
+        run.snapshot_id = uuid.uuid4()
+
+        snapshot = MagicMock()
+        snapshot.graph_json = {
+            "nodes": [],
+            "edges": [{"source": "planner", "target": "deploy", "hitl_gate_config": {"label": "Deploy gate"}}],
+        }
+
+        claim = MagicMock()
+        claim.run_id = _RUN_ID
+        claim.gate_id = "hitl_gate_planner_deploy"
+        claim.pipeline_id = uuid.uuid4()
+        claim.account_id = _USER_ID
+        claim.claimed_at = None
+        claim.expires_at = None
+        claim.decision = None
+        claim.decision_at = None
+
+        def _execute(stmt: object, *args: object, **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            if "pipeline_snapshots" in str(stmt):
+                result.scalar_one_or_none.return_value = snapshot
+            else:
+                result.scalars.return_value = [claim]
+            return result
+
+        mock_session.execute = AsyncMock(side_effect=_execute)
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        try:
+            with patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)):
+                resp = client.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 200
+        gates = resp.json()["gates"]
+        assert gates[0]["gate_id"] == "hitl_gate_planner_deploy"
+        assert gates[0]["label"] == "Deploy gate"
+
+    def test_list_run_pending_gates_label_none_without_snapshot(self, client: TestClient) -> None:
+        from collections.abc import AsyncGenerator
+
+        mock_session = AsyncMock()
+        configure_mock_session(mock_session, allow_empty_execute=True)
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_session.begin = MagicMock(return_value=begin_cm)
+        mock_session.get = AsyncMock(return_value=None)
+
+        run = MagicMock()
+        run.id = _RUN_ID
+        run.snapshot_id = None
+
+        claim = MagicMock()
+        claim.run_id = _RUN_ID
+        claim.gate_id = "hitl_gate_planner_deploy"
+        claim.pipeline_id = uuid.uuid4()
+        claim.account_id = _USER_ID
+        claim.claimed_at = None
+        claim.expires_at = None
+        claim.decision = None
+        claim.decision_at = None
+
+        def _execute(stmt: object, *args: object, **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.scalars.return_value = [claim]
+            return result
+
+        mock_session.execute = AsyncMock(side_effect=_execute)
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        try:
+            with patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)):
+                resp = client.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 200
+        assert resp.json()["gates"][0]["label"] is None

@@ -1051,6 +1051,8 @@ class RunIOResponse(BaseModel):
     outputs_json: dict[str, Any] | None = None
     node_telemetry: dict[str, Any] | None = None
     fixture_map: dict[str, str] | None = None
+    #: node_id -> human label from the snapshot graph (frontend UUID hygiene).
+    node_labels: dict[str, str] = Field(default_factory=dict)
 
     def build_fixture_map(self) -> dict[str, str]:
         return _build_fixture_map(self.input_payload, self.outputs_json)
@@ -1129,6 +1131,12 @@ async def get_run_io_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             run = await get_run(session, run_id)
+            snapshot = None
+            if run is not None and run.snapshot_id:
+                from modulo.db.models.pipeline_snapshot import PipelineSnapshot as SnapModel
+
+                snap_result = await session.execute(select(SnapModel).where(SnapModel.id == run.snapshot_id))
+                snapshot = snap_result.scalar_one_or_none()
     except IntegrityError:
         _log.exception("runs.get_run_io_endpoint")
         raise HTTPException(
@@ -1160,6 +1168,12 @@ async def get_run_io_endpoint(
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
 
+    node_labels: dict[str, str] = {}
+    if snapshot is not None and isinstance(snapshot.graph_json, dict):
+        for n in snapshot.graph_json.get("nodes", []):
+            if isinstance(n, dict) and n.get("id"):
+                node_labels[str(n["id"])] = str(n.get("label") or n.get("node_type") or n.get("id"))
+
     outputs_json = run.outputs_json
     telemetry_json = run.node_telemetry_json
 
@@ -1185,6 +1199,7 @@ async def get_run_io_endpoint(
         input_payload=masked_input,
         outputs_json=masked_outputs,
         node_telemetry=masked_telemetry,
+        node_labels=node_labels,
     )
     resp.fixture_map = resp.build_fixture_map()
     return resp

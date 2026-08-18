@@ -123,6 +123,9 @@ class GateResponse(BaseModel):
     expires_at: str | None = None
     decision: str | None = None
     decision_at: str | None = None
+    #: Human label from the snapshot edge's ``hitl_gate_config.label``
+    #: (frontend UUID hygiene — falls back to shortId when absent).
+    label: str | None = None
 
 
 class PendingGatesResponse(BaseModel):
@@ -713,6 +716,15 @@ async def list_run_pending_gates(
             if gates:
                 pipeline = await session.get(Pipeline, gates[0].pipeline_id)
                 pipeline_name = pipeline.name if pipeline else None
+
+            gate_label_map: dict[str, str] = {}
+            if run is not None and run.snapshot_id:
+                from modulo.db.models.pipeline_snapshot import PipelineSnapshot as SnapModel
+
+                snap_result = await session.execute(select(SnapModel).where(SnapModel.id == run.snapshot_id))
+                snapshot = snap_result.scalar_one_or_none()
+                if snapshot is not None and isinstance(snapshot.graph_json, dict):
+                    gate_label_map = _build_gate_label_map(snapshot.graph_json)
     except ProgrammingError as exc:
         logger.exception("hitl.list_run_pending_gates")
         raise HTTPException(
@@ -734,7 +746,9 @@ async def list_run_pending_gates(
             detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
 
-    return PendingGatesResponse(gates=[_gate_to_response(g, pipeline_name=pipeline_name) for g in gates])
+    return PendingGatesResponse(
+        gates=[_gate_to_response(g, pipeline_name=pipeline_name, label=gate_label_map.get(g.gate_id)) for g in gates]
+    )
 
 
 @router.get(
@@ -781,6 +795,9 @@ async def list_org_pending_gates(
             detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
 
+    # Org-level: gates span many runs, so per-run snapshot lookups are
+    # expensive. Leave label=None here — the frontend falls back to shortId.
+    # Only the run-level endpoint (used by RunDetailView) resolves the label.
     return PendingGatesResponse(
         gates=[_gate_to_response(g, pipeline_name=pipeline_map.get(g.pipeline_id)) for g in gates]
     )
@@ -791,7 +808,42 @@ async def list_org_pending_gates(
 # ---------------------------------------------------------------------------
 
 
-def _gate_to_response(g: HitlClaim, pipeline_name: str | None = None) -> GateResponse:
+def _edge_source_or_target(edge: dict[str, Any], key: str) -> str | None:
+    """Resolve an edge's source/target node id (canonical + persisted keys).
+
+    Mirrors ``graph_cache._get_edge_val`` but returns None instead of raising
+    when the edge omits the field, so a malformed snapshot edge never breaks
+    gate-label resolution.
+    """
+    value = edge.get(key) or edge.get(f"{key}_node_id")
+    return str(value) if value is not None else None
+
+
+def _build_gate_label_map(graph_json: dict[str, Any]) -> dict[str, str]:
+    """Map gate_id -> human label from snapshot edges carrying hitl_gate_config.
+
+    Gate id format is ``hitl_gate_<source>_<target>`` (see
+    ``graph_cache._make_gate_id``). Edges without a ``label`` in their
+    ``hitl_gate_config`` are omitted so the frontend falls back to shortId.
+    """
+    gate_label_map: dict[str, str] = {}
+    for edge in graph_json.get("edges", []):
+        if not isinstance(edge, dict):
+            continue
+        hitl_config = edge.get("hitl_gate_config")
+        if not isinstance(hitl_config, dict):
+            continue
+        label = hitl_config.get("label")
+        if not label:
+            continue
+        source = _edge_source_or_target(edge, "source")
+        target = _edge_source_or_target(edge, "target")
+        if source and target:
+            gate_label_map[f"hitl_gate_{source}_{target}"] = str(label)
+    return gate_label_map
+
+
+def _gate_to_response(g: HitlClaim, pipeline_name: str | None = None, label: str | None = None) -> GateResponse:
     return GateResponse(
         run_id=g.run_id,
         gate_id=g.gate_id,
@@ -802,4 +854,5 @@ def _gate_to_response(g: HitlClaim, pipeline_name: str | None = None) -> GateRes
         expires_at=g.expires_at.isoformat() if g.expires_at else None,
         decision=g.decision,
         decision_at=g.decision_at.isoformat() if g.decision_at else None,
+        label=label,
     )
