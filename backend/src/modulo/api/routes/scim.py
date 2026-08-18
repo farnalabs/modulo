@@ -1048,23 +1048,28 @@ async def _apply_replace_group_op(session: AsyncSession, group: Any, op: Any, or
                 )
 
 
+def _iter_member_uuids(values: Any) -> list[uuid.UUID]:
+    if isinstance(values, dict):
+        values = [values]
+    result: list[uuid.UUID] = []
+    if isinstance(values, list):
+        for m in values:
+            if isinstance(m, dict) and "value" in m:
+                uid = _parse_member_uuid(m["value"])
+                if uid is not None:
+                    result.append(uid)
+    return result
+
+
 async def _apply_add_group_op(session: AsyncSession, group: Any, op: Any, org_id: uuid.UUID) -> None:
     if op.path == "members" or op.path is None:
-        values = op.value
-        if isinstance(values, dict):
-            values = [values]
-        if isinstance(values, list):
-            for m in values:
-                if isinstance(m, dict) and "value" in m:
-                    uid = _parse_member_uuid(m["value"])
-                    if uid is None:
-                        continue
-                    await scim_add_group_member(
-                        session,
-                        org_id=org_id,
-                        team_id=group.id,
-                        user_id=uid,
-                    )
+        for uid in _iter_member_uuids(op.value):
+            await scim_add_group_member(
+                session,
+                org_id=org_id,
+                team_id=group.id,
+                user_id=uid,
+            )
 
 
 async def _remove_member_by_path(session: AsyncSession, group: Any, path: str) -> None:
