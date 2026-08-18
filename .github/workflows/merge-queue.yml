@@ -618,6 +618,56 @@ jobs:
             && echo "Self-report delivered to Modulo." \
             || echo "::warning::Modulo self-report POST failed - merged PRs recorded in log only (fail-open)."
 
+      - name: Close Linear tickets for merged PRs
+        if: success() && steps.merge.outputs.merged_count != '0'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        shell: bash
+        run: |
+          PR_NUMS=$(git log main..merge-queue --oneline 2>/dev/null | grep -oP 'PR #\K\d+' | tac || true)
+          [ -z "$PR_NUMS" ] && { echo "No PRs merged this cycle - nothing to close."; exit 0; }
+          if [ -z "$LINEAR_API_KEY" ]; then
+            echo "::warning::LINEAR_API_KEY not configured - skipping Linear ticket close (fail-open)."
+            exit 0
+          fi
+
+          DONE_STATE_ID="552f8a33-d543-462e-a25f-74e2572cbb2d"
+          for NUM in $PR_NUMS; do
+            TITLE=$(gh pr view "$NUM" --json title --jq '.title' 2>/dev/null || echo "")
+            TICKET=$(echo "$TITLE" | grep -oP 'FAR-\d+' | head -1 || true)
+            if [ -z "$TICKET" ]; then
+              echo "PR #$NUM has no FAR-xxx ticket in title - skipping Linear close"
+              continue
+            fi
+            echo "Closing Linear ticket $TICKET for PR #$NUM"
+            # Find the issue id by querying the FAR team's issues and matching identifier
+            TEAM_ID=$(curl -sS --max-time 30 -X POST https://api.linear.app/graphql \
+              -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" \
+              -d '{"query":"{ teams(first: 50) { nodes { id key } } }"}' \
+              | jq -r '.data.teams.nodes[] | select(.key == "FAR") | .id' 2>/dev/null || echo "")
+            if [ -z "$TEAM_ID" ]; then
+              echo "::warning::Could not resolve FAR team id - skipping $TICKET"
+              continue
+            fi
+            ISSUE_ID=$(curl -sS --max-time 30 -X POST https://api.linear.app/graphql \
+              -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" \
+              -d "{\"query\":\"query(\$teamId: String!) { team(id: \$teamId) { issues(first: 100) { nodes { id identifier state { name } } } } }\",\"variables\":{\"teamId\":\"$TEAM_ID\"}}" \
+              | jq -r --arg t "$TICKET" '.data.team.issues.nodes[] | select(.identifier == $t) | .id' 2>/dev/null || echo "")
+            if [ -z "$ISSUE_ID" ]; then
+              echo "::warning::Ticket $TICKET not found in Linear - skipping"
+              continue
+            fi
+            RESULT=$(curl -sS --max-time 30 -X POST https://api.linear.app/graphql \
+              -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" \
+              -d "{\"query\":\"mutation(\$id: String!, \$stateId: String!) { issueUpdate(id: \$id, input: { stateId: \$stateId }) { issue { id state { name } } } }\",\"variables\":{\"id\":\"$ISSUE_ID\",\"stateId\":\"$DONE_STATE_ID\"}}" \
+              | jq -r '.data.issueUpdate.issue.state.name' 2>/dev/null || echo "")
+            if [ -n "$RESULT" ]; then
+              echo "  $TICKET -> $RESULT"
+            else
+              echo "::warning::Failed to close $TICKET (fail-open)"
+            fi
+          done
+
       - name: Delete branches whose PRs are already merged (defense-in-depth)
         if: success()
         env:
