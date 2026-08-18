@@ -44,8 +44,10 @@ from modulo.core.team_visibility import (
     find_model_backend_team_mismatches,
     model_backend_team_mismatch_detail,
 )
+from modulo.db.crud import guardrail_config as _guardrail_config
 from modulo.db.crud.composite_template import create_composite_template
 from modulo.db.crud.hitl_gate_guard import (
+    GuardrailBindingStripDenied,
     HitlGateWeakeningDenied,
     denial_http_status,
 )
@@ -101,6 +103,7 @@ _MAX_GRAPH_EDGES = 1000
 # ADR 017 service-layer backstop: operator+ is "privileged" (privilege is
 # required to weaken/remove an existing HITL gate via a graph write).
 _OPERATOR_LEVEL = org_role_level("operator")
+_ADMIN_LEVEL = org_role_level("admin")
 
 
 def _is_privileged(role: str | None) -> bool:
@@ -113,6 +116,25 @@ def _is_privileged(role: str | None) -> bool:
     if role is None:
         return False
     return org_role_level(role) >= _OPERATOR_LEVEL
+
+
+def _is_guardrail_admin(principal: TenantPrincipal) -> bool:
+    """Resolve whether the caller may strip a guardrail binding from a node.
+
+    Admin-level only (``org_role == "admin"``, the role the ``guardrail.manage``
+    permission requires) — the same privilege the admin-only guardrail
+    definition / apply / reject endpoints enforce. Uses the flag-independent
+    numeric hierarchy so enforcement stays live even when authz.enforce is
+    disabled (mirrors ``_is_privileged`` for the HITL guard).
+
+    FAR-309 PR A review: this resolves the caller-supplied admin flag; the
+    service-layer guard (``replace_pipeline_graph`` /
+    ``rollback_to_snapshot``) re-reads the live role under the row lock for
+    REST callers, so a stale role claim cannot slip a strip past the guard.
+    """
+    if principal.org_role is None:
+        return False
+    return org_role_level(principal.org_role) >= _ADMIN_LEVEL
 
 
 async def _deny_hitl_gate(
@@ -396,6 +418,17 @@ class PipelineGraphNode(BaseModel):
     label: str | None = Field(default=None, max_length=255)
     role: str | None = None
     autonomy_recommendation: str | None = None
+    # FAR-295: is this node logically safe to re-run? Applies to EVERY executor
+    # type (agent, manual, composite, sandbox_agent). Defaults to true. A node
+    # marked idempotent=false (e.g. one with an external side effect like
+    # creating a PR or charging a card) suppresses BOTH the run-level
+    # retry_policy re-dispatch and the node-level transient retry for any graph
+    # that contains it — re-running would double-execute the side effect.
+    idempotent: bool = Field(
+        default=True,
+        description="Whether the node is logically safe to re-run. When false, "
+        "retries of any run containing this node are suppressed.",
+    )
     composite_ref: uuid.UUID | None = None
     composite_parameter_values: dict[str, Any] | None = None
     composite_input_mapping: dict[str, Any] | None = None
@@ -1036,6 +1069,12 @@ async def replace_pipeline_graph_endpoint(
                 pipeline.owner_team_id,
                 connector_bindings,
             )
+            # FAR-309 PR A review: the guardrail-binding strip guard now lives
+            # in the SERVICE LAYER (replace_pipeline_graph, under the row lock)
+            # so every graph-mutation caller inherits it — including the
+            # PATCH /{id} graph_json path and snapshot rollback. The admin flag
+            # is resolved here and the service layer re-reads the live role
+            # under the lock for REST callers.
             _schema_pins, model_backend_pins = await _resolve_graph_references(
                 session,
                 req.nodes,
@@ -1051,15 +1090,14 @@ async def replace_pipeline_graph_endpoint(
                 is_privileged=_is_privileged(principal.org_role),
                 caller_type="rest",
                 account_id=principal.account_id,
+                is_guardrail_admin=_is_guardrail_admin(principal),
             )
             if graph is not None:
                 # Load the pipeline's guardrail eval rows so the graph-save
                 # validation can reject a per-node guardrail-cap violation
                 # (FAR-223 item 7) — the authoring-time rejection that the
                 # create_run fail-closed backstop also enforces at run start.
-                from modulo.db.crud.guardrail_config import load_pipeline_guardrail_rows
-
-                guardrail_rows = await load_pipeline_guardrail_rows(
+                guardrail_rows = await _guardrail_config.load_pipeline_guardrail_rows(
                     session,
                     pipeline_id=pipeline_id,
                     organisation_id=principal.organisation_id,
@@ -1091,6 +1129,11 @@ async def replace_pipeline_graph_endpoint(
             exc=exc,
             request_id=getattr(principal, "request_id", None),
         )
+    except GuardrailBindingStripDenied as exc:
+        raise HTTPException(
+            status_code=denial_http_status(exc.reason_code),
+            detail=exc.detail,
+        ) from None
     except ProgrammingError:
         logger.exception(_CODE_ROUTES_PIPELINES)
 
@@ -1257,6 +1300,7 @@ async def update_pipeline_endpoint(
                     is_privileged=_is_privileged(principal.org_role),
                     caller_type="rest",
                     account_id=principal.account_id,
+                    is_guardrail_admin=_is_guardrail_admin(principal),
                 )
                 if graph is None:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
@@ -1277,6 +1321,11 @@ async def update_pipeline_endpoint(
             exc=exc,
             request_id=getattr(principal, "request_id", None),
         )
+    except GuardrailBindingStripDenied as exc:
+        raise HTTPException(
+            status_code=denial_http_status(exc.reason_code),
+            detail=exc.detail,
+        ) from None
     except PipelineHasActiveRunsError as exc:
         # PRD §9.3: ownership transfer is blocked while any run is non-terminal.
         raise HTTPException(
@@ -1900,6 +1949,7 @@ async def rollback_snapshot_endpoint(
                 account_id=principal.account_id,
                 is_privileged=_is_privileged(principal.org_role),
                 caller_type="rest",
+                is_guardrail_admin=_is_guardrail_admin(principal),
             )
     except HitlGateWeakeningDenied as exc:
         await _deny_hitl_gate(
@@ -1910,6 +1960,11 @@ async def rollback_snapshot_endpoint(
             exc=exc,
             request_id=getattr(principal, "request_id", None),
         )
+    except GuardrailBindingStripDenied as exc:
+        raise HTTPException(
+            status_code=denial_http_status(exc.reason_code),
+            detail=exc.detail,
+        ) from None
     except ProgrammingError:
         logger.exception(_CODE_ROUTES_PIPELINES)
 
@@ -2149,6 +2204,7 @@ async def convert_node_to_agent_endpoint(
                 is_privileged=_is_privileged(principal.org_role),
                 caller_type="rest",
                 account_id=principal.account_id,
+                is_guardrail_admin=_is_guardrail_admin(principal),
             )
     except HitlGateWeakeningDenied as exc:
         await _deny_hitl_gate(
@@ -2159,6 +2215,11 @@ async def convert_node_to_agent_endpoint(
             exc=exc,
             request_id=getattr(principal, "request_id", None),
         )
+    except GuardrailBindingStripDenied as exc:
+        raise HTTPException(
+            status_code=denial_http_status(exc.reason_code),
+            detail=exc.detail,
+        ) from None
     except ProgrammingError:
         logger.exception(_CODE_ROUTES_PIPELINES)
 
@@ -2268,6 +2329,7 @@ async def revert_node_to_manual_endpoint(
                 is_privileged=_is_privileged(principal.org_role),
                 caller_type="rest",
                 account_id=principal.account_id,
+                is_guardrail_admin=_is_guardrail_admin(principal),
             )
     except HitlGateWeakeningDenied as exc:
         await _deny_hitl_gate(
@@ -2278,6 +2340,11 @@ async def revert_node_to_manual_endpoint(
             exc=exc,
             request_id=getattr(principal, "request_id", None),
         )
+    except GuardrailBindingStripDenied as exc:
+        raise HTTPException(
+            status_code=denial_http_status(exc.reason_code),
+            detail=exc.detail,
+        ) from None
     except ProgrammingError:
         logger.exception(_CODE_ROUTES_PIPELINES)
 
@@ -2325,12 +2392,14 @@ async def _save_graph(
     is_privileged: bool,
     caller_type: Literal["rest", "mcp"],
     account_id: uuid.UUID | None = None,
+    is_guardrail_admin: bool = False,
 ) -> tuple[list[dict[str, Any]], list[Any]] | None:
     """Persist updated nodes + edges via replace_pipeline_graph.
 
     Accepts edges as either ORM model instances (PipelineEdge) or plain dicts.
-    Forwards is_privileged + caller_type + account_id to the underlying graph
-    write (ADR 017 backstop / hitl-gate-removal-guard-plan.md v19).
+    Forwards is_privileged + caller_type + account_id + is_guardrail_admin to
+    the underlying graph write (ADR 017 backstop /
+    hitl-gate-removal-guard-plan.md v19 / FAR-309 PR A review).
     """
     edge_dicts = [_edge_to_dict(e) if hasattr(e, "source_node_id") else dict(e) for e in edges]
     return await replace_pipeline_graph(
@@ -2342,4 +2411,5 @@ async def _save_graph(
         is_privileged=is_privileged,
         caller_type=caller_type,
         account_id=account_id,
+        is_guardrail_admin=is_guardrail_admin,
     )

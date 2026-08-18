@@ -76,3 +76,13 @@ export function formatHeartbeatAge(
   if (age == null) return '—'
   return t(key, { s: age })
 }
+
+/** Human-readable label for a dotted run error code (e.g. `agent.stall` →
+ * "Agent stalled"), looked up in the locale's `errorCodes` section. Falls back
+ * to the locale's `errorCodes._unknown` label when the code has no entry. */
+export function errorCodeLabel(code: string | null | undefined, t: (key: string) => string): string {
+  if (!code) return '—'
+  const key = `errorCodes.${code}`
+  const translated = t(key)
+  return translated === key ? t('errorCodes._unknown') : translated
+}

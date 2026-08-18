@@ -99,6 +99,11 @@ PERMISSIONS: dict[str, str] = {
     "org.authz_enforce.manage": "admin",
     "org.triggers.pause.manage": "admin",
     "org.guardrails.kill_switch.manage": "admin",
+    # guardrail definition/binding management — the admin-level permission for
+    # managing guardrail definitions, node bindings, and the elevated (full,
+    # unmasked) config read. Mirrors the org.guardrails.kill_switch.manage
+    # admin pattern.
+    "guardrail.manage": "admin",
     "org.delete": "admin",
     # agents
     "agent.create": "operator",

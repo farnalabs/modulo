@@ -16,6 +16,7 @@ from modulo.db.crud.hitl_gate_guard import (
     apply_gated_edge_diff,
     build_gate_diff_payload,
     denial_detail,
+    enforce_guardrail_binding_strip,
     resolve_effective_privilege,
 )
 from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
@@ -149,6 +150,7 @@ async def rollback_to_snapshot(
     *,
     is_privileged: bool,
     caller_type: Literal["rest", "mcp"],
+    is_guardrail_admin: bool = False,
     _on_lock_acquired: Callable[[], Awaitable[None]] | None = None,
 ) -> PipelineSnapshot | None:
     """Create a new snapshot that restores the graph from a previous snapshot.
@@ -159,6 +161,13 @@ async def rollback_to_snapshot(
     (treated as weakening) with the distinct reason code
     ``legacy-snapshot-ambiguous``. ``caller_type == "mcp"`` forces
     ``is_privileged`` to False.
+
+    FAR-309 PR A review: the guardrail-binding strip guard runs here too, under
+    the same row lock — a non-admin may not roll back to a snapshot whose graph
+    LACKS a node that currently carries a bound guardrail (rolling back would
+    strip the binding). ``is_guardrail_admin`` is the caller-supplied admin
+    flag; for ``"rest"`` with ``account_id`` the live role is re-read under the
+    lock.
 
     Does not affect in-flight runs (they continue on their original snapshot).
     Returns the new snapshot, or None if the target snapshot doesn't exist.
@@ -195,6 +204,21 @@ async def rollback_to_snapshot(
         }
         for e in old_rows
     ]
+
+    # FAR-309 PR A review: service-layer guardrail-binding strip guard. A
+    # non-admin may not roll back to a snapshot that drops a guardrail-bound
+    # node (that would strip the binding). Runs under the row lock, before any
+    # graph mutation.
+    snapshot_nodes = target.graph_json.get("nodes", []) if isinstance(target.graph_json, dict) else []
+    await enforce_guardrail_binding_strip(
+        session,
+        pipeline_id=pipeline_id,
+        org_id=pipeline.organisation_id,
+        incoming_node_ids={str(node.get("id")) for node in snapshot_nodes if node.get("id")},
+        is_guardrail_admin=is_guardrail_admin,
+        caller_type=caller_type,
+        account_id=account_id,
+    )
     # Historical snapshots: missing/None fields are fail-closed — a snapshot
     # edge that omits a gate field (or carries None) is treated as a genuine
     # removal when the live edge carried a gate.

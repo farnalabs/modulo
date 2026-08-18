@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -20,14 +20,18 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.events.event_bus import get_event_bus
+from modulo.core.notifier.event_mapper import notification_categories
+from modulo.db.crud.account import get_account_by_id, update_account_preferences
 from modulo.db.crud.notifications import (
     count_notifications_for_user,
     dismiss_notification,
     get_dashboard_notifications,
     get_notification,
     get_notifications_for_user,
+    get_opted_out_categories,
     get_unread_count,
     review_later,
+    set_notification_preferences,
 )
 from modulo.db.models.notification import Notification
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -94,6 +98,17 @@ SCOPE_LABELS: dict[str, str] = {
     "org": "Org-wide",
     "admin": "Admin",
 }
+
+_DASHBOARD_LEVELS: frozenset[str] = frozenset({"debug", "info", "warning", "error"})
+_DASHBOARD_LEVEL_KEY = "notification_dashboard_level"
+
+
+async def _load_dashboard_level(session: AsyncSession, account_id: uuid.UUID) -> str:
+    account = await get_account_by_id(session, account_id)
+    if account is None:
+        return "warning"
+    prefs = account.preferences if isinstance(account.preferences, dict) else {}
+    return cast(str, prefs.get(_DASHBOARD_LEVEL_KEY, "warning"))
 
 
 def _notification_to_response(n: Notification) -> NotificationResponse:
@@ -257,6 +272,110 @@ async def list_notifications(
     )
 
 
+@router.get("/preferences", response_model=NotificationPreferencesResponse)
+@handle_db_errors("in_app_notifications.get_preferences")
+async def get_preferences(
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_SELF),
+) -> NotificationPreferencesResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            opted_out = await get_opted_out_categories(
+                session=session,
+                org_id=principal.organisation_id,
+                account_id=principal.account_id,
+            )
+            dashboard_level = await _load_dashboard_level(session, principal.account_id)
+    except ProgrammingError:
+        _log.exception("in_app_notifications.get_preferences")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except IntegrityError:
+        _log.exception("in_app_notifications.get_preferences")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_MSG_DATA_CONFLICT_OCCURRED,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("in_app_notifications.get_preferences")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=_MSG_DATABASE_ERROR_OCCURRED,
+        ) from None
+    return NotificationPreferencesResponse(
+        dashboard_level=dashboard_level,
+        notification_opt_outs={category: category in opted_out for category in sorted(notification_categories())},
+    )
+
+
+@router.put("/preferences", response_model=NotificationPreferencesResponse)
+@handle_db_errors("in_app_notifications.update_preferences")
+async def update_preferences(
+    req: NotificationPreferencesUpdate,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_SELF),
+) -> NotificationPreferencesResponse:
+    dashboard_level = req.dashboard_level
+    if dashboard_level is not None and dashboard_level not in _DASHBOARD_LEVELS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"dashboard_level must be one of {sorted(_DASHBOARD_LEVELS)}.",
+        )
+    if req.notification_opt_outs is not None:
+        unknown = set(req.notification_opt_outs) - set(notification_categories())
+        if unknown:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"Unknown notification category keys: {sorted(unknown)}.",
+            )
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            if req.notification_opt_outs is not None:
+                await set_notification_preferences(
+                    session=session,
+                    org_id=principal.organisation_id,
+                    account_id=principal.account_id,
+                    opt_outs=req.notification_opt_outs,
+                )
+            if dashboard_level is not None:
+                await update_account_preferences(session, principal.account_id, {_DASHBOARD_LEVEL_KEY: dashboard_level})
+            opted_out = await get_opted_out_categories(
+                session=session,
+                org_id=principal.organisation_id,
+                account_id=principal.account_id,
+            )
+            if dashboard_level is None:
+                dashboard_level = await _load_dashboard_level(session, principal.account_id)
+    except ProgrammingError:
+        _log.exception("in_app_notifications.update_preferences")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except IntegrityError:
+        _log.exception("in_app_notifications.update_preferences")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_MSG_DATA_CONFLICT_OCCURRED,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("in_app_notifications.update_preferences")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=_MSG_DATABASE_ERROR_OCCURRED,
+        ) from None
+    return NotificationPreferencesResponse(
+        dashboard_level=dashboard_level,
+        notification_opt_outs={category: category in opted_out for category in sorted(notification_categories())},
+    )
+
+
 @router.get("/{notification_id}", response_model=NotificationResponse)
 @handle_db_errors(_CODE_APP_NOTIFICATIONS_GET_NOTIFICATION)
 async def get_notification_detail(
@@ -406,28 +525,3 @@ async def dismiss_endpoint(
 
     scope_label = "for_everyone" if req.dismiss_scope == "scope" else "for_self"
     return {"status": f"dismissed_{scope_label}"}
-
-
-@router.get("/preferences", response_model=NotificationPreferencesResponse)
-@handle_db_errors("in_app_notifications.get_preferences")
-async def get_preferences(
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_SELF),
-) -> NotificationPreferencesResponse:
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Notification preferences are not yet implemented.",
-    )
-
-
-@router.put("/preferences", response_model=NotificationPreferencesResponse)
-@handle_db_errors("in_app_notifications.update_preferences")
-async def update_preferences(
-    req: NotificationPreferencesUpdate,
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_SELF),
-) -> NotificationPreferencesResponse:
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Notification preferences are not yet implemented.",
-    )

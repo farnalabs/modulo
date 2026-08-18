@@ -44,6 +44,7 @@ from modulo.core.guardrails.config import (
     dump_config_set,
     hash_config_set,
     load_config_set,
+    mask_config_set,
     to_eval_config,
     utc_now_iso,
 )
@@ -53,6 +54,7 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.rls import set_rls_org
 
 _CODE_EVAL_DEFINITION_CREATE = "eval.definition.create"
+_CODE_GUARDRAIL_MANAGE = "guardrail.manage"
 
 
 _log = logging.getLogger(__name__)
@@ -150,6 +152,25 @@ def _applied_config_set(pin: GuardrailPin | None) -> GuardrailConfigSet:
         return load_config_set(pin.serialized_snapshot)
     except GuardrailConfigError:
         _log.exception("guardrail_config.stored_snapshot_invalid")
+        return GuardrailConfigSet()
+
+
+def _effective_config_set(pin: GuardrailPin | None) -> GuardrailConfigSet:
+    """The config set a reader sees: the PROPOSED set while a proposal is
+    pending (that is what the operator is reviewing), else the last APPLIED
+    snapshot. Returns the empty set when nothing is pinned/applied."""
+    if pin is None:
+        return GuardrailConfigSet()
+    if pin.status == "proposed":
+        serialized = pin.serialized_proposal or pin.serialized_snapshot
+    else:
+        serialized = pin.serialized_snapshot
+    if not serialized:
+        return GuardrailConfigSet()
+    try:
+        return load_config_set(serialized)
+    except GuardrailConfigError:
+        _log.exception("guardrail_config.effective_config_invalid")
         return GuardrailConfigSet()
 
 
@@ -297,7 +318,13 @@ async def get_guardrail_config(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("eval.list"),
 ) -> GuardrailConfigResponse:
-    """Export the org's applied guardrail config as YAML + pin metadata."""
+    """Export the org's applied guardrail config as YAML + pin metadata.
+
+    The standard (non-admin) read MASKS the deny-rule internals (regex
+    patterns, JSON schemas, redaction field paths) — a viewer can see the
+    guardrail topology and actions without the sensitive rule bodies. Admins
+    use ``GET /elevated`` (``guardrail.manage``) for the full unmasked config.
+    """
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         pin = await _load_pin(session, principal.organisation_id)
@@ -314,7 +341,7 @@ async def get_guardrail_config(
             ) from None
         if pin is None:
             return GuardrailConfigResponse(
-                config_yaml=dump_config_set(GuardrailConfigSet()),
+                config_yaml=dump_config_set(mask_config_set(GuardrailConfigSet())),
                 hash=None,
                 applied_at=None,
                 # Live guardrail rows without a pin (e.g. authored via the
@@ -323,14 +350,48 @@ async def get_guardrail_config(
                 status="drift" if drifted else "clean",
             )
         current_status = _current_status(pin, drifted)
-        # While a proposal is pending, export the PROPOSED config — that is
-        # what the operator is reviewing — not the stale applied snapshot.
-        if current_status == "proposed":
-            config_yaml = pin.serialized_proposal or pin.serialized_snapshot or dump_config_set(GuardrailConfigSet())
-        else:
-            config_yaml = pin.serialized_snapshot or dump_config_set(GuardrailConfigSet())
         return GuardrailConfigResponse(
-            config_yaml=config_yaml,
+            config_yaml=dump_config_set(mask_config_set(_effective_config_set(pin))),
+            hash=pin.applied_hash,
+            applied_at=pin.applied_at,
+            status=current_status,
+        )
+
+
+@router.get("/elevated", response_model=GuardrailConfigResponse)
+@handle_db_errors("guardrail_config.elevated")
+async def get_guardrail_config_elevated(
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_GUARDRAIL_MANAGE),
+) -> GuardrailConfigResponse:
+    """Elevated (admin-only) export of the FULL unmasked guardrail config.
+
+    Requires ``guardrail.manage`` (admin). Returns the actual regex patterns,
+    JSON schemas, and redaction field paths that the standard read masks —
+    the safety-control internals an operator needs to author/audit rules but a
+    non-admin viewer must not see (FAR-309 PR A elevated read).
+    """
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        pin = await _load_pin(session, principal.organisation_id)
+        definitions = await _load_guardrail_definitions(session, principal.organisation_id)
+        try:
+            drifted = check_guardrail_drift(definitions, pin)
+        except GuardrailConfigError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(exc),
+            ) from None
+        if pin is None:
+            return GuardrailConfigResponse(
+                config_yaml=dump_config_set(GuardrailConfigSet()),
+                hash=None,
+                applied_at=None,
+                status="drift" if drifted else "clean",
+            )
+        current_status = _current_status(pin, drifted)
+        return GuardrailConfigResponse(
+            config_yaml=dump_config_set(_effective_config_set(pin)),
             hash=pin.applied_hash,
             applied_at=pin.applied_at,
             status=current_status,

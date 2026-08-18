@@ -753,7 +753,7 @@ class TestValidatePayloadSuccess(AuthContext):
 
 
 class TestValidatePayloadDogfoodSchemas(AuthContext):
-    """FAR-304: dogfood the schema system — validate_payload against the seeded
+    """Dogfood the schema system (FAR-304): validate_payload against the seeded
     reusable dogfood pipeline input schemas (``ticket-input``, ``pr-review-input``).
 
     Mirrors the unit-level jsonschema checks in test_dogfood_input_schemas.py but
@@ -790,7 +790,7 @@ class TestValidatePayloadDogfoodSchemas(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.api.mcp_server.get_schema")
-    async def test_valid_payload_passes_for_seeded_dogfood_schema(
+    async def test_seeded_dogfood_schema_accepts_valid_payload(
         self,
         mock_get_schema: AsyncMock,
         mock_session: AsyncMock,
@@ -798,12 +798,11 @@ class TestValidatePayloadDogfoodSchemas(AuthContext):
         schema_name: str,
         payload: dict,
     ) -> None:
-        definition = _dogfood_definition(schema_name)
         schema = MagicMock()
         mock_get_schema.return_value = schema
 
         result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = _make_schema_version(definition)
+        result_mock.scalar_one_or_none.return_value = _make_schema_version(_dogfood_definition(schema_name))
 
         mock_sesh = AsyncMock()
         mock_sesh.execute = AsyncMock(return_value=result_mock)
@@ -823,7 +822,7 @@ class TestValidatePayloadDogfoodSchemas(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.api.mcp_server.get_schema")
-    async def test_invalid_payload_rejected_for_seeded_dogfood_schema(
+    async def test_seeded_dogfood_schema_rejects_invalid_payload(
         self,
         mock_get_schema: AsyncMock,
         mock_session: AsyncMock,
@@ -831,12 +830,11 @@ class TestValidatePayloadDogfoodSchemas(AuthContext):
         schema_name: str,
         payload: dict,
     ) -> None:
-        definition = _dogfood_definition(schema_name)
         schema = MagicMock()
         mock_get_schema.return_value = schema
 
         result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = _make_schema_version(definition)
+        result_mock.scalar_one_or_none.return_value = _make_schema_version(_dogfood_definition(schema_name))
 
         mock_sesh = AsyncMock()
         mock_sesh.execute = AsyncMock(return_value=result_mock)

@@ -37,4 +37,15 @@ describe('RunErrorTag', () => {
     const auth = mount(RunErrorTag, { props: { code: 'provider.authentication' } })
     expect(auth.text()).toBe('Authentication failed')
   })
+
+  it('renders script error codes with their i18n labels', () => {
+    const failed = mount(RunErrorTag, { props: { code: 'script.failed' } })
+    expect(failed.text()).toBe('Script failed')
+    const invalid = mount(RunErrorTag, { props: { code: 'script.invalid_output' } })
+    expect(invalid.text()).toBe('Invalid script output')
+    const sideEffect = mount(RunErrorTag, { props: { code: 'script.side_effect_unknown' } })
+    expect(sideEffect.text()).toBe('Script side effects unknown')
+    const sessionLost = mount(RunErrorTag, { props: { code: 'script.session_lost' } })
+    expect(sessionLost.text()).toBe('Script session lost')
+  })
 })
