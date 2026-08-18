@@ -20,6 +20,10 @@ from typing import Any
 import jinja2
 
 _SANDBOX_MODES = frozenset({"llm", "script"})
+_SANDBOX_EGRESS_POLICIES = frozenset({"default", "deny_all"})
+_SANDBOX_RESOURCE_LIMIT_KEYS = frozenset(
+    {"cpu_count", "memory_mb", "disk_mb", "max_processes", "max_fds", "max_sockets"}
+)
 
 
 def _validate_sandbox_mode_config(node_def: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
@@ -122,3 +126,51 @@ def validate_sandbox_agent_command_jinja(node_def: dict[str, Any]) -> str | None
     except jinja2.TemplateSyntaxError as exc:
         return f"sandbox_agent node '{node_id}' agent_command is not valid Jinja2: {exc}"
     return None
+
+
+def _validate_sandbox_egress_config(node_def: dict[str, Any]) -> None:
+    """Validate a sandbox_agent node's ``egress_policy`` (FAR-296 Phase 3).
+
+    Allowed values: ``None`` (default), ``"default"``, ``"deny_all"``. Any
+    other value raises ``ValueError`` — this is the single shared gate so
+    save-time (Pydantic, GraphValidator, MCP) and run-time (node runner) agree
+    on what an egress policy means.
+    """
+    node_id = node_def.get("id")
+    egress_policy = node_def.get("egress_policy")
+    if egress_policy is None:
+        return
+    if not isinstance(egress_policy, str) or egress_policy not in _SANDBOX_EGRESS_POLICIES:
+        raise ValueError(
+            f"sandbox_agent node '{node_id}' has invalid egress_policy {egress_policy!r} "
+            "— expected None, 'default' or 'deny_all'"
+        )
+
+
+def _validate_sandbox_resource_limits_config(node_def: dict[str, Any]) -> None:
+    """Validate a sandbox_agent node's ``resource_limits`` (FAR-296 Phase 3).
+
+    Fail-closed: if present, ``resource_limits`` must be a dict whose keys are
+    a known subset and whose values are positive numbers. Unknown keys raise
+    ``ValueError`` (never silently dropped); non-positive values raise too.
+    This is the single shared gate so save-time and run-time agree.
+    """
+    node_id = node_def.get("id")
+    resource_limits = node_def.get("resource_limits")
+    if resource_limits is None:
+        return
+    if not isinstance(resource_limits, dict):
+        raise ValueError(
+            f"sandbox_agent node '{node_id}' has invalid resource_limits {resource_limits!r} — expected an object"
+        )
+    unknown = set(resource_limits) - _SANDBOX_RESOURCE_LIMIT_KEYS
+    if unknown:
+        raise ValueError(
+            f"sandbox_agent node '{node_id}' resource_limits contains unknown keys "
+            f"{sorted(unknown)} — allowed keys are {sorted(_SANDBOX_RESOURCE_LIMIT_KEYS)}"
+        )
+    for key, value in resource_limits.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            raise ValueError(
+                f"sandbox_agent node '{node_id}' resource_limits['{key}'] must be a positive number, got {value!r}"
+            )

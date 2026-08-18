@@ -11991,6 +11991,12 @@ export interface components {
             agent_prompt?: string | null;
             /** Script Command */
             script_command?: string | null;
+            /** Egress Policy */
+            egress_policy?: ("default" | "deny_all") | null;
+            /** Resource Limits */
+            resource_limits?: {
+                [key: string]: unknown;
+            } | null;
             /** Delivery Sentinel */
             delivery_sentinel?: string | null;
             /** Env Vars */

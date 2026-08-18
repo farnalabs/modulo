@@ -27,11 +27,25 @@ from modulo.core.pipeline_engine.node_runner import (
     make_sandbox_agent_fn,
 )
 from modulo.core.pipeline_engine.sandbox_mode import (
+    _validate_sandbox_egress_config,
     _validate_sandbox_mode_config,
+    _validate_sandbox_resource_limits_config,
     validate_sandbox_agent_command_jinja,
 )
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
+
+
+@pytest.fixture(autouse=True)
+def _remote_e2b_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Script mode requires a remote E2B provider (FAR-296 Phase 3).
+
+    ``make_sandbox_agent_fn`` refuses to construct a script-mode node without a
+    remote E2B API key (local providers have no egress/resource enforcement
+    point). These tests exercise script-mode dispatch, so set a fake key for
+    the duration of each test.
+    """
+    monkeypatch.setenv("MODULO_E2B_API_KEY", "test-e2b-key")
 
 
 def _read_router(output_json: str, log_content: str = ""):
@@ -528,3 +542,155 @@ async def test_script_mode_does_not_require_agent_prompt():
         result = await fn(_run_state())
 
     assert result["output"]["status"] == "completed"
+
+
+# ---------------------------------------------------------------------------
+# 5. FAR-296 Phase 3a: egress control + credential hygiene + resource limits
+# ---------------------------------------------------------------------------
+
+
+async def test_script_mode_does_not_inject_host_credentials():
+    """Script mode does NOT auto-inject APP_MODULO_OPENCODE_API_KEY / GITHUB_TOKEN.
+
+    Credential hygiene (FAR-296 Phase 3): a script only gets what the pipeline
+    explicitly passes via env_vars — never the long-lived host credentials that
+    the LLM-mode agent loop relies on.
+    """
+    node_def = _script_node_def()
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _script_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        await fn(_run_state())
+
+    envs = sandbox.commands.run.call_args.kwargs["envs"]
+    assert "APP_MODULO_OPENCODE_API_KEY" not in envs
+    assert "GITHUB_TOKEN" not in envs
+
+
+async def test_llm_mode_still_injects_host_credentials():
+    """LLM mode continues to inject the opencode API key + GitHub PAT."""
+    node_def: dict[str, Any] = {
+        "id": str(uuid.uuid4()),
+        "node_type": "sandbox_agent",
+        "position": {"x": 0, "y": 0},
+        "template_id": "opencode",
+        "mode": "llm",
+        "agent_command": "opencode run --auto --format json < /home/user/prompt.md",
+        "agent_prompt": "Do the thing",
+    }
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _script_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        await fn(_run_state())
+
+    envs = sandbox.commands.run.call_args.kwargs["envs"]
+    assert "APP_MODULO_OPENCODE_API_KEY" in envs
+    assert "GITHUB_TOKEN" in envs
+
+
+async def test_egress_deny_all_maps_to_no_internet():
+    """egress_policy='deny_all' -> AsyncSandbox.create(allow_internet_access=False)."""
+    node_def = _script_node_def(egress_policy="deny_all")
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _script_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create_mock:
+        await fn(_run_state())
+
+    create_mock.assert_awaited_once()
+    kwargs = create_mock.await_args.kwargs
+    assert kwargs["allow_internet_access"] is False
+
+
+async def test_egress_default_maps_to_internet_allowed():
+    """egress_policy unset/None -> allow_internet_access=True (e2b default)."""
+    node_def = _script_node_def()
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _script_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create_mock:
+        await fn(_run_state())
+
+    create_mock.assert_awaited_once()
+    assert create_mock.await_args.kwargs["allow_internet_access"] is True
+
+
+def test_script_mode_local_provider_is_refused(monkeypatch: pytest.MonkeyPatch):
+    """Script mode requesting enforcement without a remote E2B provider is refused.
+
+    Local providers have no egress/resource enforcement point, so deny_all /
+    resource_limits would silently no-op — fail closed when enforcement is
+    actually requested. A plain script-mode node (no egress/resource config)
+    has nothing to enforce and still constructs.
+    """
+    monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+    monkeypatch.delenv("E2B_API_KEY", raising=False)
+
+    # Enforcement requested (egress_policy="deny_all") -> refused without a key.
+    denied = _script_node_def(egress_policy="deny_all")
+    with pytest.raises(ValueError, match="requires a remote E2B provider"):
+        make_sandbox_agent_fn(denied)
+
+    # Enforcement requested via resource_limits -> refused without a key.
+    limited = _script_node_def(resource_limits={"cpu_count": 1})
+    with pytest.raises(ValueError, match="requires a remote E2B provider"):
+        make_sandbox_agent_fn(limited)
+
+    # No enforcement requested -> no refusal (a plain script needs no key).
+    plain = _script_node_def()
+    make_sandbox_agent_fn(plain)
+
+
+async def test_resource_limits_passed_as_metadata():
+    """resource_limits is carried as sandbox metadata to AsyncSandbox.create."""
+    limits = {"cpu_count": 2, "memory_mb": 512}
+    node_def = _script_node_def(resource_limits=limits)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _script_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create_mock:
+        await fn(_run_state())
+
+    kwargs = create_mock.await_args.kwargs
+    import json
+
+    assert json.loads(kwargs["metadata"]["resource_limits"]) == limits
+
+
+async def test_no_resource_limits_metadata_omitted():
+    """With no resource_limits, metadata is None (no empty resource_limits key)."""
+    node_def = _script_node_def()
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _script_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create_mock:
+        await fn(_run_state())
+
+    kwargs = create_mock.await_args.kwargs
+    assert kwargs.get("metadata") is None
+
+
+def test_shared_validator_rejects_invalid_egress_policy():
+    """The shared validator rejects any egress_policy other than default/deny_all."""
+    with pytest.raises(ValueError, match="invalid egress_policy"):
+        _validate_sandbox_egress_config({"id": "n1", "egress_policy": "allow_all"})
+    with pytest.raises(ValueError, match="invalid egress_policy"):
+        _validate_sandbox_egress_config({"id": "n1", "egress_policy": 123})
+    # None / valid values pass.
+    _validate_sandbox_egress_config({"id": "n1", "egress_policy": None})
+    _validate_sandbox_egress_config({"id": "n1", "egress_policy": "default"})
+    _validate_sandbox_egress_config({"id": "n1", "egress_policy": "deny_all"})
+
+
+def test_shared_validator_rejects_unknown_resource_limit_keys():
+    """The shared validator fails closed on unknown resource_limits keys."""
+    with pytest.raises(ValueError, match="unknown keys"):
+        _validate_sandbox_resource_limits_config({"id": "n1", "resource_limits": {"gpu": 1}})
+    with pytest.raises(ValueError, match="positive number"):
+        _validate_sandbox_resource_limits_config({"id": "n1", "resource_limits": {"cpu_count": -1}})
+    with pytest.raises(ValueError, match="expected an object"):
+        _validate_sandbox_resource_limits_config({"id": "n1", "resource_limits": [1, 2]})
+    # Valid keys pass.
+    _validate_sandbox_resource_limits_config({"id": "n1", "resource_limits": {"cpu_count": 2, "memory_mb": 512.5}})
