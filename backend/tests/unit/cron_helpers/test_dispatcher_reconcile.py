@@ -993,8 +993,7 @@ class TestRunApiKeySweepWiring:
                 stack.enter_context(p)
             summary = await ch.dispatcher_reconcile()
 
-        sweep_mock.assert_awaited_once()
-        sweep_mock.assert_awaited_with(factory)
+        sweep_mock.assert_awaited_once_with(factory)
         assert summary["run_api_key_scanned"] == 3
         assert summary["run_api_key_revoked"] == 2
         assert summary["run_api_key_errors"] == 0
