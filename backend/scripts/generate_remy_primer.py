@@ -255,7 +255,7 @@ async def _get_active_context(
 # ---------------------------------------------------------------------------
 
 _ABOUT_MODULO = (
-    "Modulo is a governed AI orchestration platform for the software development "
+    "Modulo is an agent governance platform for the software development "
     "lifecycle. It lets teams build, run, and evaluate multi-agent pipelines that "
     "automate SDLC workflows — from code review and testing to deployment and "
     "monitoring — all within a single interface with role-based access control, "
