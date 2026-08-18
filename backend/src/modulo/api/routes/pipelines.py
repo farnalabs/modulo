@@ -418,6 +418,17 @@ class PipelineGraphNode(BaseModel):
     label: str | None = Field(default=None, max_length=255)
     role: str | None = None
     autonomy_recommendation: str | None = None
+    # FAR-295: is this node logically safe to re-run? Applies to EVERY executor
+    # type (agent, manual, composite, sandbox_agent). Defaults to true. A node
+    # marked idempotent=false (e.g. one with an external side effect like
+    # creating a PR or charging a card) suppresses BOTH the run-level
+    # retry_policy re-dispatch and the node-level transient retry for any graph
+    # that contains it — re-running would double-execute the side effect.
+    idempotent: bool = Field(
+        default=True,
+        description="Whether the node is logically safe to re-run. When false, "
+        "retries of any run containing this node are suppressed.",
+    )
     composite_ref: uuid.UUID | None = None
     composite_parameter_values: dict[str, Any] | None = None
     composite_input_mapping: dict[str, Any] | None = None

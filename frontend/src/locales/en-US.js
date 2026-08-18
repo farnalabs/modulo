@@ -824,6 +824,8 @@ export default {
       "retry_policy_failure": "Failure",
       "retry_policy_warning_no_max": "Set Max retries to at least 1, or the selected retry events will never fire.",
       "retry_policy_update_failed": "Failed to update retry policy: ",
+      "idempotent": "Idempotent",
+      "idempotent_description": "Safe to re-run. When disabled, a run of this pipeline is never automatically retried (re-running could double-execute a side effect).",
       "saving": "Saving..."
     },
     "AdminPluginsView": {
