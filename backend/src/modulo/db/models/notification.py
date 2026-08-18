@@ -43,6 +43,52 @@ class Notification(OrgScoped):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class NotificationPreference(Base):
+    """Per-user read-time notification opt-out (FAR-247).
+
+    One row per opted-out category for a user within an org. Opt-outs are
+    enforced at read time by ``apply_prefs_filter`` (crud/notifications.py),
+    not at notification-create time.
+    """
+
+    __tablename__ = "notification_preferences"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "organisation_id",
+            "account_id",
+            "category",
+            name="uq_notification_preferences_org_account_category",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    organisation_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(),
+        ForeignKey("organisations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(),
+        ForeignKey("accounts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    category: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.current_timestamp(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp(),
+        nullable=False,
+    )
+
+
 class Dismissal(Base):
     __tablename__ = "dismissals"
 
