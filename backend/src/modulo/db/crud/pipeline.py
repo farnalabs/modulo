@@ -774,13 +774,19 @@ async def replace_pipeline_graph(
         for e in old_edges
         if e.get("hitl_gate_config") is not None
     }
+    # Coerce edge id/source/target to uuid.UUID objects. The REST Pydantic path
+    # already does this, but MCP passes raw dicts with string ids — and SQLAlchemy's
+    # insertmanyvalues sentinel matching (INSERT ... RETURNING) requires UUID
+    # objects, not strings, to match the returned sentinel. Without coercion a
+    # 2+ edge graph save raises InvalidRequestError (MCP update_pipeline_graph
+    # internal_error).
     persisted_edges = [
         PipelineEdge(
-            id=edge["id"],
+            id=uuid.UUID(str(edge["id"])),
             organisation_id=org_id,
             pipeline_id=pipeline_id,
-            source_node_id=edge["source_node_id"],
-            target_node_id=edge["target_node_id"],
+            source_node_id=uuid.UUID(str(edge["source_node_id"])),
+            target_node_id=uuid.UUID(str(edge["target_node_id"])),
             edge_type=edge["edge_type"],
             hitl_gate_config=_preserve_omitted_gate_config(edge, old_by_key),
         )
