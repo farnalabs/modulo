@@ -518,7 +518,8 @@ class _BridgeHTTPHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         server = self.server
-        assert isinstance(server, _BridgeHTTPServer)
+        if not isinstance(server, _BridgeHTTPServer):
+            raise TypeError("bridge server must be a _BridgeHTTPServer")
         owner = server.owner
         loop = owner.loop
         if self.path.rstrip("/") != "/intercept" or loop is None:
@@ -677,7 +678,8 @@ class LoopInterceptCallbackServer:
 
     async def _run_audit(self, records: Sequence[LoopInterceptAuditRecord]) -> None:
         try:
-            assert self._audit_sink is not None
+            if self._audit_sink is None:
+                raise RuntimeError("loop audit sink is not configured")
             await self._audit_sink(records)
         except asyncio.CancelledError:
             raise

@@ -1473,7 +1473,8 @@ async def _ongoing_topup(
         if outcome is not None:
             outcome.update(snapshot_skip)
         return []
-    assert snapshot_id is not None
+    if snapshot_id is None:
+        raise RuntimeError("ongoing topup: snapshot_id unresolved after skip check")
 
     to_create = effective_target - in_flight
     if to_create <= 0:

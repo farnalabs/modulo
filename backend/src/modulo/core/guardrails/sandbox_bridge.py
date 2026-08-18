@@ -215,7 +215,8 @@ def _wrap_command(argv: list[str], client: BridgeClient) -> int:
     except OSError as exc:
         _err(f"error: failed to start wrapped command: {exc}")
         return 1
-    assert proc.stdout is not None
+    if proc.stdout is None:
+        raise RuntimeError("subprocess started without a stdout stream")
     try:
         for raw_line in proc.stdout:
             line = raw_line.decode("utf-8", "replace").rstrip("\n")

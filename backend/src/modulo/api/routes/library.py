@@ -1453,7 +1453,11 @@ async def community_contribute_endpoint(
 ) -> LibraryPrimitiveResponse:
     """Submit a community library contribution."""
     try:
-        assert principal.organisation_id is not None, _MSG_ORGANISATION_ID_REQUIRED
+        if principal.organisation_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=_MSG_ORGANISATION_ID_REQUIRED,
+            )
         result = await contribute_primitive(
             session,
             org_id=principal.organisation_id,
@@ -1498,7 +1502,11 @@ async def list_community_contributions_endpoint(
 ) -> CommunityContributionListResponse:
     """List the org's own community contributions, optionally filtered by status."""
     try:
-        assert principal.organisation_id is not None, _MSG_ORGANISATION_ID_REQUIRED
+        if principal.organisation_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=_MSG_ORGANISATION_ID_REQUIRED,
+            )
         try:
             result = await list_org_contributions(
                 session,
@@ -1554,7 +1562,11 @@ async def admin_publish_contribution_endpoint(
 ) -> LibraryPrimitiveResponse:
     """Publish a community contribution to the community library (admin only)."""
     try:
-        assert principal.organisation_id is not None, _MSG_ORGANISATION_ID_REQUIRED
+        if principal.organisation_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=_MSG_ORGANISATION_ID_REQUIRED,
+            )
         result = await publish_contribution(
             session,
             principal.organisation_id,

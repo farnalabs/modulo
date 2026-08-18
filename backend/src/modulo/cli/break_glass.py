@@ -444,7 +444,8 @@ async def force_last_admin(
         if sqlstate in ("M2010", "M2020"):
             raise PreconditionError(f"force-last-admin refused by database ({sqlstate}): {exc}") from exc
         raise DeactivateAtomicityError(f"force-last-admin transaction failed: {exc}") from exc
-    assert removed_account_id is not None
+    if removed_account_id is None:
+        raise DeactivateAtomicityError("force-last-admin transaction produced no removed account id")
     return {"removed_account_id": removed_account_id}
 
 
@@ -720,7 +721,8 @@ async def _async_activate(
     except Exception as exc:
         click.echo(f"error: activation failed: {exc}", err=True)
         ctx.exit(EXIT_ACTIVATION_TXN_FAILURE)
-    assert credential is not None
+    if credential is None:
+        raise ActivationTxnError("activation succeeded but returned no credential")
     try:
         _deliver_credential(credential, yes=yes)
     except CredentialPrintError as exc:

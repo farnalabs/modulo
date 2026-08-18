@@ -152,7 +152,8 @@ def get_event_bus() -> EventBus:
         with _bus_init_lock:
             if _event_bus is None:
                 _set_event_bus(EventBus())
-    assert _event_bus is not None
+    if _event_bus is None:
+        raise RuntimeError("event bus singleton was not initialised")
     return _event_bus
 
 
