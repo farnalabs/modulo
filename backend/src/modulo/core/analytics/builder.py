@@ -647,6 +647,137 @@ def resolve_group_by(
     return AnalyticsGroupBy.WEEK
 
 
+def _empty_bucket() -> dict[str, Any]:
+    return {
+        "count": 0,
+        "complete": 0,
+        "cost": None,
+        "tokens": None,
+        "duration_sum": 0.0,
+        "duration_n": 0,
+        "failure": 0,
+        "stall": 0,
+        "queue_wait_sum": 0.0,
+        "queue_wait_n": 0,
+        "final_idle_sum": 0.0,
+        "final_idle_n": 0,
+        "output_bytes_sum": 0.0,
+        "output_bytes_n": 0,
+    }
+
+
+def _row_dimension_key(row: Any, dimension: AnalyticsDimension | None) -> Any | None:
+    if dimension is None:
+        return None
+    label = getattr(row, "key_label", None)
+    raw = label if label is not None else getattr(row, _DIMENSION_KEY_ATTR[dimension], None)
+    # Presentation maps on read: the facts table stores the RAW DB code
+    # while the runs API emits dotted codes, so the error_code dimension
+    # canonicalizes each key (legacy `task_failure` -> `harness.worker_failed`)
+    # to match the runs UI — variants collapse into one chart slice.
+    if dimension == AnalyticsDimension.ERROR_CODE and raw is not None:
+        raw = map_legacy_code(str(raw))
+    # Normalize to a comparable string: dimension keys may be UUID ids
+    # (folder_id/pipeline_id/team_id fallback when the snapshot label is
+    # NULL) or label strings. Never emit a raw UUID — mixing UUID and
+    # None in the bucket key crashes `sorted` and breaks the
+    # ``str | None`` response model (AnalyticsBucket.key).
+    return str(raw) if raw is not None else None
+
+
+def _accumulate_row(bucket: dict[str, Any], row: Any, cnt: int) -> None:
+    bucket["count"] += cnt
+    bucket["complete"] += int(getattr(row, "complete_count", None) or 0)
+    bucket["failure"] += int(getattr(row, "failure_count", None) or 0)
+    bucket["stall"] += int(getattr(row, "stall_count", None) or 0)
+    if row.total_cost_usd is not None:
+        bucket["cost"] = (bucket["cost"] or Decimal(0)) + Decimal(str(row.total_cost_usd))
+    if row.total_tokens is not None:
+        bucket["tokens"] = (bucket["tokens"] or 0) + int(row.total_tokens)
+    if row.avg_duration_ms is not None:
+        bucket["duration_sum"] += float(row.avg_duration_ms) * cnt
+        bucket["duration_n"] += cnt
+    avg_queue_wait = getattr(row, "avg_queue_wait_ms", None)
+    if avg_queue_wait is not None:
+        bucket["queue_wait_sum"] += float(avg_queue_wait) * cnt
+        bucket["queue_wait_n"] += cnt
+    avg_final_idle = getattr(row, "avg_final_idle_ms", None)
+    if avg_final_idle is not None:
+        bucket["final_idle_sum"] += float(avg_final_idle) * cnt
+        bucket["final_idle_n"] += cnt
+    avg_output = getattr(row, "avg_output_bytes", None)
+    if avg_output is not None:
+        bucket["output_bytes_sum"] += float(avg_output) * cnt
+        bucket["output_bytes_n"] += cnt
+
+
+def _build_time_grid(group_by: AnalyticsGroupBy, date_from: date, date_to: date) -> list[date] | list[datetime]:
+    # Each branch builds a single-typed list so mypy can reconcile the grid type.
+    grid_times: list[date] | list[datetime]
+    if group_by == AnalyticsGroupBy.HOUR:
+        grid_times = sorted(_hour_grid(date_from, date_to))
+    else:
+        day_from = date_from.date() if isinstance(date_from, datetime) else date_from
+        day_to = date_to.date() if isinstance(date_to, datetime) else date_to
+        grid_days: list[date] = []
+        day = day_from
+        while day <= day_to:
+            grid_days.append(day)
+            day += timedelta(days=1)
+        grid_times = sorted({_week_start(d) for d in grid_days}) if group_by == AnalyticsGroupBy.WEEK else grid_days
+    return grid_times
+
+
+def _bucket_dim_keys(
+    agg: dict[tuple[Any, Any | None], dict[str, Any]], dimension: AnalyticsDimension | None
+) -> list[Any]:
+    dim_keys: list[Any] = [None]
+    if dimension is not None:
+        # All keys are already normalized to ``str | None``, so the sort is
+        # None-safe. An empty range (no observed dimension keys) falls back to
+        # ``[None]`` so a dimensioned query still zero-fills the requested grid
+        # — same shape as the non-dimensioned case.
+        dim_keys = sorted({bk[1] for bk in agg}, key=lambda k: (k is None, k or "")) or [None]
+    return dim_keys
+
+
+def _bucket_averages(
+    b: dict[str, Any] | None,
+) -> tuple[float | None, float | None, float | None, float | None]:
+    avg_dur = (b["duration_sum"] / b["duration_n"]) if b and b["duration_n"] else None
+    avg_queue_wait = (b["queue_wait_sum"] / b["queue_wait_n"]) if b and b["queue_wait_n"] else None
+    avg_final_idle = (b["final_idle_sum"] / b["final_idle_n"]) if b and b["final_idle_n"] else None
+    avg_output_bytes = (b["output_bytes_sum"] / b["output_bytes_n"]) if b and b["output_bytes_n"] else None
+    return (avg_dur, avg_queue_wait, avg_final_idle, avg_output_bytes)
+
+
+def _format_iso(tkey: date | datetime) -> str:
+    return tkey.replace(tzinfo=None).isoformat() if isinstance(tkey, datetime) else tkey.isoformat()
+
+
+def _emit_bucket_row(b: dict[str, Any] | None, tkey: date | datetime, dkey: Any | None) -> dict[str, Any]:
+    count = b["count"] if b else 0
+    complete = b["complete"] if b else 0
+    cost = float(b["cost"]) if b and b["cost"] is not None else None
+    tokens = b["tokens"] if b else None
+    avg_dur, avg_queue_wait, avg_final_idle, avg_output_bytes = _bucket_averages(b)
+    success_rate = (complete / count) if count else None
+    return {
+        "date": _format_iso(tkey),
+        "key": dkey,
+        "count": count,
+        "total_cost_usd": cost,
+        "total_tokens": tokens,
+        "avg_duration_ms": round(avg_dur, 1) if avg_dur is not None else None,
+        "success_rate": round(success_rate, 4) if success_rate is not None else None,
+        "failure_count": b["failure"] if b else 0,
+        "stall_count": b["stall"] if b else 0,
+        "avg_queue_wait_ms": round(avg_queue_wait, 1) if avg_queue_wait is not None else None,
+        "avg_final_idle_ms": round(avg_final_idle, 1) if avg_final_idle is not None else None,
+        "avg_output_bytes": round(avg_output_bytes, 1) if avg_output_bytes is not None else None,
+    }
+
+
 def bucket_rows(
     rows: list[Any],
     *,
@@ -670,121 +801,27 @@ def bucket_rows(
     for row in rows:
         day = row.run_date
         tkey = _week_start(day) if group_by == AnalyticsGroupBy.WEEK else day
-        dkey: Any = None
-        if dimension is not None:
-            label = getattr(row, "key_label", None)
-            raw = label if label is not None else getattr(row, _DIMENSION_KEY_ATTR[dimension], None)
-            # Presentation maps on read: the facts table stores the RAW DB code
-            # while the runs API emits dotted codes, so the error_code dimension
-            # canonicalizes each key (legacy `task_failure` -> `harness.worker_failed`)
-            # to match the runs UI — variants collapse into one chart slice.
-            if dimension == AnalyticsDimension.ERROR_CODE and raw is not None:
-                raw = map_legacy_code(str(raw))
-            # Normalize to a comparable string: dimension keys may be UUID ids
-            # (folder_id/pipeline_id/team_id fallback when the snapshot label is
-            # NULL) or label strings. Never emit a raw UUID — mixing UUID and
-            # None in the bucket key crashes `sorted` and breaks the
-            # ``str | None`` response model (AnalyticsBucket.key).
-            dkey = str(raw) if raw is not None else None
+        dkey = _row_dimension_key(row, dimension)
         bkey: tuple[Any, Any | None] = (tkey, dkey)
         bucket = agg.get(bkey)
         if bucket is None:
-            bucket = {
-                "count": 0,
-                "complete": 0,
-                "cost": None,
-                "tokens": None,
-                "duration_sum": 0.0,
-                "duration_n": 0,
-                "failure": 0,
-                "stall": 0,
-                "queue_wait_sum": 0.0,
-                "queue_wait_n": 0,
-                "final_idle_sum": 0.0,
-                "final_idle_n": 0,
-                "output_bytes_sum": 0.0,
-                "output_bytes_n": 0,
-            }
+            bucket = _empty_bucket()
             agg[bkey] = bucket
         cnt = int(row.count or 0)
-        bucket["count"] += cnt
-        bucket["complete"] += int(getattr(row, "complete_count", None) or 0)
-        bucket["failure"] += int(getattr(row, "failure_count", None) or 0)
-        bucket["stall"] += int(getattr(row, "stall_count", None) or 0)
-        if row.total_cost_usd is not None:
-            bucket["cost"] = (bucket["cost"] or Decimal(0)) + Decimal(str(row.total_cost_usd))
-        if row.total_tokens is not None:
-            bucket["tokens"] = (bucket["tokens"] or 0) + int(row.total_tokens)
-        if row.avg_duration_ms is not None:
-            bucket["duration_sum"] += float(row.avg_duration_ms) * cnt
-            bucket["duration_n"] += cnt
-        avg_queue_wait = getattr(row, "avg_queue_wait_ms", None)
-        if avg_queue_wait is not None:
-            bucket["queue_wait_sum"] += float(avg_queue_wait) * cnt
-            bucket["queue_wait_n"] += cnt
-        avg_final_idle = getattr(row, "avg_final_idle_ms", None)
-        if avg_final_idle is not None:
-            bucket["final_idle_sum"] += float(avg_final_idle) * cnt
-            bucket["final_idle_n"] += cnt
-        avg_output = getattr(row, "avg_output_bytes", None)
-        if avg_output is not None:
-            bucket["output_bytes_sum"] += float(avg_output) * cnt
-            bucket["output_bytes_n"] += cnt
+        _accumulate_row(bucket, row, cnt)
 
     # Explicit time grid: hourly (from date_from 00:00 UTC to date_to 23:59 UTC)
     # for hour grouping, otherwise the day grid (week Mondays for week grouping).
-    # Each branch builds a single-typed list so mypy can reconcile the grid type.
-    grid_times: list[date] | list[datetime]
-    if group_by == AnalyticsGroupBy.HOUR:
-        grid_times = sorted(_hour_grid(date_from, date_to))
-    else:
-        day_from = date_from.date() if isinstance(date_from, datetime) else date_from
-        day_to = date_to.date() if isinstance(date_to, datetime) else date_to
-        grid_days: list[date] = []
-        day = day_from
-        while day <= day_to:
-            grid_days.append(day)
-            day += timedelta(days=1)
-        grid_times = sorted({_week_start(d) for d in grid_days}) if group_by == AnalyticsGroupBy.WEEK else grid_days
+    grid_times = _build_time_grid(group_by, date_from, date_to)
 
-    dim_keys: list[Any] = [None]
-    if dimension is not None:
-        # All keys are already normalized to ``str | None``, so the sort is
-        # None-safe. An empty range (no observed dimension keys) falls back to
-        # ``[None]`` so a dimensioned query still zero-fills the requested grid
-        # — same shape as the non-dimensioned case.
-        dim_keys = sorted({bk[1] for bk in agg}, key=lambda k: (k is None, k or "")) or [None]
+    dim_keys = _bucket_dim_keys(agg, dimension)
 
     out: list[dict[str, Any]] = []
     for tkey in grid_times:
         for dkey in dim_keys:
             out_key: tuple[Any, Any | None] = (tkey, dkey)
             b = agg.get(out_key)
-            count = b["count"] if b else 0
-            complete = b["complete"] if b else 0
-            cost = float(b["cost"]) if b and b["cost"] is not None else None
-            tokens = b["tokens"] if b else None
-            avg_dur = (b["duration_sum"] / b["duration_n"]) if b and b["duration_n"] else None
-            avg_queue_wait = (b["queue_wait_sum"] / b["queue_wait_n"]) if b and b["queue_wait_n"] else None
-            avg_final_idle = (b["final_idle_sum"] / b["final_idle_n"]) if b and b["final_idle_n"] else None
-            avg_output_bytes = (b["output_bytes_sum"] / b["output_bytes_n"]) if b and b["output_bytes_n"] else None
-            success_rate = (complete / count) if count else None
-            out.append(
-                {
-                    "date": tkey.replace(tzinfo=None).isoformat() if isinstance(tkey, datetime) else tkey.isoformat(),
-                    "key": dkey,
-                    "count": count,
-                    "total_cost_usd": cost,
-                    "total_tokens": tokens,
-                    "avg_duration_ms": round(avg_dur, 1) if avg_dur is not None else None,
-                    "success_rate": round(success_rate, 4) if success_rate is not None else None,
-                    "failure_count": b["failure"] if b else 0,
-                    "stall_count": b["stall"] if b else 0,
-                    "avg_queue_wait_ms": round(avg_queue_wait, 1) if avg_queue_wait is not None else None,
-                    "avg_final_idle_ms": round(avg_final_idle, 1) if avg_final_idle is not None else None,
-                    "avg_output_bytes": round(avg_output_bytes, 1) if avg_output_bytes is not None else None,
-                }
-            )
+            out.append(_emit_bucket_row(b, tkey, dkey))
 
     out.sort(key=lambda b: (b["date"], b["key"] or ""))
     if 0 < limit < len(out):

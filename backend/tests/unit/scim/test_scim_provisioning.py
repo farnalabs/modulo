@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
+from modulo.api.routes.scim import _parse_member_uuid
 from modulo.auth.scim_auth import ScimPrincipal, get_scim_plan_context, get_scim_principal
 from modulo.core.feature_flags import CommunityTier, DbPlanContext, FeatureFlagRegistry
 from modulo.settings import Settings, get_settings
@@ -623,6 +624,34 @@ class TestPatchEdgeCases:
                 headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
             )
         assert resp.status_code == 200
+
+
+class TestParseMemberUuid:
+    """Direct coverage for the member-id parser extracted from ``patch_group`` (FAR-310).
+
+    The PATCH helpers skip a member whose ``value`` does not parse as a UUID
+    (invalid string, ``None``, non-str value) — this pins the parser contract
+    so a malformed SCIM member reference is never turned into a DB call.
+    """
+
+    def test_valid_uuid_string_returns_uuid(self) -> None:
+        assert _parse_member_uuid(str(_USER_ID)) == _USER_ID
+
+    def test_valid_uuid_object_returns_uuid(self) -> None:
+        assert _parse_member_uuid(_USER_ID) == _USER_ID
+
+    def test_invalid_string_returns_none(self) -> None:
+        assert _parse_member_uuid("not-a-uuid") is None
+        assert _parse_member_uuid("") is None
+
+    def test_non_str_value_returns_none(self) -> None:
+        assert _parse_member_uuid(12345) is None
+        assert _parse_member_uuid(None) is None
+        assert _parse_member_uuid(3.14) is None
+
+    def test_value_is_never_typed_coerced(self) -> None:
+        # str(value) must be a valid UUID hex — a bare uuid-like fragment is rejected.
+        assert _parse_member_uuid("00000000-0000-0000-0000-00000000000X") is None
 
 
 # ── ServiceProviderConfig ────────────────────────────────────────────

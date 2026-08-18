@@ -1793,3 +1793,21 @@ class TestGetRunIO:
         telemetry = body["node_telemetry"]["planner"]
         assert telemetry["secrets"]["api_key"] == SENSITIVE_VALUE_MASK
         assert telemetry["agent_stdout"] == "plain log"
+
+    def test_io_masks_input_payload_sensitive_keys(self, client: TestClient) -> None:
+        run = _make_io_run(
+            input_payload={"prompt": "Hello", "api_key": "sk-input-secret"},
+            outputs_json={"planner": {"result": "ok"}},
+            node_telemetry_json=None,
+        )
+
+        with (
+            patch("modulo.api.routes.runs.get_run", return_value=run),
+            patch("modulo.api.routes.runs.set_rls_org"),
+        ):
+            resp = client.get(f"/api/v1/runs/{_RUN_ID}/io")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["input_payload"]["prompt"] == "Hello"
+        assert body["input_payload"]["api_key"] == SENSITIVE_VALUE_MASK
