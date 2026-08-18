@@ -1127,3 +1127,183 @@ async def test_eval_before_interrupt_skips_persist_without_run_id(monkeypatch: p
         )
 
     assert not session.added
+
+
+# ---------------------------------------------------------------------------
+# FAR-311 regression: gate evals target the SOURCE node's contract output
+# ---------------------------------------------------------------------------
+
+PR_REVIEW_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"status": {"type": "string"}},
+    "if": {"properties": {"status": {"const": "completed"}}},
+    "then": {"required": ["pr_url", "changed_files"]},
+    "required": ["status"],
+}
+
+
+def _pr_review_eval_def() -> EvalDefinition:
+    return EvalDefinition(
+        id=uuid4(),
+        org_id=uuid4(),
+        node_id="reviewer",
+        name="pr-review",
+        eval_type=EvalType.JSON_SCHEMA,
+        config={"schema": PR_REVIEW_SCHEMA},
+        failure_behaviour="block",
+    )
+
+
+def _completed_sandbox_gate_state(contract_output: dict[str, Any]) -> dict[str, Any]:
+    """A gate state after a sandbox_agent source node completed.
+
+    LangGraph merges the node's envelope at the state's TOP-LEVEL keys:
+    ``output`` holds the telemetry-style outer envelope, ``artifacts`` the
+    node's artifact wrapper (contract return in ``output.output_json``).
+    """
+    return {
+        "artifacts": [
+            {
+                "node_id": "reviewer",
+                "status": "completed",
+                "output": {"status": "completed", "summary": "reviewed", "output_json": contract_output},
+            }
+        ],
+        "output": {
+            "status": "completed",
+            "summary": "reviewed",
+            "wall_clock_time_ms": 5,
+            "cost_estimate_usd": 0.01,
+        },
+        "_hitl_gates": [],
+        "run_context": {},
+    }
+
+
+async def test_gate_eval_validates_source_contract_output_for_sandbox_agent():
+    """A source sandbox_agent whose artifact ``output_json`` carries pr_url +
+    changed_files PASSES the pr_url-requiring eval (the merged-state ``output``
+    telemetry alone would fail it)."""
+    node_fn = make_hitl_gate_fn(
+        {"gate_id": "eval-gate"},
+        eval_definitions=[_pr_review_eval_def()],
+        node_type_map={"reviewer": "sandbox_agent"},
+    )
+
+    with pytest.raises(GraphInterrupt):
+        await node_fn(
+            _completed_sandbox_gate_state(
+                {"status": "completed", "pr_url": "https://github.com/x/y/pull/1", "changed_files": ["a.py"]}
+            )
+        )
+
+
+async def test_gate_eval_blocks_on_contract_output_missing_pr_url():
+    """Same graph, but the source's contract output lacks pr_url/changed_files
+    → the block eval fails with EvalBlockedError (not an interrupt)."""
+    node_fn = make_hitl_gate_fn(
+        {"gate_id": "eval-gate"},
+        eval_definitions=[_pr_review_eval_def()],
+        node_type_map={"reviewer": "sandbox_agent"},
+    )
+
+    with pytest.raises(EvalBlockedError, match="pr-review"):
+        await node_fn(_completed_sandbox_gate_state({"status": "completed", "summary": "no pr was made"}))
+
+
+async def test_gate_eval_without_type_map_keeps_whole_state_target():
+    """No node_type_map → the gate evaluates the whole state as before (the
+    telemetry-only merged state fails the pr_url schema, documenting the
+    pre-fix behaviour)."""
+    node_fn = make_hitl_gate_fn(
+        {"gate_id": "eval-gate"},
+        eval_definitions=[_pr_review_eval_def()],
+    )
+
+    with pytest.raises(EvalBlockedError, match="pr-review"):
+        await node_fn(
+            _completed_sandbox_gate_state(
+                {"status": "completed", "pr_url": "https://github.com/x/y/pull/1", "changed_files": ["a.py"]}
+            )
+        )
+
+
+async def test_gate_eval_uses_sources_own_output_for_agent_in_fanout():
+    """FAR-311: an ``agent`` source's contract output is its envelope's
+    ``output``. In a parallel fan-out the merged ``state["output"]`` is
+    last-write-wins and can belong to a sibling — the gate must take the
+    source's own output from its matched artifact, not the merged key."""
+    node_fn = make_hitl_gate_fn(
+        {"gate_id": "eval-gate"},
+        eval_definitions=[_pr_review_eval_def()],
+        node_type_map={"reviewer": "agent"},
+    )
+    # Sibling "writer" lands last and its top-level `output` (no pr_url) is
+    # what the merged state's ``output`` key holds; the gated agent source
+    # "reviewer" carries the valid pr_url in its own artifact output.
+    state = {
+        "artifacts": [
+            {
+                "node_id": "reviewer",
+                "status": "completed",
+                "output": {"status": "completed", "pr_url": "https://github.com/x/y/pull/1", "changed_files": ["a.py"]},
+            },
+            {
+                "node_id": "writer",
+                "status": "completed",
+                "output": {"status": "completed", "summary": "sibling wrote files"},
+            },
+        ],
+        "output": {"status": "completed", "summary": "sibling wrote files"},
+        "_hitl_gates": [],
+        "run_context": {},
+    }
+
+    with pytest.raises(GraphInterrupt):
+        await node_fn(state)
+
+
+async def test_gate_eval_ignores_sibling_artifact_in_parallel_fanout():
+    """FAR-311: the gate locates the source node's artifact by node_id, NOT by
+    position. Parallel fan-out concatenates artifacts in completion order, so a
+    sibling's artifact can land last — it must NEVER be mistaken for the
+    source's contract output."""
+    node_fn = make_hitl_gate_fn(
+        {"gate_id": "eval-gate"},
+        eval_definitions=[_pr_review_eval_def()],
+        node_type_map={"reviewer": "sandbox_agent"},
+    )
+    # Sibling "writer" completes last in the artifact list but carries NO
+    # pr_url; the gated source "reviewer" (earlier in the list) does.
+    state = {
+        "artifacts": [
+            {
+                "node_id": "reviewer",
+                "status": "completed",
+                "output": {
+                    "status": "completed",
+                    "summary": "reviewed",
+                    "output_json": {
+                        "status": "completed",
+                        "pr_url": "https://github.com/x/y/pull/1",
+                        "changed_files": ["a.py"],
+                    },
+                },
+            },
+            {
+                "node_id": "writer",
+                "status": "completed",
+                "output": {
+                    "status": "completed",
+                    "summary": "sibling wrote files",
+                    "output_json": {"status": "completed", "summary": "no pr made"},
+                },
+            },
+        ],
+        "output": {"status": "completed", "summary": "reviewed", "wall_clock_time_ms": 5, "cost_estimate_usd": 0.01},
+        "_hitl_gates": [],
+        "run_context": {},
+    }
+
+    with pytest.raises(GraphInterrupt):
+        await node_fn(state)

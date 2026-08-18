@@ -34,15 +34,35 @@ from typing import Any
 _log = logging.getLogger(__name__)
 
 __all__ = [
+    "DEFAULT_NODE_TYPE",
     "NODE_TYPE_GATE",
+    "SPLITTABLE_NODE_TYPES",
     "extend_node_type_map_from_edges",
     "node_return",
     "node_telemetry",
+    "resolve_node_contract_output",
     "split_node_output",
 ]
 
 #: Node-type value used for HITL gate envelopes in extended type maps.
 NODE_TYPE_GATE = "gate"
+
+#: Node type assumed when a graph node declares none (matches the compile-time
+#: default in ``build_graph_from_json`` / ``_split_agent``).
+DEFAULT_NODE_TYPE = "agent"
+
+#: Node types with a dedicated WRITE-side splitter in ``split_node_output``.
+#: Only these types can be resolved to a contract output from a live envelope;
+#: anything else keeps the legacy inner-``output`` read.
+SPLITTABLE_NODE_TYPES = frozenset(
+    {
+        "sandbox_agent",
+        "agent",
+        "connector",
+        "manual",
+        NODE_TYPE_GATE,
+    }
+)
 
 #: The exhaustive telemetry field vocabulary -- every field that may appear in
 #: ``node_telemetry_json[node_id]``. Envelope fields NOT in this vocabulary are
@@ -146,6 +166,30 @@ def _legacy_inner_output(outputs_json: Any, node_id: str) -> dict[str, Any] | No
         return None
     inner = node_output.get("output")
     return inner if isinstance(inner, dict) else node_output
+
+
+def resolve_node_contract_output(
+    envelope: dict[str, Any],
+    node_type: str | None,
+) -> tuple[bool, Any]:
+    """Resolve a node envelope's CONTRACT output for eval validation (FAR-311).
+
+    Returns ``(found, contract_output)``. The contract output is the pure
+    return users see as the node return — NOT the telemetry-style outer
+    ``output`` envelope, which for a sandbox_agent carries status/summary/cost
+    but never the agent's real fields (``pr_url`` / ``changed_files`` live in
+    ``artifacts[0].output.output_json``). Only SPLITTABLE_NODE_TYPES are
+    resolved this way; unknown node types report ``found=False`` so callers
+    keep their legacy read. ``found=False`` also covers a splittable type
+    whose contract output is missing or non-dict (callers fail closed).
+    """
+    resolved = node_type or DEFAULT_NODE_TYPE
+    if resolved not in SPLITTABLE_NODE_TYPES:
+        return False, None
+    contract_output, _ = split_node_output(envelope, resolved, None)
+    if isinstance(contract_output, dict):
+        return True, contract_output
+    return False, None
 
 
 # ---------------------------------------------------------------------------
@@ -405,15 +449,15 @@ def split_node_output(
     if ("recovered" in outer_dict or "skipped" in outer_dict) and not isinstance(outer_dict.get("artifacts"), list):
         return _split_recovery(outer_dict)
     resolved_type = node_type or ""
-    if resolved_type == "sandbox_agent":
-        return _split_sandbox_agent(outer_dict)
-    if resolved_type == "agent":
-        return _split_agent(outer_dict)
-    if resolved_type == "connector":
-        return _split_connector(outer_dict)
-    if resolved_type == "manual":
-        return _split_manual(outer_dict)
-    if resolved_type == NODE_TYPE_GATE:
+    if resolved_type in SPLITTABLE_NODE_TYPES:
+        if resolved_type == "sandbox_agent":
+            return _split_sandbox_agent(outer_dict)
+        if resolved_type == "agent":
+            return _split_agent(outer_dict)
+        if resolved_type == "connector":
+            return _split_connector(outer_dict)
+        if resolved_type == "manual":
+            return _split_manual(outer_dict)
         return _split_gate(outer_dict)
     if _looks_like_gate(outer_dict):
         return _split_gate(outer_dict)

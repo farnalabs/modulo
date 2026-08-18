@@ -25,6 +25,7 @@ import jmespath
 from langgraph.graph import StateGraph
 
 from modulo.core.eval_engine import EvalDefinition
+from modulo.core.node_output_split import DEFAULT_NODE_TYPE
 from modulo.core.pipeline_engine.node_runner import (
     _is_truthy,
     make_connector_fn,
@@ -378,6 +379,12 @@ def build_graph_from_json(
     if not nodes:
         raise ValueError("graph_json has no nodes")
 
+    # FAR-311: node type map for the HITL gate eval path — the gate validates
+    # the source node's CONTRACT output (not the merged state), so it needs the
+    # source node's type to split the envelope. Derived from the immutable
+    # graph_json, so it is identical for every compiled snapshot.
+    node_type_map = {str(n["id"]): (n.get("node_type") or DEFAULT_NODE_TYPE) for n in nodes if n.get("id")}
+
     # FAR-228: the idempotency gate is inert on multi-node graphs. Computed ONCE
     # here and threaded into the sandbox node builder so guard A (early skip)
     # can require it without re-deriving from the node's own def.
@@ -556,6 +563,7 @@ def build_graph_from_json(
                             eval_definitions=node_evals,
                             session_factory=session_factory,
                             org_id=org_id,
+                            node_type_map=node_type_map,
                         ),
                     )
                     graph.add_edge(source, gate_id)

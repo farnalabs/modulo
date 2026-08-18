@@ -61,6 +61,11 @@ from modulo.core.graph_validator import GraphValidator
 from modulo.core.graph_validator._types import ValidationResult
 from modulo.core.hitl_manager import HITLManager
 from modulo.core.model_backend_hub import ModelBackendHub
+from modulo.core.node_output_split import (
+    DEFAULT_NODE_TYPE,
+    SPLITTABLE_NODE_TYPES,
+    resolve_node_contract_output,
+)
 from modulo.core.notifier import EVENT_HITL_AWAITING
 from modulo.core.pipeline_engine.decorator import (
     RunCancelledError,
@@ -580,6 +585,40 @@ async def _script_lease_probe_ok(
         # Fail-closed on a probe error: a script-mode run whose lease we cannot
         # read is NEVER requeued (a hidden live process would double-execute).
         return False
+
+
+def _resolve_post_node_eval_target(
+    node_id: str,
+    envelope: dict[str, Any],
+    node_type_map: dict[str, str] | None,
+) -> Any:
+    """Resolve the eval target for a completed node envelope (FAR-311).
+
+    Returns the node's CONTRACT output — the same pure return users see as the
+    node return — so evals validate what the agent actually produced, not the
+    telemetry-style outer ``output`` envelope. For a sandbox_agent that means
+    ``artifacts[0].output.output_json`` (which carries ``pr_url`` /
+    ``changed_files``). Unknown node types keep the legacy ``envelope["output"]``
+    read, falling back to the whole envelope if it is not a dict — preserving
+    historical behaviour for graphs without a resolved node type.
+    """
+    node_type = (node_type_map or {}).get(node_id) or DEFAULT_NODE_TYPE
+    found, contract_output = resolve_node_contract_output(envelope, node_type)
+    if found:
+        return contract_output
+    if node_type in SPLITTABLE_NODE_TYPES:
+        # Splittable type but no dict contract output (e.g. a sandbox_agent
+        # that produced no output_json) — fail closed on the whole envelope
+        # rather than silently validating telemetry.
+        _log.debug(
+            "post_node_eval.missing_contract_output",
+            extra={"node_id": node_id, "node_type": node_type},
+        )
+        return envelope
+    inner_output = envelope.get("output")
+    if isinstance(inner_output, dict):
+        return inner_output
+    return envelope
 
 
 def _node_output_stall_reason(node_output: Any) -> str | None:
@@ -1179,15 +1218,18 @@ class PipelineExecutor:
         eval_definitions_by_node: dict[str, list[EvalDefDTO]],
         run_id: uuid.UUID,
         org_id: uuid.UUID | None,
+        node_type_map: dict[str, str] | None = None,
     ) -> None:
         """FAR-305: run node-scoped evals for a completed node (standalone path).
 
         This is the non-HITL counterpart to ``make_hitl_gate_fn``'s
         eval-before-interrupt: it evaluates each of the node's eval definitions
-        against the node's *inner* output dict (``envelope["output"]`` — the
-        agent's actual ``output.json`` content, matching what the HITL gate
-        evaluates against state) and persists the results to the ``eval_results``
-        table so post-run suite-level threshold checks can read them.
+        against the node's CONTRACT output — the agent's actual return (what
+        users see as the node return; for a sandbox_agent that is
+        ``artifacts[0].output.output_json``), matching what the HITL gate
+        evaluates against state after FAR-311 — and persists the results to the
+        ``eval_results`` table so post-run suite-level threshold checks can
+        read them.
 
         If a ``block`` eval fails, ``EvalBlockedError`` propagates to
         ``_stream_graph``'s existing handler, transitioning the run to
@@ -1197,16 +1239,17 @@ class PipelineExecutor:
         if not eval_defs:
             return
         # The captured ``output`` is the envelope ``{"artifacts": [...],
-        # "output": {...}}``. Validate the INNER output dict (what the agent
-        # produced), falling back to the whole envelope if it isn't a dict.
-        inner_output = envelope.get("output")
-        if not isinstance(inner_output, dict):
-            inner_output = envelope
+        # "output": {...}}``. Validate the node's CONTRACT output (what the
+        # agent produced — ``artifacts[0].output.output_json`` for a
+        # sandbox_agent), NOT the telemetry-style outer ``output`` envelope
+        # (FAR-311: the outer output carries status/summary/cost but no
+        # pr_url / changed_files).
+        eval_target = _resolve_post_node_eval_target(node_id, envelope, node_type_map)
 
         engine = EvalEngine()
         results: dict[str, EngineEvalResult] = {}
         for eval_def in eval_defs:
-            eval_result = engine.evaluate(inner_output, eval_def, run_id=run_id)
+            eval_result = engine.evaluate(eval_target, eval_def, run_id=run_id)
             results[eval_def.name] = eval_result
             _log.info(
                 "post_node_eval.result",
@@ -1775,6 +1818,7 @@ class PipelineExecutor:
                     guard=guard,
                     node_token_budgets=node_token_budgets,
                     eval_definitions_by_node=eval_defs_by_node,
+                    node_type_map=node_type_map,
                 )
         except RuntimeError as exc:
             if "checkpointer" in str(exc):
@@ -2153,6 +2197,7 @@ class PipelineExecutor:
                         guard=guard,
                         node_token_budgets=node_token_budgets,
                         eval_definitions_by_node=eval_defs_by_node,
+                        node_type_map=node_type_map,
                     )
             else:
                 final_status, error_code, error_detail, node_token_usage = await self._stream_graph(
@@ -2168,6 +2213,7 @@ class PipelineExecutor:
                     guard=guard,
                     node_token_budgets=node_token_budgets,
                     eval_definitions_by_node=eval_defs_by_node,
+                    node_type_map=node_type_map,
                 )
         except asyncio.CancelledError:
             raise
@@ -2840,6 +2886,7 @@ class PipelineExecutor:
         guard: RunawayGuard | None = None,
         node_token_budgets: dict[str, int] | None = None,
         eval_definitions_by_node: dict[str, list[EvalDefDTO]] | None = None,
+        node_type_map: dict[str, str] | None = None,
     ) -> tuple[str, str | None, str | None, dict[str, Any] | None]:
         """Stream graph execution, mapping events to broker publishes.
 
@@ -2974,6 +3021,7 @@ class PipelineExecutor:
                                         eval_definitions_by_node,
                                         run_id,
                                         org_id,
+                                        node_type_map=node_type_map,
                                     )
                                 stall_reason = _node_output_stall_reason(output)
                                 if stall_reason:
