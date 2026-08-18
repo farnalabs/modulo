@@ -1814,6 +1814,17 @@ Versioned, hashed, PR-gated (git-backed) guardrail configuration is **shipped**.
 - **Drift detection** — `GET /api/v1/guardrails/config/drift` recomputes the applied hash from the current DB rows and reports `clean`/`drift` when they diverge from the applied pin (e.g. a row edited outside the config layer). Each state-changing step emits an audit event (`guardrail_config.proposed|applied|rejected|drift_detected`) with summary payloads only — never raw config content.
 - Two-step delete + break-glass machinery from the T1 engine remains the emergency path.
 
+#### Policy packs (T3 — FAR-216)
+
+Compliance bundles as guardrail-as-code (`modulo.core.guardrails.policy_pack`). A **policy pack** is a versioned compliance bundle (SOC 2, GDPR, ...) whose `controls` are the individual compliance controls (SOC2 `CC6.1`, GDPR `art.32`), each with a `title`, a `description`, and an OPTIONAL concrete guardrail mapping (`guardrail` — a `GuardrailConfigItem`; `mapped` records whether the control has a concrete mapping and is auto-synced from a supplied guardrail). The framework ships (PR A):
+
+- **Control→guardrail mapping** — each control MAY instantiate to a concrete, schema-valid guardrail config. `instantiate_pack(pack)` builds a `GuardrailConfigSet` from every MAPPED control's guardrail, validating each against the config-as-code `validate_config_set`. Unmapped controls are EXCLUDED (allowed but reported); an uninstantiable control (guardrail fails validation, or its guardrail id duplicates another control's) RAISES fail-closed — a partial set that silently drops a security control is never produced.
+- **Mapping validator + gap report** — `validate_pack(pack)` produces a structured `PackValidationReport` with `mapped` / `unmapped` / `uninstantiable` counts, the unmapped control ids, the uninstantiable control ids WITH their validation error, and a flat `errors` list. `mapped + unmapped == total` by construction; `uninstantiable` is a subset of `mapped`.
+- **CI gate** — `assert_pack_ci_ready(pack)` RAISES when a pack has any unmapped or uninstantiable control, so a pack author cannot merge a pack with gaps. Wired as a CLI (`python -m modulo.core.guardrails.policy_pack <pack.yaml>`, exit 0 ready / 1 gapped).
+- **Warn-mode-first rollout** — `pack_rollout_config(pack, mode="warn"|"block")` returns the instantiated set with every guardrail's action forced to the rollout mode: a pack is rolled out in `observe`/`warn` (shadow) mode first, then PROMOTED to `block` once the org is confident it does not false-positive on legitimate traffic. `redact` is not a rollout mode.
+
+**T1 go/no-go gate:** a NAMED enterprise use case (a real customer/org adopting a specific pack) must be committed before block-mode promotion of any pack. Pack CONTENT (the SOC2/GDPR controls and their guardrail mappings) is a separate delivery (FAR-216 PR B).
+
 #### Alpha Note
 The Eval Engine component appears in the §6.1 architecture diagram. Eval System is a **v1 feature** — no eval definitions, no eval UI, and no conditional HITL in alpha. Alpha runs do not execute evals.
 
