@@ -845,4 +845,4 @@ class TestValidatePayloadDogfoodSchemas(AuthContext):
         result = await validate_payload(schema_id=str(uuid.uuid4()), payload=payload)
 
         assert result["valid"] is False
-        assert len(result["errors"]) > 0
+        assert result["errors"]
