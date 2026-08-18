@@ -45,7 +45,7 @@ from modulo.db.crud.token_family import (
 from modulo.db.models.account import Account
 from modulo.settings import Settings, get_settings
 
-_MSG_INCORRECT_EMAIL_PASSWORD = "Incorrect email or password"
+_MSG_INCORRECT_EMAIL_PASSWORD = "Incorrect email or password"  # nosec B105 — error message, not a real credential
 _CODE_AUTH_REFRESH = "auth.refresh"
 _CODE_AUTH_LOGOUT = "auth.logout"
 
@@ -582,7 +582,7 @@ async def ws_token(
             )
             return WsTokenResponse(
                 ws_token=token,
-                token_type="ws-opaque",  # noqa: S106
+                token_type="ws-opaque",  # noqa: S106  # nosec B106 — opaque-token type label, not a credential
                 expires_in_seconds=settings.modulo_ws_token_ttl_seconds,
             )
         finally:

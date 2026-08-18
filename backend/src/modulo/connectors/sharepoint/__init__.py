@@ -17,7 +17,7 @@ from modulo.connectors.base import (
 )
 
 # Pagination query parameter name shared across list endpoints (S1192).
-_SKIP_TOKEN = "$skiptoken"
+_SKIP_TOKEN = "$skiptoken"  # nosec B105 — Graph pagination query-param name, not a credential
 
 
 class SharePointConnector(ConnectorBase):

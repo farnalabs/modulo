@@ -43,7 +43,7 @@ class MCPConfigurationError(Exception):
 
 # tool (or ``tool:action``) -> permission key in ``PERMISSIONS``
 # Secret-management permission shared by the create/delete/list secret tools.
-_SCOPE_SECRET_MANAGE = "secret.manage"
+_SCOPE_SECRET_MANAGE = "secret.manage"  # nosec B105 — permission scope name, not a credential
 
 _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "trigger_pipeline": "run.trigger",

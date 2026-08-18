@@ -322,7 +322,7 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
             "required_environment_capabilities": [],
             "model_backend_id": None,
             "retry_policy": {},
-            "token_budget": None,
+            "token_budget": None,  # nosec B105 — None sentinel for "no budget", not a credential
         },
         tags=["agent", "spec-implementer", "simplest-workflow", "day-1"],
     ),

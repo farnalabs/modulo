@@ -545,8 +545,8 @@ class GitHubConnector(ConnectorBase):
         instead of being collapsed to near-immediate retries.
         """
         if tight:
-            return random.uniform(delay * 0.9, delay)  # noqa: S311 — non-cryptographic jitter for retry delays
-        return random.uniform(0, delay)  # noqa: S311 — non-cryptographic jitter for retry delays
+            return random.uniform(delay * 0.9, delay)  # noqa: S311  # nosec B311 — non-cryptographic jitter for retry delays
+        return random.uniform(0, delay)  # noqa: S311  # nosec B311 — non-cryptographic jitter for retry delays
 
     @staticmethod
     def _has_server_delay(response: httpx.Response) -> bool:

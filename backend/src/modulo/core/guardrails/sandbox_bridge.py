@@ -29,7 +29,7 @@ import argparse
 import fnmatch
 import json
 import os
-import subprocess
+import subprocess  # nosec B404 — subprocess is stdlib-only (sandbox file); only used to exec the configured agent command (no shell=True)
 import sys
 import urllib.request
 from typing import Any
@@ -206,7 +206,7 @@ def _wrap_command(argv: list[str], client: BridgeClient) -> int:
         return 2
     shell_cmd = " ".join(argv)
     try:
-        proc = subprocess.Popen(  # noqa: S603 - explicit argv form via /bin/sh -c; the command is platform config
+        proc = subprocess.Popen(  # noqa: S603  # nosec B603 — execs the configured agent command (fixed argv list, shell=False, no user input)
             ["/bin/sh", "-c", shell_cmd],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,

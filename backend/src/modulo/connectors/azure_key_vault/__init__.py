@@ -19,7 +19,7 @@ from modulo.connectors.base import (
 _API_VERSION = "7.4"
 
 # Pagination query parameter name shared across list endpoints (S1192).
-_SKIP_TOKEN = "$skiptoken"
+_SKIP_TOKEN = "$skiptoken"  # nosec B105 — Azure pagination query-param name, not a credential
 
 
 class AzureKeyVaultConnector(ConnectorBase):
