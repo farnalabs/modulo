@@ -848,6 +848,194 @@ async def org_sandbox_capacity_free(
         return True
 
 
+def _compute_otel_run_context(
+    config: dict[str, Any],
+    bridge: Any,
+) -> tuple[str | None, Any | None, Any | None]:
+    """FAR-198: compute the run's deterministic OTel trace id and root span.
+
+    The root span is created via the bridge (spans created by the bridge
+    inherit it). The ``context_api.attach`` is deferred to the caller so the
+    ``context_api.detach`` in the caller's ``finally`` stays balanced with the
+    attach.
+    """
+    thread_id = (config.get("configurable") or {}).get("thread_id")
+    run_trace_id = trace_id_for_thread(thread_id) if thread_id else None
+    run_root_span = None
+    run_root_token = None
+    if thread_id:
+        run_root_span = bridge.start_run_root(thread_id)
+    return run_trace_id, run_root_span, run_root_token
+
+
+def _record_chain_end_output(
+    completed_node_outputs: dict[str, Any] | None,
+    name: str,
+    data: Any,
+    run_trace_id: str | None,
+    bridge: Any,
+    lg_run_id: Any,
+) -> Any | None:
+    """FAR-198: stamp and store a completed node's output envelope.
+
+    Stamps the node's real OTel span id (and the run's trace id) onto a
+    shallow copy of the envelope, stores it into ``completed_node_outputs``
+    and returns the (possibly stamped) output so the caller can extract the
+    stall / agent-failure / session-lost markers. Returns ``None`` when there
+    is no envelope to capture (nothing stored).
+    """
+    if completed_node_outputs is None:
+        return None
+    output = data.get("output") if isinstance(data, dict) else None
+    if output is None:
+        return None
+    # FAR-198: stamp the node's real OTel span id (and the run's trace id)
+    # onto a shallow copy of the envelope. The node_output_split splitter
+    # folds unknown top-level envelope keys into the node_telemetry entry, so
+    # these surface in the per-node span column — never in the pure return.
+    node_span_id = bridge.span_id_for_run(lg_run_id)
+    if isinstance(output, dict) and (node_span_id or run_trace_id):
+        stamped = dict(output)
+        if node_span_id:
+            stamped["otel_span_id"] = node_span_id
+        if run_trace_id:
+            stamped["otel_trace_id"] = run_trace_id
+        output = stamped
+    completed_node_outputs[name] = output
+    return output
+
+
+def _record_node_markers(
+    output: Any,
+    broker: RunEventBroker,
+    name: str,
+) -> tuple[str | None, str | None, str | None]:
+    """Extract stall / agent-failure / session-lost markers from a node output.
+
+    Publishes ``run_stalled`` when the output carries a stall reason and
+    returns the three marker reasons so the caller can latch them onto the
+    run's terminal status.
+    """
+    stall_reason = _node_output_stall_reason(output)
+    if stall_reason:
+        broker.publish(
+            "run_stalled",
+            {
+                "node_id": name,
+                "stall_reason": _sanitize_detail(stall_reason, limit=5000),
+            },
+        )
+    agent_failure = _node_output_agent_failure(output)
+    session_lost = _node_output_sandbox_session_lost(output)
+    return stall_reason, agent_failure, session_lost
+
+
+def _accumulate_chat_model_tokens(
+    lg_event: Any,
+    node_token_usage: dict[str, dict[str, int]],
+    guard: RunawayGuard | None,
+    node_token_budgets: dict[str, int] | None,
+) -> None:
+    """Accumulate token usage from an ``on_chat_model_end`` event.
+
+    Reads ``usage_metadata`` (with the legacy ``llm_output.token_usage``
+    fallback), records cumulative tokens on the guard, and enforces the
+    per-node token budget (raising ``RunawayRunError`` on breach).
+    """
+    metadata = lg_event.get("metadata") or {}
+    node_name = metadata.get("langgraph_node")
+    if node_name:
+        data = lg_event.get("data", {})
+        output = data.get("output", {}) if isinstance(data, dict) else {}
+        usage_metadata = getattr(output, "usage_metadata", None) if isinstance(output, BaseMessage) else None
+        if usage_metadata is not None:
+            token_usage = {
+                "input_tokens": usage_metadata.get("input_tokens", 0) or 0,
+                "output_tokens": usage_metadata.get("output_tokens", 0) or 0,
+                "total_tokens": usage_metadata.get("total_tokens", 0) or 0,
+            }
+        elif isinstance(output, dict):
+            # Legacy fallback: llm_output.token_usage
+            llm_output = output.get("llm_output", {})
+            token_usage = llm_output.get("token_usage", {}) if isinstance(llm_output, dict) else {}
+        else:
+            token_usage = {}
+        if isinstance(token_usage, dict):
+            node_data = node_token_usage.setdefault(
+                node_name, {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+            )
+            pt = token_usage.get("input_tokens", token_usage.get("prompt_tokens", 0)) or 0
+            ct = token_usage.get("output_tokens", token_usage.get("completion_tokens", 0)) or 0
+            tt = token_usage.get("total_tokens", 0) or 0
+            node_data["input_tokens"] += pt
+            node_data["output_tokens"] += ct
+            node_data["total_tokens"] += tt
+            if guard is not None:
+                guard.record_tokens(tt)
+            # Per-node token budget check
+            if node_token_budgets is not None:
+                node_budget = node_token_budgets.get(node_name)
+                if node_budget is not None and node_data["total_tokens"] > node_budget:
+                    raise RunawayRunError(
+                        "token_budget",
+                        node_data["total_tokens"],
+                        node_budget,
+                    )
+
+
+def _accumulate_llm_tokens(
+    lg_event: Any,
+    node_token_usage: dict[str, dict[str, int]],
+    guard: RunawayGuard | None,
+    node_token_budgets: dict[str, int] | None,
+) -> None:
+    """Accumulate token usage from an ``on_llm_end`` event (legacy interface).
+
+    Reads ``llm_output.token_usage``, records cumulative tokens on the guard,
+    and enforces the per-node token budget (raising ``RunawayRunError`` on
+    breach).
+    """
+    metadata = lg_event.get("metadata") or {}
+    node_name = metadata.get("langgraph_node")
+    if node_name:
+        data = lg_event.get("data", {})
+        output = data.get("output", {}) if isinstance(data, dict) else {}
+        llm_output = output.get("llm_output", {}) if isinstance(output, dict) else {}
+        token_usage = llm_output.get("token_usage", {}) if isinstance(llm_output, dict) else {}
+        if isinstance(token_usage, dict):
+            node_data = node_token_usage.setdefault(
+                node_name, {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+            )
+            pt = token_usage.get("prompt_tokens", 0) or 0
+            ct = token_usage.get("completion_tokens", 0) or 0
+            tt = token_usage.get("total_tokens", 0) or 0
+            node_data["input_tokens"] += pt
+            node_data["output_tokens"] += ct
+            node_data["total_tokens"] += tt
+            if guard is not None:
+                guard.record_tokens(tt)
+            if node_token_budgets is not None:
+                node_budget = node_token_budgets.get(node_name)
+                if node_budget is not None and node_data["total_tokens"] > node_budget:
+                    raise RunawayRunError(
+                        "token_budget",
+                        node_data["total_tokens"],
+                        node_budget,
+                    )
+
+
+def _terminal_failure(
+    broker: RunEventBroker,
+    status: str,
+    code: str,
+    detail: str,
+    node_token_usage: dict[str, Any] | None,
+) -> tuple[str, str | None, str | None, dict[str, Any] | None]:
+    """Publish ``run_failed`` and return the terminal failure 4-tuple."""
+    broker.publish("run_failed", {"error": code, "detail": detail})
+    return status, code, detail, node_token_usage or None
+
+
 class PipelineExecutor:
     """Execute a single pipeline run (HITL-aware, supports parallel fan-out).
 
@@ -3001,12 +3189,12 @@ class PipelineExecutor:
         # the bridge (its spans inherit it) AND attached to the current
         # context (spans created outside the bridge inherit it too). Both are
         # cleaned up in the finally block below.
-        thread_id = (config.get("configurable") or {}).get("thread_id")
-        run_trace_id = trace_id_for_thread(thread_id) if thread_id else None
-        run_root_span = None
-        run_root_token = None
-        if thread_id:
-            run_root_span = self._otel_bridge.start_run_root(thread_id)
+        run_trace_id, run_root_span, _run_root_token = _compute_otel_run_context(
+            config,
+            self._otel_bridge,
+        )
+        run_root_token = _run_root_token
+        if run_root_span is not None and _run_root_token is None:
             run_root_token = context_api.attach(set_span_in_context(run_root_span))
         try:
             async for lg_event in compiled.astream_events(initial_state, lg_config, version="v2"):
@@ -3058,136 +3246,53 @@ class PipelineExecutor:
                         segments_completed += 1
                         if guard is not None:
                             guard.record_step()
-                        if completed_node_outputs is not None:
-                            data = lg_event.get("data", {})
-                            output = data.get("output") if isinstance(data, dict) else None
-                            if output is not None:
-                                # FAR-198: stamp the node's real OTel span id
-                                # (and the run's trace id) onto a shallow copy of
-                                # the envelope. The node_output_split splitter
-                                # folds unknown top-level envelope keys into the
-                                # node_telemetry entry, so these surface in the
-                                # per-node span column — never in the pure return.
-                                node_span_id = self._otel_bridge.span_id_for_run(lg_event.get("run_id"))
-                                if isinstance(output, dict) and (node_span_id or run_trace_id):
-                                    stamped = dict(output)
-                                    if node_span_id:
-                                        stamped["otel_span_id"] = node_span_id
-                                    if run_trace_id:
-                                        stamped["otel_trace_id"] = run_trace_id
-                                    output = stamped
-                                completed_node_outputs[name] = output
-                                # FAR-305: standalone post-node eval path — run any
-                                # node-scoped evals for this node against its inner
-                                # output dict. This is independent of HITL gates:
-                                # a plain node (no gate) now gets its node-scoped
-                                # evals evaluated too. If a ``block`` eval fails,
-                                # ``EvalBlockedError`` propagates and the existing
-                                # ``except EvalBlockedError`` below transitions the
-                                # run to ``eval_failed`` with ``error_code="eval_blocked"``.
-                                # NOTE: if this node ALSO feeds a HITL gate with
-                                # eval-before-interrupt, the evals run twice (once
-                                # here post-node, once in the gate) — acceptable for
-                                # now, the gate's eval is a separate node.
-                                if eval_definitions_by_node:
-                                    await self._run_post_node_evals(
-                                        name,
-                                        output,
-                                        eval_definitions_by_node,
-                                        run_id,
-                                        org_id,
-                                        node_type_map=node_type_map,
-                                    )
-                                stall_reason = _node_output_stall_reason(output)
-                                if stall_reason:
-                                    stalled_node_reason = stall_reason
-                                    broker.publish(
-                                        "run_stalled",
-                                        {
-                                            "node_id": name,
-                                            "stall_reason": _sanitize_detail(stall_reason, limit=5000),
-                                        },
-                                    )
-                                agent_failure = _node_output_agent_failure(output)
-                                if agent_failure:
-                                    agent_failure_reason = agent_failure
-                                session_lost = _node_output_sandbox_session_lost(output)
-                                if session_lost:
-                                    sandbox_session_lost_reason = session_lost
+                        output = _record_chain_end_output(
+                            completed_node_outputs,
+                            name,
+                            lg_event.get("data", {}),
+                            run_trace_id,
+                            self._otel_bridge,
+                            lg_event.get("run_id"),
+                        )
+                        if output is not None:
+                            # FAR-305: standalone post-node eval path — run any
+                            # node-scoped evals for this node against its inner
+                            # output dict. This is independent of HITL gates:
+                            # a plain node (no gate) now gets its node-scoped
+                            # evals evaluated too. If a ``block`` eval fails,
+                            # ``EvalBlockedError`` propagates and the existing
+                            # ``except EvalBlockedError`` below transitions the
+                            # run to ``eval_failed`` with ``error_code="eval_blocked"``.
+                            # NOTE: if this node ALSO feeds a HITL gate with
+                            # eval-before-interrupt, the evals run twice (once
+                            # here post-node, once in the gate) — acceptable for
+                            # now, the gate's eval is a separate node.
+                            if eval_definitions_by_node:
+                                await self._run_post_node_evals(
+                                    name,
+                                    output,
+                                    eval_definitions_by_node,
+                                    run_id,
+                                    org_id,
+                                    node_type_map=node_type_map,
+                                )
+                            stall_reason, agent_failure, session_lost = _record_node_markers(
+                                output,
+                                broker,
+                                name,
+                            )
+                            if stall_reason:
+                                stalled_node_reason = stall_reason
+                            if agent_failure:
+                                agent_failure_reason = agent_failure
+                            if session_lost:
+                                sandbox_session_lost_reason = session_lost
 
                 if event_kind == "on_chat_model_end":
-                    metadata = lg_event.get("metadata") or {}
-                    node_name = metadata.get("langgraph_node")
-                    if node_name:
-                        data = lg_event.get("data", {})
-                        output = data.get("output", {}) if isinstance(data, dict) else {}
-                        if isinstance(output, BaseMessage):
-                            usage_metadata = getattr(output, "usage_metadata", None)
-                        else:
-                            usage_metadata = None
-                        if usage_metadata is not None:
-                            token_usage = {
-                                "input_tokens": usage_metadata.get("input_tokens", 0) or 0,
-                                "output_tokens": usage_metadata.get("output_tokens", 0) or 0,
-                                "total_tokens": usage_metadata.get("total_tokens", 0) or 0,
-                            }
-                        elif isinstance(output, dict):
-                            # Legacy fallback: llm_output.token_usage
-                            llm_output = output.get("llm_output", {})
-                            token_usage = llm_output.get("token_usage", {}) if isinstance(llm_output, dict) else {}
-                        else:
-                            token_usage = {}
-                        if isinstance(token_usage, dict):
-                            node_data = node_token_usage.setdefault(
-                                node_name, {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-                            )
-                            pt = token_usage.get("input_tokens", token_usage.get("prompt_tokens", 0)) or 0
-                            ct = token_usage.get("output_tokens", token_usage.get("completion_tokens", 0)) or 0
-                            tt = token_usage.get("total_tokens", 0) or 0
-                            node_data["input_tokens"] += pt
-                            node_data["output_tokens"] += ct
-                            node_data["total_tokens"] += tt
-                            if guard is not None:
-                                guard.record_tokens(tt)
-                            # Per-node token budget check
-                            if node_token_budgets is not None:
-                                node_budget = node_token_budgets.get(node_name)
-                                if node_budget is not None and node_data["total_tokens"] > node_budget:
-                                    raise RunawayRunError(
-                                        "token_budget",
-                                        node_data["total_tokens"],
-                                        node_budget,
-                                    )
+                    _accumulate_chat_model_tokens(lg_event, node_token_usage, guard, node_token_budgets)
 
                 elif event_kind == "on_llm_end":
-                    # Legacy LLM interface — output is a dict with llm_output.
-                    metadata = lg_event.get("metadata") or {}
-                    node_name = metadata.get("langgraph_node")
-                    if node_name:
-                        data = lg_event.get("data", {})
-                        output = data.get("output", {}) if isinstance(data, dict) else {}
-                        llm_output = output.get("llm_output", {}) if isinstance(output, dict) else {}
-                        token_usage = llm_output.get("token_usage", {}) if isinstance(llm_output, dict) else {}
-                        if isinstance(token_usage, dict):
-                            node_data = node_token_usage.setdefault(
-                                node_name, {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-                            )
-                            pt = token_usage.get("prompt_tokens", 0) or 0
-                            ct = token_usage.get("completion_tokens", 0) or 0
-                            tt = token_usage.get("total_tokens", 0) or 0
-                            node_data["input_tokens"] += pt
-                            node_data["output_tokens"] += ct
-                            node_data["total_tokens"] += tt
-                            if guard is not None:
-                                guard.record_tokens(tt)
-                            if node_token_budgets is not None:
-                                node_budget = node_token_budgets.get(node_name)
-                                if node_budget is not None and node_data["total_tokens"] > node_budget:
-                                    raise RunawayRunError(
-                                        "token_budget",
-                                        node_data["total_tokens"],
-                                        node_budget,
-                                    )
+                    _accumulate_llm_tokens(lg_event, node_token_usage, guard, node_token_budgets)
 
             if sandbox_session_lost_reason and not stalled_node_reason:
                 # FAR-227: a dead opencode session (the E2B wrapper's fallback
@@ -3197,11 +3302,13 @@ class PipelineExecutor:
                 # the non-retryable ``agent.failed`` verdict. The summary is
                 # preserved so the failure detail stays visible.
                 scrubbed = _sanitize_detail(sandbox_session_lost_reason, limit=5000)
-                broker.publish(
-                    "run_failed",
-                    {"error": "sandbox.no_output_json", "detail": scrubbed},
+                return _terminal_failure(
+                    broker,
+                    "failed",
+                    "sandbox.no_output_json",
+                    scrubbed,
+                    node_token_usage or None,
                 )
-                return "failed", "sandbox.no_output_json", scrubbed, node_token_usage or None
             if agent_failure_reason and not stalled_node_reason:
                 # A1 elevation (agent-failure UX, phase 1, §15.4): a node that
                 # self-reported failure must NEVER land the run 'complete'.
@@ -3213,11 +3320,13 @@ class PipelineExecutor:
 
                     if get_settings().modulo_agent_failure_elevation_enabled:
                         scrubbed = _sanitize_detail(agent_failure_reason, limit=5000)
-                        broker.publish(
-                            "run_failed",
-                            {"error": _ERROR_CODE_AGENT_FAILED, "detail": scrubbed},
+                        return _terminal_failure(
+                            broker,
+                            "failed",
+                            _ERROR_CODE_AGENT_FAILED,
+                            scrubbed,
+                            node_token_usage or None,
                         )
-                        return "failed", _ERROR_CODE_AGENT_FAILED, scrubbed, node_token_usage or None
                 except Exception:
                     _log.warning(
                         "agent_failure_elevation.failed_open",
@@ -3226,8 +3335,13 @@ class PipelineExecutor:
                     )
             if stalled_node_reason:
                 scrubbed = _sanitize_detail(stalled_node_reason, limit=5000)
-                broker.publish("run_failed", {"error": "executor_stalled", "detail": scrubbed})
-                return "stalled", "executor_stalled", scrubbed, node_token_usage or None
+                return _terminal_failure(
+                    broker,
+                    "stalled",
+                    "executor_stalled",
+                    scrubbed,
+                    node_token_usage or None,
+                )
             broker.publish("run_completed", {})
             return "complete", None, None, node_token_usage or None
         except GraphInterrupt as exc:
@@ -3242,22 +3356,29 @@ class PipelineExecutor:
                 org_id=org_id,
             )
         except EvalBlockedError as exc:
-            scrubbed = _sanitize_detail(exc, limit=5000)
-            broker.publish("run_failed", {"error": "eval_blocked", "detail": scrubbed})
-            return "eval_failed", "eval_blocked", scrubbed, node_token_usage or None
+            return _terminal_failure(
+                broker,
+                "eval_failed",
+                "eval_blocked",
+                _sanitize_detail(exc, limit=5000),
+                node_token_usage or None,
+            )
         except OutputRejectedError as exc:
             # C4: ``output_rejected`` violates the ``ck_runs_status`` CHECK
             # constraint as a STATUS — it is an error CODE on a ``failed`` run.
-            scrubbed = _sanitize_detail(exc, limit=5000)
-            broker.publish("run_failed", {"error": "output_rejected", "detail": scrubbed})
-            return "failed", "output_rejected", scrubbed, node_token_usage or None
+            return _terminal_failure(
+                broker,
+                "failed",
+                "output_rejected",
+                _sanitize_detail(exc, limit=5000),
+                node_token_usage or None,
+            )
         except RunCancelledError:
             broker.publish("run_cancelled", {})
             self._log_accumulation_state(run_id, segments_completed, node_token_usage)
             return "cancelled", None, None, node_token_usage or None
         except RunawayRunError as exc:
             error_detail = _sanitize_detail(exc, limit=5000)
-            broker.publish("run_failed", {"error": "runaway", "detail": error_detail})
             _log.warning(
                 "runaway.terminated",
                 extra={
@@ -3267,38 +3388,47 @@ class PipelineExecutor:
                     "limit": exc.limit,
                 },
             )
-            return "failed", "runaway", error_detail, node_token_usage or None
+            return _terminal_failure(broker, "failed", "runaway", error_detail, node_token_usage or None)
         except TimeoutError as exc:
             error_detail = _sanitize_detail(exc, limit=5000)
-            broker.publish("run_failed", {"error": "node_timeout", "detail": error_detail})
             _log.warning(
                 _ERROR_CODE_NODE_TIMEOUT,
                 extra={"run_id": str(run_id), "detail": error_detail},
             )
-            return "failed", "node_timeout", error_detail, node_token_usage or None
+            return _terminal_failure(broker, "failed", "node_timeout", error_detail, node_token_usage or None)
         except SupersededNodeError as exc:
             # A6: the sandbox dispatch marker was denied — a superseded claim
             # or a run no longer running. Terminal ``superseded`` failure; the
             # token-guarded finalize write is a no-op if a successor already
             # owns the run. NEVER a completed run with zero work.
             scrubbed = _sanitize_detail(exc, limit=5000)
-            broker.publish("run_failed", {"error": "executor_superseded", "detail": scrubbed})
             _log.warning(
                 "pipeline.node_superseded",
                 extra={"run_id": str(run_id), "detail": scrubbed[:500]},
             )
-            return "failed", "executor_superseded", scrubbed, node_token_usage or None
+            return _terminal_failure(
+                broker,
+                "failed",
+                "executor_superseded",
+                scrubbed,
+                node_token_usage or None,
+            )
         except OutputSchemaValidationError as exc:
             # Manual-node resume output (or agent output) failed validation
             # against output_schema_json. Domain-specific error code per §8.9 —
             # never a raw ``ValueError``.
             scrubbed = _sanitize_detail(exc, limit=5000)
-            broker.publish("run_failed", {"error": "schema_validation_failure", "detail": scrubbed})
             _log.warning(
                 "pipeline.output_schema_validation_failed",
                 extra={"run_id": str(run_id), "detail": scrubbed[:500]},
             )
-            return "failed", "schema_validation_failure", scrubbed, node_token_usage or None
+            return _terminal_failure(
+                broker,
+                "failed",
+                "schema_validation_failure",
+                scrubbed,
+                node_token_usage or None,
+            )
         except asyncio.CancelledError:
             raise
         except (NodeCancelledError, SandboxNodeFailedError):
@@ -3316,8 +3446,13 @@ class PipelineExecutor:
                 "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
                 limit=5000,
             )
-            broker.publish("run_failed", {"error": type(exc).__name__, "detail": _tb})
-            return "failed", type(exc).__name__, _tb, node_token_usage or None
+            return _terminal_failure(
+                broker,
+                "failed",
+                type(exc).__name__,
+                _tb,
+                node_token_usage or None,
+            )
         finally:
             # FAR-198: tear down the seeded OTel context + run root span on
             # every exit path (returns, exceptions, cancellation).
