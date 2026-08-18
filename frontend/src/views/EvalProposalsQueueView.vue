@@ -88,12 +88,7 @@
             </div>
 
             <div v-if="isActionable(p.feedback_status)" class="flex shrink-0 items-center gap-2">
-            <Button
-              :disabled="actioningId === p.id"
-              data-testid="proposal-publish"
-              variant="default"
-              @click="publishProposal(p)"
-            >
+            <Button :disabled="actioningId === p.id" data-testid="proposal-publish" @click="publishProposal(p)">
               {{ actioningId === p.id ? $t('views.EvalProposalsQueueView.publishing') : $t('views.EvalProposalsQueueView.publish') }}
             </Button>
               <button
@@ -127,7 +122,7 @@ import { shortId } from '../utils/format'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 import PageTabs from "../components/PageTabs.vue"
 import EmptyState from '../components/shared/EmptyState.vue'
 import { formatDateShortWithTime } from '../lib/formatDate'

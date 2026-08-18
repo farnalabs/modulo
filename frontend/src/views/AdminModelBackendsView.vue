@@ -3,12 +3,7 @@
     <div class="page-wide">
       <header class="flex items-center justify-between">
         <PageHeader :title="$t('views.AdminModelBackendsView.model_backends')" :subtitle="$t('views.AdminModelBackendsView.manage_llm_backend_connections_and_credentials')" />
-        <Button
-          variant="default"
-           class="border-primary/30 hover:border-primary/60"
-          data-testid="admin-model-backends-add"
-          @click="openAddForm"
-        >
+        <Button class="border-primary/30 hover:border-primary/60" data-testid="admin-model-backends-add" @click="openAddForm">
           {{ $t('views.AdminModelBackendsView.add_model_backend') }}
         </Button>
       </header>
@@ -44,26 +39,20 @@
               </div>
               <div>
                 <label for="adminmodelbackendsview-field-12" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.provider') }}</label>
-                <Select aria-label="Provider" v-model="formData.provider">
-                  <SelectTrigger data-testid="admin-model-backends-provider-select" aria-label="Provider" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
-                    <SelectValue placeholder="anthropic" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="anthropic">{{ $t('views.AdminModelBackendsView.provider_anthropic') }}</SelectItem>
-                    <SelectItem value="openai">{{ $t('views.AdminModelBackendsView.provider_openai') }}</SelectItem>
-                    <SelectItem value="opencode">{{ $t('views.AdminModelBackendsView.provider_opencode') }}</SelectItem>
-                    <SelectItem value="azure_openai">{{ $t('views.AdminModelBackendsView.azure_openai') }}</SelectItem>
-                    <SelectItem value="ollama">{{ $t('views.AdminModelBackendsView.provider_ollama') }}</SelectItem>
-                    <SelectItem value="groq">{{ $t('views.AdminModelBackendsView.provider_groq') }}</SelectItem>
-                    <SelectItem value="deepseek">{{ $t('views.AdminModelBackendsView.provider_deepseek') }}</SelectItem>
-                    <SelectItem value="gemini">{{ $t('views.AdminModelBackendsView.provider_gemini') }}</SelectItem>
-                    <SelectItem value="mistral">{{ $t('views.AdminModelBackendsView.provider_mistral') }}</SelectItem>
-                    <SelectItem value="cohere">{{ $t('views.AdminModelBackendsView.provider_cohere') }}</SelectItem>
-                    <SelectItem value="togetherai">{{ $t('views.AdminModelBackendsView.provider_togetherai') }}</SelectItem>
-                    <SelectItem value="fireworks">{{ $t('views.AdminModelBackendsView.provider_fireworks') }}</SelectItem>
-                    <SelectItem value="openrouter">{{ $t('views.AdminModelBackendsView.provider_openrouter') }}</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Select
+  aria-label="Provider"
+  v-model="formData.provider"
+  placeholder="anthropic"
+  data-testid="admin-model-backends-provider-select"
+  class="w-full"
+  :options="[{ value: 'anthropic', label: $t('views.AdminModelBackendsView.provider_anthropic') }, { value: 'openai', label: $t('views.AdminModelBackendsView.provider_openai') }, { value: 'opencode', label: $t('views.AdminModelBackendsView.provider_opencode') }, { value: 'azure_openai', label: $t('views.AdminModelBackendsView.azure_openai') }, { value: 'ollama', label: $t('views.AdminModelBackendsView.provider_ollama') }, { value: 'groq', label: $t('views.AdminModelBackendsView.provider_groq') }, { value: 'deepseek', label: $t('views.AdminModelBackendsView.provider_deepseek') }, { value: 'gemini', label: $t('views.AdminModelBackendsView.provider_gemini') }, { value: 'mistral', label: $t('views.AdminModelBackendsView.provider_mistral') }, { value: 'cohere', label: $t('views.AdminModelBackendsView.provider_cohere') }, { value: 'togetherai', label: $t('views.AdminModelBackendsView.provider_togetherai') }, { value: 'fireworks', label: $t('views.AdminModelBackendsView.provider_fireworks') }, { value: 'openrouter', label: $t('views.AdminModelBackendsView.provider_openrouter') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
               </div>
               <div v-if="showBaseUrl">
                 <label for="adminmodelbackendsview-field-11" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.base_url') }}</label>
@@ -107,24 +96,24 @@
               </div>
               <div>
                 <label for="adminmodelbackendsview-field-7" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.visibility') }}</label>
-                <Select aria-label="Visibility" v-model="formData.visibility">
-                  <SelectTrigger data-testid="admin-model-backends-visibility-select" aria-label="Visibility" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
-                    <SelectValue placeholder="org" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="org">{{ $t('views.AdminModelBackendsView.visibility_org') }}</SelectItem>
-                    <SelectItem value="private">{{ $t('views.AdminModelBackendsView.visibility_private') }}</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Select
+  aria-label="Visibility"
+  v-model="formData.visibility"
+  placeholder="org"
+  data-testid="admin-model-backends-visibility-select"
+  class="w-full"
+  :options="[{ value: 'org', label: $t('views.AdminModelBackendsView.visibility_org') }, { value: 'private', label: $t('views.AdminModelBackendsView.visibility_private') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
               </div>
               <div v-if="formError" class="text-sm text-destructive">{{ formError }}</div>
               <div class="flex items-center gap-2">
-              <Button
-                :disabled="saving || !formData.name.trim() || !formData.display_name.trim() || !formData.model_id.trim() || !formData.api_key.trim()"
-                type="submit"
-                variant="default"
-                data-testid="admin-model-backends-submit"
-              >
+              <Button :disabled="saving || !formData.name.trim() || !formData.display_name.trim() || !formData.model_id.trim() || !formData.api_key.trim()" type="submit" data-testid="admin-model-backends-submit">
                 {{ saving ? $t('views.AdminModelBackendsView.creating') : $t('views.AdminModelBackendsView.create') }}
               </Button>
                 <button
@@ -291,24 +280,24 @@
               </div>
               <div>
                 <label for="adminmodelbackendsview-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.visibility') }}</label>
-                <Select aria-label="Visibility" v-model="formData.visibility">
-                  <SelectTrigger data-testid="admin-model-backends-edit-visibility" aria-label="Visibility" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
-                    <SelectValue placeholder="org" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="org">{{ $t('views.AdminModelBackendsView.visibility_org') }}</SelectItem>
-                    <SelectItem value="private">{{ $t('views.AdminModelBackendsView.visibility_private') }}</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Select
+  aria-label="Visibility"
+  v-model="formData.visibility"
+  placeholder="org"
+  data-testid="admin-model-backends-edit-visibility"
+  class="w-full"
+  :options="[{ value: 'org', label: $t('views.AdminModelBackendsView.visibility_org') }, { value: 'private', label: $t('views.AdminModelBackendsView.visibility_private') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
               </div>
               <div v-if="formError" class="text-sm text-destructive">{{ formError }}</div>
               <div class="flex items-center gap-2">
-              <Button
-                :disabled="saving || !formData.name.trim() || !formData.display_name.trim() || !formData.model_id.trim()"
-                type="submit"
-                variant="default"
-                data-testid="admin-model-backends-save"
-              >
+              <Button :disabled="saving || !formData.name.trim() || !formData.display_name.trim() || !formData.model_id.trim()" type="submit" data-testid="admin-model-backends-save">
                 {{ saving ? $t('views.AdminModelBackendsView.saving') : $t('views.AdminModelBackendsView.save') }}
               </Button>
                 <button
@@ -328,12 +317,7 @@
           <p class="text-sm font-medium text-destructive">{{ $t('views.AdminModelBackendsView.delete_confirm', { name: deleteConfirmName }) }}</p>
           <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminModelBackendsView.this_action_cannot_be_undone') }}</p>
           <div class="mt-3 flex items-center gap-2">
-          <Button
-            :disabled="deleting"
-            variant="destructive"
-            data-testid="admin-model-backends-delete-confirm"
-            @click="deleteBackend"
-          >
+          <Button :disabled="deleting" severity="danger" data-testid="admin-model-backends-delete-confirm" @click="deleteBackend">
             {{ deleting ? $t('views.AdminModelBackendsView.deleting') : $t('views.AdminModelBackendsView.delete') }}
           </Button>
             <button
@@ -362,8 +346,8 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import { formatApiError } from '../lib/api/formatError'
-import { Button } from '@/components/ui/button'
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import Button from 'primevue/button'
+import Select from 'primevue/select'
 import TableActions from '../components/shared/TableActions.vue'
 
 type ModelBackendItem = components['schemas']['ModelBackendResponse']

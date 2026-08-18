@@ -3,22 +3,14 @@
     <FeatureGate feature-name="view_modes" required-tier="team" show-disabled>
     <header class="flex items-center justify-between">
       <PageHeader :title="$t('components.ViewToggle.saved_views')" :subtitle="$t('views.AdminViewsView.manage_saved_views_for_organizing_and_filtering_data')" />
-      <Button
-        variant="default"
-        class="border-primary/30 hover:border-primary/60"
-        data-testid="admin-views-add"
-        @click="openAddForm"
-      >
+      <Button class="border-primary/30 hover:border-primary/60" data-testid="admin-views-add" @click="openAddForm">
         Create View
       </Button>
     </header>
-
     <LoadingSpinner v-if="loading" />
-
     <div v-else-if="error" data-testid="admin-views-error">
       <ErrorAlert :message="error" :on-retry="loadViews" />
     </div>
-
     <template v-else>
       <div v-if="showForm" class="card p-6">
         <h2 class="mb-4 text-base font-semibold" data-testid="admin-views-form-title">{{ editingId ? 'Edit View' : 'New View' }}</h2>
@@ -35,17 +27,20 @@
           </div>
           <div>
             <label for="adminviewsview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.view_type') }}</label>
-            <Select aria-label="View type" v-model="form.view_type">
-              <SelectTrigger data-testid="admin-views-type-select" aria-label="View type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50">
-                <SelectValue placeholder="table" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="table">{{ $t('views.AdminViewsView.table') }}</SelectItem>
-                <SelectItem value="grid">{{ $t('views.AdminViewsView.grid') }}</SelectItem>
-                <SelectItem value="kanban">{{ $t('views.AdminViewsView.kanban') }}</SelectItem>
-                <SelectItem value="timeline">{{ $t('views.AdminViewsView.timeline') }}</SelectItem>
-              </SelectContent>
-            </Select>
+            <Select
+  aria-label="View type"
+  v-model="form.view_type"
+  placeholder="table"
+  data-testid="admin-views-type-select"
+  class="w-full"
+  :options="[{ value: 'table', label: $t('views.AdminViewsView.table') }, { value: 'grid', label: $t('views.AdminViewsView.grid') }, { value: 'kanban', label: $t('views.AdminViewsView.kanban') }, { value: 'timeline', label: $t('views.AdminViewsView.timeline') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
           </div>
           <div>
             <label for="adminviewsview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.filters_json') }}</label>
@@ -78,26 +73,25 @@
             </div>
             <div>
               <label for="adminviewsview-field-1" class="mb-1 block text-sm font-medium">{{ $t('components.NodeCategoryEditor.sort_order') }}</label>
-            <Select aria-label="Sort order" v-model="form.sort_order">
-              <SelectTrigger data-testid="admin-views-sort-order-select" aria-label="Sort order" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50">
-                <SelectValue placeholder="desc" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="desc">{{ $t('views.AdminViewsView.descending') }}</SelectItem>
-                <SelectItem value="asc">{{ $t('views.AdminViewsView.ascending') }}</SelectItem>
-              </SelectContent>
-            </Select>
+            <Select
+  aria-label="Sort order"
+  v-model="form.sort_order"
+  placeholder="desc"
+  data-testid="admin-views-sort-order-select"
+  class="w-full"
+  :options="[{ value: 'desc', label: $t('views.AdminViewsView.descending') }, { value: 'asc', label: $t('views.AdminViewsView.ascending') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
             </div>
           </div>
           <div v-if="saveError" class="text-sm text-destructive">{{ saveError }}</div>
           <div class="flex items-center gap-2">
-            <Button
-              type="submit"
-              :disabled="saving"
-              variant="default"
-              class="border-primary/30 hover:border-primary/60"
-              data-testid="admin-views-save"
-            >
+            <Button type="submit" :disabled="saving" class="border-primary/30 hover:border-primary/60" data-testid="admin-views-save">
               {{ saving ? 'Saving...' : 'Save' }}
             </Button>
             <button
@@ -111,7 +105,6 @@
           </div>
         </form>
       </div>
-
       <div v-if="views.length === 0 && !showForm" class="card p-8 text-center">
         <svg
           class="mx-auto h-16 w-16 text-muted-foreground/40"
@@ -142,7 +135,6 @@
           </svg>
         </a>
       </div>
-
       <div v-if="views.length > 0" class="overflow-hidden rounded-lg border">
         <table class="w-full text-left text-sm">
           <thead class="bg-muted/50">
@@ -165,14 +157,7 @@
               <td class="px-4 py-3">
                 <span class="inline-flex rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary capitalize">{{ v.view_type }}</span>
               </td>
-              <Tooltip :delay-duration="300">
-                <TooltipTrigger as-child>
-                  <td class="px-4 py-3 text-muted-foreground max-w-[200px] truncate font-mono text-xs">{{ filtersSummary(v.filters) }}</td>
-                </TooltipTrigger>
-                <TooltipContent side="top" class="max-w-xs">
-                  <p>{{ filtersSummary(v.filters) }}</p>
-                </TooltipContent>
-              </Tooltip>
+              <td class="px-4 py-3 text-muted-foreground max-w-[200px] truncate font-mono text-xs" v-tooltip.top="filtersSummary(v.filters)">{{ filtersSummary(v.filters) }}</td>
               <td class="px-4 py-3 text-muted-foreground">{{ v.created_by || '—' }}</td>
               <td class="px-4 py-3 text-muted-foreground">{{ formatDate(v.created_at) }}</td>
               <td class="px-4 py-3 text-right">
@@ -182,17 +167,11 @@
           </tbody>
         </table>
       </div>
-
       <div v-if="deleteConfirmId" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
         <p class="text-sm font-medium text-destructive">Delete "{{ deleteConfirmName }}"?</p>
         <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminModelBackendsView.this_action_cannot_be_undone') }}</p>
         <div class="mt-3 flex items-center gap-2">
-          <Button
-            :disabled="deleting"
-            variant="destructive"
-            data-testid="admin-views-delete-confirm"
-            @click="deleteView"
-          >
+          <Button :disabled="deleting" severity="danger" data-testid="admin-views-delete-confirm" @click="deleteView">
             {{ deleting ? 'Deleting...' : 'Delete' }}
           </Button>
           <button
@@ -209,7 +188,6 @@
     </FeatureGate>
   </div>
 </template>
-
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, computed } from 'vue'
@@ -218,15 +196,10 @@ import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
-import {
-  Tooltip,
-  TooltipTrigger,
-  TooltipContent,
-} from '../components/ui/tooltip'
-import { formatApiError } from '../lib/api/formatError'
 import { formatDateShort } from '../lib/formatDate'
-import { Button } from '@/components/ui/button'
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import { formatApiError } from '../lib/api/formatError'
+import Button from 'primevue/button'
+import Select from 'primevue/select'
 import TableActions from '../components/shared/TableActions.vue'
 
 interface SavedView {

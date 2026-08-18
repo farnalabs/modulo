@@ -6,17 +6,21 @@
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div>
           <label for="settingsnotificationlogview-status" class="mb-1 block text-xs font-medium text-muted-foreground capitalize">{{ $t('views.SettingsNotificationLogView.status') }}</label>
-          <Select aria-label="Status" v-model="filterStatus">
-            <SelectTrigger id="settingsnotificationlogview-status" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" aria-label="Status" data-testid="settings-notification-log-status">
-              <SelectValue :placeholder="$t('views.SettingsNotificationLogView.status')" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__all__">{{ $t('views.AdminErrorsView.all_statuses') }}</SelectItem>
-              <SelectItem value="delivered">{{ $t('views.SettingsNotificationLogView.delivered') }}</SelectItem>
-              <SelectItem value="failed">{{ $t('views.SettingsNotificationLogView.failed') }}</SelectItem>
-              <SelectItem value="dead_lettered">{{ $t('views.AdminNotificationDeliveryLogView.dead_lettered') }}</SelectItem>
-            </SelectContent>
-          </Select>
+          <Select
+  aria-label="Status"
+  v-model="filterStatus"
+  :placeholder="$t('views.SettingsNotificationLogView.status')"
+  data-testid="settings-notification-log-status"
+  id="settingsnotificationlogview-status"
+  class="w-full"
+  :options="[{ value: '__all__', label: $t('views.AdminErrorsView.all_statuses') }, { value: 'delivered', label: $t('views.SettingsNotificationLogView.delivered') }, { value: 'failed', label: $t('views.SettingsNotificationLogView.failed') }, { value: 'dead_lettered', label: $t('views.AdminNotificationDeliveryLogView.dead_lettered') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
         </div>
         <div>
           <label for="settingsnotificationlogview-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.SettingsNotificationLogView.from') }}</label>
@@ -37,11 +41,7 @@
           />
         </div>
         <div class="flex items-end gap-2">
-          <Button
-            variant="default"
-            data-testid="settings-notification-log-apply"
-            @click="applyFilters"
-          >
+          <Button data-testid="settings-notification-log-apply" @click="applyFilters">
             Apply
           </Button>
           <button
@@ -141,14 +141,8 @@ import { useDataFetch } from '../composables/useDataFetch'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import { Button } from '@/components/ui/button'
-import {
-  Select,
-  SelectTrigger,
-  SelectContent,
-  SelectItem,
-  SelectValue,
-} from '@/components/ui/select'
+import Button from 'primevue/button'
+import Select from 'primevue/select'
 
 const cursorStack = ref<(string | null)[]>([])
 const currentCursor = ref<string | null>(null)

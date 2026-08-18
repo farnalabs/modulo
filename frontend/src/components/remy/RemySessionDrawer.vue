@@ -6,13 +6,7 @@
       >
         Sessions
       </h3>
-      <Button
-        variant="ghost"
-        size="icon"
-        @click="handleNewSession"
-        :title="$t('components.remy.RemySessionDrawer.new_session')"
-        :aria-label="$t('components.remy.new_session')"
-      >
+      <Button severity="secondary" text icon-only @click="handleNewSession" :title="$t('components.remy.RemySessionDrawer.new_session')" :aria-label="$t('components.remy.new_session')">
         <svg
           xmlns="http://www.w3.org/2000/svg"
           width="14"
@@ -40,9 +34,7 @@
       class="flex flex-col items-center justify-center py-8 px-4 text-center"
     >
       <p class="text-sm text-muted-foreground">{{ $t('components.remy.RemySessionDrawer.no_sessions_yet') }}</p>
-      <Button variant="link" size="sm" @click="handleNewSession" class="mt-2"
-        >{{ $t('components.remy.RemySessionDrawer.start_a_new_chat') }}</Button
-      >
+      <Button severity="primary" link size="small" @click="handleNewSession" class="mt-2">{{ $t('components.remy.RemySessionDrawer.start_a_new_chat') }}</Button>
     </div>
 
     <div v-else class="divide-y">
@@ -96,7 +88,7 @@
 <script setup lang="ts">
 import { shortId } from "@/utils/format";
 import { useRemyStore } from "@/composables/useRemyStore";
-import { Button } from "@/components/ui/button";
+import Button from 'primevue/button'
 import { formatDateShort } from "@/lib/formatDate";
 
 const emit = defineEmits<{

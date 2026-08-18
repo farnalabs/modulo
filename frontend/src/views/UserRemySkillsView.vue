@@ -1,29 +1,18 @@
 <template>
-  <div data-theme="agent" class="page-wide">
-      <TooltipProvider>
-    <header class="flex items-center justify-between">
+  <div data-theme="agent" class="page-wide"><header class="flex items-center justify-between">
       <PageHeader :title="$t('views.UserRemySkillsView.my_remy_skills')" :subtitle="$t('views.UserRemySkillsView.manage_your_personal_skills_for_the_remy_ai_assistant')" />
-      <Button
-        variant="default"
-        class="border border-primary/30"
-        data-testid="remy-user-skills-add"
-        @click="skillDialogRef?.openCreate()"
-      >
+      <Button class="border border-primary/30" data-testid="remy-user-skills-add" @click="skillDialogRef?.openCreate()">
         Add Skill
       </Button>
     </header>
-
     <LoadingSpinner v-if="loading" />
-
     <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadSkills" />
-
     <div v-else-if="skills.length === 0" class="rounded-lg border bg-card p-8 text-center">
       <p class="text-lg font-medium">{{ $t('views.UserRemySkillsView.no_personal_skills_configured') }}</p>
       <p class="mt-1 text-sm text-muted-foreground">
         Create skills to give Remy custom instructions and behaviours.
       </p>
     </div>
-
     <template v-else>
       <div class="overflow-hidden rounded-lg border bg-card shadow-sm">
         <table class="w-full text-left text-sm">
@@ -43,14 +32,7 @@
               class="transition-colors hover:bg-muted/30"
             >
               <td class="px-4 py-3 font-medium">{{ skill.name }}</td>
-              <Tooltip :delay-duration="300">
-                <TooltipTrigger as-child>
-                  <td class="px-4 py-3 text-muted-foreground max-w-xs truncate">{{ skill.description || '—' }}</td>
-                </TooltipTrigger>
-                <TooltipContent side="top" class="max-w-xs">
-                  <p>{{ skill.description || '—' }}</p>
-                </TooltipContent>
-              </Tooltip>
+              <td class="px-4 py-3 text-muted-foreground max-w-xs truncate" v-tooltip.top="skill.description || '—'">{{ skill.description || '—' }}</td>
               <td class="px-4 py-3">
                 <div class="flex flex-wrap gap-1">
                   <span
@@ -107,7 +89,6 @@
       </div>
       <div v-if="skillToggleError" class="px-4 pt-2 text-sm text-destructive">{{ skillToggleError }}</div>
     </template>
-
     <RemySkillDialog
       ref="skillDialogRef"
       create-description="Create a new personal skill for Remy."
@@ -116,14 +97,11 @@
       update-endpoint="/api/v1/me/remy/skills/{skill_id}"
       delete-endpoint="/api/v1/me/remy/skills/{skill_id}"
       @saved="loadSkills"
-    />
-      </TooltipProvider>
-  </div>
+    /></div>
 </template>
-
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
@@ -132,12 +110,6 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import RemySkillDialog from '../components/remy/RemySkillDialog.vue'
-import {
-  TooltipProvider,
-  Tooltip,
-  TooltipTrigger,
-  TooltipContent,
-} from '../components/ui/tooltip'
 import type { SkillItem } from '../types/remy'
 
 const remyStore = useRemyStore()

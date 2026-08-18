@@ -13,16 +13,15 @@
 
       <template v-else>
         <Card>
-          <CardHeader>
-            <CardTitle>{{ $t('views.AdminSandboxConcurrencyView.max_concurrent_sandbox_runs') }}</CardTitle>
-            <CardDescription>{{ $t('views.AdminSandboxConcurrencyView.leave_empty_for_unlimited') }}</CardDescription>
-          </CardHeader>
-          <CardContent>
+          <template #title>{{ $t('views.AdminSandboxConcurrencyView.max_concurrent_sandbox_runs') }}</template>
+<template #subtitle>{{ $t('views.AdminSandboxConcurrencyView.leave_empty_for_unlimited') }}</template>
+
+          <template #content>
             <div class="flex items-end gap-3">
               <div class="flex-1">
                 <span class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminSandboxConcurrencyView.concurrent_run_limit') }}</span>
-                <Input aria-label="Form control"
-                  :model-value="limitInput ?? undefined"
+                <InputText aria-label="Form control"
+                  :model-value="limitInput == null ? '' : String(limitInput)"
                   @update:model-value="(v: any) => limitInput = v === '' ? null : Number(v)"
                   type="number"
                   min="1"
@@ -36,7 +35,7 @@
             </div>
             <p v-if="saveError" class="mt-2 text-xs text-destructive">{{ saveError }}</p>
             <p v-if="saveSuccess" class="mt-2 text-xs text-success">{{ $t('views.AdminSandboxConcurrencyView.limit_updated') }}</p>
-          </CardContent>
+          </template>
         </Card>
       </template>
     </FeatureGate>
@@ -53,9 +52,9 @@ import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card'
-import { Input } from '../components/ui/input'
-import { Button } from '../components/ui/button'
+import Card from 'primevue/card'
+import InputText from 'primevue/inputtext'
+import Button from 'primevue/button'
 
 const planStore = usePlanStore()
 

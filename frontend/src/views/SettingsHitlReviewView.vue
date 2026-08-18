@@ -18,16 +18,20 @@
     >
       <template #after>
         <div class="flex items-center gap-2">
-          <Select :aria-label="$t('views.SettingsHitlReviewView.pipeline_label')" v-model="pipelineFilter" @update:model-value="loadGates">
-            <SelectTrigger data-testid="hitl-review-pipeline-select" :aria-label="$t('views.SettingsHitlReviewView.pipeline_label')" class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-              <SelectValue :placeholder="$t('views.SettingsHitlReviewView.all_pipelines')" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">
-                {{ p.name }}
-              </SelectItem>
-            </SelectContent>
-          </Select>
+          <Select
+  :aria-label="$t('views.SettingsHitlReviewView.pipeline_label')"
+  v-model="pipelineFilter"
+  @update:model-value="loadGates"
+  :placeholder="$t('views.SettingsHitlReviewView.all_pipelines')"
+  data-testid="hitl-review-pipeline-select"
+  :options="pipelines.map(p => ({ value: p.id, label: p.name }))"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
           <input :aria-label="$t('views.SettingsHitlReviewView.date_label')"
             v-model="dateFrom"
             type="date"
@@ -159,13 +163,7 @@
                 <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.SettingsHitlReviewView.actions_label') }}</h3>
                 <div class="space-y-3">
                   <div v-if="gateStatus(gate) === 'pending'">
-                    <Button
-                      :disabled="claiming[expandKey(gate)]"
-                      variant="default"
-                      class="w-full"
-                      data-testid="hitl-review-claim"
-                      @click="claimGate(gate)"
-                    >
+                    <Button :disabled="claiming[expandKey(gate)]" class="w-full" data-testid="hitl-review-claim" @click="claimGate(gate)">
                       {{ claiming[expandKey(gate)] ? $t('views.SettingsHitlReviewView.claiming') : $t('views.SettingsHitlReviewView.claim_gate') }}
                     </Button>
                   </div>
@@ -238,8 +236,8 @@ import EmptyState from '../components/shared/EmptyState.vue'
 import { usePlanStore } from '../stores/planStore'
 import { formatDateShortWithTime } from '../lib/formatDate'
 import { shortId } from '../utils/format'
-import { Button } from '@/components/ui/button'
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import Button from 'primevue/button'
+import Select from 'primevue/select'
 
 const planStore = usePlanStore()
 const { t } = useI18n()

@@ -1,7 +1,6 @@
 <template>
   <div class="page-wide">
     <PageHeader :title="$t('views.FeedbackInboxView.feedback_inbox')" :subtitle="$t('views.FeedbackInboxView.review_and_resolve_pending_feedback_from_pipeline_evaluation')" data-testid="feedback-inbox-title" />
-
     <FilterBar
       :filters="[{ key: 'status', label: $t('views.FeedbackInboxView.all'), options: [
         { value: 'pending', label: $t('views.FeedbackInboxView.pending') },
@@ -15,14 +14,20 @@
     >
       <template #after>
         <div class="flex items-center gap-2">
-          <Select :aria-label="$t('views.FeedbackInboxView.pipeline')" v-model="pipelineFilter" @update:model-value="loadFeedback">
-            <SelectTrigger data-testid="feedback-inbox-pipeline-select" :aria-label="$t('views.FeedbackInboxView.pipeline')" class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-              <SelectValue :placeholder="$t('views.FeedbackInboxView.all_pipelines')" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</SelectItem>
-            </SelectContent>
-          </Select>
+          <Select
+  :aria-label="$t('views.FeedbackInboxView.pipeline')"
+  v-model="pipelineFilter"
+  @update:model-value="loadFeedback"
+  :placeholder="$t('views.FeedbackInboxView.all_pipelines')"
+  data-testid="feedback-inbox-pipeline-select"
+  :options="pipelines.map(p => ({ value: p.id, label: p.name }))"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
           <input :aria-label="$t('views.FeedbackInboxView.from')"
             v-model="dateFrom"
             type="date"
@@ -40,13 +45,9 @@
         </div>
       </template>
     </FilterBar>
-
     <ErrorAlert v-if="pipelinesError" :message="pipelinesError" :on-retry="loadPipelines" />
-
     <LoadingSpinner v-if="loading" />
-
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadFeedback" />
-
     <template v-else>
       <EmptyState
         v-if="records.length === 0"
@@ -54,7 +55,6 @@
         :title="$t('views.FeedbackInboxView.no_feedback_yet')"
         :description="$t('views.FeedbackInboxView.all_feedback_records_have_been_resolved_or_no_evaluations_ha')"
       />
-
       <div v-else class="space-y-2">
         <div
           v-for="record in records"
@@ -77,37 +77,18 @@
               :class="{ 'rotate-90': expandedId === record.id }"
               aria-hidden="true"
             />
-
             <span :class="statusBadgeClass(record.feedback_status)" class="capitalize">
               {{ record.feedback_status }}
             </span>
-
             <div class="min-w-0 flex-1">
-              <Tooltip :delay-duration="300">
-                <TooltipTrigger as-child>
-                  <p class="truncate text-sm font-medium">{{ record.pipeline_name }}</p>
-                </TooltipTrigger>
-                <TooltipContent side="top">
-                  <p>{{ record.pipeline_name }}</p>
-                </TooltipContent>
-              </Tooltip>
+              <p class="truncate text-sm font-medium" v-tooltip.top="record.pipeline_name">{{ record.pipeline_name }}</p>
             </div>
-
             <div class="min-w-0 flex-1">
-              <Tooltip :delay-duration="300">
-                <TooltipTrigger as-child>
-                  <p class="truncate text-sm text-muted-foreground">{{ record.rejection_reason || '-' }}</p>
-                </TooltipTrigger>
-                <TooltipContent side="top" class="max-w-xs">
-                  <p>{{ record.rejection_reason || '-' }}</p>
-                </TooltipContent>
-              </Tooltip>
+              <p class="truncate text-sm text-muted-foreground" v-tooltip.top="record.rejection_reason || '-'">{{ record.rejection_reason || '-' }}</p>
             </div>
-
             <span class="flex-shrink-0 text-xs text-muted-foreground">
               {{ formatDate(record.created_at) }}
             </span>
-
             <span
               v-if="record.feedback_handler_type"
               class="inline-flex flex-shrink-0 items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground"
@@ -115,47 +96,35 @@
               {{ handlerTypeLabel(record.feedback_handler_type) }}
             </span>
           </div>
-
           <div v-if="expandedId === record.id" class="border-t p-4">
             <div v-if="detailLoading[record.id]" class="flex items-center justify-center py-8">
               <div class="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
             </div>
-
             <template v-else-if="detailError[record.id]">
               <div role="alert" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
                 {{ detailError[record.id] }}
                 <button data-testid="feedback-inbox-retry" class="ml-2 underline" @click="loadDetail(record.id)">{{ $t('views.FeedbackInboxView.retry') }}</button>
               </div>
             </template>
-
             <template v-else-if="detailMap[record.id]">
               <div class="space-y-6">
                 <div>
                   <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.FeedbackInboxView.rejection_reason_heading') }}</h3>
                   <p class="text-sm">{{ detailMap[record.id].rejection_reason || $t('views.FeedbackInboxView.no_rejection_reason') }}</p>
                 </div>
-
                 <div>
                   <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.FeedbackInboxView.rejected_output') }}</h3>
                   <JsonViewer :data="detailMap[record.id].rejected_output ?? null" :show-toolbar="true" :max-height="'16rem'" />
                 </div>
-
                 <div v-if="detailMap[record.id].correction_proposal">
                   <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.FeedbackInboxView.correction_proposal') }}</h3>
                   <JsonViewer :data="detailMap[record.id].correction_proposal ?? null" :show-toolbar="true" :max-height="'12rem'" />
                 </div>
-
                 <div v-if="detailMap[record.id].feedback_status === 'pending' || detailMap[record.id].feedback_status === 'routing'">
-                  <Button
-                    :disabled="triggering[record.id]"
-                    data-testid="feedback-inbox-trigger-correction"
-                    variant="default"
-                    @click="triggerCorrection(record.id)"
-                  >
+                  <Button :disabled="triggering[record.id]" data-testid="feedback-inbox-trigger-correction" @click="triggerCorrection(record.id)">
                     {{ triggering[record.id] ? $t('views.FeedbackInboxView.triggering') : $t('views.FeedbackInboxView.trigger_correction_run') }}
                   </Button>
                 </div>
-
                 <div>
                   <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.FeedbackInboxView.annotation_heading') }}</h3>
                   <textarea
@@ -168,12 +137,7 @@
                     :placeholder="$t('views.FeedbackInboxView.add_your_review_annotation')"
                   />
                   <div class="mt-2 flex items-center gap-2">
-                    <Button
-                      :disabled="savingAnnotation[record.id]"
-                      data-testid="feedback-inbox-save-annotation"
-                      variant="default"
-                      @click="saveAnnotation(record.id)"
-                    >
+                    <Button :disabled="savingAnnotation[record.id]" data-testid="feedback-inbox-save-annotation" @click="saveAnnotation(record.id)">
                       {{ savingAnnotation[record.id] ? $t('views.FeedbackInboxView.saving') : $t('views.FeedbackInboxView.save_annotation') }}
                     </Button>
                     <button
@@ -205,7 +169,6 @@
     </template>
   </div>
 </template>
-
 <script setup lang="ts">
 import { ref, computed, onBeforeUnmount, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -217,15 +180,9 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import JsonViewer from '../components/shared/JsonViewer.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
-import {
-  Tooltip,
-  TooltipTrigger,
-  TooltipContent,
-} from '../components/ui/tooltip'
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 import { formatDateShortWithTime } from '../lib/formatDate'
 import { ChevronRight } from '@lucide/vue'
 

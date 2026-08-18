@@ -10,16 +10,15 @@
 
       <template v-else>
         <Card>
-          <CardHeader>
-            <CardTitle>{{ $t('views.AdminRunRetentionView.current_retention_period') }}</CardTitle>
-            <CardDescription>{{ $t('views.AdminRunRetentionView.runs_older_than_this_many_days_are_automatically_cleaned_up') }}</CardDescription>
-          </CardHeader>
-          <CardContent>
+          <template #title>{{ $t('views.AdminRunRetentionView.current_retention_period') }}</template>
+<template #subtitle>{{ $t('views.AdminRunRetentionView.runs_older_than_this_many_days_are_automatically_cleaned_up') }}</template>
+
+          <template #content>
             <div class="flex items-end gap-3">
               <div class="flex-1">
                 <span class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminRunRetentionView.retention_period_days') }}</span>
-                <Input aria-label="Form control"
-                  :model-value="retentionDays ?? undefined"
+                <InputText aria-label="Form control"
+                  :model-value="retentionDays == null ? '' : String(retentionDays)"
                   @update:model-value="(v: any) => retentionDays = v === '' ? null : Number(v)"
                   type="number"
                   min="7"
@@ -33,20 +32,19 @@
             </div>
             <p v-if="retentionSaveError" class="mt-2 text-xs text-destructive">{{ retentionSaveError }}</p>
             <p v-if="retentionSaveSuccess" class="mt-2 text-xs text-success">{{ $t('views.AdminRunRetentionView.retention_period_updated') }}</p>
-          </CardContent>
+          </template>
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle>{{ $t('views.AdminRunRetentionView.manual_purge') }}</CardTitle>
-            <CardDescription>{{ $t('views.AdminRunRetentionView.immediately_delete_runs_older_than_a_specified_number_of_days') }}</CardDescription>
-          </CardHeader>
-          <CardContent>
+          <template #title>{{ $t('views.AdminRunRetentionView.manual_purge') }}</template>
+<template #subtitle>{{ $t('views.AdminRunRetentionView.immediately_delete_runs_older_than_a_specified_number_of_days') }}</template>
+
+          <template #content>
             <div class="flex items-end gap-3">
               <div class="flex-1">
                 <span class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminRunRetentionView.purge_runs_older_than_days') }}</span>
-                <Input aria-label="Form control"
-                  :model-value="purgeAge ?? undefined"
+                <InputText aria-label="Form control"
+                  :model-value="purgeAge == null ? '' : String(purgeAge)"
                   @update:model-value="(v: any) => purgeAge = v === '' ? null : Number(v)"
                   type="number"
                   min="1"
@@ -54,26 +52,20 @@
                   data-testid="admin-run-retention-purge-age"
                 />
               </div>
-              <Button
-                :disabled="purging"
-                variant="destructive"
-                data-testid="admin-run-retention-purge-now"
-                @click="executePurge"
-              >
+              <Button :disabled="purging" severity="danger" data-testid="admin-run-retention-purge-now" @click="executePurge">
                 {{ purging ? 'Purging...' : 'Purge Now' }}
               </Button>
             </div>
             <p v-if="purgeError" class="mt-2 text-xs text-destructive">{{ purgeError }}</p>
             <p v-if="purgeResult" class="mt-2 text-xs text-success">{{ purgeResult }}</p>
-          </CardContent>
+          </template>
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle>{{ $t('views.AdminRunRetentionView.storage_info') }}</CardTitle>
-            <CardDescription>{{ $t('views.AdminRunRetentionView.current_run_storage_statistics') }}</CardDescription>
-          </CardHeader>
-          <CardContent>
+          <template #title>{{ $t('views.AdminRunRetentionView.storage_info') }}</template>
+<template #subtitle>{{ $t('views.AdminRunRetentionView.current_run_storage_statistics') }}</template>
+
+          <template #content>
             <LoadingSpinner v-if="storageLoading" />
             <div v-else-if="storageError" class="text-sm text-destructive">{{ storageError }}</div>
             <div v-else class="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -99,7 +91,7 @@
                 </div>
               </div>
             </div>
-          </CardContent>
+          </template>
         </Card>
       </template>
     </FeatureGate>
@@ -116,9 +108,9 @@ import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card'
-import { Input } from '../components/ui/input'
-import { Button } from '../components/ui/button'
+import Card from 'primevue/card'
+import InputText from 'primevue/inputtext'
+import Button from 'primevue/button'
 
 const planStore = usePlanStore()
 

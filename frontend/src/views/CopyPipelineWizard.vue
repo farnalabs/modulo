@@ -95,13 +95,7 @@
         </div>
 
         <div class="flex justify-end mt-6">
-              <Button
-                :disabled="!selectedPipeline"
-                variant="default"
-                class="px-6 py-2.5"
-                @click="step = 2"
-                data-testid="copy-wizard-next-step1"
-          >
+              <Button :disabled="!selectedPipeline" class="px-6 py-2.5" @click="step = 2" data-testid="copy-wizard-next-step1">
             Next: Configure Copy
           </Button>
         </div>
@@ -201,12 +195,7 @@
           >
             Back
           </button>
-          <Button
-            variant="default"
-            class="px-6 py-2.5"
-            @click="step = 3"
-            data-testid="copy-wizard-next-step2"
-          >
+          <Button class="px-6 py-2.5" @click="step = 3" data-testid="copy-wizard-next-step2">
             Next: Review
           </Button>
         </div>
@@ -277,13 +266,7 @@
           >
             Back
           </button>
-          <Button
-            :disabled="executing"
-            variant="default"
-            class="px-6 py-2.5"
-            @click="executeCopy"
-            data-testid="copy-wizard-execute"
-          >
+          <Button :disabled="executing" class="px-6 py-2.5" @click="executeCopy" data-testid="copy-wizard-execute">
             {{ executing ? 'Copying...' : 'Copy Pipeline' }}
           </Button>
         </div>
@@ -321,12 +304,7 @@
             <p class="text-lg font-medium text-foreground mb-1">{{ $t('views.CopyPipelineWizard.pipeline_copied') }}</p>
             <p class="text-sm text-muted-foreground mb-6">{{ result?.name }} is ready for adaptation.</p>
             <div class="flex items-center justify-center gap-3">
-              <Button
-                variant="default"
-                class="px-6 py-2.5"
-                @click="openInEditor"
-                data-testid="copy-wizard-open-editor"
-              >
+              <Button class="px-6 py-2.5" @click="openInEditor" data-testid="copy-wizard-open-editor">
                 Open in Editor
               </Button>
               <button
@@ -346,12 +324,7 @@
             <p class="text-lg font-medium text-destructive mb-1">{{ $t('views.CopyPipelineWizard.copy_failed') }}</p>
             <p class="text-sm text-muted-foreground mb-6">{{ executeError }}</p>
             <div class="flex items-center justify-center gap-3">
-              <Button
-                variant="default"
-                class="px-6 py-2.5"
-                @click="executeCopy"
-                data-testid="copy-wizard-retry"
-              >
+              <Button class="px-6 py-2.5" @click="executeCopy" data-testid="copy-wizard-retry">
                 Retry
               </Button>
               <button
@@ -374,7 +347,7 @@ import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 import { useDataFetch } from '../composables/useDataFetch'
 import BackLink from '../components/BackLink.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'

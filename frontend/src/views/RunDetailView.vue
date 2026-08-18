@@ -323,12 +323,7 @@
       >
         <h3 class="text-sm font-semibold text-warning mb-1">{{ $t('views.RunDetailGuardrailSummary.override_guardrail') }}</h3>
         <p class="text-xs text-warning/80 mb-3">{{ $t('views.RunDetailGuardrailSummary.override_disclosure') }}</p>
-        <Button
-          v-if="isOrgOperator"
-          data-testid="run-detail-override-guardrail"
-          variant="default"
-          @click="openOverrideDialog"
-        >
+        <Button v-if="isOrgOperator" data-testid="run-detail-override-guardrail" @click="openOverrideDialog">
           {{ $t('views.RunDetailGuardrailSummary.override_guardrail') }}
         </Button>
         <p
@@ -634,76 +629,70 @@
       </section>
 
       <!-- Prompt Reveal Dialog -->
-      <Dialog v-if="selectedPrompt" :open="!!selectedPrompt" @update:open="closePromptDialog">
-        <DialogContent class="max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>
+      <Dialog v-if="selectedPrompt" :visible="!!selectedPrompt" :modal="true" :dismissable-mask="true" :style="{ width: '48rem' }" @update:visible="closePromptDialog">
+        <template #header>
+          <div>
+            <div class="text-lg font-semibold">
               Prompt — {{ selectedPrompt.nodeName }}
               <span v-if="selectedPrompt.tokenCount != null" class="ml-2 text-sm font-normal text-muted-foreground">
                 ~{{ selectedPrompt.tokenCount.toLocaleString() }} tokens
               </span>
-            </DialogTitle>
-            <DialogDescription class="sr-only">
-              {{ $t('views.RunDetailView.prompt_dialog_description') }}
-            </DialogDescription>
-          </DialogHeader>
-          <div class="max-h-[60vh] overflow-auto rounded-lg border bg-muted p-4">
-            <pre class="whitespace-pre-wrap text-xs leading-relaxed"><code>{{ selectedPrompt.prompt }}</code></pre>
+            </div>
           </div>
-          <DialogFooter>
-            <Button
-              data-testid="run-detail-copy-prompt"
-              @click="copyPromptText"
-            >
+        </template>
+        <div class="max-h-[60vh] overflow-auto rounded-lg border bg-muted p-4">
+          <pre class="whitespace-pre-wrap text-xs leading-relaxed"><code>{{ selectedPrompt.prompt }}</code></pre>
+        </div>
+        <template #footer>
+          <div class="flex justify-end">
+            <Button data-testid="run-detail-copy-prompt" @click="copyPromptText">
               {{ promptCopied ? $t('views.RunDetailView.copied') : $t('views.RunDetailView.copy_prompt') }}
             </Button>
-          </DialogFooter>
-        </DialogContent>
+          </div>
+        </template>
       </Dialog>
 
       <!-- Guardrail Override Dialog -->
-      <Dialog :open="overrideDialogOpen" @update:open="overrideDialogOpen = false">
-        <DialogContent class="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>{{ $t('views.RunDetailGuardrailSummary.override_guardrail') }}</DialogTitle>
-            <DialogDescription>
+      <Dialog :visible="overrideDialogOpen" :modal="true" :dismissable-mask="true" :style="{ width: '42rem' }" @update:visible="overrideDialogOpen = false">
+        <template #header>
+          <div>
+            <div class="text-lg font-semibold">{{ $t('views.RunDetailGuardrailSummary.override_guardrail') }}</div>
+            <div class="mt-0.5 text-sm text-muted-foreground">
               {{ $t('views.RunDetailGuardrailSummary.override_guardrail_description') }}
-            </DialogDescription>
-          </DialogHeader>
-          <div class="space-y-4">
-            <label for="run-detail-override-input" class="mb-1 block text-sm font-medium">
-              {{ $t('views.RunDetailGuardrailSummary.input_payload') }}
-            </label>
-            <textarea
-              id="run-detail-override-input"
-              v-model="overrideInput"
-              rows="10"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              data-testid="run-detail-override-input"
-              :aria-label="$t('views.RunDetailGuardrailSummary.input_payload')"
-            />
-            <p class="text-xs text-muted-foreground">{{ $t('views.RunDetailGuardrailSummary.override_disclosure') }}</p>
-            <div
-              v-if="overrideMessage"
-              :data-testid="overrideMessage.type === 'error' ? 'run-detail-override-error' : 'run-detail-override-success'"
-              role="status"
-              aria-live="polite"
-              class="text-sm font-medium"
-              :class="overrideMessage.type === 'error' ? 'text-destructive' : 'text-success'"
-            >
-              {{ overrideMessage.text }}
             </div>
           </div>
-          <DialogFooter>
-            <Button
-              data-testid="run-detail-override-submit"
-              :disabled="overrideSubmitting"
-              @click="submitOverride"
-            >
+        </template>
+        <div class="space-y-4">
+          <label for="run-detail-override-input" class="mb-1 block text-sm font-medium">
+            {{ $t('views.RunDetailGuardrailSummary.input_payload') }}
+          </label>
+          <textarea
+            id="run-detail-override-input"
+            v-model="overrideInput"
+            rows="10"
+            class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            data-testid="run-detail-override-input"
+            :aria-label="$t('views.RunDetailGuardrailSummary.input_payload')"
+          />
+          <p class="text-xs text-muted-foreground">{{ $t('views.RunDetailGuardrailSummary.override_disclosure') }}</p>
+          <div
+            v-if="overrideMessage"
+            :data-testid="overrideMessage.type === 'error' ? 'run-detail-override-error' : 'run-detail-override-success'"
+            role="status"
+            aria-live="polite"
+            class="text-sm font-medium"
+            :class="overrideMessage.type === 'error' ? 'text-destructive' : 'text-success'"
+          >
+            {{ overrideMessage.text }}
+          </div>
+        </div>
+        <template #footer>
+          <div class="flex justify-end">
+            <Button data-testid="run-detail-override-submit" :disabled="overrideSubmitting" @click="submitOverride">
               {{ overrideSubmitting ? '...' : $t('views.RunDetailGuardrailSummary.override_guardrail') }}
             </Button>
-          </DialogFooter>
-        </DialogContent>
+          </div>
+        </template>
       </Dialog>
     </template>
   </div>
@@ -722,14 +711,8 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import RunErrorTag from '../components/shared/RunErrorTag.vue'
 import JsonViewer from '../components/shared/JsonViewer.vue'
-import Dialog from '../components/ui/dialog/Dialog.vue'
-import DialogContent from '../components/ui/dialog/DialogContent.vue'
-import DialogHeader from '../components/ui/dialog/DialogHeader.vue'
-import DialogTitle from '../components/ui/dialog/DialogTitle.vue'
-import DialogDescription from '../components/ui/dialog/DialogDescription.vue'
-import DialogFooter from '../components/ui/dialog/DialogFooter.vue'
-import Button from '../components/ui/button/Button.vue'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip'
+import Dialog from 'primevue/dialog'
+import Button from 'primevue/button'
 import { formatApiError } from '../lib/api/formatError'
 import { requestRunCancellation } from '../lib/api/runs'
 import { isTerminalStatus } from '../constants/runStatuses'

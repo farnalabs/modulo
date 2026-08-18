@@ -4,12 +4,7 @@
     <div class="page-wide">
     <header class="flex items-center justify-between">
       <PageHeader title="Node Categories" subtitle="Manage categories for classifying nodes in pipelines" />
-      <Button
-        variant="default"
-        class="border-primary/30 hover:border-primary/60"
-        data-testid="admin-node-categories-add"
-        @click="openAddForm"
-      >
+      <Button class="border-primary/30 hover:border-primary/60" data-testid="admin-node-categories-add" @click="openAddForm">
         Add Category
       </Button>
     </header>
@@ -93,12 +88,7 @@
         <p class="text-sm font-medium text-destructive">Delete "{{ deleteConfirmName }}"?</p>
         <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminNodeCategoriesView.this_action_cannot_be_undone') }}</p>
         <div class="mt-3 flex items-center gap-2">
-          <Button
-            :disabled="deleting"
-            variant="destructive"
-            data-testid="admin-node-categories-delete-confirm"
-            @click="deleteCategory"
-          >
+          <Button :disabled="deleting" severity="danger" data-testid="admin-node-categories-delete-confirm" @click="deleteCategory">
             {{ deleting ? 'Deleting...' : 'Delete' }}
           </Button>
           <button
@@ -127,7 +117,7 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 import TableActions from '../components/shared/TableActions.vue'
 
 const planStore = usePlanStore()

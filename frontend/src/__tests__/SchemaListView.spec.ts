@@ -77,28 +77,22 @@ vi.mock('@/composables/useApi', () => {
 
 import SchemaListView from '../views/SchemaListView.vue'
 
-// The reka-ui DropdownMenu popper cannot position itself in jsdom (throws
-// "Cannot read properties of null (reading 'insertBefore')"). Stub the menu
-// family so items render inline while still exercising the view's handlers.
-const MenuStubs = {
-  DropdownMenu: { template: '<div class="ddm-root"><slot /></div>' },
-  DropdownMenuTrigger: { template: '<div class="ddm-trigger"><slot /></div>' },
-  DropdownMenuContent: { template: '<div class="ddm-content"><slot /></div>' },
-  DropdownMenuItem: {
-    template: '<div class="ddm-item" @click="$emit(\'click\', $event)"><slot /></div>',
-  },
-}
-
 function mountView() {
   return mount(SchemaListView, {
     global: {
       stubs: {
         LoadingSpinner: true,
         ErrorAlert: true,
-        ...MenuStubs,
       },
     },
   })
+}
+
+// PrimeVue Menu popup is teleported to document.body. Helper to open a row's
+// action menu and return the teleported menu item matching the given label.
+function findMenuItem(label: string): HTMLElement | null {
+  const items = Array.from(document.body.querySelectorAll('[data-pc-section="item"]'))
+  return (items.find((el) => el.textContent?.trim() === label) as HTMLElement) ?? null
 }
 
 describe('SchemaListView', () => {
@@ -134,20 +128,27 @@ describe('SchemaListView', () => {
     const wrapper = mountView()
     await flushPromises()
 
-    const deprecateItems = wrapper.findAll('[data-testid="schema-deprecate"]')
-    expect(deprecateItems.length).toBe(1)
+    // Open the menu for the active schema (row 1) -> deprecate is present
+    await wrapper.find('[data-testid="schema-row-1"] [data-testid="schema-action-menu"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(findMenuItem('Deprecate')).not.toBeNull()
 
-    // Every row offers a View / Edit affordance
-    const viewEditItems = wrapper.findAll('[data-testid="schema-view-edit"]')
-    expect(viewEditItems.length).toBe(2)
+    // Open the menu for the deprecated schema (row 2) -> deprecate is absent
+    await wrapper.find('[data-testid="schema-row-2"] [data-testid="schema-action-menu"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(findMenuItem('Deprecate')).toBeNull()
   })
 
   it('opens, confirms, and cancels deprecation via the confirmation dialog', async () => {
     const wrapper = mountView()
     await flushPromises()
 
-    const deprecateItem = wrapper.find('[data-testid="schema-deprecate"]')
-    await deprecateItem.trigger('click')
+    await wrapper.find('[data-testid="schema-row-1"] [data-testid="schema-action-menu"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    findMenuItem('Deprecate')!.click()
     await flushPromises()
     await nextTick()
     expect(document.body.textContent).toContain('Deprecate "Active Schema"?')
@@ -162,7 +163,10 @@ describe('SchemaListView', () => {
     expect(wrapper.text()).toContain('Active')
 
     // Re-open and confirm deprecation
-    await wrapper.find('[data-testid="schema-deprecate"]').trigger('click')
+    await wrapper.find('[data-testid="schema-row-1"] [data-testid="schema-action-menu"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    findMenuItem('Deprecate')!.click()
     await flushPromises()
     await nextTick()
     expect(document.body.textContent).toContain('Deprecate "Active Schema"?')
@@ -200,7 +204,10 @@ describe('SchemaListView', () => {
     const wrapper = mountView()
     await flushPromises()
 
-    await wrapper.find('[data-testid="schema-move-folder"]').trigger('click')
+    await wrapper.find('[data-testid="schema-row-1"] [data-testid="schema-action-menu"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    findMenuItem('Move to Folder')!.click()
     await flushPromises()
     await nextTick()
     expect(document.body.textContent).toContain('Move to Folder')
@@ -245,9 +252,10 @@ describe('SchemaListView', () => {
     const wrapper = mountView()
     await flushPromises()
 
-    const moveItems = wrapper.findAll('[data-testid="schema-move-folder"]')
-    expect(moveItems.length).toBe(2)
-    await moveItems[1].trigger('click')
+    await wrapper.find('[data-testid="schema-row-2"] [data-testid="schema-action-menu"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    findMenuItem('Move to Folder')!.click()
     await flushPromises()
     await nextTick()
 

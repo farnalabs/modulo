@@ -74,7 +74,7 @@
     </div>
 
     <div class="p-3 border-t flex items-center justify-between gap-2 flex-wrap">
-      <Button variant="outline" size="xs" :disabled="resetting" @click="resetToDefaults">
+      <Button severity="secondary" outlined size="small" class="text-xs" :disabled="resetting" @click="resetToDefaults">
         {{ $t('components.remy.RemyContextSources.reset_to_defaults') }}
       </Button>
       <div class="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
@@ -90,7 +90,7 @@
 import { ref, onMounted } from "vue";
 import { api } from "@/lib/api/client";
 import { formatApiError } from "@/lib/api/formatError";
-import { Button } from "@/components/ui/button";
+import Button from 'primevue/button'
 import type { ContextSourceItem, ContextSourceMode, ContextSourceUpdate } from "@/types/remy";
 
 const sources = ref<ContextSourceItem[]>([]);

@@ -7,33 +7,37 @@
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <div>
           <label for="adminnotificationdeliverylogview-field-4" class="mb-1 block text-xs font-medium text-muted-foreground capitalize">{{ $t('views.AdminNotificationDeliveryLogView.status') }}</label>
-          <Select aria-label="Status" v-model="filterStatus">
-            <SelectTrigger data-testid="admin-notification-log-status" aria-label="Status" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-              <SelectValue :placeholder="$t('views.AdminNotificationDeliveryLogView.status')" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__all__">{{ $t('views.AdminErrorsView.all_statuses') }}</SelectItem>
-              <SelectItem value="delivered">{{ $t('views.AdminNotificationDeliveryLogView.delivered') }}</SelectItem>
-              <SelectItem value="failed">{{ $t('views.AdminNotificationDeliveryLogView.failed') }}</SelectItem>
-              <SelectItem value="dead_lettered">{{ $t('views.AdminNotificationDeliveryLogView.dead_lettered') }}</SelectItem>
-              <SelectItem value="pending">{{ $t('views.AdminNotificationDeliveryLogView.pending') }}</SelectItem>
-            </SelectContent>
-          </Select>
+          <Select
+  aria-label="Status"
+  v-model="filterStatus"
+  :placeholder="$t('views.AdminNotificationDeliveryLogView.status')"
+  data-testid="admin-notification-log-status"
+  class="w-full"
+  :options="[{ value: '__all__', label: $t('views.AdminErrorsView.all_statuses') }, { value: 'delivered', label: $t('views.AdminNotificationDeliveryLogView.delivered') }, { value: 'failed', label: $t('views.AdminNotificationDeliveryLogView.failed') }, { value: 'dead_lettered', label: $t('views.AdminNotificationDeliveryLogView.dead_lettered') }, { value: 'pending', label: $t('views.AdminNotificationDeliveryLogView.pending') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
         </div>
         <div>
           <label for="adminnotificationdeliverylogview-field-3" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.event_type') }}</label>
-          <Select aria-label="Event Type" v-model="filterEventType">
-            <SelectTrigger data-testid="admin-notification-log-event-type" aria-label="Event Type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-              <SelectValue :placeholder="$t('views.AdminAuditView.event_type')" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__all__">{{ $t('views.AdminNotificationDeliveryLogView.all_types') }}</SelectItem>
-              <SelectItem value="hitl_awaiting">{{ $t('views.AdminNotificationDeliveryLogView.hitl_awaiting') }}</SelectItem>
-              <SelectItem value="run_failed">{{ $t('views.AdminNotificationDeliveryLogView.run_failed') }}</SelectItem>
-              <SelectItem value="claim_expired">{{ $t('views.AdminNotificationDeliveryLogView.claim_expired') }}</SelectItem>
-              <SelectItem value="hitl_overdue">{{ $t('views.AdminNotificationDeliveryLogView.hitl_overdue') }}</SelectItem>
-            </SelectContent>
-          </Select>
+          <Select
+  aria-label="Event Type"
+  v-model="filterEventType"
+  :placeholder="$t('views.AdminAuditView.event_type')"
+  data-testid="admin-notification-log-event-type"
+  class="w-full"
+  :options="[{ value: '__all__', label: $t('views.AdminNotificationDeliveryLogView.all_types') }, { value: 'hitl_awaiting', label: $t('views.AdminNotificationDeliveryLogView.hitl_awaiting') }, { value: 'run_failed', label: $t('views.AdminNotificationDeliveryLogView.run_failed') }, { value: 'claim_expired', label: $t('views.AdminNotificationDeliveryLogView.claim_expired') }, { value: 'hitl_overdue', label: $t('views.AdminNotificationDeliveryLogView.hitl_overdue') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
         </div>
         <div>
           <label for="adminnotificationdeliverylogview-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminNotificationDeliveryLogView.from') }}</label>
@@ -54,11 +58,7 @@
           />
         </div>
         <div class="flex items-end gap-2">
-          <Button
-            variant="default"
-            data-testid="admin-notification-log-apply"
-            @click="applyFilters"
-          >
+          <Button data-testid="admin-notification-log-apply" @click="applyFilters">
             Apply
           </Button>
           <button
@@ -257,8 +257,8 @@ import { formatApiError } from '../lib/api/formatError'
 import type { components, paths } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import { Button } from '@/components/ui/button'
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import Button from 'primevue/button'
+import Select from 'primevue/select'
 
 type DeliveryLogEntry = components['schemas']['DeliveryLogEntry']
 interface DeliveryLogPage {

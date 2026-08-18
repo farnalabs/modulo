@@ -17,20 +17,21 @@
         <div class="space-y-4">
           <div>
             <label for="schemainferenceview-connector" class="mb-1 block text-sm font-medium">{{ $t('views.SchemaInferenceView.connector') }}</label>
-            <Select aria-label="Connector" v-model="selectedConnectorId">
-              <SelectTrigger id="schemainferenceview-connector" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Connector" data-testid="schema-inference-connector">
-                <SelectValue :placeholder="$t('views.SchemaInferenceView.select_a_connector')" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem
-                  v-for="connector in connectors"
-                  :key="connector.id"
-                  :value="connector.id"
-                >
-                    {{ connector.name }} ({{ connector.connector_type_id }})
-                </SelectItem>
-              </SelectContent>
-            </Select>
+            <Select
+  aria-label="Connector"
+  v-model="selectedConnectorId"
+  :placeholder="$t('views.SchemaInferenceView.select_a_connector')"
+  data-testid="schema-inference-connector"
+  id="schemainferenceview-connector"
+  class="w-full"
+  :options="connectors.map(connector => ({ value: connector.id, label: connector.name + '(' + connector.connector_type_id + ')' }))"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
             <p v-if="connectors.length === 0" class="mt-2 text-sm text-muted-foreground">
               {{ $t('views.SchemaInferenceView.no_connectors_available') }}
             </p>
@@ -62,12 +63,7 @@
           </div>
 
           <div class="flex items-center gap-2">
-            <Button
-              :disabled="!selectedConnectorId || !resourceType.trim() || inferring"
-              variant="default"
-              data-testid="schema-inference-infer-schema"
-              @click="inferSchema"
-            >
+            <Button :disabled="!selectedConnectorId || !resourceType.trim() || inferring" data-testid="schema-inference-infer-schema" @click="inferSchema">
               {{ inferring ? $t('views.SchemaInferenceView.inferring') : $t('views.SchemaInferenceView.infer_schema') }}
             </Button>
           </div>
@@ -141,12 +137,7 @@
         </div>
 
         <div class="flex items-center gap-2">
-          <Button
-            :disabled="publishing"
-            variant="default"
-            data-testid="schema-inference-publish"
-            @click="publishSchema"
-          >
+          <Button :disabled="publishing" data-testid="schema-inference-publish" @click="publishSchema">
             {{ publishing ? $t('views.SchemaInferenceView.publishing') : $t('views.SchemaInferenceView.publish') }}
           </Button>
           <button
@@ -175,14 +166,8 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import JsonViewer from '../components/shared/JsonViewer.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import PageTabs from "../components/PageTabs.vue"
-import { Button } from '@/components/ui/button'
-import {
-  Select,
-  SelectTrigger,
-  SelectContent,
-  SelectItem,
-  SelectValue,
-} from '@/components/ui/select'
+import Button from 'primevue/button'
+import Select from 'primevue/select'
 
 type ConnectorItem = components['schemas']['ConnectorResponse']
 

@@ -51,13 +51,7 @@
             data-testid="login-password"
           />
         </div>
-        <Button
-          type="submit"
-          :disabled="loading"
-          variant="default"
-           class="w-full border-primary/30 hover:border-primary/60 px-4 py-2.5"
-          data-testid="login-submit"
-        >
+        <Button type="submit" :disabled="loading" class="w-full border-primary/30 hover:border-primary/60 px-4 py-2.5" data-testid="login-submit">
           {{ loading ? $t('common.signing_in') : $t('common.sign_in') }}
         </Button>
       </form>
@@ -68,7 +62,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 import { useMutation } from '../composables/useMutation'
 import { setAccessToken, setRefreshToken } from '../lib/api/client'
 

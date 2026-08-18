@@ -39,12 +39,7 @@
     <section class="rounded-lg border bg-card p-6 shadow-sm">
       <div class="mb-4 flex items-center justify-between">
         <h2 class="text-base font-semibold">{{ $t('views.SchemaEditorView.fields') }}</h2>
-        <Button
-          variant="default"
-          size="sm"
-          data-testid="schema-editor-add-field"
-          @click="addField"
-        >
+        <Button size="small" data-testid="schema-editor-add-field" @click="addField">
           {{ $t('views.SchemaEditorView.add_field') }}
         </Button>
       </div>
@@ -72,7 +67,7 @@
 </template>
 
 <script setup lang="ts">
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 import { createField, type SchemaField } from '../../utils/schema-definition'
 import SchemaFieldEditor from './SchemaFieldEditor.vue'
 

@@ -13,23 +13,22 @@
       <PageHeader :title="$t('views.variantCompare.title')" :subtitle="$t('views.variantCompare.subtitle')" />
 
       <div class="flex flex-wrap items-center gap-4">
-        <Select aria-label="Compare group" v-model="selectedGroupId">
-          <SelectTrigger data-testid="variant-compare-group-select" aria-label="Compare group" class="min-w-[280px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-            <SelectValue :placeholder="$t('views.variantCompare.selectGroup')" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem v-for="g in groups" :key="g.id" :value="g.id">
-              {{ g.name }}
-            </SelectItem>
-          </SelectContent>
-        </Select>
+        <Select
+  aria-label="Compare group"
+  v-model="selectedGroupId"
+  :placeholder="$t('views.variantCompare.selectGroup')"
+  data-testid="variant-compare-group-select"
+  class="min-w-[280px]"
+  :options="groups.map(g => ({ value: g.id, label: g.name }))"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
 
-        <Button
-          :disabled="!selectedGroupId || runningVariants.size > 0"
-          variant="default"
-          data-testid="variant-compare-run-variants"
-          @click="runVariants"
-        >
+        <Button :disabled="!selectedGroupId || runningVariants.size > 0" data-testid="variant-compare-run-variants" @click="runVariants">
           <span v-if="runningVariants.size > 0" class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
           {{ runningVariants.size > 0 ? $t('views.variantCompare.running') : $t('views.variantCompare.runVariants') }}
         </Button>
@@ -165,36 +164,51 @@
           <div class="flex flex-wrap gap-4">
             <label class="flex items-center gap-2 text-sm">
               <span class="text-muted-foreground">{{ $t('views.variantCompare.node') }}:</span>
-              <Select v-model="diffNode">
-                <SelectTrigger data-testid="variant-compare-diff-node" aria-label="Diff node" class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                  <SelectValue placeholder="Select node" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem v-for="n in nodeNames" :key="n" :value="n">{{ n }}</SelectItem>
-                </SelectContent>
-              </Select>
+              <Select
+  v-model="diffNode"
+  placeholder="Select node"
+  data-testid="variant-compare-diff-node"
+  aria-label="Diff node"
+  :options="nodeNames.map(n => ({ value: n, label: n }))"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
             </label>
             <label class="flex items-center gap-2 text-sm">
               <span class="text-muted-foreground">{{ $t('views.variantCompare.variantA') }}:</span>
-              <Select v-model="diffVarA">
-                <SelectTrigger data-testid="variant-compare-diff-variant-a" aria-label="Variant A" class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                  <SelectValue placeholder="Select variant" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem v-for="v in diffVariantsAvailable" :key="v" :value="v">{{ v }}</SelectItem>
-                </SelectContent>
-              </Select>
+              <Select
+  v-model="diffVarA"
+  placeholder="Select variant"
+  data-testid="variant-compare-diff-variant-a"
+  aria-label="Variant A"
+  :options="diffVariantsAvailable.map(v => ({ value: v, label: v }))"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
             </label>
             <label class="flex items-center gap-2 text-sm">
               <span class="text-muted-foreground">{{ $t('views.variantCompare.variantB') }}:</span>
-              <Select v-model="diffVarB">
-                <SelectTrigger data-testid="variant-compare-diff-variant-b" aria-label="Variant B" class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                  <SelectValue placeholder="Select variant" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem v-for="v in diffVariantsAvailable" :key="v" :value="v">{{ v }}</SelectItem>
-                </SelectContent>
-              </Select>
+              <Select
+  v-model="diffVarB"
+  placeholder="Select variant"
+  data-testid="variant-compare-diff-variant-b"
+  aria-label="Variant B"
+  :options="diffVariantsAvailable.map(v => ({ value: v, label: v }))"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
             </label>
           </div>
           <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -242,9 +256,9 @@ import JsonViewer from '../components/shared/JsonViewer.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import PageTabs from "../components/PageTabs.vue"
 import { formatApiError } from '../lib/api/formatError'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 import EmptyState from '../components/shared/EmptyState.vue'
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import Select from 'primevue/select'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
 import { TERMINAL_STATUSES } from '../constants/runStatuses'

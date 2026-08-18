@@ -32,13 +32,7 @@
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
           </button>
         </div>
-          <Button
-            :class="allPipelines.length > 0 && !loading ? '' : 'invisible'"
-            variant="default"
-            as="router-link"
-            to="/library"
-            data-testid="pipeline-list-new-pipeline"
-          >
+          <Button :class="allPipelines.length > 0 && !loading ? '' : 'invisible'" as="router-link" to="/library" data-testid="pipeline-list-new-pipeline">
             {{ $t('views.PipelineListView.new_pipeline') }}
           </Button>
       </div>
@@ -119,20 +113,10 @@
             Create a new pipeline or browse the Library to find a template.
           </p>
           <div class="flex items-center justify-center gap-3">
-            <Button
-              variant="default"
-              as="router-link"
-              to="/library"
-              data-testid="pipeline-list-new-pipeline"
-            >
+            <Button as="router-link" to="/library" data-testid="pipeline-list-new-pipeline">
               New Pipeline
             </Button>
-            <Button
-              variant="outline"
-              as="router-link"
-              to="/library"
-              data-testid="pipeline-list-browse-library"
-            >
+            <Button severity="secondary" outlined as="router-link" to="/library" data-testid="pipeline-list-browse-library">
               Browse Library
             </Button>
           </div>
@@ -142,17 +126,19 @@
           <!-- Mobile folder filter — the FolderTree is hidden below md, so offer folder selection here -->
           <div v-if="foldersList.length > 0" class="md:hidden mb-4">
             <Select
-              v-model="mobileFolderSelectValue"
-              :aria-label="$t('views.PipelineListView.folders')"
-            >
-              <SelectTrigger class="w-full" :aria-label="$t('views.PipelineListView.folders')" data-testid="pipeline-list-mobile-folder-select">
-                <SelectValue :placeholder="$t('views.PipelineListView.folders')" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__all__">{{ $t('views.PipelineListView.all_pipelines') }}</SelectItem>
-                <SelectItem v-for="f in foldersList" :key="f.id" :value="f.id">{{ f.name }}</SelectItem>
-              </SelectContent>
-            </Select>
+  v-model="mobileFolderSelectValue"
+  :aria-label="$t('views.PipelineListView.folders')"
+  :placeholder="$t('views.PipelineListView.folders')"
+  data-testid="pipeline-list-mobile-folder-select"
+  class="w-full"
+  :options="[{ value: '__all__', label: $t('views.PipelineListView.all_pipelines') }, ...foldersList.map(f => ({ value: f.id, label: f.name }))]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
           </div>
           <!-- Breadcrumb navigation -->
           <div class="mb-4 flex items-center gap-2 text-sm">
@@ -192,21 +178,9 @@
                   >
                     {{ p.visibility === 'org' ? 'Org' : 'Team' }}
                   </span>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger as-child>
-                      <button class="rounded p-1 hover:bg-accent" data-testid="pipeline-list-action-menu" @click.stop>
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" class="w-40">
-                      <DropdownMenuItem @click.stop="router.push({ name: 'runs-list', query: { pipeline_id: p.id } })">{{ $t('views.PipelineListView.runs') }}</DropdownMenuItem>
-                      <DropdownMenuItem @click="openRename(p)">{{ $t('views.PipelineListView.rename') }}</DropdownMenuItem>
-                      <DropdownMenuItem v-if="!p.archived_at" @click="handleArchive(p)">{{ $t('views.PipelineListView.archive') }}</DropdownMenuItem>
-                      <DropdownMenuItem v-else @click="handleUnarchive(p)">{{ $t('views.PipelineListView.unarchive') }}</DropdownMenuItem>
-                      <DropdownMenuItem @click="openMoveToFolder(p)">{{ $t('views.PipelineListView.move_to_folder') }}</DropdownMenuItem>
-                      <DropdownMenuItem v-if="planStore.featureEnabled('pipeline_delete')" @click="openDelete(p)" class="text-destructive focus:text-destructive">{{ $t('common.delete') }}</DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                  <button class="rounded p-1 hover:bg-accent" data-testid="pipeline-list-action-menu" :aria-label="$t('views.PipelineListView.pipeline_actions')" @click.stop="openActionMenu($event, p)">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+                  </button>
                 </div>
               </div>
 
@@ -223,19 +197,10 @@
               </div>
 
               <div class="mt-4 pt-3 border-t border-border flex gap-2">
-                <Button
-                  variant="default"
-                  class="flex-1"
-                  data-testid="pipeline-list-open-editor"
-                >
+                <Button class="flex-1" data-testid="pipeline-list-open-editor">
                   {{ $t('views.PipelineListView.open_in_editor') }}
                 </Button>
-                <Button
-                  variant="outline"
-                  class="flex-1"
-                  @click.stop="openRunDialog(p)"
-                  data-testid="pipeline-list-run"
-                >
+                <Button severity="secondary" outlined class="flex-1" @click.stop="openRunDialog(p)" data-testid="pipeline-list-run">
                   {{ $t('views.PipelineListView.run') }}
                 </Button>
               </div>
@@ -339,21 +304,9 @@
                         >
                           {{ $t('views.PipelineListView.runs') }}
                         </router-link>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger as-child>
-                            <button class="rounded p-1 hover:bg-accent" :aria-label="'Pipeline actions'" data-testid="pipeline-list-action-menu" @click.stop>
-                              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
-                            </button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" class="w-40">
-                            <DropdownMenuItem @click.prevent.stop="router.push({ name: 'runs-list', query: { pipeline_id: (row.data as PipelineItem).id } })">{{ $t('views.PipelineListView.runs') }}</DropdownMenuItem>
-                            <DropdownMenuItem @click.prevent.stop="openRename(row.data as PipelineItem)">{{ $t('views.PipelineListView.rename') }}</DropdownMenuItem>
-                            <DropdownMenuItem v-if="!(row.data as PipelineItem).archived_at" @click.prevent.stop="handleArchive(row.data as PipelineItem)">{{ $t('views.PipelineListView.archive') }}</DropdownMenuItem>
-                            <DropdownMenuItem v-else @click.prevent.stop="handleUnarchive(row.data as PipelineItem)">{{ $t('views.PipelineListView.unarchive') }}</DropdownMenuItem>
-                            <DropdownMenuItem @click.prevent.stop="openMoveToFolder(row.data as PipelineItem)">{{ $t('views.PipelineListView.move_to_folder') }}</DropdownMenuItem>
-                            <DropdownMenuItem v-if="planStore.featureEnabled('pipeline_delete')" @click.prevent.stop="openDelete(row.data as PipelineItem)" class="text-destructive focus:text-destructive">{{ $t('common.delete') }}</DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                        <button class="rounded p-1 hover:bg-accent" :aria-label="$t('views.PipelineListView.pipeline_actions')" data-testid="pipeline-list-action-menu" @click.stop="openActionMenu($event, row.data as PipelineItem)">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -469,13 +422,7 @@
             >
               {{ $t('common.cancel') }}
             </button>
-            <Button
-              variant="default"
-              :disabled="running"
-              class="border-primary/30"
-              @click="triggerRun"
-              data-testid="pipeline-list-run-submit"
-            >
+            <Button :disabled="running" class="border-primary/30" @click="triggerRun" data-testid="pipeline-list-run-submit">
               <svg
                 v-if="running"
                 class="animate-spin h-4 w-4"
@@ -562,10 +509,7 @@
               >
                 Cancel
               </button>
-              <Button
-                :disabled="!renameName.trim() || renaming"
-                @click="handleRename"
-              >
+              <Button :disabled="!renameName.trim() || renaming" @click="handleRename">
                 {{ renaming ? 'Saving...' : 'Save' }}
               </Button>
             </div>
@@ -603,6 +547,8 @@
           </div>
         </div>
       </div>
+
+      <Menu ref="actionMenuRef" :model="actionMenuItems" popup />
   </div>
 </template>
 
@@ -617,9 +563,9 @@ import { useDataFetch } from '../composables/useDataFetch'
 import { usePlanStore } from '../stores/planStore'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { formatApiError } from '../lib/api/formatError'
-import { Button } from '@/components/ui/button'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '@/components/ui/dropdown-menu'
+import Button from 'primevue/button'
+import Select from 'primevue/select'
+import Menu from 'primevue/menu'
 import { api } from '../lib/api/client'
 import { useApi } from '../composables/useApi'
 import { formatDateShort } from '../lib/formatDate'
@@ -975,6 +921,29 @@ function formatDate(dateStr: string): string {
 
 function openPipeline(p: PipelineItem) {
   router.push({ name: 'pipeline-editor', params: { id: p.id } })
+}
+
+const actionMenuRef = ref<InstanceType<typeof Menu> | null>(null)
+const actionMenuPipeline = ref<PipelineItem | null>(null)
+const actionMenuItems = computed(() => {
+  const p = actionMenuPipeline.value
+  if (!p) return []
+  return [
+    { label: t('views.PipelineListView.runs'), command: () => router.push({ name: 'runs-list', query: { pipeline_id: p.id } }) },
+    { label: t('views.PipelineListView.rename'), command: () => openRename(p) },
+    ...(!p.archived_at
+      ? [{ label: t('views.PipelineListView.archive'), command: () => handleArchive(p) }]
+      : [{ label: t('views.PipelineListView.unarchive'), command: () => handleUnarchive(p) }]),
+    { label: t('views.PipelineListView.move_to_folder'), command: () => openMoveToFolder(p) },
+    ...(planStore.featureEnabled('pipeline_delete')
+      ? [{ label: t('common.delete'), class: 'text-destructive', command: () => openDelete(p) }]
+      : []),
+  ]
+})
+
+function openActionMenu(event: MouseEvent, p: PipelineItem) {
+  actionMenuPipeline.value = p
+  actionMenuRef.value?.toggle(event)
 }
 
 function openRunDialog(p: PipelineItem) {

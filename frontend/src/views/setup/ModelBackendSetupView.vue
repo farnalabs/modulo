@@ -7,7 +7,7 @@
         <div class="rounded-md bg-green-50 p-3 text-sm text-green-800">
           Backend "{{ backendName }}" is now active.
         </div>
-        <Button variant="outline" class="w-full" @click="router.push('/admin/model-backends')">
+        <Button severity="secondary" outlined class="w-full" @click="router.push('/admin/model-backends')">
           View Model Backends
         </Button>
       </div>
@@ -15,7 +15,7 @@
       <form v-else @submit.prevent="() => submit()" class="space-y-4">
         <div>
           <span class="mb-1 block text-sm font-medium">API Key</span>
-          <Input aria-label="Form control"
+          <InputText aria-label="Form control"
             v-model="apiKey"
             type="password"
             placeholder="sk-..."
@@ -40,8 +40,8 @@ import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '../../components/shared/PageHeader.vue'
 import { useApi } from '../../composables/useApi'
 import { useMutation } from '../../composables/useMutation'
-import { Button } from '../../components/ui/button'
-import { Input } from '../../components/ui/input'
+import Button from 'primevue/button'
+import InputText from 'primevue/inputtext'
 
 const route = useRoute()
 const router = useRouter()

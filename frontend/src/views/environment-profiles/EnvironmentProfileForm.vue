@@ -44,15 +44,20 @@
 
       <div>
         <label for="environmentprofileform-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.provider_type') }} <span class="text-destructive">*</span></label>
-        <Select aria-label="Provider type" v-model="form.provider_type">
-          <SelectTrigger aria-label="Provider type" data-testid="envprofile-form-provider" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" :class="{ 'border-destructive': submitted && !form.provider_type }">
-            <SelectValue placeholder="Select provider type" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="local_docker">{{ $t('views.EnvironmentProfileForm.local_docker') }}</SelectItem>
-            <SelectItem value="e2b">{{ $t('views.EnvironmentProfileForm.e2b_sandboxed_cloud') }}</SelectItem>
-          </SelectContent>
-        </Select>
+        <Select
+  aria-label="Provider type"
+  v-model="form.provider_type"
+  placeholder="Select provider type"
+  data-testid="envprofile-form-provider"
+  class="w-full"
+  :options="[{ value: 'local_docker', label: $t('views.EnvironmentProfileForm.local_docker') }, { value: 'e2b', label: $t('views.EnvironmentProfileForm.e2b_sandboxed_cloud') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
         <p v-if="submitted && !form.provider_type" class="mt-1 text-xs text-destructive">{{ $t('views.EnvironmentProfileForm.provider_type_is_required') }}</p>
       </div>
 
@@ -90,56 +95,63 @@
 
       <div>
         <label for="environmentprofileform-field-3" class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.network_policy') }}</label>
-        <Select aria-label="Network policy" v-model="form.network_policy">
-          <SelectTrigger aria-label="Network policy" data-testid="envprofile-form-network" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
-            <SelectValue placeholder="Select network policy" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="outbound">{{ $t('views.EnvironmentProfileForm.outbound_full_egress') }}</SelectItem>
-            <SelectItem value="none">{{ $t('views.EnvironmentProfileForm.none_isolated') }}</SelectItem>
-            <SelectItem value="selected">{{ $t('views.EnvironmentProfileForm.selected_domains_only') }}</SelectItem>
-          </SelectContent>
-        </Select>
+        <Select
+  aria-label="Network policy"
+  v-model="form.network_policy"
+  placeholder="Select network policy"
+  data-testid="envprofile-form-network"
+  class="w-full"
+  :options="[{ value: 'outbound', label: $t('views.EnvironmentProfileForm.outbound_full_egress') }, { value: 'none', label: $t('views.EnvironmentProfileForm.none_isolated') }, { value: 'selected', label: $t('views.EnvironmentProfileForm.selected_domains_only') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
       </div>
 
       <div>
         <label for="environmentprofileform-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.initialisation_strategy') }}</label>
-        <Select aria-label="Initialisation strategy" v-model="form.initialisation_strategy">
-          <SelectTrigger aria-label="Initialisation strategy" data-testid="envprofile-form-init" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
-            <SelectValue placeholder="Select strategy" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="git_clone">{{ $t('views.EnvironmentProfileForm.git_clone') }}</SelectItem>
-            <SelectItem value="blank">{{ $t('views.EnvironmentProfileForm.blank_empty_workspace') }}</SelectItem>
-            <SelectItem value="worktree">{{ $t('views.EnvironmentProfileForm.git_worktree') }}</SelectItem>
-          </SelectContent>
-        </Select>
+        <Select
+  aria-label="Initialisation strategy"
+  v-model="form.initialisation_strategy"
+  placeholder="Select strategy"
+  data-testid="envprofile-form-init"
+  class="w-full"
+  :options="[{ value: 'git_clone', label: $t('views.EnvironmentProfileForm.git_clone') }, { value: 'blank', label: $t('views.EnvironmentProfileForm.blank_empty_workspace') }, { value: 'worktree', label: $t('views.EnvironmentProfileForm.git_worktree') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
       </div>
 
       <div>
         <label for="environmentprofileform-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.persistence_policy') }}</label>
-        <Select aria-label="Persistence policy" v-model="form.persistence_policy">
-          <SelectTrigger aria-label="Persistence policy" data-testid="envprofile-form-persistence" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
-            <SelectValue placeholder="Select policy" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="ephemeral">{{ $t('views.EnvironmentProfileForm.ephemeral_destroyed_after_run') }}</SelectItem>
-            <SelectItem value="retained">{{ $t('views.EnvironmentProfileForm.retained_available_for_inspection') }}</SelectItem>
-            <SelectItem value="cache">{{ $t('views.EnvironmentProfileForm.cache_reusable_between_runs') }}</SelectItem>
-          </SelectContent>
-        </Select>
+        <Select
+  aria-label="Persistence policy"
+  v-model="form.persistence_policy"
+  placeholder="Select policy"
+  data-testid="envprofile-form-persistence"
+  class="w-full"
+  :options="[{ value: 'ephemeral', label: $t('views.EnvironmentProfileForm.ephemeral_destroyed_after_run') }, { value: 'retained', label: $t('views.EnvironmentProfileForm.retained_available_for_inspection') }, { value: 'cache', label: $t('views.EnvironmentProfileForm.cache_reusable_between_runs') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
       </div>
 
       <div v-if="store.error" class="text-sm text-destructive">{{ store.error }}</div>
       <div v-if="formError" class="text-sm text-destructive">{{ formError }}</div>
 
       <div class="flex items-center gap-2 pt-2">
-        <Button
-          :disabled="store.isSaving"
-          type="submit"
-          variant="default"
-          data-testid="envprofile-form-submit"
-        >
+        <Button :disabled="store.isSaving" type="submit" data-testid="envprofile-form-submit">
           {{ store.isSaving ? 'Saving...' : (isEdit ? 'Save Changes' : 'Create Profile') }}
         </Button>
         <button
@@ -160,8 +172,8 @@ import PageHeader from '../../components/shared/PageHeader.vue'
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useEnvironmentProfilesStore } from '../../stores/environmentProfiles'
-import { Button } from '@/components/ui/button'
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import Button from 'primevue/button'
+import Select from 'primevue/select'
 
 const props = defineProps<{
   profileId?: string

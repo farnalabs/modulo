@@ -9,22 +9,22 @@
           @update:search="search = $event; page = 1"
         >
           <template #after>
-            <Select aria-label="Form control" v-model="ownerFilter">
-              <SelectTrigger aria-label="Form control" data-testid="lifecycle-map-list-owner-filter" class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm">
-                <SelectValue placeholder="All teams" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem v-for="owner in uniqueOwners" :key="owner" :value="owner">{{ owner }}</SelectItem>
-              </SelectContent>
-            </Select>
+            <Select
+  aria-label="Form control"
+  v-model="ownerFilter"
+  placeholder="All teams"
+  data-testid="lifecycle-map-list-owner-filter"
+  :options="uniqueOwners.map(owner => ({ value: owner, label: owner }))"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
           </template>
         </FilterBar>
-          <Button
-            variant="default"
-            class="cursor-pointer"
-            @click="handleNewMap"
-            data-testid="lifecycle-map-list-new"
-          >
+          <Button class="cursor-pointer" @click="handleNewMap" data-testid="lifecycle-map-list-new">
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mr-1"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             New Map
           </Button>
@@ -55,12 +55,7 @@
         title="No Lifecycle Maps yet"
         description="Create one to model your SDLC."
       >
-        <Button
-          variant="default"
-          class="cursor-pointer"
-          @click="handleNewMap"
-          data-testid="lifecycle-map-list-empty-new"
-        >
+        <Button class="cursor-pointer" @click="handleNewMap" data-testid="lifecycle-map-list-empty-new">
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mr-1"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           Create Map
         </Button>
@@ -180,11 +175,7 @@
             >
               Cancel
             </button>
-            <Button
-              :disabled="!newName.trim() || creating"
-              variant="default"
-              @click="handleCreateConfirm"
-            >
+            <Button :disabled="!newName.trim() || creating" @click="handleCreateConfirm">
               {{ creating ? 'Creating...' : 'Create' }}
             </Button>
           </div>
@@ -202,12 +193,12 @@ import FilterBar from '../../components/shared/FilterBar.vue'
 import { useLifecycleMapsStore } from '../../stores/lifecycleMaps'
 import ErrorAlert from '../../components/shared/ErrorAlert.vue'
 import EmptyState from '../../components/shared/EmptyState.vue'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 import type { LifecycleMapSummary } from '../../stores/lifecycleMaps'
 import { formatDateShort } from '../../lib/formatDate'
 import { useApi } from '../../composables/useApi'
 import { formatApiError } from '../../lib/api/formatError'
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import Select from 'primevue/select'
 
 const router = useRouter()
 const route = useRoute()

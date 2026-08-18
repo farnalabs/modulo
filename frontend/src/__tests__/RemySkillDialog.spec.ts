@@ -15,7 +15,7 @@ vi.mock('../../lib/api/client', () => ({
 
 import RemySkillDialog from '../components/remy/RemySkillDialog.vue'
 
-const dialogStub = { template: '<div><slot /></div>' }
+const dialogStub = { template: '<div><slot name="header" /><slot /><slot name="footer" /></div>' }
 
 describe('RemySkillDialog', () => {
   beforeEach(() => {

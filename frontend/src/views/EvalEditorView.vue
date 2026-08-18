@@ -19,28 +19,40 @@
       <div class="grid gap-6 lg:grid-cols-2">
         <div>
           <label for="evaleditorview-field-8" class="mb-1.5 block text-sm font-medium">{{ $t('views.EvalEditorView.pipeline') }}</label>
-          <Select :aria-label="$t('views.EvalEditorView.pipeline_aria')" v-model="selectedPipelineId" @update:model-value="onPipelineChange">
-            <SelectTrigger data-testid="eval-editor-pipeline" :aria-label="$t('views.EvalEditorView.pipeline_aria')" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-              <SelectValue :placeholder="$t('views.EvalEditorView.select_a_pipeline')" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__all__">{{ $t('common.none') }}</SelectItem>
-              <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</SelectItem>
-            </SelectContent>
-          </Select>
+          <Select
+  :aria-label="$t('views.EvalEditorView.pipeline_aria')"
+  v-model="selectedPipelineId"
+  @update:model-value="onPipelineChange"
+  :placeholder="$t('views.EvalEditorView.select_a_pipeline')"
+  data-testid="eval-editor-pipeline"
+  class="w-full"
+  :options="[{ value: '__all__', label: $t('common.none') }, ...pipelines.map(p => ({ value: p.id, label: p.name }))]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
         </div>
 
         <div>
           <label for="evaleditorview-field-7" class="mb-1.5 block text-sm font-medium">{{ $t('views.EvalEditorView.node') }} <span class="text-muted-foreground">({{ $t('views.EvalEditorView.node_optional') }})</span></label>
-          <Select :aria-label="$t('views.EvalEditorView.node_aria')" v-model="form.node_id" :disabled="!selectedPipelineId || nodesLoading">
-            <SelectTrigger data-testid="eval-editor-node" :aria-label="$t('views.EvalEditorView.node_aria')" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50">
-              <SelectValue :placeholder="$t('views.EvalEditorView.select_a_node')" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__all__">{{ $t('views.EvalEditorView.all_pipeline_outputs') }}</SelectItem>
-              <SelectItem v-for="n in nodes" :key="n.id" :value="n.id">{{ n.label || n.node_type || shortId(n.id) }}</SelectItem>
-            </SelectContent>
-          </Select>
+          <Select
+  :aria-label="$t('views.EvalEditorView.node_aria')"
+  v-model="form.node_id"
+  :disabled="!selectedPipelineId || nodesLoading"
+  :placeholder="$t('views.EvalEditorView.select_a_node')"
+  data-testid="eval-editor-node"
+  class="w-full"
+  :options="[{ value: '__all__', label: $t('views.EvalEditorView.all_pipeline_outputs') }, ...nodes.map(n => ({ value: n.id, label: n.label || n.node_type || shortId(n.id) }))]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
           <div v-if="nodesLoading" class="mt-1 text-xs text-muted-foreground">{{ $t('views.EvalEditorView.loading_nodes') }}</div>
           <div v-if="nodesError" class="mt-1 text-xs text-destructive">{{ nodesError }}</div>
         </div>
@@ -65,17 +77,20 @@
 
               <div>
                 <label for="evaleditorview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.eval_type') }}</label>
-                <Select :aria-label="$t('views.EvalEditorView.eval_type_aria')" v-model="form.eval_type">
-                  <SelectTrigger data-testid="eval-editor-eval-type" :aria-label="$t('views.EvalEditorView.eval_type_aria')" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                    <SelectValue placeholder="llm_judge" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="llm_judge">{{ $t('views.EvalEditorView.llm_judge') }}</SelectItem>
-                    <SelectItem value="regex">{{ $t('views.EvalEditorView.regex') }}</SelectItem>
-                    <SelectItem value="json_schema">{{ $t('views.EvalEditorView.json_schema') }}</SelectItem>
-                    <SelectItem value="custom_function">{{ $t('views.EvalEditorView.custom_function') }}</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Select
+  :aria-label="$t('views.EvalEditorView.eval_type_aria')"
+  v-model="form.eval_type"
+  placeholder="llm_judge"
+  data-testid="eval-editor-eval-type"
+  class="w-full"
+  :options="[{ value: 'llm_judge', label: $t('views.EvalEditorView.llm_judge') }, { value: 'regex', label: $t('views.EvalEditorView.regex') }, { value: 'json_schema', label: $t('views.EvalEditorView.json_schema') }, { value: 'custom_function', label: $t('views.EvalEditorView.custom_function') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
               </div>
 
               <div>
@@ -141,12 +156,7 @@
               </div>
 
               <div class="flex items-center gap-2 pt-2">
-              <Button
-                :disabled="!canSave || saving"
-                data-testid="eval-editor-save"
-                variant="default"
-                @click="saveEval"
-              >
+              <Button :disabled="!canSave || saving" data-testid="eval-editor-save" @click="saveEval">
                 {{ saving ? $t('common.saving') : editingEvalId ? $t('views.EvalEditorView.update') : $t('common.save') }}
               </Button>
                 <button
@@ -268,8 +278,8 @@ import EmptyState from '../components/shared/EmptyState.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
-import { Button } from '@/components/ui/button'
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import Button from 'primevue/button'
+import Select from 'primevue/select'
 import PageTabs from "../components/PageTabs.vue"
 import { Pencil, Trash2 } from '@lucide/vue'
 import { api } from '../lib/api/client'
@@ -376,7 +386,7 @@ const { loading, error: pageError, data: pipelinesResp, load: loadAll } = useDat
   { initialValue: [] as PipelineItem[] },
 )
 
-const pipelines = computed(() => (pipelinesResp.value as any) ?? [])
+const pipelines = computed(() => (pipelinesResp.value ?? []) as PipelineItem[])
 
 async function loadNodes() {
   if (!selectedPipelineId.value || selectedPipelineId.value === '__all__') {

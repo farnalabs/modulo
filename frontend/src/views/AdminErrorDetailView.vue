@@ -74,16 +74,20 @@
           </button>
             <div class="ml-auto flex items-center gap-2">
             <label for="assignee-select" class="text-xs text-muted-foreground">{{ $t('views.AdminErrorDetailView.assign_to') }}</label>
-            <Select v-model="assigneeId" :aria-label="$t('views.AdminErrorDetailView.assign_to')" @update:model-value="updateAssignee">
-              <SelectTrigger id="assignee-select" :aria-label="$t('views.AdminErrorDetailView.assign_to')" class="rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-                <SelectValue :placeholder="$t('views.AdminErrorDetailView.unassigned')" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem v-for="user in users" :key="user.id" :value="user.id">
-                  {{ user.display_name || user.email }}
-                </SelectItem>
-              </SelectContent>
-            </Select>
+            <Select
+  v-model="assigneeId"
+  :aria-label="$t('views.AdminErrorDetailView.assign_to')"
+  @update:model-value="updateAssignee"
+  :placeholder="$t('views.AdminErrorDetailView.unassigned')"
+  id="assignee-select"
+  :options="users.map(user => ({ value: user.id, label: user.display_name || user.email }))"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
           </div>
         </div>
       </div>
@@ -223,7 +227,7 @@ import BackLink from '../components/BackLink.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { shortId } from '../utils/format'
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import Select from 'primevue/select'
 
 const route = useRoute()
 const router = useRouter()

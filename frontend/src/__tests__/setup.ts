@@ -4,6 +4,7 @@ import { createI18n } from 'vue-i18n'
 import { QueryClient, VueQueryPlugin } from '@tanstack/vue-query'
 import PrimeVue from 'primevue/config'
 import Aura from '@primeuix/themes/aura'
+import Tooltip from 'primevue/tooltip'
 import { vi } from 'vitest'
 import enUS from '../locales/en-US.js'
 
@@ -83,6 +84,11 @@ config.global.plugins = [
   // the `html.light` class.
   [PrimeVue, { theme: { preset: Aura, options: { darkModeSelector: ':root:not(.light)' } } }],
 ]
+
+config.global.directives = {
+  ...(config.global.directives || {}),
+  tooltip: Tooltip,
+}
 
 // Minimal polyfills PrimeVue components need to mount in jsdom. jsdom does not
 // implement ResizeObserver / IntersectionObserver, and its matchMedia is
@@ -200,8 +206,4 @@ config.global.stubs = {
       }
     },
   },
-  Tooltip: { template: '<div><slot /></div>' },
-  TooltipTrigger: { template: '<div><slot /></div>' },
-  TooltipContent: { template: '<div><slot /></div>' },
-  TooltipProvider: { template: '<div><slot /></div>' },
-}
+  }

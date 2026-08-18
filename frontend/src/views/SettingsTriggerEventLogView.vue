@@ -6,52 +6,42 @@
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div>
           <label for="settingstriggereventlogview-trigger-type" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.SettingsTriggerEventLogView.trigger_type') }}</label>
-          <Select aria-label="Trigger type" v-model="filterTriggerType">
-            <SelectTrigger id="settingstriggereventlogview-trigger-type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" aria-label="Trigger type" data-testid="settings-trigger-event-log-trigger-type">
-              <SelectValue :placeholder="$t('views.SettingsTriggerEventLogView.trigger_type')" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__all__">{{ $t('views.AdminNotificationDeliveryLogView.all_types') }}</SelectItem>
-              <SelectItem value="manual">{{ $t('views.SettingsTriggerEventLogView.manual') }}</SelectItem>
-              <SelectItem value="webhook">{{ $t('views.SettingsTriggerEventLogView.webhook') }}</SelectItem>
-              <SelectItem value="cron">{{ $t('views.SettingsTriggerEventLogView.cron') }}</SelectItem>
-              <SelectItem value="polling">{{ $t('views.SettingsTriggerEventLogView.polling') }}</SelectItem>
-              <SelectItem value="agent_signal">{{ $t('views.SettingsTriggerEventLogView.agent_signal') }}</SelectItem>
-              <SelectItem value="ongoing">{{ $t('views.SettingsTriggerEventLogView.ongoing') }}</SelectItem>
-            </SelectContent>
-          </Select>
+          <Select
+  aria-label="Trigger type"
+  v-model="filterTriggerType"
+  :placeholder="$t('views.SettingsTriggerEventLogView.trigger_type')"
+  data-testid="settings-trigger-event-log-trigger-type"
+  id="settingstriggereventlogview-trigger-type"
+  class="w-full"
+  :options="[{ value: '__all__', label: $t('views.AdminNotificationDeliveryLogView.all_types') }, { value: 'manual', label: $t('views.SettingsTriggerEventLogView.manual') }, { value: 'webhook', label: $t('views.SettingsTriggerEventLogView.webhook') }, { value: 'cron', label: $t('views.SettingsTriggerEventLogView.cron') }, { value: 'polling', label: $t('views.SettingsTriggerEventLogView.polling') }, { value: 'agent_signal', label: $t('views.SettingsTriggerEventLogView.agent_signal') }, { value: 'ongoing', label: $t('views.SettingsTriggerEventLogView.ongoing') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
         </div>
         <div>
           <label for="settingstriggereventlogview-result" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.SettingsTriggerEventLogView.result') }}</label>
-          <Select aria-label="Result" v-model="filterResult">
-            <SelectTrigger id="settingstriggereventlogview-result" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" aria-label="Result" data-testid="settings-trigger-event-log-result">
-              <SelectValue :placeholder="$t('views.SettingsTriggerEventLogView.result')" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__all__">{{ $t('views.SettingsTriggerEventLogView.all_results') }}</SelectItem>
-              <SelectItem value="accepted">{{ $t('views.SettingsTriggerEventLogView.accepted') }}</SelectItem>
-              <SelectItem value="passed">{{ $t('views.SettingsTriggerEventLogView.passed') }}</SelectItem>
-              <SelectItem value="condition_met">{{ $t('views.SettingsTriggerEventLogView.condition_met') }}</SelectItem>
-              <SelectItem value="signal_fired">{{ $t('views.SettingsTriggerEventLogView.signal_fired') }}</SelectItem>
-              <SelectItem value="no_match">{{ $t('views.SettingsTriggerEventLogView.no_match') }}</SelectItem>
-              <SelectItem value="hmac_failed">{{ $t('views.SettingsTriggerEventLogView.hmac_failed') }}</SelectItem>
-              <SelectItem value="schema_validation_failed">{{ $t('views.SettingsTriggerEventLogView.schema_validation_failed') }}</SelectItem>
-              <SelectItem value="deduplicated">{{ $t('views.SettingsTriggerEventLogView.deduplicated') }}</SelectItem>
-              <SelectItem value="concurrency_limit_reached">{{ $t('views.SettingsTriggerEventLogView.concurrency_limit_reached') }}</SelectItem>
-              <SelectItem value="flood_rejected">{{ $t('views.SettingsTriggerEventLogView.flood_rejected') }}</SelectItem>
-              <SelectItem value="timestamp_expired">{{ $t('views.SettingsTriggerEventLogView.timestamp_expired') }}</SelectItem>
-              <SelectItem value="validation_failed">{{ $t('views.SettingsTriggerEventLogView.validation_failed') }}</SelectItem>
-              <SelectItem value="rate_limited">{{ $t('views.SettingsTriggerEventLogView.rate_limited') }}</SelectItem>
-              <SelectItem value="poll_error">{{ $t('views.SettingsTriggerEventLogView.poll_error') }}</SelectItem>
-            </SelectContent>
-          </Select>
+          <Select
+  aria-label="Result"
+  v-model="filterResult"
+  :placeholder="$t('views.SettingsTriggerEventLogView.result')"
+  data-testid="settings-trigger-event-log-result"
+  id="settingstriggereventlogview-result"
+  class="w-full"
+  :options="[{ value: '__all__', label: $t('views.SettingsTriggerEventLogView.all_results') }, { value: 'accepted', label: $t('views.SettingsTriggerEventLogView.accepted') }, { value: 'passed', label: $t('views.SettingsTriggerEventLogView.passed') }, { value: 'condition_met', label: $t('views.SettingsTriggerEventLogView.condition_met') }, { value: 'signal_fired', label: $t('views.SettingsTriggerEventLogView.signal_fired') }, { value: 'no_match', label: $t('views.SettingsTriggerEventLogView.no_match') }, { value: 'hmac_failed', label: $t('views.SettingsTriggerEventLogView.hmac_failed') }, { value: 'schema_validation_failed', label: $t('views.SettingsTriggerEventLogView.schema_validation_failed') }, { value: 'deduplicated', label: $t('views.SettingsTriggerEventLogView.deduplicated') }, { value: 'concurrency_limit_reached', label: $t('views.SettingsTriggerEventLogView.concurrency_limit_reached') }, { value: 'flood_rejected', label: $t('views.SettingsTriggerEventLogView.flood_rejected') }, { value: 'timestamp_expired', label: $t('views.SettingsTriggerEventLogView.timestamp_expired') }, { value: 'validation_failed', label: $t('views.SettingsTriggerEventLogView.validation_failed') }, { value: 'rate_limited', label: $t('views.SettingsTriggerEventLogView.rate_limited') }, { value: 'poll_error', label: $t('views.SettingsTriggerEventLogView.poll_error') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
         </div>
         <div class="flex items-end gap-2">
-          <Button
-            variant="default"
-            data-testid="settings-trigger-event-log-apply"
-            @click="applyFilters"
-          >
+          <Button data-testid="settings-trigger-event-log-apply" @click="applyFilters">
             Apply
           </Button>
           <button
@@ -161,14 +151,8 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { shortId } from '../utils/format'
-import { Button } from '@/components/ui/button'
-import {
-  Select,
-  SelectTrigger,
-  SelectContent,
-  SelectItem,
-  SelectValue,
-} from '@/components/ui/select'
+import Button from 'primevue/button'
+import Select from 'primevue/select'
 
 const cursorStack = ref<(string | null)[]>([])
 const currentCursor = ref<string | null>(null)

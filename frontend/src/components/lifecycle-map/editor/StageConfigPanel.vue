@@ -2,7 +2,7 @@
   <div class="space-y-4">
     <div>
       <span class="mb-1 block text-sm font-medium">{{ $t('components.lifecycle-map.editor.StageConfigPanel.name') }}</span>
-      <Input v-model="form.name" placeholder="Stage name" />
+      <InputText v-model="form.name" placeholder="Stage name" />
     </div>
 
     <div>
@@ -37,32 +37,33 @@
 
     <div v-if="form.stage_type === 'modulo'">
       <span class="mb-1 block text-sm font-medium">{{ $t('components.lifecycle-map.editor.StageConfigPanel.pipeline') }}</span>
-      <Select aria-label="Pipeline" v-model="form.pipeline_id">
-        <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Pipeline">
-          <SelectValue placeholder="Select a pipeline..." />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</SelectItem>
-        </SelectContent>
-      </Select>
+      <Select
+  aria-label="Pipeline"
+  v-model="form.pipeline_id"
+  placeholder="Select a pipeline..."
+  class="w-full"
+  :options="pipelines.map(p => ({ value: p.id, label: p.name }))"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
     </div>
 
     <div v-if="form.stage_type === 'external'">
       <span class="mb-1 block text-sm font-medium">{{ $t('components.lifecycle-map.editor.StageConfigPanel.external_url') }}</span>
-      <Input v-model="form.external_url" placeholder="https://..." />
+      <InputText v-model="form.external_url" placeholder="https://..." />
     </div>
 
     <div>
       <span class="mb-1 block text-sm font-medium">{{ $t('components.lifecycle-map.editor.StageConfigPanel.owner') }}</span>
-      <Input v-model="form.owner" placeholder="Team or person name" />
+      <InputText v-model="form.owner" placeholder="Team or person name" />
     </div>
 
     <div v-if="isGraduatable" class="border-t pt-4">
-      <Button
-        variant="outline"
-        class="w-full gap-2"
-        @click="$emit('graduate', { ...form, id: stageId })"
-      >
+      <Button severity="secondary" outlined class="w-full gap-2" @click="$emit('graduate', { ...form, id: stageId })">
         <GraduationCapIcon class="h-4 w-4" />
         Graduate Stage
       </Button>
@@ -76,9 +77,9 @@
 <script setup lang="ts">
 import { reactive, computed, watch } from 'vue'
 import { GraduationCap as GraduationCapIcon } from '@lucide/vue'
-import { Input } from '@/components/ui/input'
-import { Button } from '@/components/ui/button'
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import InputText from 'primevue/inputtext'
+import Button from 'primevue/button'
+import Select from 'primevue/select'
 import type { StageType, PipelineSummary } from '../../../types/lifecycleMap'
 
 interface FormModel {

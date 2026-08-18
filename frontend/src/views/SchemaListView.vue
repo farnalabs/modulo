@@ -59,15 +59,20 @@
         <template v-else>
           <!-- Mobile folder filter — the FolderTree is hidden below md -->
           <div v-if="foldersList.length > 0" class="md:hidden mb-4">
-            <Select v-model="mobileFolderSelectValue" :aria-label="$t('views.SchemaListView.folders')">
-              <SelectTrigger class="w-full" :aria-label="$t('views.SchemaListView.folders')" data-testid="schema-list-mobile-folder-select">
-                <SelectValue :placeholder="$t('views.SchemaListView.folders')" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__all__">{{ $t('views.SchemaListView.all_schemas') }}</SelectItem>
-                <SelectItem v-for="f in foldersList" :key="f.id" :value="f.id">{{ f.name }}</SelectItem>
-              </SelectContent>
-            </Select>
+            <Select
+  v-model="mobileFolderSelectValue"
+  :aria-label="$t('views.SchemaListView.folders')"
+  :placeholder="$t('views.SchemaListView.folders')"
+  data-testid="schema-list-mobile-folder-select"
+  class="w-full"
+  :options="[{ value: '__all__', label: $t('views.SchemaListView.all_schemas') }, ...foldersList.map(f => ({ value: f.id, label: f.name }))]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
           </div>
 
           <!-- Breadcrumb navigation -->
@@ -129,34 +134,14 @@
                       </span>
                     </td>
                     <td class="px-4 py-3 text-right">
-                      <DropdownMenu>
-                        <DropdownMenuTrigger as-child>
-                          <button
-                            class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-                            data-testid="schema-action-menu"
-                            :aria-label="$t('views.SchemaListView.schema_actions')"
-                            @click.stop
-                          >
-                            <MoreVertical class="h-3.5 w-3.5" aria-hidden="true" />
-                          </button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" class="w-40">
-                          <DropdownMenuItem data-testid="schema-view-edit" @click.stop="openEditor(schema)">
-                            {{ $t('views.SchemaListView.view_edit') }}
-                          </DropdownMenuItem>
-                          <DropdownMenuItem data-testid="schema-move-folder" @click.stop="openMoveToFolder(schema)">
-                            {{ $t('views.SchemaListView.move_to_folder') }}
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            v-if="!schema.deprecated"
-                            class="text-destructive focus:text-destructive"
-                            data-testid="schema-deprecate"
-                            @click.stop="confirmDeprecate(schema)"
-                          >
-                            {{ $t('views.SchemaListView.deprecate') }}
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
+                      <button
+                        class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                        data-testid="schema-action-menu"
+                        :aria-label="$t('views.SchemaListView.schema_actions')"
+                        @click.stop="openActionMenu($event, schema)"
+                      >
+                        <MoreVertical class="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
                     </td>
                   </tr>
                 </tbody>
@@ -168,76 +153,83 @@
     </div>
 
     <!-- Deprecation Confirmation Dialog -->
-    <Dialog v-model:open="deprecateDialogOpen">
-      <DialogContent data-testid="schema-deprecate-dialog">
-        <DialogHeader>
-          <DialogTitle>{{ $t('views.SchemaListView.deprecation_title', { name: deprecateConfirmName }) }}</DialogTitle>
-          <DialogDescription>{{ $t('views.SchemaListView.deprecation_description') }}</DialogDescription>
-        </DialogHeader>
-        <div v-if="deprecateError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-          {{ deprecateError }}
+    <Dialog v-model:visible="deprecateDialogOpen" :modal="true" :dismissable-mask="true" :style="{ width: '28rem' }" data-testid="schema-deprecate-dialog">
+      <template #header>
+        <div>
+          <div class="text-lg font-semibold">{{ $t('views.SchemaListView.deprecation_title', { name: deprecateConfirmName }) }}</div>
+          <div class="mt-0.5 text-sm text-muted-foreground">{{ $t('views.SchemaListView.deprecation_description') }}</div>
         </div>
-        <DialogFooter>
-          <Button variant="outline" data-testid="schema-deprecate-cancel" @click="deprecateDialogOpen = false">
+      </template>
+      <div v-if="deprecateError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+        {{ deprecateError }}
+      </div>
+      <template #footer>
+        <div class="flex gap-2 justify-end">
+          <Button severity="secondary" outlined data-testid="schema-deprecate-cancel" @click="deprecateDialogOpen = false">
             {{ $t('views.SchemaListView.cancel') }}
           </Button>
-          <Button variant="destructive" data-testid="schema-deprecate-confirm" :disabled="deprecating" :loading="deprecating" @click="deprecateSchema">
+          <Button severity="danger" data-testid="schema-deprecate-confirm" :disabled="deprecating" :loading="deprecating" @click="deprecateSchema">
             {{ deprecating ? $t('views.SchemaListView.deprecating') : $t('views.SchemaListView.deprecate') }}
           </Button>
-        </DialogFooter>
-      </DialogContent>
+        </div>
+      </template>
     </Dialog>
 
     <!-- Move to Folder Dialog -->
-    <Dialog v-model:open="showMoveToFolder">
-      <DialogContent data-testid="schema-move-dialog">
-        <DialogHeader>
-          <DialogTitle>{{ $t('views.SchemaListView.move_to_folder') }}</DialogTitle>
-          <DialogDescription v-if="moveTarget">
+    <Dialog v-model:visible="showMoveToFolder" :modal="true" :dismissable-mask="true" :style="{ width: '28rem' }" data-testid="schema-move-dialog">
+      <template #header>
+        <div>
+          <div class="text-lg font-semibold">{{ $t('views.SchemaListView.move_to_folder') }}</div>
+          <div v-if="moveTarget" class="mt-0.5 text-sm text-muted-foreground">
             {{ $t('views.SchemaListView.move_to_folder_description', { name: moveTarget.name }) }}
-          </DialogDescription>
-        </DialogHeader>
-        <div class="space-y-2">
-          <button
-            v-for="f in foldersList"
-            :key="f.id"
-            class="flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-accent transition-colors text-left"
-            :class="moveToFolderId === f.id ? 'border-primary bg-accent' : 'border-border'"
-            :data-testid="`schema-move-folder-${f.id}`"
-            @click="moveToFolderId = f.id"
-          >
-            <Folder class="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-            {{ f.name }}
-          </button>
-          <button
-            class="flex w-full items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm hover:bg-accent transition-colors text-left"
-            :class="moveToFolderId === null ? 'border-primary bg-accent' : ''"
-            data-testid="schema-move-nofolder"
-            @click="moveToFolderId = null"
-          >
-            <FolderOpen class="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-            {{ $t('views.SchemaListView.no_folder') }}
-          </button>
-          <div v-if="moveError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive" role="alert">
-            {{ moveError }}
           </div>
         </div>
-        <DialogFooter>
-          <Button variant="outline" data-testid="schema-move-cancel" @click="showMoveToFolder = false">
+      </template>
+      <div class="space-y-2">
+        <button
+          v-for="f in foldersList"
+          :key="f.id"
+          class="flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-accent transition-colors text-left"
+          :class="moveToFolderId === f.id ? 'border-primary bg-accent' : 'border-border'"
+          :data-testid="`schema-move-folder-${f.id}`"
+          @click="moveToFolderId = f.id"
+        >
+          <Folder class="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+          {{ f.name }}
+        </button>
+        <button
+          class="flex w-full items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm hover:bg-accent transition-colors text-left"
+          :class="moveToFolderId === null ? 'border-primary bg-accent' : ''"
+          data-testid="schema-move-nofolder"
+          @click="moveToFolderId = null"
+        >
+          <FolderOpen class="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+          {{ $t('views.SchemaListView.no_folder') }}
+        </button>
+        <div v-if="moveError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive" role="alert">
+          {{ moveError }}
+        </div>
+      </div>
+      <template #footer>
+        <div class="flex gap-2 justify-end">
+          <Button severity="secondary" outlined data-testid="schema-move-cancel" @click="showMoveToFolder = false">
             {{ $t('common.cancel') }}
           </Button>
           <Button data-testid="schema-move-confirm" :disabled="moving" :loading="moving" @click="handleMoveToFolder">
             {{ moving ? $t('common.saving') : $t('common.save') }}
           </Button>
-        </DialogFooter>
-      </DialogContent>
+        </div>
+      </template>
     </Dialog>
+
+    <Menu ref="actionMenuRef" :model="actionMenuItems" popup />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { useApi } from '../composables/useApi'
@@ -248,10 +240,10 @@ import EmptyState from '../components/shared/EmptyState.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import FolderTree from '../components/pipelines/FolderTree.vue'
 import { ChevronRight, Folder, FolderOpen, MoreVertical, X } from '@lucide/vue'
-import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '@/components/ui/dropdown-menu'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import Button from 'primevue/button'
+import Dialog from 'primevue/dialog'
+import Menu from 'primevue/menu'
+import Select from 'primevue/select'
 import PageTabs from "../components/PageTabs.vue"
 
 type SchemaItem = components['schemas']['modulo__api__routes__schemas__SchemaResponse'] & {
@@ -274,6 +266,7 @@ interface FolderItem {
 }
 
 const router = useRouter()
+const { t } = useI18n()
 const { get, patch: patchUntyped } = useApi()
 
 const selectedFolderId = ref<string | null>(null)
@@ -409,6 +402,40 @@ const deprecateConfirmId = ref<string | null>(null)
 const deprecateConfirmName = ref('')
 const deprecating = ref(false)
 const deprecateError = ref<string | null>(null)
+
+const actionMenuRef = ref<InstanceType<typeof Menu> | null>(null)
+const actionMenuSchema = ref<SchemaItem | null>(null)
+const actionMenuItems = computed(() => [
+  {
+    label: t('views.SchemaListView.view_edit'),
+    dataTestid: 'schema-view-edit',
+    command: () => {
+      if (actionMenuSchema.value) openEditor(actionMenuSchema.value)
+    },
+  },
+  {
+    label: t('views.SchemaListView.move_to_folder'),
+    dataTestid: 'schema-move-folder',
+    command: () => {
+      if (actionMenuSchema.value) openMoveToFolder(actionMenuSchema.value)
+    },
+  },
+  ...(!actionMenuSchema.value?.deprecated
+    ? [{
+        label: t('views.SchemaListView.deprecate'),
+        dataTestid: 'schema-deprecate',
+        class: 'text-destructive',
+        command: () => {
+          if (actionMenuSchema.value) confirmDeprecate(actionMenuSchema.value)
+        },
+      }]
+    : []),
+])
+
+function openActionMenu(event: MouseEvent, schema: SchemaItem) {
+  actionMenuSchema.value = schema
+  actionMenuRef.value?.toggle(event)
+}
 
 function confirmDeprecate(schema: SchemaItem) {
   deprecateConfirmId.value = schema.id

@@ -46,11 +46,7 @@
       <SectionCard title="Data Export" description="Export all organisation data including runs, pipelines, schemas, connectors, and settings.">
 
         <div v-if="exportStatus === 'idle'" class="flex items-center gap-3">
-          <Button
-            variant="default"
-            class="h-8 px-2.5"
-            @click="startExport"
-          >
+          <Button class="h-8 px-2.5" @click="startExport">
             Export All Data
           </Button>
         </div>
@@ -92,11 +88,7 @@
 
       <!-- Delete Organization -->
       <SectionCard title="Delete Organisation" description="Permanently delete this organisation and all associated data. This action cannot be undone." class="border-destructive/30" title-class="text-destructive" description-class="text-destructive/80">
-        <Button
-          variant="destructive"
-          class="h-8 px-2.5"
-          @click="deleteDialogOpen = true"
-        >
+        <Button severity="danger" class="h-8 px-2.5" @click="deleteDialogOpen = true">
           Delete Organisation
         </Button>
       </SectionCard>
@@ -139,7 +131,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import SectionCard from '../components/shared/SectionCard.vue'
 import { ref, computed, reactive } from 'vue'
 import { useRouter } from 'vue-router'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'

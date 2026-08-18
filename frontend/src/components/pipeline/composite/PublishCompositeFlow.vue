@@ -3,7 +3,7 @@ import { ref, computed } from "vue";
 import { useRouter } from "vue-router";
 import { useApi } from "../../../composables/useApi";
 import type { ParameterPort } from "../../../types/pipeline";
-import { Button } from "@/components/ui/button";
+import Button from 'primevue/button'
 import { formatApiError } from "../../../lib/api/formatError";
 
 const props = defineProps<{
@@ -275,10 +275,7 @@ function goToLibrary() {
           >
             Stay Here
           </button>
-          <Button
-            variant="default"
-            @click="goToLibrary"
-          >
+          <Button @click="goToLibrary">
             Go to Library
           </Button>
         </div>
