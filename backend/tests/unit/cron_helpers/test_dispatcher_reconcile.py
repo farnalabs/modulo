@@ -5,6 +5,7 @@ discriminator, durable-dispatch recovery (B3) and safe terminalizers (B4/B5).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -937,3 +938,82 @@ class TestAwaitingHumanHasCommittedDecision:
     async def test_deliver_manual_with_payload_is_committed(self) -> None:
         session = self._mock_session(("deliver_manual", {"action": "deliver_manual", "output": {"z": 3}}))
         assert await ch._awaiting_human_has_committed_decision(session, ORG, RUN_AWAITING) is True
+
+
+class TestRunApiKeySweepWiring:
+    """FAR-296 Phase 3b-2: the compensating per-run API-key revocation sweep is
+    wired into the dispatcher_reconcile periodic tick (the FAR-189 lesson: an
+    unwired sweep is dead code, so the wiring is regression-tested here)."""
+
+    def _patches(self, monkeypatch: pytest.MonkeyPatch, api_key_module: Any, sweep_mock: Any) -> tuple[Any, list[Any]]:
+        _patch_env(monkeypatch)
+        session = _MockSession([_org_result([ORG]), _rows_result([])])
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+        q = _make_queue(redis_client)
+        redis_cls = MagicMock()
+        redis_cls.from_url.return_value = redis_client
+        return factory, [
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis", redis_cls),
+            patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
+            patch.object(ch, "run_classification_reconcile", new=AsyncMock(return_value={})),
+            patch.object(ch, "enforce_no_delivery_streaks", new=AsyncMock(return_value={})),
+            patch.object(api_key_module, "revoke_run_api_key_sweep", new=sweep_mock),
+            patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock, return_value=("enqueued", "new-job-id")),
+            patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock),
+            patch.object(
+                ch,
+                "_awaiting_human_has_committed_decision",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock),
+            patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_dispatcher_reconcile_invokes_run_api_key_sweep(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-189 wiring regression test: the real ``dispatcher_reconcile``
+        must invoke the per-run API-key revocation sweep and fold its counters
+        into the summary.
+
+        Deleting the ``await revoke_run_api_key_sweep(...)`` line from
+        ``cron_helpers.dispatcher_reconcile`` must leave this test red �?" the
+        sweep mock is asserted awaited once AND the folded summary keys would be
+        missing from the summary dict.
+        """
+        from modulo.auth import api_key as api_key_module
+
+        sweep_mock = AsyncMock(return_value={"scanned": 3, "revoked": 2, "errors": 0})
+        with contextlib.ExitStack() as stack:
+            factory, patches = self._patches(monkeypatch, api_key_module, sweep_mock)
+            for p in patches:
+                stack.enter_context(p)
+            summary = await ch.dispatcher_reconcile()
+
+        sweep_mock.assert_awaited_once_with(factory)
+        assert summary["run_api_key_scanned"] == 3
+        assert summary["run_api_key_revoked"] == 2
+        assert summary["run_api_key_errors"] == 0
+
+    @pytest.mark.asyncio
+    async def test_run_api_key_sweep_failure_does_not_fail_reconcile(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A sweep exception is caught and logged (never raised through the
+        tick); the reconcile survives and folds the counters to zero."""
+        from modulo.auth import api_key as api_key_module
+
+        sweep_mock = AsyncMock(side_effect=RuntimeError("boom"))
+        with contextlib.ExitStack() as stack:
+            _factory, patches = self._patches(monkeypatch, api_key_module, sweep_mock)
+            for p in patches:
+                stack.enter_context(p)
+            summary = await ch.dispatcher_reconcile()
+
+        assert summary["run_api_key_scanned"] == 0
+        assert summary["run_api_key_revoked"] == 0
+        assert summary["run_api_key_errors"] == 0
+        # The tick completed its bookkeeping despite the sweep failure.
+        assert summary["repaired"] == 0
+        assert summary["scanned"] == 0
