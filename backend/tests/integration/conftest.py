@@ -508,7 +508,15 @@ async def rls_session(migrated_db_url: str, test_org: uuid.UUID) -> AsyncGenerat
     Creates a dedicated engine + session on the current event loop so that
     connection operations never cross event loop boundaries.
     """
-    engine = create_async_engine(migrated_db_url, echo=False)
+    engine = create_async_engine(
+        migrated_db_url,
+        echo=False,
+        # Mirror the production engine knob from db/session.py — without it the
+        # fixture would NOT exercise the fixed path and multi-row INSERT
+        # batching (insertmanyvalues) would still trip the asyncpg UUID-sentinel
+        # mismatch (test_replace_pipeline_graph_multi_edge_round_trip).
+        use_insertmanyvalues=False,
+    )
     try:
         factory = async_sessionmaker(engine, expire_on_commit=False)
         async with factory() as session:
