@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 import uuid
 from datetime import UTC, date, datetime, timedelta, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -24,6 +25,12 @@ from modulo.core.analytics.builder import (
     AnalyticsQuery,
     AnalyticsStatus,
     AnalyticsTriggerType,
+    _accumulate_row,
+    _bucket_dim_keys,
+    _build_time_grid,
+    _emit_bucket_row,
+    _empty_bucket,
+    _row_dimension_key,
     bucket_concurrency_rows,
     bucket_rows,
     build_concurrency_query,
@@ -666,6 +673,192 @@ class TestBucketing:
         assert [b["date"] for b in out] == ["2026-08-01", "2026-08-02", "2026-08-03"]
         assert all(b["count"] == 0 for b in out)
         assert all(b["key"] is None for b in out)
+
+
+class TestExtractedBucketHelpers:
+    """Direct coverage for the helpers extracted from ``bucket_rows`` (FAR-310).
+
+    The public ``bucket_rows`` tests above exercise the composed path; these
+    pin the extracted helpers' own contracts for edge cases that are hard to
+    reach compositionally: fresh-bucket independence, None-safe dimension key
+    normalization (UUID + legacy error-code canonicalization), inclusive
+    time-grid boundaries, and zero-filled emission.
+    """
+
+    def test_empty_bucket_returns_fresh_dict_per_call(self) -> None:
+        b1 = _empty_bucket()
+        b1["count"] = 7
+        b1["cost"] = Decimal("3.50")
+        b2 = _empty_bucket()
+        assert b2["count"] == 0
+        assert b2["cost"] is None
+        assert b2["tokens"] is None
+        assert b2["duration_sum"] == 0.0
+        assert b2["duration_n"] == 0
+        assert b2["output_bytes_n"] == 0
+
+    def test_row_dimension_key_none_dimension_returns_none(self) -> None:
+        assert _row_dimension_key(SimpleNamespace(key_label="manual"), None) is None
+
+    def test_row_dimension_key_prefers_key_label_over_raw_attr(self) -> None:
+        pid = uuid.UUID("66666666-6666-4666-8666-666666666666")
+        row = SimpleNamespace(key_label="Pipeline A", pipeline_id=pid)
+        assert _row_dimension_key(row, AnalyticsDimension.PIPELINE) == "Pipeline A"
+
+    def test_row_dimension_key_null_label_falls_back_to_uuid_string(self) -> None:
+        pid = uuid.UUID("66666666-6666-4666-8666-666666666666")
+        row = SimpleNamespace(key_label=None, pipeline_id=pid)
+        key = _row_dimension_key(row, AnalyticsDimension.PIPELINE)
+        assert key == str(pid)
+        assert isinstance(key, str), "keys must be str | None, never a raw UUID"
+
+    def test_row_dimension_key_missing_attrs_returns_none(self) -> None:
+        assert _row_dimension_key(SimpleNamespace(key_label=None), AnalyticsDimension.FOLDER) is None
+
+    def test_row_dimension_key_error_code_canonicalizes_legacy_to_dotted(self) -> None:
+        legacy = SimpleNamespace(error_code="task_failure")
+        dotted = SimpleNamespace(error_code="harness.worker_failed")
+        assert _row_dimension_key(legacy, AnalyticsDimension.ERROR_CODE) == "harness.worker_failed"
+        assert _row_dimension_key(dotted, AnalyticsDimension.ERROR_CODE) == "harness.worker_failed"
+
+    def test_row_dimension_key_error_code_unknown_maps_to_harness_unknown(self) -> None:
+        row = SimpleNamespace(error_code="some_mystery_code")
+        assert _row_dimension_key(row, AnalyticsDimension.ERROR_CODE) == "harness.unknown"
+
+    def test_accumulate_row_none_cost_and_tokens_stay_none(self) -> None:
+        bucket = _empty_bucket()
+        row = SimpleNamespace(
+            count=2,
+            complete_count=2,
+            failure_count=0,
+            stall_count=0,
+            total_cost_usd=None,
+            total_tokens=None,
+            avg_duration_ms=500.0,
+        )
+        _accumulate_row(bucket, row, cnt=2)
+        assert bucket["count"] == 2
+        assert bucket["cost"] is None
+        assert bucket["tokens"] is None
+        assert bucket["duration_sum"] == 1000.0
+        assert bucket["duration_n"] == 2
+
+    def test_accumulate_row_sums_real_values(self) -> None:
+        bucket = _empty_bucket()
+        _accumulate_row(
+            bucket,
+            SimpleNamespace(
+                count=1,
+                complete_count=1,
+                failure_count=0,
+                stall_count=0,
+                total_cost_usd=10.0,
+                total_tokens=50,
+                avg_duration_ms=100.0,
+                avg_queue_wait_ms=20.0,
+                avg_final_idle_ms=5.0,
+                avg_output_bytes=1024.0,
+            ),
+            cnt=1,
+        )
+        _accumulate_row(
+            bucket,
+            SimpleNamespace(
+                count=1,
+                complete_count=1,
+                failure_count=0,
+                stall_count=0,
+                total_cost_usd=5.0,
+                total_tokens=25,
+                avg_duration_ms=300.0,
+                avg_queue_wait_ms=10.0,
+                avg_final_idle_ms=1.0,
+                avg_output_bytes=512.0,
+            ),
+            cnt=1,
+        )
+        assert bucket["count"] == 2
+        assert bucket["complete"] == 2
+        assert bucket["cost"] == Decimal("15.0")
+        assert bucket["tokens"] == 75
+        assert bucket["duration_sum"] == 400.0
+        assert bucket["duration_n"] == 2
+        assert bucket["queue_wait_sum"] == 30.0
+        assert bucket["final_idle_sum"] == 6.0
+        assert bucket["output_bytes_sum"] == 1536.0
+
+    def test_build_time_grid_day_inclusive_span(self) -> None:
+        grid = _build_time_grid(AnalyticsGroupBy.DAY, date(2026, 8, 1), date(2026, 8, 3))
+        assert grid == [date(2026, 8, 1), date(2026, 8, 2), date(2026, 8, 3)]
+
+    def test_build_time_grid_week_anchors_on_mondays(self) -> None:
+        # 2026-08-05 (Wed) .. 2026-08-16 (Sun) spans two ISO weeks starting
+        # Mon 2026-08-03 and Mon 2026-08-10 — the grid must be the week starts.
+        grid = _build_time_grid(AnalyticsGroupBy.WEEK, date(2026, 8, 5), date(2026, 8, 16))
+        assert grid == [date(2026, 8, 3), date(2026, 8, 10)]
+
+    def test_build_time_grid_hour_single_day_has_24_buckets(self) -> None:
+        grid = _build_time_grid(AnalyticsGroupBy.HOUR, date(2026, 8, 6), date(2026, 8, 6))
+        assert len(grid) == 24
+        assert grid[0] == datetime(2026, 8, 6, 0, 0, tzinfo=UTC)
+        assert grid[-1] == datetime(2026, 8, 6, 23, 0, tzinfo=UTC)
+
+    def test_bucket_dim_keys_no_dimension_returns_singleton_none(self) -> None:
+        assert _bucket_dim_keys({}, None) == [None]
+
+    def test_bucket_dim_keys_empty_agg_falls_back_to_none(self) -> None:
+        assert _bucket_dim_keys({}, AnalyticsDimension.FOLDER) == [None]
+
+    def test_bucket_dim_keys_sorts_strings_then_none(self) -> None:
+        agg = {
+            (date(2026, 8, 5), "cron"): _empty_bucket(),
+            (date(2026, 8, 5), None): _empty_bucket(),
+            (date(2026, 8, 5), "manual"): _empty_bucket(),
+        }
+        # Sort key is ``(k is None, k or "")`` — False < True, so the string
+        # keys sort before the None key.
+        assert _bucket_dim_keys(agg, AnalyticsDimension.TRIGGER_TYPE) == ["cron", "manual", None]
+
+    def test_emit_bucket_row_none_bucket_zero_fills(self) -> None:
+        out = _emit_bucket_row(None, date(2026, 8, 5), "manual")
+        assert out["date"] == "2026-08-05"
+        assert out["key"] == "manual"
+        assert out["count"] == 0
+        assert out["total_cost_usd"] is None
+        assert out["total_tokens"] is None
+        assert out["success_rate"] is None
+        assert out["failure_count"] == 0
+        assert out["stall_count"] == 0
+        assert out["avg_duration_ms"] is None
+
+    def test_emit_bucket_row_populated_bucket_computes_aggregates(self) -> None:
+        b = {
+            "count": 4,
+            "complete": 3,
+            "cost": Decimal("10.0"),
+            "tokens": 100,
+            "duration_sum": 800.0,
+            "duration_n": 4,
+            "failure": 1,
+            "stall": 0,
+            "queue_wait_sum": 40.0,
+            "queue_wait_n": 2,
+            "final_idle_sum": 10.0,
+            "final_idle_n": 2,
+            "output_bytes_sum": 2048.0,
+            "output_bytes_n": 2,
+        }
+        out = _emit_bucket_row(b, datetime(2026, 8, 6, 10, 0, tzinfo=UTC), None)
+        assert out["date"] == "2026-08-06T10:00:00"
+        assert out["count"] == 4
+        assert out["total_cost_usd"] == 10.0
+        assert out["total_tokens"] == 100
+        assert out["avg_duration_ms"] == 200.0
+        assert out["success_rate"] == 0.75
+        assert out["failure_count"] == 1
+        assert out["avg_queue_wait_ms"] == 20.0
+        assert out["avg_final_idle_ms"] == 5.0
+        assert out["avg_output_bytes"] == 1024.0
 
 
 class TestHourGranularity:
