@@ -583,19 +583,29 @@ async def test_revoke_run_api_key_zero_rows_returns_zero() -> None:
 
 
 class _SweepBegin:
+    def __init__(self, session: "_SweepSession") -> None:
+        self._session = session
+
     async def __aenter__(self) -> Self:
+        self._session.in_tx = True
         return self
 
     async def __aexit__(self, *args: object) -> bool:
+        self._session.in_tx = False
         return False
 
 
 class _SweepSession:
-    """Minimal session double for ``revoke_run_api_key_sweep``.
+    """Minimal autobegin=False-style session double for
+    ``revoke_run_api_key_sweep``.
 
-    ``begin()`` returns a no-op async context manager; ``in_transaction()`` is
-    True so ``set_rls_org``'s active-transaction guard passes; ``get_bind()``
-    reports a non-Postgres dialect so RLS goes through ``session.info`` (no
+    Mirrors ``async_sessionmaker(autobegin=False)`` (the DI default): a bare
+    ``execute`` outside ``begin()`` raises the same InvalidRequestError the
+    real session would, so the sweep's org self-selection path (the only
+    production path) is genuinely exercised. ``begin()`` flips ``in_tx`` on
+    for the duration of the context; ``in_transaction()`` reports it (so
+    ``set_rls_org``'s active-transaction guard passes); ``get_bind()`` reports
+    a non-Postgres dialect so RLS goes through ``session.info`` (no
     ``set_config`` SQL); ``execute`` pops canned results in order and records
     every statement for assertion.
     """
@@ -604,6 +614,7 @@ class _SweepSession:
         self._results = list(results)
         self.executed: list[tuple[Any, Any]] = []
         self.info: dict[str, Any] = {}
+        self.in_tx = False
 
     async def __aenter__(self) -> Self:
         return self
@@ -612,10 +623,10 @@ class _SweepSession:
         return False
 
     def begin(self) -> _SweepBegin:
-        return _SweepBegin()
+        return _SweepBegin(self)
 
     def in_transaction(self) -> bool:
-        return True
+        return self.in_tx
 
     def get_bind(self) -> Any:
         bind = MagicMock()
@@ -624,11 +635,19 @@ class _SweepSession:
 
     async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
         self.executed.append((stmt, params))
+        if not self.in_transaction():
+            raise RuntimeError("Autobegin is disabled on this Session; please call session.begin()")
         if "set_config" in str(stmt):
             return MagicMock()
         if not self._results:
             return MagicMock()
         return self._results.pop(0)
+
+
+def _sweep_orgs_result(org_ids: list[uuid.UUID]) -> MagicMock:
+    r = MagicMock()
+    r.scalars.return_value = org_ids
+    return r
 
 
 def _sweep_keys_result(rows: list[tuple[uuid.UUID, uuid.UUID]]) -> MagicMock:
@@ -703,6 +722,33 @@ async def test_revoke_run_api_key_sweep_never_raises() -> None:
     assert result["scanned"] == 0
     assert result["revoked"] == 0
     assert result["errors"] == 1
+
+
+@pytest.mark.asyncio
+async def test_revoke_run_api_key_sweep_org_self_selection_works_with_autobegin_false() -> None:
+    """The org self-selection path (``org_ids=None`` — the ONLY path production
+    takes via ``dispatcher_reconcile``) must work on an ``autobegin=False``
+    session.
+
+    The session double raises the real ``InvalidRequestError``
+    ("Autobegin is disabled...") for any ``execute`` outside ``begin()``, so
+    this test is RED on the pre-fix code (bare ``session.execute`` on the org
+    SELECT → the sweep folds the error into ``errors: 1`` and never revokes)
+    and GREEN once the org SELECT runs inside ``session.begin()``.
+    """
+    org_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    session = _SweepSession(
+        [_sweep_orgs_result([org_id]), _sweep_keys_result([(uuid.uuid4(), run_id)]), _sweep_revoke_result(1)]
+    )
+    session_factory = MagicMock(return_value=session)
+
+    result = await revoke_run_api_key_sweep(session_factory)
+
+    assert result == {"scanned": 1, "revoked": 1, "errors": 0}
+    # The first executed statement was the org SELECT, and it ran inside a
+    # transaction (the autobegin guard never fired).
+    assert "organisations" in str(session.executed[0][0])
 
 
 # ---------------------------------------------------------------------------

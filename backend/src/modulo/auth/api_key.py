@@ -206,7 +206,12 @@ async def revoke_run_api_key_sweep(
     errors = 0
     try:
         if org_ids is None:
-            async with session_factory() as session:
+            # Org self-selection runs system-scoped, but the factory's sessions
+            # are autobegin=False (the DI default), so the SELECT needs an
+            # explicit begin() — a bare execute would raise InvalidRequestError
+            # and be swallowed into errors (this org-selection path is the ONLY
+            # production path via dispatcher_reconcile).
+            async with session_factory() as session, session.begin():
                 result = await session.execute(select(Organisation.id))
                 org_ids = list(result.scalars())
         for org_id in org_ids:
