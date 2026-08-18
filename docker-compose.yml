@@ -46,7 +46,7 @@ services:
       - ./frontend/src/manifest.yaml:/app/manifest.yaml
 
   # SAQ runs worker — executes run jobs (plan F8 local dev). Required for any
-  # pipeline execution after the Celery removal.
+  # pipeline execution.
   saq-runner:
     build: ./backend
     command: ["python", "-m", "saq", "modulo.core.saq_worker.runs_settings"]
@@ -65,8 +65,8 @@ services:
       - ./backend/src:/app/src
 
   # SAQ system worker — owns the scheduler (fire_due_triggers) + reconcile +
-  # system crons (plan F8). REQUIRED for local cron/triggers after the Celery
-  # removal. Web UI bound to 127.0.0.1:8081 via the custom runner.
+  # system crons (plan F8). REQUIRED for local cron/triggers. Web UI bound to
+  # 127.0.0.1:8081 via the custom runner.
   saq-system:
     build: ./backend
     command: ["python", "-m", "modulo.core.saq_worker"]
