@@ -741,18 +741,29 @@ def _bucket_dim_keys(
     return dim_keys
 
 
+def _bucket_averages(
+    b: dict[str, Any] | None,
+) -> tuple[float | None, float | None, float | None, float | None]:
+    avg_dur = (b["duration_sum"] / b["duration_n"]) if b and b["duration_n"] else None
+    avg_queue_wait = (b["queue_wait_sum"] / b["queue_wait_n"]) if b and b["queue_wait_n"] else None
+    avg_final_idle = (b["final_idle_sum"] / b["final_idle_n"]) if b and b["final_idle_n"] else None
+    avg_output_bytes = (b["output_bytes_sum"] / b["output_bytes_n"]) if b and b["output_bytes_n"] else None
+    return (avg_dur, avg_queue_wait, avg_final_idle, avg_output_bytes)
+
+
+def _format_iso(tkey: date | datetime) -> str:
+    return tkey.replace(tzinfo=None).isoformat() if isinstance(tkey, datetime) else tkey.isoformat()
+
+
 def _emit_bucket_row(b: dict[str, Any] | None, tkey: date | datetime, dkey: Any | None) -> dict[str, Any]:
     count = b["count"] if b else 0
     complete = b["complete"] if b else 0
     cost = float(b["cost"]) if b and b["cost"] is not None else None
     tokens = b["tokens"] if b else None
-    avg_dur = (b["duration_sum"] / b["duration_n"]) if b and b["duration_n"] else None
-    avg_queue_wait = (b["queue_wait_sum"] / b["queue_wait_n"]) if b and b["queue_wait_n"] else None
-    avg_final_idle = (b["final_idle_sum"] / b["final_idle_n"]) if b and b["final_idle_n"] else None
-    avg_output_bytes = (b["output_bytes_sum"] / b["output_bytes_n"]) if b and b["output_bytes_n"] else None
+    avg_dur, avg_queue_wait, avg_final_idle, avg_output_bytes = _bucket_averages(b)
     success_rate = (complete / count) if count else None
     return {
-        "date": tkey.replace(tzinfo=None).isoformat() if isinstance(tkey, datetime) else tkey.isoformat(),
+        "date": _format_iso(tkey),
         "key": dkey,
         "count": count,
         "total_cost_usd": cost,
