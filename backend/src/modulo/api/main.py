@@ -1089,7 +1089,7 @@ async def _seed_tier_catalog() -> None:
 
 app = FastAPI(
     title="Modulo",
-    description="Governed orchestration for your agentic SDLC",
+    description="Agent governance for your agentic SDLC",
     version="0.1.0",
     lifespan=_lifespan,
 )
