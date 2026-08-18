@@ -143,6 +143,75 @@ async def test_replace_pipeline_graph_persists_nodes_and_first_class_edges(
     assert loaded_edges[0].pipeline_id == pipeline.id
 
 
+async def test_replace_pipeline_graph_multi_edge_round_trip(
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    pipeline = await create_pipeline(
+        rls_session,
+        org_id=test_org,
+        name="Multi-edge graph save",
+        account_id=test_user,
+    )
+    node_ids = [str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())]
+    nodes = [
+        {
+            "id": node_ids[0],
+            "agent_id": str(uuid.uuid4()),
+            "position": {"x": 0, "y": 0},
+            "connector_binding": None,
+        },
+        {
+            "id": node_ids[1],
+            "agent_id": str(uuid.uuid4()),
+            "position": {"x": 200, "y": 0},
+            "connector_binding": None,
+        },
+        {
+            "id": node_ids[2],
+            "agent_id": str(uuid.uuid4()),
+            "position": {"x": 400, "y": 0},
+            "connector_binding": None,
+        },
+    ]
+    edge_ids = [uuid.uuid4(), uuid.uuid4()]
+    edges = [
+        {
+            "id": edge_ids[0],
+            "source_node_id": node_ids[0],
+            "target_node_id": node_ids[1],
+            "edge_type": "normal",
+            "hitl_gate_config": None,
+        },
+        {
+            "id": edge_ids[1],
+            "source_node_id": node_ids[1],
+            "target_node_id": node_ids[2],
+            "edge_type": "normal",
+            "hitl_gate_config": None,
+        },
+    ]
+    saved = await replace_pipeline_graph(
+        rls_session,
+        pipeline_id=pipeline.id,
+        org_id=test_org,
+        nodes=nodes,
+        edges=edges,
+        is_privileged=True,
+        caller_type="rest",
+    )
+
+    assert saved is not None
+    loaded = await get_pipeline_graph(rls_session, pipeline.id)
+    assert loaded is not None
+    loaded_nodes, loaded_edges = loaded
+    assert len(loaded_nodes) == 3
+    assert len(loaded_edges) == 2
+    assert {edge.id for edge in loaded_edges} == set(edge_ids)
+    assert all(edge.pipeline_id == pipeline.id for edge in loaded_edges)
+
+
 async def test_clone_pipeline_returns_new_id_and_name_prefix(
     rls_session: AsyncSession,
     test_org: uuid.UUID,
