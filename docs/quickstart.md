@@ -59,8 +59,8 @@ The API is now live at `http://localhost:8000`. OpenAPI docs at `http://localhos
 
 ## 3b. Start the SAQ workers (required for pipeline execution + cron)
 
-Modulo executes pipeline runs through SAQ workers (Celery was removed). Start
-them in separate terminals:
+Modulo executes pipeline runs through SAQ workers. Start them in separate
+terminals:
 
 ```powershell
 # Runs worker: executes run jobs (queue: runs)

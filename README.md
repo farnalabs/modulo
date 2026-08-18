@@ -40,9 +40,6 @@
 > migrations, configuration, and deployment procedures may change. Evaluate it
 > before using it with production data and keep current backups.
 
-<!-- SCREENSHOT placeholder — replace with a real screenshot before public launch -->
-![Modulo pipeline editor](docs/assets/screenshot-pipeline-editor.png)
-
 ## Table of Contents
 - [What it is](#what-it-is)
 - [Key features](#key-features)
@@ -57,9 +54,9 @@
 ## What it is
 
 Modulo is a self-hosted agent governance platform for building governed, repeatable
-AI-assisted software delivery pipelines. It connects atomic agents to tools such
-as GitHub, Linear, and Notion while keeping execution, approvals, audit data,
-and credentials under the operator's control.
+AI-assisted software delivery pipelines. It connects atomic agents to external tools like GitHub, GitLab, and Slack
+while keeping execution, approvals, audit data, and credentials under the
+operator's control.
 
 Unlike running agents ad hoc, Modulo gives you a visual, composable pipeline of
 atomic AI agents with built-in governance: role-based access, audit trails,
@@ -101,7 +98,7 @@ Python 3.12, [uv](https://docs.astral.sh/uv/), Node.js 20+, and Docker Desktop.
 
 ### Local SAQ workers (required for pipeline execution and cron)
 
-Modulo executes pipeline runs through **SAQ** workers (Celery was removed).
+Modulo executes pipeline runs through **SAQ** workers.
 After starting Postgres + Redis (e.g. `docker compose up -d` or
 `docker compose -f docker-compose.local.yml up -d`), launch the workers:
 

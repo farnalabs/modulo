@@ -17,7 +17,7 @@
 
 Modulo is an agent governance platform for agentic SDLC pipelines. It
 provides a composable pipeline of atomic AI agents that automate work between
-existing tools like GitHub, Linear, and Notion.
+existing tools like GitHub, GitLab, and Slack.
 
 We're glad you're here. Be respectful, constructive, and assume good faith.
 
