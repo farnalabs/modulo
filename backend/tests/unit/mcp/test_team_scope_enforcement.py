@@ -73,18 +73,6 @@ def _make_execute_result(value: Any) -> AsyncMock:
     return result
 
 
-def _make_empty_scalars_result() -> MagicMock:
-    """A session.execute() result whose sync scalars().all() returns [].
-
-    Shape required by ``load_pipeline_guardrail_rows``: the guardrail-rows
-    query is consumed as ``result.scalars().all()``. An empty list means no
-    guardrail rows are bound, so no strip is detected.
-    """
-    result = MagicMock()
-    result.scalars.return_value.all.return_value = []
-    return result
-
-
 def _make_run(
     *,
     pipeline_id: uuid.UUID,
@@ -478,7 +466,6 @@ class TestUpdatePipelineGraphTeamScope(_OperatorAuthContext):
         mock_pipeline = MagicMock()
         mock_pipeline.owner_team_id = _TEAM_A
         session = AsyncMock()
-        session.execute.return_value = _make_empty_scalars_result()
         with (
             patch("modulo.api.mcp_server._session") as mock_session,
             patch("modulo.api.routes.pipelines._is_privileged", return_value=False),
