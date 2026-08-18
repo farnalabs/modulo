@@ -14,6 +14,7 @@ an ADR 017 follow-up (Phase 3 documents the runner-default grant).
 """
 
 import logging
+import re
 import uuid
 from typing import Any
 
@@ -1074,9 +1075,7 @@ async def _apply_add_group_op(session: AsyncSession, group: Any, op: Any, org_id
 
 async def _remove_member_by_path(session: AsyncSession, group: Any, path: str) -> None:
     # Extract user ID from path: members[value eq "uuid"]
-    import re as _re
-
-    m = _re.search(r'value\s+eq\s+"([^"]+)"', path)
+    m = re.search(r'value\s+eq\s+"([^"]+)"', path)
     if m:
         uid = _parse_member_uuid(m.group(1))
         if uid is not None:
