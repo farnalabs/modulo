@@ -11,7 +11,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.exc import TimeoutError as SA_TimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -57,6 +57,7 @@ from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 from modulo.db.crud.run import (
     create_run,
     get_child_run_rollup,
+    get_org_run_concurrency_limit,
     get_run,
     get_run_heatmap,
     get_run_stats,
@@ -65,9 +66,12 @@ from modulo.db.crud.run import (
 from modulo.db.crud.run import (
     list_runs as db_list_runs,
 )
+from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
+from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import TERMINAL_STATUSES, Run
+from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES, Run
+from modulo.db.models.trigger import Trigger
 from modulo.db.rls import set_rls_org
 from modulo.otel_bridge import trace_id_for_thread
 from modulo.settings import Settings, get_settings
@@ -192,6 +196,79 @@ async def _do_get_otel_endpoint(
         return ""
 
 
+async def _resolve_trigger_actor(session: AsyncSession, run: Run) -> str | None:
+    """Resolve a human-readable actor label for a run.
+
+    For manual runs, returns the triggering account's email (falling back to
+    display_name). For trigger-driven runs (webhook/cron/polling/agent_signal/
+    ongoing/slack_app_mention), returns the owning trigger's type as the actor
+    label. Returns None when no account or trigger can be resolved.
+    """
+    if run.trigger_type == "manual" and run.account_id is not None:
+        account_result = await session.execute(select(Account).where(Account.id == run.account_id))
+        account = account_result.scalar_one_or_none()
+        if account is not None:
+            return account.email or account.display_name
+        return None
+    if run.trigger_id is not None:
+        trigger_result = await session.execute(select(Trigger).where(Trigger.id == run.trigger_id))
+        trigger = trigger_result.scalar_one_or_none()
+        if trigger is not None:
+            return trigger.trigger_type
+        return None
+    return None
+
+
+async def _resolve_capacity(session: AsyncSession, org_id: uuid.UUID, run: Run) -> dict[str, Any]:
+    """Compute the org's active-run capacity relative to this run.
+
+    Returns ``{active_runs, concurrency_limit, waiting}`` where ``waiting`` is
+    True when this pending run is queued at/above the org's concurrency limit.
+    """
+    count_result = await session.execute(
+        select(func.count()).select_from(Run).where(Run.organisation_id == org_id, Run.status.in_(ACTIVE_RUN_STATUSES))
+    )
+    active_count = int(count_result.scalar_one() or 0)
+    limit = await get_org_run_concurrency_limit(session, org_id)
+    waiting = run.status == "pending" and limit is not None and active_count >= limit
+    return {"active_runs": active_count, "concurrency_limit": limit, "waiting": waiting}
+
+
+async def _resolve_child_runs(session: AsyncSession, run: Run) -> list[dict[str, Any]]:
+    """Resolve the direct child runs of a run (parent_run_id == run.id)."""
+    child_result = await session.execute(
+        select(Run, Pipeline.name)
+        .join(Pipeline, Run.pipeline_id == Pipeline.id)
+        .where(Run.parent_run_id == run.id)
+        .order_by(Run.created_at)
+    )
+    children = []
+    for child_run, pipeline_name in child_result.all():
+        children.append(
+            {
+                "run_id": str(child_run.id),
+                "run_number": child_run.run_number,
+                "status": child_run.status,
+                "pipeline_name": pipeline_name,
+            }
+        )
+    return children
+
+
+async def _do_get_run_observability(
+    factory: async_sessionmaker[AsyncSession],
+    principal: TenantPrincipal,
+    run: Run,
+) -> tuple[str | None, dict[str, Any] | None, list[dict[str, Any]] | None]:
+    """Resolve trigger_actor, capacity, and child_runs for a run detail response."""
+    async with factory() as session, session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        actor = await _resolve_trigger_actor(session, run)
+        capacity = await _resolve_capacity(session, principal.organisation_id, run)
+        child_runs = await _resolve_child_runs(session, run)
+    return actor, capacity, child_runs
+
+
 async def _do_list_runs(
     factory: async_sessionmaker[AsyncSession],
     user: TenantPrincipal,
@@ -219,6 +296,33 @@ async def _do_list_runs(
         child_rollup: dict[uuid.UUID, tuple[Decimal, int]] = {}
         if run_ids:
             child_rollup = await get_child_run_rollup(session, run_ids)
+
+        # Active-run observability (FAR-307). Capacity is computed ONCE per
+        # request (one active-count query + one limit read) and reused for
+        # every item; `waiting` is derived per item from its own status.
+        account_ids = {run.account_id for run in result.items if run.account_id is not None}
+        trigger_ids = {run.trigger_id for run in result.items if run.trigger_id is not None}
+        account_labels: dict[uuid.UUID, str] = {}
+        if account_ids:
+            account_result = await session.execute(select(Account).where(Account.id.in_(account_ids)))
+            for account in account_result.scalars().all():
+                account_labels[account.id] = account.email or account.display_name
+        trigger_labels: dict[uuid.UUID, str] = {}
+        if trigger_ids:
+            trigger_result = await session.execute(select(Trigger).where(Trigger.id.in_(trigger_ids)))
+            for trigger in trigger_result.scalars().all():
+                trigger_labels[trigger.id] = trigger.trigger_type
+        active_count_result = await session.execute(
+            select(func.count())
+            .select_from(Run)
+            .where(
+                Run.organisation_id == user.organisation_id,
+                Run.status.in_(ACTIVE_RUN_STATUSES),
+            )
+        )
+        active_count = int(active_count_result.scalar_one() or 0)
+        concurrency_limit = await get_org_run_concurrency_limit(session, user.organisation_id)
+
         items = []
         for run in result.items:
             pipeline_name = run.pipeline.name if run.pipeline else None
@@ -226,6 +330,19 @@ async def _do_list_runs(
             child_cost = _quantize_cost_rollup(child_cost)
             own_cost = run.total_cost_usd if run.total_cost_usd is not None else _COST_ROLLUP_ZERO
             _error_code, error_detail = present_error(run.error_code, run.error_detail, limit=200)
+            if run.trigger_type == "manual" and run.account_id is not None:
+                trigger_actor = account_labels.get(run.account_id)
+            elif run.trigger_id is not None:
+                trigger_actor = trigger_labels.get(run.trigger_id)
+            else:
+                trigger_actor = None
+            capacity = {
+                "active_runs": active_count,
+                "concurrency_limit": concurrency_limit,
+                "waiting": (
+                    run.status == "pending" and concurrency_limit is not None and active_count >= concurrency_limit
+                ),
+            }
             items.append(
                 {
                     "run_id": str(run.id),
@@ -245,6 +362,9 @@ async def _do_list_runs(
                     "aggregate_cost_usd": _quantize_cost_rollup(own_cost + child_cost),
                     "account_id": str(run.account_id) if run.account_id else None,
                     "input_payload": _mask_output_value(run.input_payload) if run.input_payload else None,
+                    "trigger_actor": trigger_actor,
+                    "heartbeat_at": run.heartbeat_at.isoformat() if run.heartbeat_at else None,
+                    "capacity": capacity,
                 }
             )
     return {
@@ -412,6 +532,14 @@ class RunResponse(BaseModel):
     # expected_skips / unexpected_skips). NULL when the run had no guardrails
     # bound, or on pre-migration runs.
     guardrail_summary: dict[str, int] | None = None
+    # Active-run observability (FAR-307). Populated only on the detail
+    # endpoint for active runs; always None on list/trigger responses.
+    trigger_actor: str | None = None
+    trigger_id: uuid.UUID | None = None
+    heartbeat_at: datetime | None = None
+    work_item_refs: list[dict[str, Any]] | None = None
+    child_runs: list[dict[str, Any]] | None = None
+    capacity: dict[str, Any] | None = None
 
 
 def _run_gate_fired(run: Any) -> bool:
@@ -456,6 +584,12 @@ def _build_run_response(
     child_cost: Decimal | None = None,
     child_count: int = 0,
     otlp_endpoint: str | None = None,
+    trigger_actor: str | None = None,
+    trigger_id: uuid.UUID | None = None,
+    heartbeat_at: datetime | None = None,
+    work_item_refs: list[dict[str, Any]] | None = None,
+    child_runs: list[dict[str, Any]] | None = None,
+    capacity: dict[str, Any] | None = None,
 ) -> RunResponse:
     """Build a RunResponse from a Run ORM entity, populating derived fields."""
     token_consumption: dict[str, Any] | None = None
@@ -511,6 +645,12 @@ def _build_run_response(
         gate_fired=_run_gate_fired(run),
         blocked_partial_summary=blocked_partial_summary,
         guardrail_summary=_guardrail_summary_from_run(run),
+        trigger_actor=trigger_actor,
+        trigger_id=trigger_id if trigger_id is not None else getattr(run, "trigger_id", None),
+        heartbeat_at=heartbeat_at if heartbeat_at is not None else getattr(run, "heartbeat_at", None),
+        work_item_refs=work_item_refs,
+        child_runs=child_runs,
+        capacity=capacity,
     )
 
 
@@ -759,6 +899,9 @@ async def get_run_status(
         run = await _run_with_retry(lambda: _do_get_run(factory, principal, run_id))
         child_cost, child_count = await _run_with_retry(lambda: _do_get_child_run_rollup(factory, principal, run_id))
         otlp_endpoint = await _do_get_otel_endpoint(factory, principal.organisation_id)
+        trigger_actor, capacity, child_runs = await _run_with_retry(
+            lambda: _do_get_run_observability(factory, principal, run)
+        )
     except IntegrityError:
         _log.exception("runs.get_run_status")
         raise HTTPException(
@@ -793,7 +936,17 @@ async def get_run_status(
             detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
-    return _build_run_response(run, child_cost, child_count, otlp_endpoint=otlp_endpoint)
+    return _build_run_response(
+        run,
+        child_cost,
+        child_count,
+        otlp_endpoint=otlp_endpoint,
+        trigger_actor=trigger_actor,
+        heartbeat_at=run.heartbeat_at,
+        work_item_refs=run.work_item_refs,
+        child_runs=child_runs,
+        capacity=capacity,
+    )
 
 
 @router.post("/{run_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
@@ -1351,10 +1504,11 @@ async def get_run_events(
     factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
     principal: TenantPrincipal = require_permission_any_credential("run.status"),
 ) -> RunEventsResponse:
-    """Return live chunk events for a run since a sequence number.
+    """Return live events for a run since a sequence number.
 
-    Only ``node.stdout_chunk`` / ``node.stderr_chunk`` events (the live-output
-    surface published by sandbox_agent nodes) are returned. Optionally filter
+    Returns ``node.stdout_chunk`` / ``node.stderr_chunk`` (the live-output
+    surface published by sandbox_agent nodes) plus the node lifecycle events
+    ``node_started`` / ``node_completed`` / ``node_failed``. Optionally filter
     to a single ``node_id``. The run's org-scoped existence is validated first
     so callers can never observe another org's run events.
     """
@@ -1366,7 +1520,13 @@ async def get_run_events(
     events: list[RunEventItem] = []
     if broker is not None:
         for evt in broker.replay_since(since_seq):
-            if evt.event_type not in ("node.stdout_chunk", "node.stderr_chunk"):
+            if evt.event_type not in (
+                "node.stdout_chunk",
+                "node.stderr_chunk",
+                "node_started",
+                "node_completed",
+                "node_failed",
+            ):
                 continue
             if node_id is not None and evt.payload.get("node_id") != node_id:
                 continue
