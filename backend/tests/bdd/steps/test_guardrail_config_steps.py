@@ -319,6 +319,49 @@ def _bdd_reject_clean(request) -> None:
     assert data["status"] == "clean"
 
 
+@given("a guardrail config with a regex pattern was applied")
+def _bdd_regex_config_applied(request) -> None:
+    request.node._pin = _pin_dict(
+        applied_hash=hash_config_set(load_config_set(_BLOCK_YAML)),
+        applied_at="2026-08-16T00:00:00+00:00",
+        serialized_snapshot=_BLOCK_YAML,
+        status="clean",
+    )
+    request.node._definitions = _definitions_from_yaml(_BLOCK_YAML)
+
+
+@when("I read the guardrail config as an operator")
+def _bdd_read_config_operator(request) -> None:
+    _patch_route(request)
+    _capture(request, "GET", "/api/v1/guardrails/config", "operator")
+
+
+@when("I read the elevated guardrail config as an admin")
+def _bdd_read_elevated_admin(request) -> None:
+    _patch_route(request)
+    _capture(request, "GET", "/api/v1/guardrails/config/elevated", "admin")
+
+
+@when("I read the elevated guardrail config as an operator")
+def _bdd_read_elevated_operator(request) -> None:
+    _patch_route(request)
+    _capture(request, "GET", "/api/v1/guardrails/config/elevated", "operator")
+
+
+@then("the response config masks the regex pattern")
+def _bdd_config_masks_pattern(request) -> None:
+    yaml_text = request.node._resp.json()["config_yaml"]
+    assert "AKIA" not in yaml_text, "masked read must not leak the real regex pattern"
+    assert "SECRET_[A-Z0-9]{8}" not in yaml_text, "masked read must not leak the real regex pattern"
+    assert "********" in yaml_text, "masked read must show the redaction mask"
+
+
+@then("the response config shows the real regex pattern")
+def _bdd_config_shows_pattern(request) -> None:
+    yaml_text = request.node._resp.json()["config_yaml"]
+    assert "SECRET_[A-Z0-9]{8}" in yaml_text, "elevated read must show the real regex pattern"
+
+
 @then(parsers.parse('the drift response reports "{status}"'))
 def _bdd_drift_status(request, status: str) -> None:
     data = request.node._resp.json()
