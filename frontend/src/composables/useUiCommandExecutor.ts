@@ -464,7 +464,20 @@ async function select(selector: string, value: string): Promise<UiCommandResult>
     }
     highlightElement(el)
 
-    const option = el.querySelector(`[data-value="${CSS.escape(value)}"]`) as HTMLElement
+    // A combobox trigger renders its options in a teleported overlay at body
+    // level, never inside the trigger. Open the popover first (click + wait),
+    // then query for the option document-scoped — mirroring the click() path.
+    const isCombobox = el.getAttribute('role') === 'combobox' || !!el.closest('[role="combobox"]')
+    if (isCombobox) {
+      (el as HTMLElement).click()
+      await new Promise(r => setTimeout(r, 300))
+    }
+
+    // Options may live at body level (teleported overlay) or inside the
+    // trigger's own listbox — query document-scoped so both resolve.
+    const option = document.querySelector(
+      `[data-value="${CSS.escape(value)}"]`,
+    ) as HTMLElement | null
     if (option) {
       option.click()
       return { id: `select-${Date.now()}`, name: 'select', success: true }

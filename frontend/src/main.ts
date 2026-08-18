@@ -3,6 +3,8 @@ import { createPinia } from 'pinia'
 import App from './App.vue'
 import router from './router'
 import i18n from './i18n'
+import PrimeVue from 'primevue/config'
+import Aura from '@primeuix/themes/aura'
 import { useLocaleStore } from './stores/localeStore'
 import { createErrorTracker } from './lib/error-tracking'
 import { loadMonitorConfig, loadBackends } from './monitor'
@@ -16,6 +18,18 @@ async function main() {
   const pinia = createPinia()
   app.use(pinia)
   app.use(i18n)
+  app.use(PrimeVue, {
+    theme: {
+      preset: Aura,
+      options: {
+        // PrimeVue's darkModeSelector selects the DARK token set. Our app is
+        // dark by default (`:root` in style.css) and light is toggled via the
+        // `html.light` class, so the dark selector is ":root:not(.light)" —
+        // dark when light is absent, light when the class is present.
+        darkModeSelector: ':root:not(.light)',
+      },
+    },
+  })
 
   const monitorConfig = loadMonitorConfig()
   const backends = await loadBackends(monitorConfig)
