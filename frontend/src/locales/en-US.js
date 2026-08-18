@@ -1166,6 +1166,11 @@ export default {
       "stale": "stale",
       "ago": "{s}s ago",
       "running_label": "running",
+      "node_progress_aria": "Node {name}: {state}",
+      "node_state_completed": "completed",
+      "node_state_running": "running",
+      "node_state_failed": "failed",
+      "node_state_pending": "pending",
     },
     "AdminRunRetentionView": {
       "run_retention": "Run Retention",

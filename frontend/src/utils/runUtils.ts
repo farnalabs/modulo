@@ -1,4 +1,5 @@
 import { toDate } from '../lib/formatDate'
+import { isTerminalStatus } from '../constants/runStatuses'
 
 export function runStatusBadgeClass(status: string): string {
   const map: Record<string, string> = {
@@ -41,4 +42,37 @@ export function formatRunDate(dateStr: string | null): string {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+/**
+ * Seconds elapsed since the run's last heartbeat, or null when there is no
+ * heartbeat to measure (no heartbeat_at, terminal run, or invalid timestamp).
+ * Shared by the runs list and run detail views so the age computation and the
+ * stale threshold never drift apart.
+ */
+export const HEARTBEAT_STALE_AFTER_SECONDS = 60
+
+export function heartbeatAgeSeconds(
+  heartbeatAt: string | null | undefined,
+  status: string,
+  nowMs: number,
+): number | null {
+  if (!heartbeatAt) return null
+  if (isTerminalStatus(status)) return null
+  const parsed = new Date(heartbeatAt) // nosemgrep: new-date-without-guard
+  if (isNaN(parsed.getTime())) return null
+  return Math.max(0, Math.floor((nowMs - parsed.getTime()) / 1000))
+}
+
+export function isHeartbeatStale(age: number | null): boolean {
+  return age != null && age > HEARTBEAT_STALE_AFTER_SECONDS
+}
+
+export function formatHeartbeatAge(
+  age: number | null,
+  t: (key: string, named?: Record<string, unknown>) => string,
+  key = 'views.RunDetailView.ago',
+): string {
+  if (age == null) return '—'
+  return t(key, { s: age })
 }
