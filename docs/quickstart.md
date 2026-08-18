@@ -1,6 +1,6 @@
 # Quickstart
 
-Welcome to Modulo. Get up and running with a demo pipeline in under 10 minutes. No external API keys required.
+Welcome to Modulo. Get a local Modulo stack running in under 10 minutes.
 
 Modulo is a self-hosted agent governance platform for agentic SDLC pipelines. You run it on your own infrastructure; there is no hosted SaaS version yet. See [`docs/system-requirements.md`](./system-requirements.md) for supported platforms and minimum resource requirements.
 

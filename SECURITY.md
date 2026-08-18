@@ -2,8 +2,8 @@
 
 ## Overview
 
-Modulo is a self-hosted platform for implementing and continuously improving an
-agentic software development lifecycle. We take the security of Modulo and its
+Modulo is a self-hosted agent governance platform for building governed,
+repeatable AI-assisted software delivery pipelines. We take the security of Modulo and its
 users seriously. This document outlines our vulnerability disclosure process
 and supported versions.
 
