@@ -488,6 +488,7 @@ class TestUpdatePipelineGraphTeamScope(_OperatorAuthContext):
                 "modulo.db.crud.pipeline.replace_pipeline_graph",
                 AsyncMock(return_value=([], [])),
             ) as mock_replace,
+            patch("modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows", AsyncMock(return_value=[])),
         ):
             mock_session.return_value = _make_session_context(session)
             result = await update_pipeline_graph(pipeline_id=str(pipeline_id), nodes=[], edges=[])

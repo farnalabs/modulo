@@ -44,6 +44,7 @@ from modulo.core.team_visibility import (
     find_model_backend_team_mismatches,
     model_backend_team_mismatch_detail,
 )
+from modulo.db.crud import guardrail_config as _guardrail_config
 from modulo.db.crud.composite_template import create_composite_template
 from modulo.db.crud.hitl_gate_guard import (
     HitlGateWeakeningDenied,
@@ -151,9 +152,7 @@ async def _enforce_guardrail_binding_strip(
     """
     if _is_guardrail_admin(principal):
         return
-    from modulo.db.crud.guardrail_config import load_pipeline_guardrail_rows
-
-    guardrail_rows = await load_pipeline_guardrail_rows(
+    guardrail_rows = await _guardrail_config.load_pipeline_guardrail_rows(
         session,
         pipeline_id=pipeline_id,
         organisation_id=org_id,
@@ -1130,9 +1129,7 @@ async def replace_pipeline_graph_endpoint(
                 # validation can reject a per-node guardrail-cap violation
                 # (FAR-223 item 7) — the authoring-time rejection that the
                 # create_run fail-closed backstop also enforces at run start.
-                from modulo.db.crud.guardrail_config import load_pipeline_guardrail_rows
-
-                guardrail_rows = await load_pipeline_guardrail_rows(
+                guardrail_rows = await _guardrail_config.load_pipeline_guardrail_rows(
                     session,
                     pipeline_id=pipeline_id,
                     organisation_id=principal.organisation_id,
