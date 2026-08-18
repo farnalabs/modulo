@@ -66,8 +66,10 @@ class TestUpdatePipelineGraphGuardrailStrip:
     @patch("modulo.db.crud.pipeline.get_pipeline")
     @patch("modulo.core.team_visibility.find_connector_team_mismatches", return_value=[])
     @patch("modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows")
+    @patch("modulo.db.crud.pipeline.replace_pipeline_graph")
     async def test_nonadmin_cannot_strip_guardrail_binding(
         self,
+        mock_replace_graph: AsyncMock,
         mock_guardrail_rows: AsyncMock,
         mock_find_mismatches: AsyncMock,
         mock_get_pipeline: AsyncMock,
@@ -75,8 +77,13 @@ class TestUpdatePipelineGraphGuardrailStrip:
         mock_validate_auth: AsyncMock,
     ) -> None:
         """FAR-309 PR A prove-the-fix: a NON-ADMIN MCP caller stripping a
-        guardrail-bound node is denied. Without the enforcement this save
-        would proceed (the bound node's guardrail would silently drop)."""
+        guardrail-bound node is denied. The enforcement lives in the SERVICE
+        LAYER (``replace_pipeline_graph``, under the row lock); the MCP tool
+        translates the ``GuardrailBindingStripDenied`` it raises into
+        ``guardrail_strip_forbidden``. Without the service-layer guard this
+        save would proceed (the bound node's guardrail would silently drop)."""
+        from modulo.db.crud.hitl_gate_guard import GuardrailBindingStripDenied
+
         _set_ctx(role="operator")
         pipeline_id = uuid.uuid4()
         bound_node_id = uuid.uuid4()
@@ -84,6 +91,15 @@ class TestUpdatePipelineGraphGuardrailStrip:
         mock_get_pipeline.return_value = MagicMock(id=pipeline_id, owner_team_id=None)
         mock_guardrail_rows.return_value = [_guardrail_row(bound_node_id)]
         mock_session.return_value.__aenter__.return_value = AsyncMock()
+        mock_replace_graph.side_effect = GuardrailBindingStripDenied(
+            stripped_node_ids=[str(bound_node_id)],
+            detail=(
+                "Non-admin cannot strip a guardrail binding: removing node(s) "
+                + str(bound_node_id)
+                + " from the graph would drop a node-bound guardrail. Only an "
+                "admin can remove a node that has a bound guardrail."
+            ),
+        )
 
         result = await update_pipeline_graph(
             pipeline_id=str(pipeline_id),
@@ -94,7 +110,7 @@ class TestUpdatePipelineGraphGuardrailStrip:
         assert result["error"] == "guardrail_strip_forbidden", result
         assert "strip a guardrail binding" in result["detail"]
         assert str(bound_node_id) in result["detail"]
-        mock_guardrail_rows.assert_awaited_once()
+        mock_replace_graph.assert_awaited_once()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")

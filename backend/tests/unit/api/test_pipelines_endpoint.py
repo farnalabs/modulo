@@ -19,6 +19,7 @@ from modulo.api.routes.pipelines import PipelineGraphNode, _resolve_graph_refere
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.graph_validator._types import ValidationResult
+from modulo.db.crud.hitl_gate_guard import GuardrailBindingStripDenied
 from modulo.db.crud.pipeline_folder import create_folder, update_folder
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
@@ -733,16 +734,31 @@ def _guardrail_row(node_id: uuid.UUID) -> SimpleNamespace:
 
 def test_nonadmin_cannot_strip_guardrail_binding(operator_client: TestClient) -> None:
     """FAR-309 PR A prove-the-fix: a NON-ADMIN (operator) saving a graph that
-    REMOVES a node carrying a bound guardrail is denied 403. Without the route
-    enforcement this save would succeed (200) — the guardrail-bound node would
-    silently drop its binding."""
+    REMOVES a node carrying a bound guardrail is denied 403. The enforcement
+    lives in the SERVICE LAYER (``replace_pipeline_graph``, under the row
+    lock); the route translates the ``GuardrailBindingStripDenied`` it raises
+    into a 403. Without the service-layer guard the save would succeed (200) —
+    the guardrail-bound node would silently drop its binding."""
     bound_node_id = uuid.uuid4()
     kept_node_id = uuid.uuid4()
     nodes = [{"id": str(kept_node_id), "agent_id": str(uuid.uuid4()), "position": {"x": 0, "y": 0}}]
     edges = []
 
+    denied = GuardrailBindingStripDenied(
+        stripped_node_ids=[str(bound_node_id)],
+        detail=(
+            "Non-admin cannot strip a guardrail binding: removing node(s) "
+            + str(bound_node_id)
+            + " from the graph would drop a node-bound guardrail. Only an "
+            "admin can remove a node that has a bound guardrail."
+        ),
+    )
+
     with (
-        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, edges)),
+        patch(
+            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            side_effect=denied,
+        ),
         patch("modulo.api.routes.pipelines.GraphValidator.validate_definition", return_value=MagicMock(issues=[])),
         patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
         patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
@@ -786,6 +802,136 @@ def test_admin_can_strip_guardrail_binding(client: TestClient) -> None:
         resp = client.patch(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
             json={"nodes": nodes, "edges": edges},
+        )
+
+    assert resp.status_code == 200
+
+
+def test_nonadmin_cannot_strip_guardrail_binding_via_update_graph_json(
+    operator_client: TestClient,
+) -> None:
+    """FAR-309 PR A review bypass-path #1 (MAJOR): a NON-ADMIN can previously
+    bypass the graph-save strip guard by using ``PATCH /api/v1/pipelines/{id}``
+    with ``graph_json`` (``update_pipeline_endpoint``, operator-level
+    ``pipeline.update``), which replaced the graph WITHOUT the check. The
+    service-layer guard now covers this path too: the route translates the
+    ``GuardrailBindingStripDenied`` raised by ``replace_pipeline_graph`` into
+    403. This test FAILS without the service-layer guard (the save would
+    succeed 200)."""
+    bound_node_id = uuid.uuid4()
+    kept_node_id = uuid.uuid4()
+    node = {"id": str(kept_node_id), "agent_id": str(uuid.uuid4()), "position": {"x": 0, "y": 0}}
+    denied = GuardrailBindingStripDenied(
+        stripped_node_ids=[str(bound_node_id)],
+        detail=(
+            "Non-admin cannot strip a guardrail binding: removing node(s) "
+            + str(bound_node_id)
+            + " from the graph would drop a node-bound guardrail. Only an "
+            "admin can remove a node that has a bound guardrail."
+        ),
+    )
+    pipeline = _make_pipeline()
+
+    with (
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch("modulo.api.routes.pipelines.find_connector_team_mismatches", new=AsyncMock(return_value=[])),
+        patch("modulo.api.routes.pipelines._resolve_graph_references", new=AsyncMock(return_value=([], []))),
+        patch("modulo.api.routes.pipelines.replace_pipeline_graph", side_effect=denied),
+        patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = operator_client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}",
+            json={"graph_json": {"nodes": [node], "edges": []}},
+        )
+
+    assert resp.status_code == 403
+    assert "strip a guardrail binding" in resp.json()["detail"]
+    assert str(bound_node_id) in resp.json()["detail"]
+
+
+def test_admin_can_strip_guardrail_binding_via_update_graph_json(client: TestClient) -> None:
+    """FAR-309 PR A review: an ADMIN may strip a guardrail-bound node via the
+    ``PATCH /{id}`` ``graph_json`` path (admin owns guardrail management)."""
+    kept_node_id = uuid.uuid4()
+    node = {"id": str(kept_node_id), "agent_id": str(uuid.uuid4()), "position": {"x": 0, "y": 0}}
+    pipeline = _make_pipeline()
+
+    with (
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch("modulo.api.routes.pipelines.find_connector_team_mismatches", new=AsyncMock(return_value=[])),
+        patch("modulo.api.routes.pipelines._resolve_graph_references", new=AsyncMock(return_value=([], []))),
+        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=([node], [])),
+        patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}",
+            json={"graph_json": {"nodes": [node], "edges": []}},
+        )
+
+    assert resp.status_code == 200
+
+
+def test_nonadmin_cannot_strip_guardrail_binding_via_snapshot_rollback(
+    operator_client: TestClient,
+) -> None:
+    """FAR-309 PR A review bypass-path #2 (MAJOR): a NON-ADMIN can previously
+    bypass the graph-save strip guard by rolling back to a snapshot whose
+    graph LACKS a currently guardrail-bound node
+    (``rollback_snapshot_endpoint``, operator-level ``pipeline.graph.update``),
+    which overwrote the graph WITHOUT the check. The service-layer guard now
+    covers this path too: the route translates the ``GuardrailBindingStripDenied``
+    raised by ``rollback_to_snapshot`` into 403. This test FAILS without the
+    service-layer guard (the rollback would succeed 200)."""
+    bound_node_id = uuid.uuid4()
+    snapshot_id = uuid.uuid4()
+    denied = GuardrailBindingStripDenied(
+        stripped_node_ids=[str(bound_node_id)],
+        detail=(
+            "Non-admin cannot strip a guardrail binding: removing node(s) "
+            + str(bound_node_id)
+            + " from the graph would drop a node-bound guardrail. Only an "
+            "admin can remove a node that has a bound guardrail."
+        ),
+    )
+
+    with (
+        patch("modulo.api.routes.pipelines.rollback_to_snapshot", side_effect=denied),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = operator_client.post(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{snapshot_id}/rollback",
+        )
+
+    assert resp.status_code == 403
+    assert "strip a guardrail binding" in resp.json()["detail"]
+    assert str(bound_node_id) in resp.json()["detail"]
+
+
+def test_admin_can_strip_guardrail_binding_via_snapshot_rollback(client: TestClient) -> None:
+    """FAR-309 PR A review: an ADMIN may roll back to a snapshot that drops a
+    guardrail-bound node (admin owns guardrail management)."""
+    snapshot_id = uuid.uuid4()
+    new_snapshot = MagicMock()
+    new_snapshot.id = uuid.uuid4()
+    new_snapshot.pipeline_id = _PIPELINE_ID
+    new_snapshot.snapshot_version = 2
+    new_snapshot.tag = None
+    new_snapshot.notes = None
+    new_snapshot.created_at = _NOW
+    new_snapshot.account_id = uuid.uuid4()
+
+    with (
+        patch("modulo.api.routes.pipelines.rollback_to_snapshot", return_value=new_snapshot),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.post(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{snapshot_id}/rollback",
         )
 
     assert resp.status_code == 200

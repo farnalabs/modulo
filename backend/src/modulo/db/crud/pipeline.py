@@ -30,6 +30,7 @@ from modulo.db.crud.hitl_gate_guard import (
     apply_gated_edge_diff,
     build_gate_diff_payload,
     denial_detail,
+    enforce_guardrail_binding_strip,
     resolve_effective_privilege,
 )
 from modulo.db.crud.pagination import CursorPaginator
@@ -674,6 +675,7 @@ async def replace_pipeline_graph(
     is_privileged: bool,
     caller_type: Literal["rest", "mcp"],
     account_id: uuid.UUID | None = None,
+    is_guardrail_admin: bool = False,
     _on_lock_acquired: Callable[[], Awaitable[None]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[PipelineEdge]] | None:
     """Atomically replace an editable graph while preserving first-class edges.
@@ -685,6 +687,14 @@ async def replace_pipeline_graph(
     caller's live org role is re-read under the lock (fail-closed on DB error,
     no retry). A gate-weakening write by a non-privileged caller raises
     ``HitlGateWeakeningDenied`` before the delete/insert executes.
+
+    FAR-309 PR A review: the guardrail-binding strip guard
+    (``enforce_guardrail_binding_strip``) runs here too, under the same row
+    lock — a non-admin cannot strip a guardrail binding by removing a
+    guardrail-bound node. ``is_guardrail_admin`` is the caller-supplied admin
+    flag (admin-level, the ``guardrail.manage`` privilege — distinct from the
+    operator+ ``is_privileged``); for ``"rest"`` with ``account_id`` the live
+    role is re-read under the lock.
     """
     result = await session.execute(
         select(Pipeline).where(Pipeline.id == pipeline_id, Pipeline.deleted_at.is_(None)).with_for_update()
@@ -717,6 +727,19 @@ async def replace_pipeline_graph(
         }
         for e in old_rows
     ]
+
+    # FAR-309 PR A review: service-layer guardrail-binding strip guard. A
+    # non-admin may not remove a guardrail-bound node (that would drop the
+    # binding). Runs under the row lock, before any graph mutation.
+    await enforce_guardrail_binding_strip(
+        session,
+        pipeline_id=pipeline_id,
+        org_id=org_id,
+        incoming_node_ids={str(node.get("id")) for node in nodes if node.get("id")},
+        is_guardrail_admin=is_guardrail_admin,
+        caller_type=caller_type,
+        account_id=account_id,
+    )
 
     diff = await apply_gated_edge_diff(
         session,
