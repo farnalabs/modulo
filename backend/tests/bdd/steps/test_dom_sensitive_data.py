@@ -2,6 +2,7 @@
 
 import contextlib
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -60,6 +61,10 @@ def connector_with_sensitive_config(
     mock_connector.allowed_operations = []
     mock_connector.status = "active"
     mock_connector.visibility = "org"
+    mock_connector.owner_team_id = None
+    mock_connector.tier = "community"
+    mock_connector.created_at = datetime(2025, 1, 1, tzinfo=UTC)
+    mock_connector.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
 
     request.node._mock_connector = mock_connector
 

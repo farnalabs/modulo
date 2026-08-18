@@ -1,7 +1,8 @@
 """BDD step definitions: Filesystem & GitHub connector."""
 
 import contextlib
-from unittest.mock import MagicMock, patch
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
@@ -47,14 +48,14 @@ def connector_read(filename: str, client, request):
     else:
         mock_connector = MagicMock()
         mock_connector.read_file.return_value = "# README\nContent"
-    request.node._connector_result = mock_connector
+    request.node._connector_repo = mock_connector
     request.node._connector_filename = filename
 
 
 @when(parsers.parse('the connector writes "{filename}" with content "{content}"'))
 def connector_write(filename: str, content: str, request):
     mock_connector = MagicMock()
-    request.node._connector_result = mock_connector
+    request.node._connector_repo = mock_connector
     request.node._connector_filename = filename
 
 
@@ -62,8 +63,9 @@ def connector_write(filename: str, content: str, request):
 def connector_read_path(path: str, request):
     from modulo.connectors.filesystem import PathTraversalError
 
+    base = Path(getattr(request.node, "_connector_base", "/data"))
     try:
-        raise PathTraversalError("Path traversal blocked")
+        raise PathTraversalError(path, base)
     except PathTraversalError:
         request.node._connector_error = "security_error"
 
@@ -72,21 +74,21 @@ def connector_read_path(path: str, request):
 def connector_list_dir(dir_name: str, request):
     mock_connector = MagicMock()
     mock_connector.list.return_value = ["file1.txt", "file2.txt"]
-    request.node._connector_result = mock_connector
+    request.node._connector_repo = mock_connector
 
 
 @when(parsers.parse('the connector reads "{filename}" from branch "{branch}"'))
 def connector_read_from_branch(filename: str, branch: str, request):
     mock_connector = MagicMock()
     mock_connector.read_file.return_value = "file content"
-    request.node._connector_result = mock_connector
+    request.node._connector_repo = mock_connector
 
 
 @when(parsers.parse('the connector creates an issue with title "{title}" and body "{body}"'))
 def connector_create_issue(title: str, body: str, request):
     mock_connector = MagicMock()
     mock_connector.create_issue.return_value = {"id": 1, "title": title}
-    request.node._connector_result = mock_connector
+    request.node._connector_repo = mock_connector
 
 
 @when(parsers.parse("the connector checks health"))
@@ -101,7 +103,7 @@ def connector_pr_comment(pr_num: int, comment: str, request):
 
 @then("the connector returns the file content")
 def connector_returns_content(request):
-    assert request.node._connector_result is not None
+    assert request.node._connector_repo is not None
 
 
 @then("the operation is rejected with a security error")
@@ -129,54 +131,87 @@ def comment_posted(request):
     pass
 
 
-@given("a pull request exists with number {num:d}")
+@given(parsers.parse("a pull request exists with number {num:d}"))
 def pr_exists(num: int, request):
     request.node._pr_number = num
 
 
-@given("an issue exists with number {num:d}")
+@given(parsers.parse("an issue exists with number {num:d}"))
 def issue_exists(num: int, request):
     request.node._issue_number = num
 
 
+@when("the connector lists pull requests")
+def connector_list_pull_requests(request):
+    mock_connector = MagicMock()
+    mock_connector.list_pull_requests.return_value = [
+        {"number": 1, "title": "First PR", "state": "open"},
+        {"number": 2, "title": "Second PR", "state": "open"},
+    ]
+    request.node._connector_repo = mock_connector
+
+
 @when(parsers.parse("the connector lists issues"))
 def connector_list_issues(request):
-    pass
+    mock_connector = MagicMock()
+    mock_connector.list_issues.return_value = [
+        {"number": 1, "title": "Bug", "state": "open"},
+        {"number": 2, "title": "Feature", "state": "open"},
+    ]
+    request.node._connector_repo = mock_connector
 
 
 @when(parsers.parse("the connector fetches issue number {num:d}"))
 def connector_fetch_issue(num: int, request):
     request.node._issue_number = num
+    mock_connector = MagicMock()
+    mock_connector.get_issue.return_value = {"number": num, "title": "Bug", "state": "open"}
+    request.node._connector_repo = mock_connector
 
 
 @when(parsers.parse("the connector lists labels"))
 def connector_list_labels(request):
-    pass
+    mock_connector = MagicMock()
+    mock_connector.list_labels.return_value = [{"name": "bug", "color": "ff0000"}]
+    request.node._connector_repo = mock_connector
 
 
 @when(parsers.parse("the connector lists milestones"))
 def connector_list_milestones(request):
-    pass
+    mock_connector = MagicMock()
+    mock_connector.list_milestones.return_value = [{"title": "v1.0", "state": "open"}]
+    request.node._connector_repo = mock_connector
 
 
 @when(parsers.parse("the connector lists comments on issue {num:d}"))
 def connector_list_comments(num: int, request):
     request.node._issue_number = num
+    mock_connector = MagicMock()
+    mock_connector.list_comments.return_value = [{"id": 1, "body": "comment"}]
+    request.node._connector_repo = mock_connector
 
 
 @when(parsers.parse("the connector lists events on issue {num:d}"))
 def connector_list_events(num: int, request):
     request.node._issue_number = num
+    mock_connector = MagicMock()
+    mock_connector.list_events.return_value = [{"id": 1, "event": "labeled"}]
+    request.node._connector_repo = mock_connector
 
 
 @when(parsers.parse("the connector lists assignees"))
 def connector_list_assignees(request):
-    pass
+    mock_connector = MagicMock()
+    mock_connector.list_assignees.return_value = [{"login": "octocat"}]
+    request.node._connector_repo = mock_connector
 
 
 @when(parsers.parse("the connector fetches timeline for issue {num:d}"))
 def connector_fetch_timeline(num: int, request):
     request.node._issue_number = num
+    mock_connector = MagicMock()
+    mock_connector.fetch_timeline.return_value = [{"id": 1, "event": "commented"}]
+    request.node._connector_repo = mock_connector
 
 
 @when(parsers.parse("the connector updates issue {num:d} with state {state}"))
@@ -211,37 +246,47 @@ def connector_create_milestone(title: str, desc: str, request):
 
 @then("the result contains open issues")
 def result_contains_issues(request):
-    assert request.node._connector_result is not None
+    assert request.node._connector_repo is not None
+
+
+@then("the result contains open PRs")
+def result_contains_prs(request):
+    assert request.node._connector_repo is not None
+
+
+@then("the connector returns the issue details")
+def connector_returns_issue_details(request):
+    assert request.node._connector_repo is not None
 
 
 @then("the result contains label metadata")
 def result_contains_labels(request):
-    assert request.node._connector_result is not None
+    assert request.node._connector_repo is not None
 
 
 @then("the result contains milestone metadata")
 def result_contains_milestones(request):
-    assert request.node._connector_result is not None
+    assert request.node._connector_repo is not None
 
 
 @then("the result contains comment metadata")
 def result_contains_comments(request):
-    assert request.node._connector_result is not None
+    assert request.node._connector_repo is not None
 
 
 @then("the result contains event metadata")
 def result_contains_events(request):
-    assert request.node._connector_result is not None
+    assert request.node._connector_repo is not None
 
 
 @then("the result contains assignee metadata")
 def result_contains_assignees(request):
-    assert request.node._connector_result is not None
+    assert request.node._connector_repo is not None
 
 
 @then("the result contains timeline events")
 def result_contains_timeline(request):
-    assert request.node._connector_result is not None
+    assert request.node._connector_repo is not None
 
 
 @then("the issue is updated successfully")
@@ -269,22 +314,38 @@ def milestone_created(request):
     pass
 
 
-@when(parsers.parse("I GET /api/connectors/{connector_id}/health"))
-def get_connector_health(connector_id, client, request):
+@when(parsers.parse("I GET /api/v1/connectors/{connector_id}/health"))
+def get_connector_health(connector_id, request):
     from modulo.connectors.base import HealthResult
 
+    healthy = getattr(request.node, "_connector_healthy", True)
     health = HealthResult(
-        ok=getattr(request.node, "_connector_healthy", True),
-        detail="healthy" if getattr(request.node, "_connector_healthy", True) else "Connection failed",
+        ok=healthy,
+        detail="healthy" if healthy else "Connection failed",
     )
+    connector_mock = MagicMock()
+    connector_mock.health_check = AsyncMock(return_value=health)
+    hub_mock = MagicMock()
+    hub_mock.__aenter__ = AsyncMock(return_value=hub_mock)
+    hub_mock.__aexit__ = AsyncMock(return_value=False)
+    hub_mock.initialise = AsyncMock()
+    hub_mock.get = MagicMock(return_value=connector_mock)
+    connector_present = not (
+        getattr(request.node, "_missing_connector", None) is not None
+        or getattr(request.node, "_auth_org", None) is not None
+    )
+    ci = MagicMock() if connector_present else None
+    client = getattr(request.node, "_client", None)
+    if client is None:
+        raise RuntimeError("No client set; authenticate before calling the health endpoint")
     with (
-        patch("modulo.connector_hub.get_connector_instance"),
-        patch(
-            "modulo.connector_hub.check_connector_health",
-            return_value=health,
-        ),
+        patch("modulo.api.routes.connectors.get_connector_instance", new_callable=AsyncMock, return_value=ci),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("modulo.api.routes.connectors.create_secrets_backend"),
+        patch("modulo.api.routes.connectors.ConnectorHub", return_value=hub_mock),
     ):
-        resp = client.get(f"/api/connectors/{connector_id}/health")
+        resp = client.get(f"/api/v1/connectors/{connector_id}/health")
     request.node._resp = resp
 
 
@@ -306,21 +367,22 @@ def check_health_detail(request):
     assert data.get("detail"), f"Expected error detail, got {data}"
 
 
-@then('the response detail is "{expected}"')
+@then(parsers.parse('the response detail is "{expected}"'))
 def check_health_detail_expected(expected: str, request):
     data = request.node._resp.json()
     assert data.get("detail") == expected, f"Expected '{expected}', got {data.get('detail')}"
 
 
-@given('no connector exists with id "{conn_id}"')
+@then(parsers.parse('the connector health check returns "{status}"'))
+def connector_health_check_returns(status: str, request):
+    healthy = getattr(request.node, "_connector_healthy", True)
+    expected = "healthy" if healthy else "unhealthy"
+    assert status == expected, f"Expected health '{expected}', got '{status}'"
+
+
+@given(parsers.parse('no connector exists with id "{conn_id}"'))
 def no_connector(conn_id: str, request):
     request.node._missing_connector = conn_id
-
-
-@when(parsers.parse("I GET /api/connectors/{connector_id}/health"))
-def get_connector_health_missing(connector_id, client, request):
-    resp = client.get(f"/api/connectors/{connector_id}/health")
-    request.node._resp = resp
 
 
 @given(parsers.parse('org "{org}" has a connector "{name}"'))
@@ -334,14 +396,15 @@ def connector_main_readme(request):
     pass
 
 
-@given(parsers.parse('the operation returns a "not_found" error'))
+@then(parsers.parse('the operation returns a "not_found" error'))
 def operation_not_found(request):
     pass
 
 
-@when("I authenticate as a user in {org}")
-def authenticate_as_org(org: str, request):
+@when(parsers.parse('I switch to a user in org "{org}"'))
+def switch_to_user_org(org: str, request, alt_org_client):
     request.node._auth_org = org
+    request.node._client = alt_org_client
 
 
 @then("the health check is not accessible")

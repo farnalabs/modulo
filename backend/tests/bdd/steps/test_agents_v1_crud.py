@@ -18,6 +18,10 @@ _AGENT_BODY: dict = {
     "output_schema_version": "1.0",
     "prompt_template": "You are a code reviewer.",
     "model_backend_id": str(uuid.uuid4()),
+    "required_environment_capabilities": [],
+    "template_id": None,
+    "agent_command": None,
+    "agent_commands": None,
 }
 
 
@@ -40,6 +44,11 @@ def _make_mock_agent(name: str = "test") -> MagicMock:
     a.token_budget = None
     a.max_input_length = None
     a.library_id = None
+    a.required_environment_capabilities = []
+    a.template_id = None
+    a.agent_command = None
+    a.agent_commands = None
+    a.prompt_always_visible = False
     a.account_id = uuid.uuid4()
     a.prompt_version_history = []
     a.created_at = datetime.now(UTC)
@@ -126,7 +135,10 @@ def _update_agent(client, request, name: str) -> None:
         patch("modulo.api.routes.agents.update_agent", return_value=mock_agent),
         patch("modulo.api.routes.agents.set_rls_org"),
     ):
-        resp = client.patch(f"/api/v1/agents/{agent_id}", json={"name": name})
+        resp = client.patch(
+            f"/api/v1/agents/{agent_id}",
+            json={"name": name, "required_environment_capabilities": [], "template_id": None},
+        )
     request.node._resp = resp
 
 

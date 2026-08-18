@@ -249,6 +249,9 @@ def publish_schema(version: str, client, request):
     mock_schema.name = "inferred-schema"
     mock_schema.description = "Inferred from connector"
     mock_schema.abstract_name = None
+    mock_schema.folder_id = None
+    mock_schema.deprecated = False
+    mock_schema.deprecated_at = None
     mock_schema.created_by = uuid.uuid4()
     mock_schema.account_id = mock_schema.created_by
     mock_schema.created_at = now

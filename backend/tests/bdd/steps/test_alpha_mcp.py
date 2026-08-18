@@ -37,13 +37,13 @@ def org_has_pipeline(org: str, name: str, request):
 @when(parsers.parse('the MCP client sends a tools/call request for "{tool}" with pipeline "{pipeline}"'))
 def mcp_trigger_pipeline(tool: str, pipeline: str, client, request):
     with (
-        patch("modulo.core.pipeline_engine.run_crud.set_rls_org"),
+        patch("modulo.api.mcp_server.set_rls_org"),
         patch(
-            "modulo.core.pipeline_engine.run_crud.get_pipeline_by_name",
+            "modulo.api.mcp_server.get_pipeline_by_name",
             return_value=make_mock_pipeline(name=pipeline),
         ),
         patch(
-            "modulo.core.pipeline_engine.run_crud.create_run",
+            "modulo.api.mcp_server.create_run",
             return_value=MagicMock(id=uuid.uuid4(), status="pending"),
         ),
     ):
@@ -73,13 +73,13 @@ def run_created_with_status(status: str, request):
 def mcp_trigger_with_context(tool: str, ctx, client, request):
     context = json.loads(ctx) if isinstance(ctx, str) else ctx
     with (
-        patch("modulo.core.pipeline_engine.run_crud.set_rls_org"),
+        patch("modulo.api.mcp_server.set_rls_org"),
         patch(
-            "modulo.core.pipeline_engine.run_crud.get_pipeline_by_name",
+            "modulo.api.mcp_server.get_pipeline_by_name",
             return_value=make_mock_pipeline(name=getattr(request.node, "_pipeline_name", "test")),
         ),
         patch(
-            "modulo.core.pipeline_engine.run_crud.create_run",
+            "modulo.api.mcp_server.create_run",
             return_value=MagicMock(id=uuid.uuid4(), status="pending"),
         ),
     ):
@@ -111,7 +111,7 @@ def mcp_no_auth(tool: str, client, request):
 @when(parsers.parse('the MCP client sends a tools/call request for "{tool}" with pipeline "{pipeline}"'))
 def mcp_trigger_nonexistent(tool: str, pipeline: str, client, request):
     with (
-        patch("modulo.core.pipeline_engine.run_crud.get_pipeline_by_name", return_value=None),
+        patch("modulo.api.mcp_server.get_pipeline_by_name", return_value=None),
     ):
         resp = client.post(
             "/mcp/tools/call",
@@ -142,9 +142,9 @@ def mcp_key_scope(scope: str, request):
 @when(parsers.parse('the MCP client sends a tools/call request for "{tool}"'))
 def mcp_tool_call_generic(tool: str, client, request):
     with (
-        patch("modulo.core.pipeline_engine.run_crud.set_rls_org"),
+        patch("modulo.api.mcp_server.set_rls_org"),
         patch(
-            "modulo.core.pipeline_engine.run_crud.get_pipeline_by_name",
+            "modulo.api.mcp_server.get_pipeline_by_name",
             return_value=make_mock_pipeline(name="test"),
         ),
     ):

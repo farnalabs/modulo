@@ -40,7 +40,14 @@ def auth_api_key_role(role: str, ctx) -> None:
 
 @when(parsers.parse('I GET /api/viewmodel/current with view_as_team "{team_name}"'))
 def get_viewmodel_with_view_as_team(team_name: str, request, ctx) -> None:
-    auth_role = ctx.get("auth_role", "")
+    from tests.bdd.conftest import _shared_state
+
+    state = _shared_state(request)
+    shared_role = state.get("org_role", "admin")
+    ctx_role = ctx.get("auth_role", "")
+    # Conftest shared steps (e.g. 'my role is changed to "operator"') write the
+    # effective role to the shared state; fall back to this module's own ctx.
+    auth_role = shared_role if shared_role != "admin" or not ctx_role else ctx_role
 
     if auth_role.startswith("api_key_") or auth_role in ("operator", "runner", "viewer"):
         resp = MagicMock()

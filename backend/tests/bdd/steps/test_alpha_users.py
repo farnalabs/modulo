@@ -9,6 +9,7 @@ tests remain DB-free and fast.
 import contextlib
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,7 +22,7 @@ with contextlib.suppress(FileNotFoundError, OSError):
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/users/runner_role.feature")
 
-from tests.bdd.conftest import ORG_ID, make_mock_run, make_mock_snapshot
+from tests.bdd.conftest import _VALID_32, ORG_ID, USER_ID, make_mock_run, make_mock_snapshot
 
 
 def _get_client(request) -> object:
@@ -69,6 +70,118 @@ def auth_operator(org: str, request, operator_client):
 @given(parsers.parse('I am authenticated as a runner in org "{org}"'))
 def auth_runner(org: str, request, runner_client):
     request.node._client = runner_client
+
+
+# ---------------------------------------------------------------------------
+# basic_auth.feature — login, refresh, expired token
+# ---------------------------------------------------------------------------
+
+
+@given(parsers.parse('a user exists with email "{email}" and password "{password}"'))
+def user_exists(email: str, password: str, request):
+    request.node._user_email = email
+    request.node._user_password = password
+
+
+@when(parsers.parse('I POST /api/v1/auth/login with email "{email}" and password "{password}"'))
+def post_login(email: str, password: str, request, client):
+    account = MagicMock() if email == "alice@example.com" else None
+    if account is not None:
+        account.id = uuid.uuid4()
+        account.email = email
+        account.is_break_glass = None
+        account.is_system_admin = False
+    auth_ok = email == "alice@example.com" and password == "correct-horse-battery"
+    membership = MagicMock()
+    membership.organisation_id = ORG_ID
+    membership.role = "admin"
+    family = MagicMock()
+    family.family_id = uuid.uuid4()
+    with (
+        patch("modulo.api.routes.auth.get_account_by_email", new_callable=AsyncMock, return_value=account),
+        patch("modulo.api.routes.auth.authenticate_db_user", return_value=auth_ok),
+        patch("modulo.api.routes.auth.update_last_login", new_callable=AsyncMock),
+        patch(
+            "modulo.api.routes.auth.list_memberships_for_account",
+            new_callable=AsyncMock,
+            return_value=[membership],
+        ),
+        patch("modulo.api.routes.auth.create_family", new_callable=AsyncMock, return_value=family),
+    ):
+        resp = client.post("/api/v1/auth/login", json={"email": email, "password": password})
+    request.node._user_email = email
+    request.node._resp = resp
+    request.node.response = resp
+    if resp.status_code == 200:
+        data = resp.json()
+        request.node._access_token = data.get("access_token")
+        request.node._refresh_token = data.get("refresh_token")
+
+
+@then("the response contains an access_token")
+def response_has_access_token(request):
+    data = request.node._resp.json()
+    assert data.get("access_token")
+
+
+@then("the token encodes org_id")
+def token_encodes_org(request):
+    import jwt as pyjwt
+
+    token = request.node._access_token
+    payload = pyjwt.decode(token, _VALID_32, algorithms=["HS256"])
+    assert payload.get("org_id") == str(ORG_ID)
+
+
+@when("I use the refresh_token to get a new access_token")
+def use_refresh_token(request, client):
+    with (
+        patch("modulo.api.routes.auth.resolve_role_from_membership", new_callable=AsyncMock, return_value="admin"),
+        patch("modulo.api.routes.auth.advance_sequence", new_callable=AsyncMock, return_value=(1, False)),
+    ):
+        resp = client.post(
+            "/api/v1/auth/refresh",
+            json={"refresh_token": request.node._refresh_token},
+        )
+    request.node._resp = resp
+    request.node._new_access_token = resp.json().get("access_token")
+
+
+@then("the new access_token is valid")
+def new_access_token_valid(request):
+    import jwt as pyjwt
+
+    token = request.node._new_access_token
+    payload = pyjwt.decode(token, _VALID_32, algorithms=["HS256"])
+    assert payload.get("sub") == request.node._user_email
+
+
+@given(parsers.parse('I have an expired JWT for org "{org}"'), target_fixture="expired_token")
+def expired_jwt(org: str) -> str:
+    from datetime import UTC, datetime, timedelta
+
+    import jwt as pyjwt
+
+    now = datetime.now(UTC)
+    claims = {
+        "sub": "alice@example.com",
+        "org_id": str(ORG_ID),
+        "account_id": str(USER_ID),
+        "org_role": "admin",
+        "is_system_admin": False,
+        "iat": now - timedelta(hours=2),
+        "exp": now - timedelta(minutes=1),
+    }
+    return str(pyjwt.encode(claims, _VALID_32, algorithm="HS256"))
+
+
+@when("I make an authenticated request to /api/v1/pipelines")
+def authenticated_request(request, unauth_client, expired_token):
+    resp = unauth_client.get(
+        "/api/v1/pipelines",
+        headers={"Authorization": f"Bearer {expired_token}"},
+    )
+    request.node._resp = resp
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +351,12 @@ def runner_gets_run(run_id, request):
     run = make_mock_run(id=resolved, status="completed")
     with (
         patch("modulo.api.routes.runs._do_get_run", new_callable=AsyncMock, return_value=run),
+        patch(
+            "modulo.api.routes.runs._do_get_child_run_rollup",
+            new_callable=AsyncMock,
+            return_value=(Decimal("0.00"), 0),
+        ),
+        patch("modulo.api.routes.runs._do_get_otel_endpoint", new_callable=AsyncMock, return_value=""),
     ):
         resp = c.get(f"/api/v1/runs/{resolved}")
     request.node._resp = resp

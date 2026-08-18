@@ -241,7 +241,12 @@ def when_write_delete(op_connector, resource, vault_id, item_id):
     global _last_write_result, _last_error
     try:
         with respx.mock:
-            respx.delete(f"{BASE_URL}/v1/vaults/{vault_id}/items/{item_id}").mock(return_value=httpx.Response(204))
+            if resource == "item_archive":
+                respx.patch(f"{BASE_URL}/v1/vaults/{vault_id}/items/{item_id}").mock(
+                    return_value=httpx.Response(200, json={"id": item_id, "state": "archived"})
+                )
+            else:
+                respx.delete(f"{BASE_URL}/v1/vaults/{vault_id}/items/{item_id}").mock(return_value=httpx.Response(204))
             _last_write_result = _run(
                 op_connector.write(ConnectorPayload(resource=resource, data={"vault_id": vault_id, "item_id": item_id}))
             )

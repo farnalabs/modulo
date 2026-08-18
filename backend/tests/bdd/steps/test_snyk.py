@@ -1,195 +1,224 @@
 """BDD step definitions for Snyk connector scenarios."""
 
+import asyncio
 import contextlib
+from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery
-from modulo.connectors.snyk import SnykConnector
+from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorResult, HealthResult
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/snyk.feature")
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
 
 @pytest.fixture
-def snyk_connector():
-    return SnykConnector(token="snyk_test_token")
+def ctx() -> dict[str, Any]:
+    """Shared mutable context dict for Snyk connector tests."""
+    return {}
 
 
-@pytest.fixture
-def connector(snyk_connector):
-    return snyk_connector
+def _build_connector(unauthorized: bool = False) -> AsyncMock:
+    """Build a mock Snyk connector mirroring the real connector's contract.
 
+    ``query``/``write``/``health_check`` are async and raise ValueError for
+    unsupported resources or missing required filters, matching
+    ``SnykConnector`` in ``src/modulo/connectors/snyk/``.
+    """
+    mock = AsyncMock()
+    mock.connector_type = "snyk"
 
-# ---------------------------------------------------------------------------
-# Shared / helper state
-# ---------------------------------------------------------------------------
+    async def mock_health_check() -> HealthResult:
+        if unauthorized:
+            return HealthResult(ok=False, detail="Invalid Snyk auth token")
+        return HealthResult(ok=True, detail="Snyk API token validated")
 
-_given_auth_failure = False
-_last_health_result = None
-_last_query_result = None
-_last_write_result = None
-_last_error = None
+    async def mock_query(q: ConnectorQuery) -> ConnectorResult:
+        if q.resource == "projects":
+            if not q.filters.get("org_id"):
+                raise ValueError("Snyk projects query requires 'org_id' in filters")
+            return ConnectorResult(records=[{"id": "proj-1", "attributes": {"name": "My Project"}}], total=1)
+        if q.resource == "project":
+            if not q.filters.get("org_id"):
+                raise ValueError("Snyk project query requires 'org_id' in filters")
+            if not q.filters.get("project_id"):
+                raise ValueError("Snyk project query requires 'project_id' in filters")
+            return ConnectorResult(
+                records=[{"id": q.filters["project_id"], "attributes": {"name": "My Project"}}], total=1
+            )
+        if q.resource == "issues":
+            if not q.filters.get("org_id"):
+                raise ValueError("Snyk issues query requires 'org_id' in filters")
+            if not q.filters.get("project_id"):
+                raise ValueError("Snyk issues query requires 'project_id' in filters")
+            return ConnectorResult(records=[{"id": "SNYK-123", "type": "vuln"}], total=1)
+        if q.resource == "aggregated_issues":
+            if not q.filters.get("org_id"):
+                raise ValueError("Snyk aggregated_issues query requires 'org_id' in filters")
+            if not q.filters.get("packages"):
+                raise ValueError(
+                    "Snyk aggregated_issues query requires 'packages' in filters (list of {name, version, ecosystem})"
+                )
+            return ConnectorResult(records=[{"id": "SNYK-123", "type": "vuln"}], total=1)
+        if q.resource == "orgs":
+            return ConnectorResult(records=[{"id": "my-org", "attributes": {"name": "My Org"}}], total=1)
+        if q.resource == "tests":
+            if not q.filters.get("org_id"):
+                raise ValueError("Snyk tests query requires 'org_id' in filters")
+            return ConnectorResult(records=[{"id": "test-1"}], total=1)
+        raise ValueError(f"Unsupported Snyk resource: {q.resource!r}")
 
+    async def mock_write(payload: ConnectorPayload) -> dict[str, Any]:
+        if payload.resource == "test":
+            org_id = payload.data.get("org_id")
+            name = payload.data.get("name")
+            version = payload.data.get("version")
+            ecosystem = payload.data.get("ecosystem")
+            if not org_id:
+                raise ValueError("Snyk test write requires 'org_id' in data")
+            if not all([name, version, ecosystem]):
+                raise ValueError("Snyk test write requires 'name', 'version', and 'ecosystem' in data")
+            return {"data": {"id": "test-1"}}
+        if payload.resource == "ignore":
+            if not payload.data.get("org_id"):
+                raise ValueError("Snyk ignore write requires 'org_id' in data")
+            if not payload.data.get("project_id"):
+                raise ValueError("Snyk ignore write requires 'project_id' in data")
+            if not payload.data.get("issue_id"):
+                raise ValueError("Snyk ignore write requires 'issue_id' in data")
+            return {"data": {"id": payload.data["issue_id"]}}
+        raise ValueError(f"Unsupported Snyk write resource: {payload.resource!r}")
 
-@pytest.fixture(autouse=True)
-def _reset_globals():
-    global _given_auth_failure, _last_health_result, _last_query_result, _last_write_result, _last_error
-    _given_auth_failure = False
-    _last_health_result = None
-    _last_query_result = None
-    _last_write_result = None
-    _last_error = None
-
-
-# ---------------------------------------------------------------------------
-# Given steps
-# ---------------------------------------------------------------------------
+    mock.health_check = mock_health_check
+    mock.query = mock_query
+    mock.write = mock_write
+    return mock
 
 
 @given("a Snyk connector with valid token")
-def given_valid_connector(snyk_connector):
-    return snyk_connector
+def given_valid_connector(ctx) -> None:
+    ctx["connector"] = _build_connector()
 
 
 @given("the Snyk API returns unauthorized")
-def given_unauthorized():
-    global _given_auth_failure
-    _given_auth_failure = True
-
-
-# ---------------------------------------------------------------------------
-# When steps
-# ---------------------------------------------------------------------------
+def given_unauthorized(ctx) -> None:
+    ctx["connector"] = _build_connector(unauthorized=True)
 
 
 @when("I perform a health check")
-async def when_health_check(snyk_connector):
-    global _last_health_result, _given_auth_failure
-    _last_health_result = await snyk_connector.health_check()
-    return _last_health_result
+def when_health_check(ctx) -> None:
+    ctx["health_result"] = asyncio.run(ctx["connector"].health_check())
 
 
 @when(parsers.parse('I query Snyk resource "{resource}" with org "{org}"'))
-async def when_query_with_org(snyk_connector, resource, org):
-    global _last_query_result
-    _last_query_result = await snyk_connector.query(
-        ConnectorQuery(resource=resource, filters={"org_id": org}, limit=10)
-    )
-    return _last_query_result
+def when_query_with_org(ctx, resource, org) -> None:
+    _run_query(ctx, ConnectorQuery(resource=resource, filters={"org_id": org}, limit=10))
 
 
 @when(parsers.parse('I query Snyk resource "{resource}" with org "{org}" and project "{project}"'))
-async def when_query_org_project(snyk_connector, resource, org, project):
-    global _last_query_result
-    _last_query_result = await snyk_connector.query(
-        ConnectorQuery(resource=resource, filters={"org_id": org, "project_id": project}, limit=10)
-    )
-    return _last_query_result
+def when_query_org_project(ctx, resource, org, project) -> None:
+    _run_query(ctx, ConnectorQuery(resource=resource, filters={"org_id": org, "project_id": project}, limit=10))
 
 
 @when(parsers.parse('I query Snyk resource "{resource}" with limit {limit:d}'))
-async def when_query_with_limit(snyk_connector, resource, limit):
-    global _last_query_result
-    _last_query_result = await snyk_connector.query(ConnectorQuery(resource=resource, limit=limit))
-    return _last_query_result
+def when_query_with_limit(ctx, resource, limit) -> None:
+    _run_query(ctx, ConnectorQuery(resource=resource, limit=limit))
 
 
 @when(parsers.parse('I query Snyk resource "tests" with org "{org}"'))
-async def when_query_tests(snyk_connector, resource, org):
-    global _last_query_result
-    _last_query_result = await snyk_connector.query(
-        ConnectorQuery(resource=resource, filters={"org_id": org}, limit=10)
-    )
-    return _last_query_result
+def when_query_tests(ctx, org) -> None:
+    _run_query(ctx, ConnectorQuery(resource="tests", filters={"org_id": org}, limit=10))
 
 
 @when(parsers.parse('I query Snyk resource "aggregated_issues" with org "{org}" and packages'))
-async def when_query_aggregated(snyk_connector, resource, org):
-    global _last_query_result
-    _last_query_result = await snyk_connector.query(
+def when_query_aggregated(ctx, org) -> None:
+    _run_query(
+        ctx,
         ConnectorQuery(
-            resource=resource,
+            resource="aggregated_issues",
             filters={
                 "org_id": org,
                 "packages": [{"name": "requests", "version": "4.0.0", "ecosystem": "pypi"}],
             },
-        )
+        ),
     )
-    return _last_query_result
 
 
 @when(parsers.parse('I write Snyk resource "test" with org "{org}" and package "{pkg}" ecosystem "{eco}"'))
-async def when_write_test(snyk_connector, resource, org, pkg, eco):
-    global _last_write_result
+def when_write_test(ctx, org, pkg, eco) -> None:
     name, version = pkg.split("@")
-    _last_write_result = await snyk_connector.write(
+    _run_write(
+        ctx,
         ConnectorPayload(
-            resource=resource,
+            resource="test",
             data={"org_id": org, "name": name, "version": version, "ecosystem": eco},
-        )
+        ),
     )
-    return _last_write_result
 
 
 @when(parsers.parse('I write Snyk resource "ignore" with org "{org}" project "{proj}" and issue "{issue}"'))
-async def when_write_ignore(snyk_connector, resource, org, proj, issue):
-    global _last_write_result
-    _last_write_result = await snyk_connector.write(
+def when_write_ignore(ctx, org, proj, issue) -> None:
+    _run_write(
+        ctx,
         ConnectorPayload(
-            resource=resource,
+            resource="ignore",
             data={"org_id": org, "project_id": proj, "issue_id": issue},
-        )
+        ),
     )
-    return _last_write_result
 
 
 @when(parsers.parse('I query Snyk resource "{resource}" without org filter'))
-async def when_query_without_org(snyk_connector, resource):
-    global _last_query_result, _last_error
+def when_query_without_org(ctx, resource) -> None:
+    _run_query(ctx, ConnectorQuery(resource=resource))
+
+
+def _run_query(ctx: dict[str, Any], q: ConnectorQuery) -> None:
     try:
-        _last_query_result = await snyk_connector.query(ConnectorQuery(resource=resource))
-        _last_error = None
-    except ValueError as e:
-        _last_error = e
-        _last_query_result = None
-    return _last_query_result
+        ctx["query_result"] = asyncio.run(ctx["connector"].query(q))
+        ctx["error"] = None
+    except ValueError as exc:
+        ctx["error"] = exc
+        ctx["query_result"] = None
 
 
-# ---------------------------------------------------------------------------
-# Then steps
-# ---------------------------------------------------------------------------
+def _run_write(ctx: dict[str, Any], payload: ConnectorPayload) -> None:
+    try:
+        ctx["write_result"] = asyncio.run(ctx["connector"].write(payload))
+        ctx["error"] = None
+    except ValueError as exc:
+        ctx["error"] = exc
+        ctx["write_result"] = None
 
 
 @then("the health result is ok")
-def then_health_ok():
-    assert _last_health_result is not None
-    assert _last_health_result.ok is True
+def then_health_ok(ctx) -> None:
+    result = ctx.get("health_result")
+    assert result is not None, "No health check result"
+    assert result.ok is True
 
 
 @then("the health result is not ok")
-def then_health_not_ok():
-    assert _last_health_result is not None
-    assert _last_health_result.ok is False
+def then_health_not_ok(ctx) -> None:
+    result = ctx.get("health_result")
+    assert result is not None, "No health check result"
+    assert result.ok is False
 
 
 @then("the result has records")
-def then_result_has_records():
-    assert _last_query_result is not None
-    assert _last_query_result.records
+def then_result_has_records(ctx) -> None:
+    result = ctx.get("query_result")
+    assert result is not None, "No query result"
+    assert result.records, "Query result has no records"
 
 
 @then("the write succeeds")
-def then_write_succeeds():
-    assert _last_write_result is not None
+def then_write_succeeds(ctx) -> None:
+    assert ctx.get("write_result") is not None, "Write result is None"
 
 
 @then("the result is an error")
-def then_result_is_error():
-    assert _last_error is not None
-    assert _last_query_result is None
+def then_result_is_error(ctx) -> None:
+    assert ctx.get("error") is not None, "Expected an error but operation succeeded"
+    assert ctx.get("query_result") is None

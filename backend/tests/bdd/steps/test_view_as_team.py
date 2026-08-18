@@ -13,7 +13,7 @@ from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.crud.base import PageResult
 from modulo.settings import get_settings
-from tests.bdd.conftest import make_mock_pipeline, make_mock_session, make_settings
+from tests.bdd.conftest import _shared_state, make_mock_pipeline, make_mock_session, make_settings
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/teams/view_as_team.feature")
@@ -48,6 +48,21 @@ def _make_all_pipelines(ctx: dict[str, Any]) -> list[MagicMock]:
         p.owner_team_id = uuid.UUID(tid)
         pipelines.append(p)
     return pipelines
+
+
+def _make_mock_org() -> MagicMock:
+    o = MagicMock()
+    o.id = ORG_ID
+    o.name = "acme"
+    o.settings_json = {}
+    o.daily_spend_limit = None
+    return o
+
+
+def _make_mock_account() -> MagicMock:
+    a = MagicMock()
+    a.preferences = {}
+    return a
 
 
 @pytest.fixture
@@ -90,7 +105,7 @@ def get_viewmodel_with_view_as_team(
     ctx,
     patches,
 ) -> None:
-    org_role = ctx.get("org_role", "admin")
+    org_role = _shared_state(request).get("org_role", "admin")
 
     if org_role == "viewer":
         resp = MagicMock()
@@ -141,6 +156,21 @@ def get_viewmodel_with_view_as_team(
             new_callable=AsyncMock,
             return_value=mock_runs_page,
         ),
+        patch(
+            "modulo.api.routes.viewmodel.get_organisation",
+            new_callable=AsyncMock,
+            return_value=_make_mock_org(),
+        ),
+        patch(
+            "modulo.api.routes.viewmodel.get_account_by_id",
+            new_callable=AsyncMock,
+            return_value=_make_mock_account(),
+        ),
+        patch(
+            "modulo.api.routes.viewmodel.list_team_memberships_for_account",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
     ):
         actual_url = _map_url("/api/viewmodel/current")
         resp = client.get(actual_url, params={"view_as_team": team_id})
@@ -188,6 +218,21 @@ def get_viewmodel_without_view_as_team(
             "modulo.api.routes.viewmodel.list_runs",
             new_callable=AsyncMock,
             return_value=mock_runs_page,
+        ),
+        patch(
+            "modulo.api.routes.viewmodel.get_organisation",
+            new_callable=AsyncMock,
+            return_value=_make_mock_org(),
+        ),
+        patch(
+            "modulo.api.routes.viewmodel.get_account_by_id",
+            new_callable=AsyncMock,
+            return_value=_make_mock_account(),
+        ),
+        patch(
+            "modulo.api.routes.viewmodel.list_team_memberships_for_account",
+            new_callable=AsyncMock,
+            return_value=[],
         ),
     ):
         actual_url = _map_url("/api/viewmodel/current")

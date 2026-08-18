@@ -115,9 +115,12 @@ _redis_registry: Any | None = None
 def _get_registry() -> Any | None:
     global _redis_registry
     if _redis_registry is None:
+        redis_url = get_settings().redis_url
+        if not redis_url:
+            return None
         from modulo.core.remy.redis_registry import RemyRedisRegistry
 
-        _redis_registry = RemyRedisRegistry(get_settings().redis_url)
+        _redis_registry = RemyRedisRegistry(redis_url)
     return _redis_registry
 
 
@@ -770,6 +773,8 @@ async def get_session(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("remy.get_session.unexpected_error")
         raise HTTPException(
@@ -809,6 +814,8 @@ async def rename_session(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("remy.rename_session.unexpected_error")
         raise HTTPException(
@@ -864,6 +871,8 @@ async def delete_session(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("remy.delete_session.unexpected_error")
         raise HTTPException(
@@ -923,6 +932,8 @@ async def list_messages(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("remy.list_messages.unexpected_error")
         raise HTTPException(
@@ -972,6 +983,8 @@ async def append_message(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("remy.append_message.unexpected_error")
         raise HTTPException(
@@ -1602,6 +1615,8 @@ async def submit_permission_response(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("remy.submit_permission_response.unexpected_error")
         raise HTTPException(
@@ -1746,6 +1761,8 @@ async def resume_session(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("remy.resume_session.unexpected_error")
         raise HTTPException(
@@ -1787,6 +1804,8 @@ async def stop_session(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("remy.stop_session.unexpected_error")
         raise HTTPException(
@@ -1945,6 +1964,8 @@ async def undo_last_action(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("remy.undo_last_action.unexpected_error")
         raise HTTPException(

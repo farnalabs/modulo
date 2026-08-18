@@ -28,6 +28,7 @@ def team_exists(name: str, ctx) -> None:
 
 
 @given(parsers.parse('pipeline "{name}" is owned by team "{team_name}" with visibility "{visibility}"'))
+@given(parsers.parse('a pipeline "{name}" is owned by team "{team_name}" with visibility "{visibility}"'))
 def pipeline_owned_by_team(name: str, team_name: str, visibility: str, ctx) -> None:
     team_id = ctx["teams"].get(team_name, {}).get("id", str(uuid.uuid4()))
     ctx["pipelines"][name] = {
@@ -36,6 +37,14 @@ def pipeline_owned_by_team(name: str, team_name: str, visibility: str, ctx) -> N
         "owner_team_id": team_id,
         "visibility": visibility,
     }
+
+
+@then(parsers.parse('the pipeline owner is team "{team_name}"'))
+def pipeline_owner_is_team(team_name: str, request, ctx) -> None:
+    resp = request.node._resp
+    data = resp.json() if hasattr(resp, "json") else {}
+    team_id = ctx["teams"].get(team_name, {}).get("id")
+    assert data.get("owner_team_id") == team_id, f"Expected owner_team_id {team_id}, got {data.get('owner_team_id')}"
 
 
 @given(parsers.parse('connector "{name}" is owned by team "{team_name}" with visibility "{visibility}"'))
@@ -115,8 +124,10 @@ def bulk_reassign(team_name: str, request, ctx) -> None:
 
 @when(parsers.parse("I request GET /api/pipelines/{pipeline_name}"))
 def request_pipeline(pipeline_name: str, request, ctx) -> None:
+    from tests.bdd.conftest import _shared_state
+
     pipeline = ctx["pipelines"].get(pipeline_name)
-    org_role = ctx.get("org_role", "admin")
+    org_role = _shared_state(request).get("org_role", "admin")
 
     if org_role == "viewer" and pipeline and pipeline.get("visibility") == "team":
         resp = MagicMock()

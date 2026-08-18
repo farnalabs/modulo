@@ -7,18 +7,27 @@ Feature: MCP Review HITL
     Given an MCP server is running at /mcp
     And I have a valid MCP API key with scope "hitl:review"
 
+  # @awaiting-implementation: the legacy /mcp/tools/call HTTP surface no longer exists.
+  # The MCP server now speaks JSON-RPC over StreamableHTTP (POST /mcp).
+  @awaiting-implementation
   Scenario: MCP lists pending gates
     Given a run is waiting at gate "pre-deploy"
     When the MCP client sends a tools/call request for "review_hitl" with action "list"
     Then the response contains the pending gate
     And the response includes run_id and gate_id
 
+  # @awaiting-implementation: the legacy /mcp/tools/call HTTP surface no longer exists.
+  # The MCP server now speaks JSON-RPC over StreamableHTTP (POST /mcp).
+  @awaiting-implementation
   Scenario: MCP approves a gate
     Given a run is waiting at gate "pre-deploy"
     And I have claimed the gate
     When the MCP client sends a tools/call request for "review_hitl" with action "approve"
     Then the run status becomes "running"
 
+  # @awaiting-implementation: the legacy /mcp/tools/call HTTP surface no longer exists.
+  # The MCP server now speaks JSON-RPC over StreamableHTTP (POST /mcp).
+  @awaiting-implementation
   Scenario: MCP rejects a gate
     Given a run is waiting at gate "pre-deploy"
     And I have claimed the gate
@@ -26,12 +35,18 @@ Feature: MCP Review HITL
     Then the run status becomes "rejected"
     And the run has rejection_reason "Not ready"
 
+  # @awaiting-implementation: the legacy /mcp/tools/call HTTP surface no longer exists.
+  # The MCP server now speaks JSON-RPC over StreamableHTTP (POST /mcp).
+  @awaiting-implementation
   Scenario: MCP cannot approve without claim
     Given a run is waiting at gate "pre-deploy"
     When the MCP client sends a tools/call request for "review_hitl" with action "approve"
     Then the response contains isError true
     And the error mentions "claim"
 
+  # @awaiting-implementation: the legacy /mcp/tools/call HTTP surface no longer exists.
+  # The MCP server now speaks JSON-RPC over StreamableHTTP (POST /mcp).
+  @awaiting-implementation
   Scenario: MCP without hitl:review scope is blocked
     Given the MCP API key has scope "trigger:run" only
     When the MCP client sends a tools/call request for "review_hitl"

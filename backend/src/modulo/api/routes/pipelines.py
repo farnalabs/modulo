@@ -1798,6 +1798,9 @@ async def list_snapshot_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            pipeline = await get_pipeline(session, pipeline_id)
+            if pipeline is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
             snapshots, total = await list_snapshots(session, pipeline_id, page=page, page_size=page_size)
     except ProgrammingError:
         logger.exception(_CODE_ROUTES_PIPELINES)
@@ -1940,6 +1943,14 @@ async def delete_snapshot_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            snapshot = await get_snapshot_detail(
+                session,
+                snapshot_id,
+                organisation_id=principal.organisation_id,
+                pipeline_id=pipeline_id,
+            )
+            if snapshot is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
             deleted = await delete_snapshot(session, snapshot_id)
     except ProgrammingError:
         logger.exception(_CODE_ROUTES_PIPELINES)
@@ -1951,8 +1962,8 @@ async def delete_snapshot_endpoint(
 
     if not deleted:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Snapshot not found or cannot delete the latest snapshot",
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot delete the latest snapshot",
         )
 
 

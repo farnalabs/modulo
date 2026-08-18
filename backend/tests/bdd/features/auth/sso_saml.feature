@@ -29,7 +29,7 @@ Feature: SSO SAML 2.0 Integration
   Scenario: Invalid SAML response is rejected
     When the SAML ACS endpoint receives a malformed SAMLResponse
     Then the response status is 401
-    And the error detail mentions "SAML Assertion"
+    And the error detail mentions "malformed or invalid"
 
   Scenario: Missing SAMLResponse in form data is rejected
     When the SAML ACS endpoint receives a request without SAMLResponse

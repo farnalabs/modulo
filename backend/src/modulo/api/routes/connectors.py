@@ -26,6 +26,8 @@ from modulo.connectors.base import ConnectorType
 from modulo.connectors.github import REQUIRED_FINE_GRAINED_PERMISSIONS as GITHUB_REQUIRED_FINE_GRAINED_PERMISSIONS
 from modulo.connectors.github import REQUIRED_SCOPES as GITHUB_REQUIRED_SCOPES
 from modulo.connectors.github import GitHubConnector, is_fine_grained_pat
+from modulo.core.connector_hub import ConnectorDecryptError, ConnectorHub
+from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.connector_instance import (
     create_connector_instance,
     delete_connector_instance,
@@ -334,6 +336,60 @@ async def get_connector_endpoint(
     if ci is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_CONNECTOR_NOT_FOUND)
     return _to_response(ci)
+
+
+class ConnectorHealthResponse(BaseModel):
+    """Live connector health check result."""
+
+    ok: bool
+    detail: str = ""
+
+
+@router.get("/{connector_id}/health", response_model=ConnectorHealthResponse)
+@handle_db_errors("connectors.connector_health_endpoint")
+async def connector_health_endpoint(
+    connector_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("connector.list"),
+    settings: Settings = Depends(get_settings),
+) -> ConnectorHealthResponse:
+    """Run a live health check against a connector instance.
+
+    Builds the connector from the stored config/credentials and runs its
+    ``health_check``. A missing connector (or one outside the caller's org) is
+    a 404. Build/decrypt failures are 502; a failing health check is reported
+    in-band as ``ok: false`` with the connector's detail.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            ci = await get_connector_instance(session, connector_id)
+    except HTTPException:
+        raise
+    if ci is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
+    try:
+        secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key)
+        async with ConnectorHub(secrets_backend=secrets_backend) as hub:
+            await hub.initialise([ci])
+            connector = hub.get(connector_id)
+            result = await connector.health_check()
+    except ConnectorDecryptError:
+        logger.exception("connectors.connector_health_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to decrypt connector credentials.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Unexpected error checking connector health")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to check connector health.",
+        ) from None
+    return ConnectorHealthResponse(ok=result.ok, detail=result.detail)
 
 
 @router.patch("/{connector_id}", response_model=ConnectorResponse, dependencies=[Depends(deny_break_glass_mint)])

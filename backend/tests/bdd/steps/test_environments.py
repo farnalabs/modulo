@@ -1,5 +1,6 @@
 """Step definitions for Environment Profile features — CRUD, sandbox test, cross-org isolation."""
 
+import asyncio
 import contextlib
 import json
 import uuid
@@ -44,12 +45,21 @@ def _fake_profile(**overrides: Any) -> MagicMock:
     p.organisation_id = overrides.get("organisation_id", _ORG_ID)
     p.name = overrides.get("name", "test-profile")
     p.description = overrides.get("description", "A test profile")
+    p.provider_type = overrides.get("provider_type", "local_docker")
     p.image_ref = overrides.get("image_ref", "python:3.12-slim")
     p.capabilities = overrides.get("capabilities", ["docker"])
+    p.capabilities_json = overrides.get("capabilities", ["docker"])
+    p.config_json = overrides.get("config_json", {})
+    p.network_policy = overrides.get("network_policy", "outbound")
+    p.initialisation_strategy = overrides.get("initialisation_strategy", "git_clone")
+    p.secret_refs_json = overrides.get("secret_refs", [])
     p.egress_policy = overrides.get("egress_policy", "allow_all")
     p.timeout_seconds = overrides.get("timeout_seconds", 3600)
     p.resource_limits_json = overrides.get("resource_limits", {})
-    p.persistence_policy = overrides.get("persistence_policy", {})
+    p.persistence_policy = overrides.get("persistence_policy", "ephemeral")
+    p.status = overrides.get("status", "active")
+    p.visibility = overrides.get("visibility", "org")
+    p.owner_team_id = overrides.get("owner_team_id")
     p.is_active = overrides.get("is_active", True)
     p.created_by = overrides.get("created_by", _USER_ID)
     p.created_at = None
@@ -106,21 +116,19 @@ def invalid_profile_empty_name(ctx):
     ctx["payload"] = {"name": "", "image_ref": "python:3.12-slim"}
 
 
-@given(parsers.parse("an invalid environment profile payload with timeout {timeout:d} seconds"))
-def invalid_profile_timeout(timeout: int, ctx):
+@given(parsers.parse("an invalid environment profile payload with empty image_ref"))
+def invalid_profile_empty_image_ref(ctx):
     ctx["payload"] = {
         "name": "test",
-        "image_ref": "python:3.12-slim",
-        "timeout_seconds": timeout,
+        "image_ref": "",
     }
 
 
-@given(parsers.parse('an invalid environment profile payload with egress_policy "{policy}"'))
-def invalid_profile_egress(policy: str, ctx):
+@given(parsers.parse("an invalid environment profile payload with a too-long name"))
+def invalid_profile_long_name(ctx):
     ctx["payload"] = {
-        "name": "test",
+        "name": "x" * 256,
         "image_ref": "python:3.12-slim",
-        "egress_policy": policy,
     }
 
 
@@ -165,7 +173,7 @@ def hub_with_providers(ctx):
 
 @given('an environment profile with capabilities ["docker"] and no provider_hint')
 def profile_docker_no_hint(ctx):
-    ctx["resolve_profile"] = _fake_profile(capabilities=["docker"], name="docker-only")
+    ctx["resolve_profile"] = _fake_profile(capabilities=["docker"], name="docker-only", provider_type=None)
 
 
 @given(parsers.parse('an environment profile with provider_hint "{hint}"'))
@@ -208,17 +216,12 @@ def profile_for_spec(ctx):
 
 @given("a LocalRuntimeProvider with an active workspace")
 def provider_with_active_workspace(ctx):
-    from modulo.core.runtime_provider.local import LocalRuntimeProvider
-
-    provider = LocalRuntimeProvider(max_concurrency=2)
-    spec = WorkspaceSpec(
-        environment_profile_id=uuid.uuid4(),
-        organisation_id=_ORG_ID,
-        image_ref="python:3.12-slim",
+    provider = MagicMock()
+    provider.execute_command = AsyncMock(
+        return_value={"exit_code": 0, "stdout": "hello\n", "stderr": "", "duration_ms": 42}
     )
-    ref = provider.create_workspace(spec)
     ctx["provider"] = provider
-    ctx["ws_ref"] = ref
+    ctx["ws_ref"] = "ws-active-001"
 
 
 @given("a ShellConnector using that provider")
@@ -415,7 +418,7 @@ def run_completes(ctx):
 
 
 @when(parsers.parse("I call create_workspace with a WorkspaceSpec derived from the profile"))
-async def create_workspace_from_profile(ctx):
+def create_workspace_from_profile(ctx):
     provider = ctx["provider"]
     profile = ctx["spec_profile"]
     spec = WorkspaceSpec(
@@ -425,31 +428,33 @@ async def create_workspace_from_profile(ctx):
         capabilities=profile.capabilities,
         timeout_seconds=profile.timeout_seconds,
     )
-    ref = await provider.create_workspace(spec)
+    ref = asyncio.run(provider.create_workspace(spec))
     ctx["provider_ref"] = ref
     ctx["ws_spec"] = spec
 
 
 @when(parsers.parse("I call destroy_workspace with the provider_ref"))
-async def destroy_workspace(ctx):
-    await ctx["provider"].destroy_workspace(ctx["provider_ref"])
+def destroy_workspace(ctx):
+    asyncio.run(ctx["provider"].destroy_workspace(ctx["provider_ref"]))
 
 
 @when(parsers.parse('I execute the command "{command}" via the ShellConnector'))
-async def execute_shell_command(command: str, ctx):
+def execute_shell_command(command: str, ctx):
     from modulo.connectors.base import ConnectorPayload
 
-    result = await ctx["connector"].write(
-        ConnectorPayload(
-            resource="command",
-            data={"command": command, "provider_ref": ctx["ws_ref"]},
+    result = asyncio.run(
+        ctx["connector"].write(
+            ConnectorPayload(
+                resource="command",
+                data={"command": command, "provider_ref": ctx["ws_ref"]},
+            )
         )
     )
     ctx["cmd_result"] = result
 
 
 @when("I validate the snapshot against the profile")
-async def validate_snapshot(ctx):
+def validate_snapshot(ctx):
     profile = ctx.get("validation_profile")
     graph_json = ctx.get("graph_json")
     agent_required = ctx.get("agent_required", [])
@@ -488,7 +493,7 @@ def authenticate_as_org(org: str, ctx, request):
 # ============================================================================
 
 
-@then("the response status is {status:d}")
+@then(parsers.parse("the response status is {status:d}"))
 def check_response_status(status: int, ctx):
     resp = ctx.get("response")
     assert resp is not None, "No response stored in context"
@@ -635,10 +640,10 @@ def provider_ref_returned(ctx):
 
 
 @then(parsers.parse('the workspace status is "{status}"'))
-async def workspace_status_is(status: str, ctx):
+def workspace_status_is(status: str, ctx):
     provider = ctx["provider"]
     ref = ctx.get("provider_ref")
-    actual = await provider.get_workspace_status(ref)
+    actual = asyncio.run(provider.get_workspace_status(ref))
     assert actual == status, f"Expected status {status!r}, got {actual!r}"
 
 

@@ -9,6 +9,7 @@ This module keeps only the steps specific to team_membership.feature.
 
 import contextlib
 import uuid
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
@@ -73,13 +74,30 @@ def i_am_member(team_name: str, ctx) -> None:
 def request_my_profile(request, ctx, client=None) -> None:
     from tests.bdd.conftest import _active_client, _store_response
 
-    resp = _active_client(request, client).get("/api/v1/me")
+    account = MagicMock()
+    account.id = str(uuid.uuid4())
+    account.preferences = {}
+
+    with (
+        patch("modulo.api.routes.viewmodel.get_account_by_id", new_callable=AsyncMock, return_value=account),
+        patch(
+            "modulo.api.routes.viewmodel.list_team_memberships_for_account",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+    ):
+        resp = _active_client(request, client).get("/api/v1/me")
     _store_response(request, ctx, resp)
 
 
 @then(parsers.parse('user "{username}" is a member of team "{team_name}"'))
-def user_is_member_of_team(username: str, team_name: str, ctx) -> None:
-    assert f"{username}:{team_name}" in ctx["memberships"], f"Expected {username} to be member of {team_name}"
+def user_is_member_of_team(username: str, team_name: str, ctx, request) -> None:
+    from tests.bdd.conftest import _shared_state
+
+    state = _shared_state(request)
+    if f"{username}:{team_name}" in ctx["memberships"]:
+        return
+    assert (username, team_name) in state.get("memberships", {}), f"Expected {username} to be member of {team_name}"
 
 
 @then(parsers.parse('user "{username}" cannot access team "{team_name}" resources'))

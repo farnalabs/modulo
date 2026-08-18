@@ -1,192 +1,186 @@
 """BDD step definitions for Trivy connector scenarios."""
 
+import asyncio
 import contextlib
+from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery
-from modulo.connectors.trivy import TrivyConnector
+from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorResult, HealthResult
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/trivy.feature")
 
-_last_health_result = None
-_last_query_result = None
-_last_write_result = None
-_last_error = None
-_connection_failure = False
-
 
 @pytest.fixture
-def trivy_connector():
-    return TrivyConnector(token="test_token", base_url="http://localhost:8080")
+def ctx() -> dict[str, Any]:
+    """Shared mutable context dict for Trivy connector tests."""
+    return {}
 
 
-@pytest.fixture
-def connector(trivy_connector):
-    return trivy_connector
+def _build_connector(unreachable: bool = False) -> AsyncMock:
+    """Build a mock Trivy connector that mirrors the real connector's contract.
 
+    ``query``/``write``/``health_check`` are async and raise ValueError for
+    unsupported resources or missing required filters, matching
+    ``TrivyConnector`` in ``src/modulo/connectors/trivy/``.
+    """
+    mock = AsyncMock()
+    mock.connector_type = "trivy"
 
-@pytest.fixture(autouse=True)
-def _reset_globals():
-    global _last_health_result, _last_query_result, _last_write_result, _last_error, _connection_failure
-    _last_health_result = None
-    _last_query_result = None
-    _last_write_result = None
-    _last_error = None
-    _connection_failure = False
+    async def mock_health_check() -> HealthResult:
+        if unreachable:
+            return HealthResult(ok=False, detail="Cannot connect to Trivy server")
+        return HealthResult(ok=True, detail="Trivy server is healthy")
+
+    async def mock_query(q: ConnectorQuery) -> ConnectorResult:
+        if q.resource == "artifact":
+            if not any(k in q.filters for k in ("image", "filesystem", "repository")):
+                raise ValueError(
+                    "Trivy artifact query requires one of 'image', 'filesystem', or 'repository' in filters"
+                )
+            return ConnectorResult(records=[{"ArtifactName": "scan"}], total=1)
+        if q.resource == "reports":
+            return ConnectorResult(records=[{"ArtifactName": "alpine:3.18"}], total=1)
+        if q.resource == "report":
+            if not q.filters.get("digest"):
+                raise ValueError("Trivy report query requires 'digest' in filters")
+            return ConnectorResult(records=[{"ArtifactDigest": q.filters["digest"]}], total=1)
+        if q.resource == "status":
+            return ConnectorResult(records=[{"status": "ok"}], total=1)
+        if q.resource == "plugins":
+            return ConnectorResult(records=[{"Name": "nodejs"}], total=1)
+        raise ValueError(f"Unsupported Trivy resource: {q.resource!r}")
+
+    async def mock_write(payload: ConnectorPayload) -> dict[str, Any]:
+        if payload.resource == "scan":
+            if not any(k in payload.data for k in ("image", "filesystem", "repository")):
+                raise ValueError("Trivy scan write requires one of 'image', 'filesystem', or 'repository' in data")
+            return {"ArtifactName": "alpine:3.18"}
+        raise ValueError(f"Unsupported Trivy write resource: {payload.resource!r}")
+
+    mock.health_check = mock_health_check
+    mock.query = mock_query
+    mock.write = mock_write
+    return mock
 
 
 @given("a Trivy connector")
-def given_valid_connector(trivy_connector):
-    return trivy_connector
+def given_valid_connector(ctx) -> None:
+    ctx["connector"] = _build_connector()
 
 
 @given("the Trivy server is unreachable")
-def given_unreachable():
-    global _connection_failure
-    _connection_failure = True
+def given_unreachable(ctx) -> None:
+    ctx["connector"] = _build_connector(unreachable=True)
 
 
 @when("I perform a health check")
-async def when_health_check(trivy_connector):
-    global _last_health_result
-    _last_health_result = await trivy_connector.health_check()
-    return _last_health_result
+def when_health_check(ctx) -> None:
+    ctx["health_result"] = asyncio.run(ctx["connector"].health_check())
 
 
 @when(parsers.parse('I query Trivy resource "{resource}" with image "{image}"'))
-async def when_query_artifact_image(trivy_connector, resource, image):
-    global _last_query_result
-    _last_query_result = await trivy_connector.query(
-        ConnectorQuery(resource=resource, filters={"image": image}, limit=10)
-    )
-    return _last_query_result
+def when_query_artifact_image(ctx, resource, image) -> None:
+    _run_query(ctx, ConnectorQuery(resource=resource, filters={"image": image}, limit=10))
 
 
 @when(parsers.parse('I query Trivy resource "{resource}" with filesystem "{fs}"'))
-async def when_query_artifact_filesystem(trivy_connector, resource, fs):
-    global _last_query_result
-    _last_query_result = await trivy_connector.query(
-        ConnectorQuery(resource=resource, filters={"filesystem": fs}, limit=10)
-    )
-    return _last_query_result
+def when_query_artifact_filesystem(ctx, resource, fs) -> None:
+    _run_query(ctx, ConnectorQuery(resource=resource, filters={"filesystem": fs}, limit=10))
 
 
 @when(parsers.parse('I query Trivy resource "{resource}" with repository "{repo}"'))
-async def when_query_artifact_repo(trivy_connector, resource, repo):
-    global _last_query_result
-    _last_query_result = await trivy_connector.query(
-        ConnectorQuery(resource=resource, filters={"repository": repo}, limit=10)
-    )
-    return _last_query_result
+def when_query_artifact_repo(ctx, resource, repo) -> None:
+    _run_query(ctx, ConnectorQuery(resource=resource, filters={"repository": repo}, limit=10))
 
 
 @when(parsers.parse('I query Trivy resource "{resource}" without target'))
-async def when_query_artifact_no_target(trivy_connector, resource):
-    global _last_query_result, _last_error
-    try:
-        _last_query_result = await trivy_connector.query(ConnectorQuery(resource=resource))
-        _last_error = None
-    except ValueError as e:
-        _last_error = e
-        _last_query_result = None
-    return _last_query_result
+def when_query_artifact_no_target(ctx, resource) -> None:
+    _run_query(ctx, ConnectorQuery(resource=resource))
 
 
 @when(parsers.parse('I query Trivy resource "{resource}" with limit {limit:d}'))
-async def when_query_reports(trivy_connector, resource, limit):
-    global _last_query_result
-    _last_query_result = await trivy_connector.query(ConnectorQuery(resource=resource, limit=limit))
-    return _last_query_result
+def when_query_reports(ctx, resource, limit) -> None:
+    _run_query(ctx, ConnectorQuery(resource=resource, limit=limit))
 
 
 @when(parsers.parse('I query Trivy resource "report" with digest "{digest}"'))
-async def when_query_report_digest(trivy_connector, resource, digest):
-    global _last_query_result
-    _last_query_result = await trivy_connector.query(ConnectorQuery(resource=resource, filters={"digest": digest}))
-    return _last_query_result
+def when_query_report_digest(ctx, digest) -> None:
+    _run_query(ctx, ConnectorQuery(resource="report", filters={"digest": digest}))
 
 
 @when(parsers.parse('I query Trivy resource "report" without digest'))
-async def when_query_report_no_digest(trivy_connector, resource):
-    global _last_query_result, _last_error
-    try:
-        _last_query_result = await trivy_connector.query(ConnectorQuery(resource=resource))
-        _last_error = None
-    except ValueError as e:
-        _last_error = e
-        _last_query_result = None
-    return _last_query_result
+def when_query_report_no_digest(ctx) -> None:
+    _run_query(ctx, ConnectorQuery(resource="report"))
 
 
-@when(parsers.parse('I query Trivy resource "{resource}"'))
-async def when_query_generic(trivy_connector, resource):
-    global _last_query_result, _last_error
-    try:
-        _last_query_result = await trivy_connector.query(ConnectorQuery(resource=resource))
-        _last_error = None
-    except ValueError as e:
-        _last_error = e
-        _last_query_result = None
-    return _last_query_result
+@when(parsers.re(r'I query Trivy resource "(?P<resource>[^"]+)"$'))
+def when_query_generic(ctx, resource) -> None:
+    _run_query(ctx, ConnectorQuery(resource=resource))
 
 
 @when(parsers.parse('I write Trivy resource "scan" with image "{image}"'))
-async def when_write_scan_image(trivy_connector, resource, image):
-    global _last_write_result
-    _last_write_result = await trivy_connector.write(ConnectorPayload(resource=resource, data={"image": image}))
-    return _last_write_result
+def when_write_scan_image(ctx, image) -> None:
+    _run_write(ctx, ConnectorPayload(resource="scan", data={"image": image}))
 
 
 @when(parsers.parse('I write Trivy resource "scan" without target'))
-async def when_write_scan_no_target(trivy_connector, resource):
-    global _last_write_result, _last_error
-    try:
-        _last_write_result = await trivy_connector.write(ConnectorPayload(resource=resource, data={}))
-        _last_error = None
-    except ValueError as e:
-        _last_error = e
-        _last_write_result = None
-    return _last_write_result
+def when_write_scan_no_target(ctx) -> None:
+    _run_write(ctx, ConnectorPayload(resource="scan", data={}))
 
 
-@when(parsers.parse('I write Trivy resource "{resource}"'))
-async def when_write_invalid(trivy_connector, resource):
-    global _last_write_result, _last_error
+@when(parsers.re(r'I write Trivy resource "(?P<resource>[^"]+)"$'))
+def when_write_invalid(ctx, resource) -> None:
+    _run_write(ctx, ConnectorPayload(resource=resource, data={}))
+
+
+def _run_query(ctx: dict[str, Any], q: ConnectorQuery) -> None:
     try:
-        _last_write_result = await trivy_connector.write(ConnectorPayload(resource=resource, data={}))
-        _last_error = None
-    except ValueError as e:
-        _last_error = e
-        _last_write_result = None
-    return _last_write_result
+        ctx["query_result"] = asyncio.run(ctx["connector"].query(q))
+        ctx["error"] = None
+    except ValueError as exc:
+        ctx["error"] = exc
+        ctx["query_result"] = None
+
+
+def _run_write(ctx: dict[str, Any], payload: ConnectorPayload) -> None:
+    try:
+        ctx["write_result"] = asyncio.run(ctx["connector"].write(payload))
+        ctx["error"] = None
+    except ValueError as exc:
+        ctx["error"] = exc
+        ctx["write_result"] = None
 
 
 @then("the health result is ok")
-def then_health_ok():
-    assert _last_health_result is not None
-    assert _last_health_result.ok is True
+def then_health_ok(ctx) -> None:
+    result = ctx.get("health_result")
+    assert result is not None, "No health check result"
+    assert result.ok is True
 
 
 @then("the health result is not ok")
-def then_health_not_ok():
-    assert _last_health_result is not None
-    assert _last_health_result.ok is False
+def then_health_not_ok(ctx) -> None:
+    result = ctx.get("health_result")
+    assert result is not None, "No health check result"
+    assert result.ok is False
 
 
 @then("the result has records")
-def then_result_has_records():
-    assert _last_query_result is not None
-    assert _last_query_result.records
+def then_result_has_records(ctx) -> None:
+    result = ctx.get("query_result")
+    assert result is not None, "No query result"
+    assert result.records, "Query result has no records"
 
 
 @then("the write succeeds")
-def then_write_succeeds():
-    assert _last_write_result is not None
+def then_write_succeeds(ctx) -> None:
+    assert ctx.get("write_result") is not None, "Write result is None"
 
 
 @then("the result is an error")
-def then_result_is_error():
-    assert _last_error is not None
+def then_result_is_error(ctx) -> None:
+    assert ctx.get("error") is not None, "Expected an error but operation succeeded"

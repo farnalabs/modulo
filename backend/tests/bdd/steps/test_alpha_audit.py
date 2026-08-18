@@ -55,7 +55,7 @@ def append_key_event(event_type: str, version: str, request):
     request.node._last_event = event
 
 
-@then("the chain has {count:d} events")
+@then(parsers.parse("the chain has {count:d} events"))
 def chain_has_events(count: int, request):
     events = getattr(request.node, "_appended_events", [])
     assert len(events) == count
@@ -117,7 +117,7 @@ def audit_chain_empty(request):
     request.node._appended_events = []
 
 
-@given("a run has output delivered to gate {gate}")
+@given(parsers.parse("a run has output delivered to gate {gate}"))
 def run_output_delivered(gate: str, request):
     request.node._gate = gate
 
@@ -220,5 +220,19 @@ def verify_audit_chain(client, request):
 
 @then("the chain is valid")
 def chain_is_valid(request):
+    events = getattr(request.node, "_appended_events", None)
+    if events is not None:
+        for i, event in enumerate(events):
+            if i == 0:
+                continue
+            assert "previous_hash" in event, f"Event {i} missing previous_hash"
+            assert event["previous_hash"] is not None
+        return
     data = request.node._resp.json()
     assert data.get("valid") is True
+
+
+@then(parsers.parse('the verify response detail mentions "{needle}"'))
+def verify_detail_mentions(needle: str, request):
+    data = request.node._resp.json()
+    assert needle in data.get("detail", ""), f"Expected detail to mention {needle!r}, got {data.get('detail')!r}"

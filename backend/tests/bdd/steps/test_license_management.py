@@ -24,6 +24,10 @@ _TEST_KP = generate_keypair()
 _TEST_PRIV = _TEST_KP["private_key"]
 _TEST_PUB = _TEST_KP["public_key"]
 
+# Set the test public key up front so the @given steps (which call parse_and_verify
+# before any client/When step invokes _setup_client) can verify signed Team license keys.
+set_public_key(_TEST_PUB)
+
 
 def _sign_license_payload(payload: dict, private_key: str = _TEST_PRIV) -> str:
     sig_hex = sign_primitive(payload, private_key)
@@ -77,8 +81,8 @@ def _setup_client(ctx: dict[str, Any]) -> None:
     from modulo.api.dependencies import _get_engine as _eng
     from modulo.api.dependencies import get_db_session
     from modulo.api.main import app as _app
-    from modulo.auth.dependencies import get_current_user
-    from modulo.auth.jwt import AuthenticatedPrincipal
+    from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
+    from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
     from modulo.settings import Settings, get_settings
 
     set_public_key(_TEST_PUB)
@@ -96,17 +100,34 @@ def _setup_client(ctx: dict[str, Any]) -> None:
         fernet_key=_valid_32,
         modulo_admin_password="testpass",
         modulo_license_key="",
+        # No real Redis for hermetic BDD steps: the license route caches status
+        # under ``license:{org_id}`` (60s TTL) and reads it back before touching
+        # the DB / in-memory store. In the full BDD suite Redis IS up, so a GET
+        # from one scenario writes a shared cache entry that a later scenario
+        # reads back as stale (community / has_license=false), short-circuiting
+        # the in-process ``_current_license`` set by a @given step. An empty
+        # redis_url makes every cache read/write fail fast inside the route's
+        # ``except Exception``, keeping each scenario hermetic.
+        redis_url="",
     )
+
+    _principal_kwargs = {
+        "username": "admin" if is_admin else "operator",
+        "organisation_id": "00000000-0000-0000-0000-000000000001",
+        "account_id": "00000000-0000-0000-0000-000000000002",
+        "org_role": "admin" if is_admin else "operator",
+    }
 
     _app.dependency_overrides[get_settings] = lambda: _settings
     _app.dependency_overrides[get_db_session] = _override_session
     _app.dependency_overrides[_eng] = lambda: None
-    _app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="admin" if is_admin else "operator",
-        organisation_id="00000000-0000-0000-0000-000000000001",
-        account_id="00000000-0000-0000-0000-000000000002",
-        org_role="admin" if is_admin else "operator",
-    )
+    _app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(**_principal_kwargs)
+
+    async def _override_tenant() -> TenantPrincipal:
+        return TenantPrincipal(**_principal_kwargs)
+
+    _app.dependency_overrides[get_current_tenant_user] = _override_tenant
+    _app.dependency_overrides[get_current_tenant_user_or_api_key] = _override_tenant
 
     get_settings.cache_clear()
 
@@ -145,7 +166,7 @@ def non_admin_user(ctx: dict[str, Any]) -> None:
     ctx["is_admin"] = False
 
 
-@given("I have a signed team license key")
+@given("I have a signed Team license key")
 def signed_team_key(ctx: dict[str, Any]) -> None:
     payload = _valid_payload()
     ctx["license_key"] = _sign_license_payload(payload)
@@ -176,7 +197,7 @@ def no_license(ctx: dict[str, Any]) -> None:
     clear_license()
 
 
-@given("I have stored a valid team license")
+@given("I have stored a valid Team license")
 def stored_valid_license(ctx: dict[str, Any]) -> None:
     payload = _valid_payload()
     key = _sign_license_payload(payload)
@@ -186,7 +207,7 @@ def stored_valid_license(ctx: dict[str, Any]) -> None:
     ctx["stored_key"] = key
 
 
-@given("I have stored a valid team license with a known expiry")
+@given("I have stored a valid Team license with a known expiry")
 def stored_license_with_expiry(ctx: dict[str, Any]) -> None:
     payload = _valid_payload()
     key = _sign_license_payload(payload)

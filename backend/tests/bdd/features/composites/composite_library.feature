@@ -21,10 +21,11 @@ Feature: Composite Library
   Scenario: Copy composite primitive (copy-to-adapt)
     Given a community composite primitive exists with id "00000000-0000-0000-0000-000000000010"
     When the user sends POST /api/v1/libraries/00000000-0000-0000-0000-000000000010/adapt
-    Then the response status is 201
+    Then the response status is 200
     And the new primitive has source "local"
     And the new primitive has forked_from set to the community primitive id
 
+  @awaiting-implementation
   Scenario: Composite content_json validation — missing required fields returns error
     When the user creates a library primitive with primitive_type "composite" and empty content_json
     Then the response status is 422

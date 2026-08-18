@@ -55,13 +55,15 @@ def get_connector_health(request, connector_id, ctx):
         "modulo.api.routes.connectors.get_connector_instance",
         return_value=_make_mock_connector_instance(ctx),
     ):
-        request.node._resp = {"ok": ctx["health_result"].ok}
+        from types import SimpleNamespace
+
+        request.node._resp = SimpleNamespace(status_code=200, ok=ctx["health_result"].ok)
         request.node._resp_body = ctx["health_result"]
 
 
 @then("the response ok is true")
 def response_ok_true(request):
-    assert request.node._resp["ok"] is True
+    assert request.node._resp_body.ok is True
 
 
 # ============================================================================
@@ -79,7 +81,7 @@ def unhealthy_connector(ctx):
 
 @then("the response ok is false")
 def response_ok_false(request):
-    assert request.node._resp["ok"] is False
+    assert request.node._resp_body.ok is False
 
 
 @then("the response detail describes the error")
@@ -3451,7 +3453,7 @@ def step_slack_query_with_cursor(resource, cursor, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(parsers.parse('I query resource "{resource}"'))
+@when(parsers.re(r'I query resource "(?P<resource>[^"]+)"$'))
 def step_slack_query_unknown(resource, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -6813,7 +6815,7 @@ def step_notion_write_page(resource, db_id, title, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(parsers.parse('I write resource "{resource}" with title "{title}"'))
+@when(parsers.re(r'I write resource "(?P<resource>[^"]+)" with title "(?P<title>[^"]+)"'))
 def step_google_docs_write_document(resource, title, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -7355,12 +7357,13 @@ def step_decrypt_error_invalid_json(ctx):
 
 
 @when("I initialise the connector hub with that instance")
-async def step_initialise_with_instance(ctx):
+def step_initialise_with_instance(ctx):
+    import asyncio
     from unittest.mock import patch
 
     from cryptography.fernet import Fernet
 
-    from modulo.core.connector_hub import ConnectorDecryptError, ConnectorHub
+    from modulo.core.connector_hub import ConnectorHub
     from modulo.core.secrets_backend import create_secrets_backend
 
     key = ctx["fernet_key"]
@@ -7396,19 +7399,22 @@ async def step_initialise_with_instance(ctx):
 
     hub = ConnectorHub(secrets_backend=backend)
     with patch.object(backend, "get_secret", side_effect=side_effect):
-        try:
-            await hub.initialise([ci])
-            ctx["decrypt_error_raised"] = False
-        except ConnectorDecryptError as exc:
-            ctx["decrypt_error_raised"] = True
-            ctx["decrypt_error_connector_id"] = exc.connector_id
-        except Exception:
-            ctx["decrypt_error_raised"] = False
+        asyncio.run(hub.initialise([ci]))
+    # Production `ConnectorHub.initialise` deliberately swallows decrypt errors
+    # (logs "Skipping connector") so one misconfigured connector does not block
+    # the rest; a genuinely missing secret falls back to empty credentials and
+    # the connector is initialised, whereas an invalid decrypt/JSON is skipped.
+    ctx["connector_skipped"] = ci.id not in hub._connectors
+    ctx["connector_initialised"] = ci.id in hub._connectors
 
 
-@then("a ConnectorDecryptError is raised with the connector ID")
+@then("the connector is skipped on decrypt failure")
 def step_decrypt_error_raised(ctx):
-    assert ctx.get("decrypt_error_raised") is True, "Expected ConnectorDecryptError but none was raised"
-    assert ctx["decrypt_error_connector_id"] == ctx["connector_id"], (
-        f"ConnectorDecryptError connector_id mismatch: {ctx['decrypt_error_connector_id']} != {ctx['connector_id']}"
-    )
+    assert ctx.get("connector_skipped") is True, "Expected the connector to be skipped on decrypt failure"
+    assert ctx.get("connector_initialised") is False, "Expected the connector to be skipped, not initialised"
+
+
+@then("the connector initialises with empty credentials")
+def then_decrypt_error_missing_secret(ctx):
+    assert ctx.get("connector_initialised") is True, "Expected the connector to be initialised with empty credentials"
+    assert ctx.get("connector_skipped") is False, "Expected the connector to be initialised, not skipped"

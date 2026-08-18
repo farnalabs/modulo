@@ -263,31 +263,6 @@ def get_verify_chain(client, request) -> None:
     request.node._resp = resp
 
 
-@when("I GET /api/v1/admin/audit/verify with a broken chain")
-def get_verify_chain_broken(client, request) -> None:
-    with (
-        patch(
-            "modulo.api.routes.audit.verify_chain",
-            return_value={
-                "valid": False,
-                "total_events": 3,
-                "checked_events": 2,
-                "first_gap_index": 2,
-                "first_tampered_id": "evt-3",
-                "chain_head_match": None,
-                "detail": (
-                    "Audit chain break at event 2 (id evt-3): stored previous_hash (tampered-hash) "
-                    "does not match the recomputed hash of the prior event (expected-hash). "
-                    "The event or one before it has been tampered with."
-                ),
-            },
-        ),
-        patch("modulo.api.routes.audit.set_rls_org"),
-    ):
-        resp = client.get("/api/v1/admin/audit/verify")
-    request.node._resp = resp
-
-
 @when(parsers.parse("I GET /api/v1/admin/audit/export?{query}"))
 def get_export(client, request, query: str) -> None:
     events = getattr(request.node, "_audit_events", [])

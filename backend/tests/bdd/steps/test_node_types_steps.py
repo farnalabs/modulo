@@ -53,6 +53,13 @@ def run_reaches_node(node_id: str, ctx, client, request):
     request.node._run_paused = False
 
 
+@when(parsers.parse('the run reaches the "{node_id}" gate'))
+def run_reaches_gate(node_id: str, ctx, client, request):
+    ctx["reached_node_id"] = node_id
+    ctx["run_status"] = "waiting_for_approval"
+    request.node._run_paused = True
+
+
 @when("human output is provided")
 def human_output_provided(ctx, client, request):
     ctx["human_output"] = {"review_notes": "Looks good", "approved": True}

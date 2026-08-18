@@ -23,6 +23,7 @@ def _make_mock_schema(name: str = "meeting-notes", description: str | None = Non
     s.description = description
     s.abstract_name = None
     s.account_id = _USER_ID
+    s.folder_id = None
     s.created_at = _NOW
     s.updated_at = _NOW
     s.deprecated = False

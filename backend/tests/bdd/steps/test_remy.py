@@ -3,6 +3,7 @@
 import asyncio
 import json
 import uuid
+from datetime import datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -14,15 +15,20 @@ from tests.bdd.conftest import ORG_ID, USER_ID, make_settings
 # ── Lazy-import helper — avoids MCP/server startup at module-import time ──
 
 
-def _make_client():
+def _make_client(mock_session: Any = None):
     from fastapi.testclient import TestClient
 
+    from modulo.api.dependencies import get_db_session
     from modulo.api.main import app
     from modulo.settings import get_settings
 
-    client = TestClient(app)
+    async def _override_session():
+        yield mock_session
+
     app.dependency_overrides[get_settings] = make_settings
-    return client
+    if mock_session is not None:
+        app.dependency_overrides[get_db_session] = _override_session
+    return TestClient(app)
 
 
 # ── Load scenarios from feature files ──────────────────────────────────
@@ -38,7 +44,7 @@ try:
 except (FileNotFoundError, OSError):
     pass
 
-_NOW = "2025-06-01T12:00:00+00:00"
+_NOW = datetime.fromisoformat("2025-06-01T12:00:00+00:00")
 
 
 # ── Fixtures ────────────────────────────────────────────────────────────
@@ -114,11 +120,11 @@ def _make_mock_skill(**overrides: Any) -> MagicMock:
 def have_two_sessions(ctx) -> None:
     ctx["sessions"]["session-1"] = _make_mock_session(
         name="First Chat",
-        updated_at="2025-06-01T12:00:00+00:00",
+        updated_at=datetime.fromisoformat("2025-06-01T12:00:00+00:00"),
     )
     ctx["sessions"]["session-2"] = _make_mock_session(
         name="Second Chat",
-        updated_at="2025-06-02T12:00:00+00:00",
+        updated_at=datetime.fromisoformat("2025-06-02T12:00:00+00:00"),
     )
     ctx["session_counter"] = 2
 
@@ -293,31 +299,26 @@ def list_remy_sessions(request, ctx) -> None:
     mock_exec.scalars = MagicMock(return_value=mock_scalars)
     mock_exec.scalar = MagicMock(return_value=total)
 
-    def _count_side_effect(*_a: Any, **_kw: Any) -> MagicMock:
-        mc = MagicMock()
-        mc.scalar = MagicMock(return_value=0)
-        return mc
+    list_result = MagicMock()
+    list_result.scalars = MagicMock(return_value=mock_scalars)
+
+    count_result = MagicMock()
+    count_result.__iter__ = MagicMock(return_value=iter([]))
 
     with (
         patch("modulo.api.routes.remy.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.remy.get_db_session") as mock_get_db,
     ):
         mock_session_inst = AsyncMock()
-        mock_session_inst.execute = AsyncMock(return_value=mock_exec)
         mock_session_inst.begin = MagicMock()
         begin_cm = MagicMock()
         begin_cm.__aenter__ = AsyncMock(return_value=None)
         begin_cm.__aexit__ = AsyncMock(return_value=False)
         mock_session_inst.begin.return_value = begin_cm
 
-        # Need a second execute call for message counts
-        messages_result = MagicMock()
-        messages_result.scalar = MagicMock(return_value=0)
-        mock_session_inst.execute = AsyncMock(side_effect=[mock_exec, messages_result])
+        # Route executes: total_q (scalar), list q (scalars().all()), count_q (rows)
+        mock_session_inst.execute = AsyncMock(side_effect=[mock_exec, list_result, count_result])
 
-        mock_get_db.return_value = mock_session_inst
-
-        client = _make_client()
+        client = _make_client(mock_session_inst)
         resp = client.get("/api/v1/remy/sessions")
         request.node._resp = resp
 
@@ -333,7 +334,6 @@ def get_remy_session(request, ctx) -> None:
 
     with (
         patch("modulo.api.routes.remy.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.remy.get_db_session") as mock_get_db,
     ):
         mock_session_inst = AsyncMock()
         mock_session_inst.begin = MagicMock()
@@ -343,9 +343,8 @@ def get_remy_session(request, ctx) -> None:
         mock_session_inst.begin.return_value = begin_cm
         mock_session_inst.get = AsyncMock(return_value=ses)
         mock_session_inst.execute = AsyncMock(return_value=mock_exec)
-        mock_get_db.return_value = mock_session_inst
 
-        client = _make_client()
+        client = _make_client(mock_session_inst)
         resp = client.get(f"/api/v1/remy/sessions/{ses.id}")
         request.node._resp = resp
 
@@ -354,7 +353,6 @@ def get_remy_session(request, ctx) -> None:
 def get_remy_session_by_id(session_id: str, request, ctx) -> None:
     with (
         patch("modulo.api.routes.remy.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.remy.get_db_session") as mock_get_db,
     ):
         mock_session_inst = AsyncMock()
         mock_session_inst.begin = MagicMock()
@@ -363,9 +361,8 @@ def get_remy_session_by_id(session_id: str, request, ctx) -> None:
         begin_cm.__aexit__ = AsyncMock(return_value=False)
         mock_session_inst.begin.return_value = begin_cm
         mock_session_inst.get = AsyncMock(return_value=None)
-        mock_get_db.return_value = mock_session_inst
 
-        client = _make_client()
+        client = _make_client(mock_session_inst)
         resp = client.get(f"/api/v1/remy/sessions/{session_id}")
         request.node._resp = resp
 
@@ -376,7 +373,6 @@ def rename_remy_session(request, ctx) -> None:
 
     with (
         patch("modulo.api.routes.remy.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.remy.get_db_session") as mock_get_db,
     ):
         mock_session_inst = AsyncMock()
         mock_session_inst.begin = MagicMock()
@@ -385,9 +381,8 @@ def rename_remy_session(request, ctx) -> None:
         begin_cm.__aexit__ = AsyncMock(return_value=False)
         mock_session_inst.begin.return_value = begin_cm
         mock_session_inst.get = AsyncMock(return_value=ses)
-        mock_get_db.return_value = mock_session_inst
 
-        client = _make_client()
+        client = _make_client(mock_session_inst)
         resp = client.patch(f"/api/v1/remy/sessions/{ses.id}", json={"name": "My renamed chat"})
         request.node._resp = resp
 
@@ -398,7 +393,6 @@ def delete_remy_session(request, ctx) -> None:
 
     with (
         patch("modulo.api.routes.remy.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.remy.get_db_session") as mock_get_db,
     ):
         mock_session_inst = AsyncMock()
         mock_session_inst.begin = MagicMock()
@@ -407,9 +401,8 @@ def delete_remy_session(request, ctx) -> None:
         begin_cm.__aexit__ = AsyncMock(return_value=False)
         mock_session_inst.begin.return_value = begin_cm
         mock_session_inst.get = AsyncMock(return_value=ses)
-        mock_get_db.return_value = mock_session_inst
 
-        client = _make_client()
+        client = _make_client(mock_session_inst)
         resp = client.delete(f"/api/v1/remy/sessions/{ses.id}")
         request.node._resp = resp
 
@@ -420,7 +413,6 @@ def get_other_users_session(request, ctx) -> None:
 
     with (
         patch("modulo.api.routes.remy.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.remy.get_db_session") as mock_get_db,
     ):
         mock_session_inst = AsyncMock()
         mock_session_inst.begin = MagicMock()
@@ -429,9 +421,8 @@ def get_other_users_session(request, ctx) -> None:
         begin_cm.__aexit__ = AsyncMock(return_value=False)
         mock_session_inst.begin.return_value = begin_cm
         mock_session_inst.get = AsyncMock(return_value=other_user_ses)
-        mock_get_db.return_value = mock_session_inst
 
-        client = _make_client()
+        client = _make_client(mock_session_inst)
         resp = client.get(f"/api/v1/remy/sessions/{other_user_ses.id}")
         request.node._resp = resp
 
@@ -440,6 +431,7 @@ def get_other_users_session(request, ctx) -> None:
 
 
 @when(parsers.parse('I append a "{role}" message with content "{content}"'))
+@when(parsers.parse("I append a \"{role}\" message with content '{content}'"))
 @when(parsers.parse('I append a message with role "{role}"'))
 def append_message(role: str, request, ctx, content: str = "Hello") -> None:
     ses = ctx.get("sessions", {}).get("session-1")
@@ -449,7 +441,6 @@ def append_message(role: str, request, ctx, content: str = "Hello") -> None:
 
     with (
         patch("modulo.api.routes.remy.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.remy.get_db_session") as mock_get_db,
     ):
         mock_session_inst = AsyncMock()
         mock_session_inst.begin = MagicMock()
@@ -458,9 +449,8 @@ def append_message(role: str, request, ctx, content: str = "Hello") -> None:
         begin_cm.__aexit__ = AsyncMock(return_value=False)
         mock_session_inst.begin.return_value = begin_cm
         mock_session_inst.get = AsyncMock(return_value=ses)
-        mock_get_db.return_value = mock_session_inst
 
-        client = _make_client()
+        client = _make_client(mock_session_inst)
 
         resp = client.post(
             f"/api/v1/remy/sessions/{ses.id}/messages",
@@ -476,7 +466,6 @@ def append_message_with_parent(role: str, content: str, request, ctx) -> None:
 
     with (
         patch("modulo.api.routes.remy.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.remy.get_db_session") as mock_get_db,
     ):
         mock_session_inst = AsyncMock()
         mock_session_inst.begin = MagicMock()
@@ -485,9 +474,8 @@ def append_message_with_parent(role: str, content: str, request, ctx) -> None:
         begin_cm.__aexit__ = AsyncMock(return_value=False)
         mock_session_inst.begin.return_value = begin_cm
         mock_session_inst.get = AsyncMock(return_value=ses)
-        mock_get_db.return_value = mock_session_inst
 
-        client = _make_client()
+        client = _make_client(mock_session_inst)
         resp = client.post(
             f"/api/v1/remy/sessions/{ses.id}/messages",
             json={"role": role, "content": content, "parent_id": str(parent_id)},
@@ -499,7 +487,6 @@ def append_message_with_parent(role: str, content: str, request, ctx) -> None:
 def append_message_to_session_id(role: str, session_id: str, request, ctx) -> None:
     with (
         patch("modulo.api.routes.remy.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.remy.get_db_session") as mock_get_db,
     ):
         mock_session_inst = AsyncMock()
         mock_session_inst.begin = MagicMock()
@@ -508,9 +495,8 @@ def append_message_to_session_id(role: str, session_id: str, request, ctx) -> No
         begin_cm.__aexit__ = AsyncMock(return_value=False)
         mock_session_inst.begin.return_value = begin_cm
         mock_session_inst.get = AsyncMock(return_value=None)
-        mock_get_db.return_value = mock_session_inst
 
-        client = _make_client()
+        client = _make_client(mock_session_inst)
         resp = client.post(
             f"/api/v1/remy/sessions/{session_id}/messages",
             json={"role": role, "content": "Hello"},
@@ -535,7 +521,6 @@ def list_messages_for_session(request, ctx) -> None:
 
     with (
         patch("modulo.api.routes.remy.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.remy.get_db_session") as mock_get_db,
     ):
         mock_session_inst = AsyncMock()
         mock_session_inst.begin = MagicMock()
@@ -545,9 +530,8 @@ def list_messages_for_session(request, ctx) -> None:
         mock_session_inst.begin.return_value = begin_cm
         mock_session_inst.get = AsyncMock(return_value=ses)
         mock_session_inst.execute = AsyncMock(return_value=mock_exec)
-        mock_get_db.return_value = mock_session_inst
 
-        client = _make_client()
+        client = _make_client(mock_session_inst)
         resp = client.get(f"/api/v1/remy/sessions/{ses.id}/messages")
         request.node._resp = resp
 
@@ -556,7 +540,6 @@ def list_messages_for_session(request, ctx) -> None:
 def list_messages_for_session_id(session_id: str, request, ctx) -> None:
     with (
         patch("modulo.api.routes.remy.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.remy.get_db_session") as mock_get_db,
     ):
         mock_session_inst = AsyncMock()
         mock_session_inst.begin = MagicMock()
@@ -565,9 +548,8 @@ def list_messages_for_session_id(session_id: str, request, ctx) -> None:
         begin_cm.__aexit__ = AsyncMock(return_value=False)
         mock_session_inst.begin.return_value = begin_cm
         mock_session_inst.get = AsyncMock(return_value=None)
-        mock_get_db.return_value = mock_session_inst
 
-        client = _make_client()
+        client = _make_client(mock_session_inst)
         resp = client.get(f"/api/v1/remy/sessions/{session_id}/messages")
         request.node._resp = resp
 
@@ -581,7 +563,6 @@ def append_message_with_tool_calls(request, ctx) -> None:
 
     with (
         patch("modulo.api.routes.remy.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.remy.get_db_session") as mock_get_db,
     ):
         mock_session_inst = AsyncMock()
         mock_session_inst.begin = MagicMock()
@@ -590,9 +571,8 @@ def append_message_with_tool_calls(request, ctx) -> None:
         begin_cm.__aexit__ = AsyncMock(return_value=False)
         mock_session_inst.begin.return_value = begin_cm
         mock_session_inst.get = AsyncMock(return_value=ses)
-        mock_get_db.return_value = mock_session_inst
 
-        client = _make_client()
+        client = _make_client(mock_session_inst)
         resp = client.post(
             f"/api/v1/remy/sessions/{ses.id}/messages",
             json={
@@ -613,7 +593,6 @@ def get_admin_remy_config(request, ctx) -> None:
 
     with (
         patch("modulo.api.routes.admin_remy.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.admin_remy.get_db_session") as mock_get_db,
     ):
         mock_session_inst = AsyncMock()
         mock_session_inst.begin = MagicMock()
@@ -632,7 +611,6 @@ def get_admin_remy_config(request, ctx) -> None:
             mock_exec.scalar_one_or_none = MagicMock(return_value=None)
 
         mock_session_inst.execute = AsyncMock(return_value=mock_exec)
-        mock_get_db.return_value = mock_session_inst
 
         from modulo.api.main import app
         from modulo.auth.dependencies import get_current_user
@@ -649,7 +627,7 @@ def get_admin_remy_config(request, ctx) -> None:
         else:
             app.dependency_overrides.pop(get_current_user, None)
 
-        client = _make_client()
+        client = _make_client(mock_session_inst)
         resp = client.get("/api/v1/admin/remy/config")
         request.node._resp = resp
 
@@ -701,7 +679,6 @@ def _update_remy_config(request: Any, ctx: dict, updates: dict) -> None:
 
     with (
         patch("modulo.api.routes.admin_remy.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.admin_remy.get_db_session") as mock_get_db,
     ):
         mock_session_inst = AsyncMock()
         mock_session_inst.begin = MagicMock()
@@ -715,7 +692,6 @@ def _update_remy_config(request: Any, ctx: dict, updates: dict) -> None:
         mock_exec = MagicMock()
         mock_exec.scalar_one_or_none = MagicMock(return_value=entry)
         mock_session_inst.execute = AsyncMock(return_value=mock_exec)
-        mock_get_db.return_value = mock_session_inst
 
         from modulo.api.main import app
         from modulo.auth.dependencies import get_current_user
@@ -727,7 +703,7 @@ def _update_remy_config(request: Any, ctx: dict, updates: dict) -> None:
             account_id=USER_ID,
             org_role="admin",
         )
-        client = _make_client()
+        client = _make_client(mock_session_inst)
         resp = client.put("/api/v1/admin/remy/config", json=updates)
         request.node._resp = resp
 
@@ -749,7 +725,6 @@ def create_skill(name: str, body: str, request, ctx) -> None:
 
     with (
         patch("modulo.api.routes.admin_remy.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.admin_remy.get_db_session") as mock_get_db,
     ):
         mock_session_inst = AsyncMock()
         mock_session_inst.begin = MagicMock()
@@ -757,9 +732,8 @@ def create_skill(name: str, body: str, request, ctx) -> None:
         begin_cm.__aenter__ = AsyncMock(return_value=None)
         begin_cm.__aexit__ = AsyncMock(return_value=False)
         mock_session_inst.begin.return_value = begin_cm
-        mock_get_db.return_value = mock_session_inst
 
-        client = _make_client()
+        client = _make_client(mock_session_inst)
         resp = client.post(
             "/api/v1/admin/remy/skills",
             json={"name": name, "body": body},
@@ -770,14 +744,11 @@ def create_skill(name: str, body: str, request, ctx) -> None:
 @when("I list org skills")
 def list_org_skills(request, ctx) -> None:
     skills = list(ctx.get("org_skills", {}).values())
-    mock_scalars = MagicMock()
-    mock_scalars.all = MagicMock(return_value=skills)
     mock_exec = MagicMock()
-    mock_exec.scalars = MagicMock(return_value=mock_scalars)
+    mock_exec.scalars = MagicMock(return_value=skills)
 
     with (
         patch("modulo.api.routes.admin_remy.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.admin_remy.get_db_session") as mock_get_db,
     ):
         mock_session_inst = AsyncMock()
         mock_session_inst.begin = MagicMock()
@@ -786,9 +757,8 @@ def list_org_skills(request, ctx) -> None:
         begin_cm.__aexit__ = AsyncMock(return_value=False)
         mock_session_inst.begin.return_value = begin_cm
         mock_session_inst.execute = AsyncMock(return_value=mock_exec)
-        mock_get_db.return_value = mock_session_inst
 
-        client = _make_client()
+        client = _make_client(mock_session_inst)
         resp = client.get("/api/v1/admin/remy/skills")
         request.node._resp = resp
 
@@ -799,7 +769,6 @@ def update_org_skill(request, ctx) -> None:
 
     with (
         patch("modulo.api.routes.admin_remy.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.admin_remy.get_db_session") as mock_get_db,
     ):
         mock_session_inst = AsyncMock()
         mock_session_inst.begin = MagicMock()
@@ -808,9 +777,8 @@ def update_org_skill(request, ctx) -> None:
         begin_cm.__aexit__ = AsyncMock(return_value=False)
         mock_session_inst.begin.return_value = begin_cm
         mock_session_inst.get = AsyncMock(return_value=skill)
-        mock_get_db.return_value = mock_session_inst
 
-        client = _make_client()
+        client = _make_client(mock_session_inst)
         resp = client.put(f"/api/v1/admin/remy/skills/{skill.id}", json={"name": "code-review-v2"})
         request.node._resp = resp
 
@@ -821,7 +789,6 @@ def delete_org_skill(request, ctx) -> None:
 
     with (
         patch("modulo.api.routes.admin_remy.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.admin_remy.get_db_session") as mock_get_db,
     ):
         mock_session_inst = AsyncMock()
         mock_session_inst.begin = MagicMock()
@@ -830,9 +797,8 @@ def delete_org_skill(request, ctx) -> None:
         begin_cm.__aexit__ = AsyncMock(return_value=False)
         mock_session_inst.begin.return_value = begin_cm
         mock_session_inst.get = AsyncMock(return_value=skill)
-        mock_get_db.return_value = mock_session_inst
 
-        client = _make_client()
+        client = _make_client(mock_session_inst)
         resp = client.delete(f"/api/v1/admin/remy/skills/{skill.id}")
         request.node._resp = resp
 
@@ -847,7 +813,6 @@ def list_user_skills(request, ctx) -> None:
 
     with (
         patch("modulo.api.routes.me.get_user_skills", new_callable=AsyncMock, return_value=skills),
-        patch("modulo.api.routes.me.get_db_session") as mock_get_db,
     ):
         mock_session_inst = AsyncMock()
         mock_session_inst.begin = MagicMock()
@@ -855,9 +820,8 @@ def list_user_skills(request, ctx) -> None:
         begin_cm.__aenter__ = AsyncMock(return_value=None)
         begin_cm.__aexit__ = AsyncMock(return_value=False)
         mock_session_inst.begin.return_value = begin_cm
-        mock_get_db.return_value = mock_session_inst
 
-        client = _make_client()
+        client = _make_client(mock_session_inst)
         resp = client.get("/api/v1/me/remy/skills")
         request.node._resp = resp
 
@@ -866,7 +830,6 @@ def list_user_skills(request, ctx) -> None:
 def update_org_skill_by_id(skill_id: str, name: str, request, ctx) -> None:
     with (
         patch("modulo.api.routes.admin_remy.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.admin_remy.get_db_session") as mock_get_db,
     ):
         mock_session_inst = AsyncMock()
         mock_session_inst.begin = MagicMock()
@@ -875,9 +838,8 @@ def update_org_skill_by_id(skill_id: str, name: str, request, ctx) -> None:
         begin_cm.__aexit__ = AsyncMock(return_value=False)
         mock_session_inst.begin.return_value = begin_cm
         mock_session_inst.get = AsyncMock(return_value=None)
-        mock_get_db.return_value = mock_session_inst
 
-        client = _make_client()
+        client = _make_client(mock_session_inst)
         resp = client.put(f"/api/v1/admin/remy/skills/{skill_id}", json={"name": name})
         request.node._resp = resp
 
@@ -886,7 +848,6 @@ def update_org_skill_by_id(skill_id: str, name: str, request, ctx) -> None:
 def delete_org_skill_by_id(skill_id: str, request, ctx) -> None:
     with (
         patch("modulo.api.routes.admin_remy.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.admin_remy.get_db_session") as mock_get_db,
     ):
         mock_session_inst = AsyncMock()
         mock_session_inst.begin = MagicMock()
@@ -895,9 +856,8 @@ def delete_org_skill_by_id(skill_id: str, request, ctx) -> None:
         begin_cm.__aexit__ = AsyncMock(return_value=False)
         mock_session_inst.begin.return_value = begin_cm
         mock_session_inst.get = AsyncMock(return_value=None)
-        mock_get_db.return_value = mock_session_inst
 
-        client = _make_client()
+        client = _make_client(mock_session_inst)
         resp = client.delete(f"/api/v1/admin/remy/skills/{skill_id}")
         request.node._resp = resp
 
@@ -908,23 +868,25 @@ def delete_org_skill_by_id(skill_id: str, request, ctx) -> None:
 @when("I check remy access")
 def check_remy_access(request, ctx) -> None:
     config = ctx.get("config", {})
+    viewer_auth = getattr(request.node, "_viewer_auth", False)
+    role = "viewer" if viewer_auth else "admin"
 
-    has_access = True
     config_access = config.get("access_list", {})
+    user_ids = config_access.get("user_ids", [])
+    org_roles = config_access.get("org_roles", [])
+    team_ids = config_access.get("team_ids", [])
+    user_teams = set(ctx.get("team_ids", []))
 
-    if config_access.get("org_roles") == [] and config_access.get("user_ids") == []:
-        # Access list is restrictive, not open
-        has_access = False
+    if config_access:
+        has_access = str(USER_ID) in user_ids or role in org_roles or bool(user_teams & set(team_ids))
+    else:
+        has_access = True
 
-    response_data = {
-        "granted": has_access,
-    }
+    response_data = {"granted": has_access}
 
     if ctx.get("no_backends"):
-        response_data = {
-            "granted": False,
-            "error": "No API key configured",
-        }
+        has_access = False
+        response_data = {"granted": False, "error": "No API key configured"}
 
     resp = MagicMock()
     resp.status_code = 200 if has_access else 403
@@ -1188,6 +1150,7 @@ def skill_response_is_active(request) -> None:
     assert data.get("active") is True
 
 
+@then(parsers.parse("the response contains {count:d} skill"))
 @then(parsers.parse("the response contains {count:d} skills"))
 def response_has_n_skills(count: int, request) -> None:
     data = request.node._resp.json()
@@ -1305,9 +1268,13 @@ def permission_mode_is_safe(ctx) -> None:
 # ── When steps (UI Commands) ──────────────────────────────────────────
 
 
+@when(parsers.parse('the LLM emits an "{tool_name}" tool call with path "{path}"'))
 @when(parsers.parse('the LLM emits a "{tool_name}" tool call with path "{path}"'))
+@when(parsers.parse('the LLM emits an "{tool_name}" tool call with selector "{selector}"'))
 @when(parsers.parse('the LLM emits a "{tool_name}" tool call with selector "{selector}"'))
+@when(parsers.parse('the LLM emits an "{tool_name}" tool call with selector "{selector}" and value "{value}"'))
 @when(parsers.parse('the LLM emits a "{tool_name}" tool call with selector "{selector}" and value "{value}"'))
+@when(parsers.parse('the LLM emits an "{tool_name}" tool call'))
 @when(parsers.parse('the LLM emits a "{tool_name}" tool call'))
 def llm_emits_tool_call(tool_name: str, request, ctx, selector: str = "", value: str = "", path: str = "") -> None:
     ses = ctx.get("sessions", {}).get("ui-session")
@@ -1323,7 +1290,6 @@ def llm_emits_tool_call(tool_name: str, request, ctx, selector: str = "", value:
 
     with (
         patch("modulo.api.routes.remy.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.remy.get_db_session") as mock_get_db,
     ):
         mock_session_inst = AsyncMock()
         mock_session_inst.begin = MagicMock()
@@ -1331,7 +1297,6 @@ def llm_emits_tool_call(tool_name: str, request, ctx, selector: str = "", value:
         begin_cm.__aenter__ = AsyncMock(return_value=None)
         begin_cm.__aexit__ = AsyncMock(return_value=False)
         mock_session_inst.begin.return_value = begin_cm
-        mock_get_db.return_value = mock_session_inst
 
         from modulo.api.main import app
 
@@ -1398,7 +1363,6 @@ def user_approves_action(request, ctx) -> None:
 
     with (
         patch("modulo.api.routes.remy.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.remy.get_db_session") as mock_get_db,
     ):
         mock_session_inst = AsyncMock()
         mock_session_inst.begin = MagicMock()
@@ -1410,9 +1374,8 @@ def user_approves_action(request, ctx) -> None:
         mock_chat_session.id = ses.id
         mock_chat_session.user_id = USER_ID
         mock_session_inst.get = AsyncMock(return_value=mock_chat_session)
-        mock_get_db.return_value = mock_session_inst
 
-        client = _make_client()
+        client = _make_client(mock_session_inst)
 
         resp = client.post(
             f"/api/v1/remy/sessions/{ses.id}/permission-response",
