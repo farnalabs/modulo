@@ -872,7 +872,7 @@ async def test_egress_selected_maps_to_no_internet_and_allowlist_metadata():
     assert json.loads(kwargs["metadata"]["egress_allowlist"]) == allowlist
 
 
-async def test_egress_selected_without_allowlist_rejected_at_save_time():
+def test_egress_selected_without_allowlist_rejected_at_save_time():
     """selected WITHOUT an allowlist is rejected at save-time by the Pydantic
     model (fail-closed) — an allowlist control must never silently no-op."""
     node = _script_node_def(egress_policy="selected")
