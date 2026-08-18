@@ -148,6 +148,10 @@ def make_mock_run(**kwargs: Any) -> MagicMock:
     r.total_cost_usd = kwargs.get("total_cost_usd")
     r.node_token_usage = kwargs.get("node_token_usage")
     r.pipeline = kwargs.get("pipeline")
+    r.trigger_id = kwargs.get("trigger_id")
+    r.account_id = kwargs.get("account_id")
+    r.heartbeat_at = kwargs.get("heartbeat_at")
+    r.work_item_refs = kwargs.get("work_item_refs")
     return r
 
 
