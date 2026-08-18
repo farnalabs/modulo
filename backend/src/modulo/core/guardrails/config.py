@@ -232,6 +232,35 @@ def dump_config_set(config_set: GuardrailConfigSet) -> str:
     )
 
 
+# Mask used for the non-admin guardrail config read (FAR-309 PR A): the actual
+# regex patterns / JSON schemas / redaction field paths are safety-control
+# internals a viewer must not see. The elevated (admin) read returns them
+# unmasked.
+REDACTED_MASK = "********"
+
+
+def mask_config_set(config_set: GuardrailConfigSet) -> GuardrailConfigSet:
+    """Return a structural copy of *config_set* with sensitive values masked.
+
+    Preserves the full topology (ids, names, actions, detection types, knobs)
+    so a non-admin viewer can still see which guardrails exist and what they
+    do, but replaces the deny-rule internals — the regex ``pattern``, the
+    JSON ``schema``, and every ``redaction[].path`` — with the redaction mask.
+    Used by the standard (non-admin) ``GET /guardrails/config`` read; the
+    elevated admin read returns the unmasked set.
+    """
+    masked_items: list[GuardrailConfigItem] = []
+    for item in config_set.guardrails:
+        detection = item.detection.model_copy(deep=True)
+        if detection.type == "regex":
+            detection.pattern = REDACTED_MASK
+        else:
+            detection.schema_data = {"redacted": True} if detection.schema_data else None
+        redaction = [rule.model_copy(update={"path": REDACTED_MASK}) for rule in item.redaction]
+        masked_items.append(item.model_copy(update={"detection": detection, "redaction": redaction}))
+    return config_set.model_copy(update={"guardrails": masked_items})
+
+
 # ---------------------------------------------------------------------------
 # Validation (reuses the engine's guardrail rules)
 # ---------------------------------------------------------------------------
@@ -561,6 +590,7 @@ def utc_now_iso() -> str:
 
 
 __all__ = [
+    "REDACTED_MASK",
     "ConfigChange",
     "GuardrailConfigError",
     "GuardrailConfigItem",
@@ -577,6 +607,7 @@ __all__ = [
     "hash_config_set",
     "hash_guardrail_item",
     "load_config_set",
+    "mask_config_set",
     "to_eval_config",
     "utc_now_iso",
     "validate_config_set",

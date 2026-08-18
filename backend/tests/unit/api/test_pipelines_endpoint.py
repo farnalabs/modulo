@@ -11,6 +11,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException, status
 from fastapi.testclient import TestClient
+from sqlalchemy.sql import Select
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -108,6 +109,51 @@ def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     yield TestClient(app)
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def operator_client() -> Generator[TestClient, None, None]:
+    """Authenticated as a NON-ADMIN operator — used for the FAR-309 PR A
+    mutation-time guardrail-strip enforcement (non-admins cannot strip a
+    guardrail binding from a node)."""
+    mock_session = _make_operator_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="operator@test",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="operator",
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+def _make_operator_mock_session() -> AsyncMock:
+    """Non-admin session: the team-scope dependency (require_team_membership_or_admin)
+    runs a ``FROM pipelines`` SELECT for a non-admin caller — stub it to a
+    org-visible pipeline (owner_team_id None → membership not required) so the
+    graph-save route under test actually reaches the handler."""
+    session = _make_mock_session()
+    base_effect = session.execute.side_effect
+
+    async def _execute(stmt: object, *args: Any, **kwargs: Any) -> Any:
+        if isinstance(stmt, Select) and "FROM pipelines" in str(stmt):
+            row = MagicMock()
+            row.first.return_value = (None, "org")
+            return row
+        return base_effect(stmt, *args, **kwargs)
+
+    session.execute = AsyncMock(side_effect=_execute)
+    return session
 
 
 # ---------------------------------------------------------------------------
@@ -667,6 +713,151 @@ def test_replace_pipeline_graph_blocks_redact_correct_422(client: TestClient) ->
 
     assert resp.status_code == 422
     assert "exfiltration channel" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# FAR-309 PR A — mutation-time guardrail-binding strip enforcement
+# ---------------------------------------------------------------------------
+
+
+def _guardrail_row(node_id: uuid.UUID) -> SimpleNamespace:
+    """A node-bound guardrail eval row (``node_id`` set, org-level rows are
+    ``node_id=None``)."""
+    return SimpleNamespace(
+        id=uuid.uuid4(),
+        node_id=node_id,
+        name="no-aws-keys",
+        eval_type="guardrail",
+    )
+
+
+def test_nonadmin_cannot_strip_guardrail_binding(operator_client: TestClient) -> None:
+    """FAR-309 PR A prove-the-fix: a NON-ADMIN (operator) saving a graph that
+    REMOVES a node carrying a bound guardrail is denied 403. Without the route
+    enforcement this save would succeed (200) — the guardrail-bound node would
+    silently drop its binding."""
+    bound_node_id = uuid.uuid4()
+    kept_node_id = uuid.uuid4()
+    nodes = [{"id": str(kept_node_id), "agent_id": str(uuid.uuid4()), "position": {"x": 0, "y": 0}}]
+    edges = []
+
+    with (
+        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, edges)),
+        patch("modulo.api.routes.pipelines.GraphValidator.validate_definition", return_value=MagicMock(issues=[])),
+        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch(
+            "modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows",
+            return_value=[_guardrail_row(bound_node_id)],
+        ),
+    ):
+        resp = operator_client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+            json={"nodes": nodes, "edges": edges},
+        )
+
+    assert resp.status_code == 403
+    assert "strip a guardrail binding" in resp.json()["detail"]
+    assert str(bound_node_id) in resp.json()["detail"]
+
+
+def test_admin_can_strip_guardrail_binding(client: TestClient) -> None:
+    """FAR-309 PR A: an ADMIN may remove a guardrail-bound node from the graph
+    (admin owns guardrail management via ``guardrail.manage``)."""
+    bound_node_id = uuid.uuid4()
+    kept_node_id = uuid.uuid4()
+    nodes = [{"id": str(kept_node_id), "agent_id": str(uuid.uuid4()), "position": {"x": 0, "y": 0}}]
+    edges = []
+
+    with (
+        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, edges)),
+        patch("modulo.api.routes.pipelines.GraphValidator.validate_definition", return_value=MagicMock(issues=[])),
+        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch(
+            "modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows",
+            return_value=[_guardrail_row(bound_node_id)],
+        ),
+    ):
+        resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+            json={"nodes": nodes, "edges": edges},
+        )
+
+    assert resp.status_code == 200
+
+
+def test_nonadmin_unrelated_graph_changes_allowed(operator_client: TestClient) -> None:
+    """FAR-309 PR A field-level scope: a NON-ADMIN making unrelated graph
+    changes (edge rewiring, editing other nodes) while KEEPING the
+    guardrail-bound node is allowed — only guardrail-binding removal is
+    protected."""
+    bound_node_id = uuid.uuid4()
+    kept_node_id = uuid.uuid4()
+    nodes = [
+        {"id": str(bound_node_id), "agent_id": str(uuid.uuid4()), "position": {"x": 0, "y": 0}},
+        {"id": str(kept_node_id), "agent_id": str(uuid.uuid4()), "position": {"x": 10, "y": 0}},
+    ]
+    edges = [
+        {
+            "source_node_id": str(bound_node_id),
+            "target_node_id": str(kept_node_id),
+            "edge_type": "normal",
+        }
+    ]
+
+    with (
+        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, edges)),
+        patch("modulo.api.routes.pipelines.GraphValidator.validate_definition", return_value=MagicMock(issues=[])),
+        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch(
+            "modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows",
+            return_value=[_guardrail_row(bound_node_id)],
+        ),
+    ):
+        resp = operator_client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+            json={"nodes": nodes, "edges": edges},
+        )
+
+    assert resp.status_code == 200
+
+
+def test_nonadmin_removing_unbound_node_allowed(operator_client: TestClient) -> None:
+    """FAR-309 PR A field-level scope: removing a node with NO bound guardrail
+    is an ordinary graph change — a non-admin may do it. The enforcement
+    protects only guardrail-bound nodes."""
+    kept_node_id = uuid.uuid4()
+    nodes = [{"id": str(kept_node_id), "agent_id": str(uuid.uuid4()), "position": {"x": 0, "y": 0}}]
+    edges = []
+
+    with (
+        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, edges)),
+        patch("modulo.api.routes.pipelines.GraphValidator.validate_definition", return_value=MagicMock(issues=[])),
+        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        # A guardrail bound to a DIFFERENT node (kept in the graph) — the removed
+        # node has none, so removal is allowed.
+        patch(
+            "modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows",
+            return_value=[_guardrail_row(kept_node_id)],
+        ),
+    ):
+        resp = operator_client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+            json={"nodes": nodes, "edges": edges},
+        )
+
+    assert resp.status_code == 200
 
 
 def test_replace_pipeline_graph_rejects_excessive_node_count(client: TestClient) -> None:
