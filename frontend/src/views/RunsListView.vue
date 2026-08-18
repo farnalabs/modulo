@@ -212,9 +212,9 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { DataTable } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
-import { runStatusBadgeClass, formatRunDate } from '../utils/runUtils'
+import { runStatusBadgeClass, formatRunDate, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge } from '../utils/runUtils'
 import { RUN_STATUS, TRIGGER_TYPE } from '../constants/filters'
-import { isNonTerminalStatus, isTerminalStatus } from '../constants/runStatuses'
+import { isNonTerminalStatus } from '../constants/runStatuses'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
 
@@ -453,21 +453,15 @@ function inputPayloadText(payload: Record<string, unknown> | null | undefined): 
 }
 
 function heartbeatAgeFor(run: RunListItem, nowMs: number): number | null {
-  if (!run.heartbeat_at) return null
-  if (isTerminalStatus(run.status)) return null
-  const t = new Date(run.heartbeat_at).getTime()
-  if (isNaN(t)) return null
-  return Math.max(0, Math.floor((nowMs - t) / 1000))
+  return heartbeatAgeSeconds(run.heartbeat_at, run.status, nowMs)
 }
 
 function isListHeartbeatStale(run: RunListItem): boolean {
-  const age = heartbeatAgeFor(run, now.value)
-  return age != null && age > 60
+  return isHeartbeatStale(heartbeatAgeFor(run, now.value))
 }
 
 function formatHeartbeat(age: number | null): string {
-  if (age == null) return '—'
-  return t('views.RunsListView.ago', { s: age })
+  return formatHeartbeatAge(age, t, 'views.RunsListView.ago')
 }
 
 </script>

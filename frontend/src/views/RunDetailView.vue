@@ -126,10 +126,10 @@
         <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.created') }}</span> {{ runTimestamps.created }}</div>
         <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.started') }}</span> {{ runTimestamps.started }}</div>
         <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.completed') }}</span> {{ runTimestamps.completed }}</div>
-        <div data-testid="run-detail-trigger-actor"><span class="font-medium text-foreground">{{ $t('views.RunDetailView.triggered_by') }}</span> {{ run.trigger_actor || run.trigger_type || '—' }}</div>
+        <div data-testid="run-detail-trigger-actor"><span class="font-medium text-foreground">{{ $t('views.RunDetailView.triggered_by') }}</span> {{ run.trigger_actor || '—' }}</div>
         <div data-testid="run-detail-heartbeat">
           <span class="font-medium text-foreground">{{ $t('views.RunDetailView.last_heartbeat') }}</span>
-          <span :class="isHeartbeatStale ? 'font-medium text-warning' : ''">{{ formatHeartbeat(heartbeatAgeSeconds) }}<span v-if="isHeartbeatStale"> ({{ $t('views.RunDetailView.stale') }})</span></span>
+          <span :class="isHeartbeatStale(heartbeatAge) ? 'font-medium text-warning' : ''">{{ formatHeartbeatAge(heartbeatAge, t) }}<span v-if="isHeartbeatStale(heartbeatAge)"> ({{ $t('views.RunDetailView.stale') }})</span></span>
         </div>
       </div>
 
@@ -150,7 +150,7 @@
           v-for="chip in nodeProgressChips"
           :key="chip.name"
           type="button"
-          :aria-label="`Node ${chip.name}: ${chip.state}`"
+          :aria-label="$t('views.RunDetailView.node_progress_aria', { name: chip.name, state: nodeStateLabel(chip.state) })"
           :data-testid="`run-detail-node-progress-${chip.name}`"
           class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium transition-colors hover:opacity-80"
           :class="chipClass(chip.state)"
@@ -163,8 +163,8 @@
             </span>
             {{ $t('views.RunDetailView.running_label') }}
           </template>
-          <svg v-else-if="chip.state === 'completed'" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
-          <svg v-else-if="chip.state === 'failed'" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          <Check v-else-if="chip.state === 'completed'" class="h-3 w-3" aria-hidden="true" />
+          <X v-else-if="chip.state === 'failed'" class="h-3 w-3" aria-hidden="true" />
           <span v-else class="h-1.5 w-1.5 rounded-full bg-muted-foreground/40" aria-hidden="true"></span>
           <span>{{ chip.name }}</span>
         </button>
@@ -708,6 +708,8 @@ import { isTerminalStatus } from '../constants/runStatuses'
 import { shortId, formatRun } from '../utils/format'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
+import { heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge } from '../utils/runUtils'
+import { Check, X } from '@lucide/vue'
 
 type RunResponse = components['schemas']['RunResponse'] & {
   created_at?: string | null
@@ -716,7 +718,6 @@ type RunResponse = components['schemas']['RunResponse'] & {
   child_runs_cost_usd?: string | null
   child_runs_count?: number
   aggregate_cost_usd?: string | null
-  trigger_type?: string | null
   trigger_actor?: string | null
   trigger_id?: string | null
   heartbeat_at?: string | null
@@ -1518,6 +1519,10 @@ const nodeProgressChips = computed(() => {
   return names.map(name => ({ name, state: nodeProgressState(name) }))
 })
 
+function nodeStateLabel(state: NodeProgressState): string {
+  return t(`views.RunDetailView.node_state_${state}`)
+}
+
 function chipClass(state: NodeProgressState): string {
   const map: Record<NodeProgressState, string> = {
     completed: 'bg-success/10 text-success border border-success/30',
@@ -1554,24 +1559,11 @@ function formatTokenCount(count: number): string {
   return String(count)
 }
 
-const heartbeatAgeSeconds = computed<number | null>(() => {
+const heartbeatAge = computed<number | null>(() => {
   const r = run.value
-  if (!r?.heartbeat_at) return null
-  if (isTerminalStatus(r.status)) return null
-  const t = new Date(r.heartbeat_at).getTime()
-  if (isNaN(t)) return null
-  return Math.max(0, Math.floor((heartbeatNow.value - t) / 1000))
+  if (!r) return null
+  return heartbeatAgeSeconds(r.heartbeat_at, r.status, heartbeatNow.value)
 })
-
-const isHeartbeatStale = computed(() => {
-  const age = heartbeatAgeSeconds.value
-  return age != null && age > 60
-})
-
-function formatHeartbeat(age: number | null): string {
-  if (age == null) return '—'
-  return t('views.RunDetailView.ago', { s: age })
-}
 
 function childRunBadgeClass(status: string | undefined): string {
   const map: Record<string, string> = {
