@@ -1,6 +1,6 @@
 # Architecture Guide
 
-Modulo is a self-hosted agent governance platform for agentic SDLC pipelines. This document covers the system architecture, tech stack, key components, data flow, database schema, authentication, and deployment.
+Modulo is a self-hosted agent governance platform for building governed, repeatable AI-assisted software delivery pipelines. This document covers the system architecture, tech stack, key components, data flow, database schema, authentication, and deployment.
 
 ## System overview
 

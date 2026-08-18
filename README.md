@@ -173,8 +173,7 @@ review. Use GitHub issues for reproducible bugs and scoped feature proposals.
 
 ## Security
 
-Do not report vulnerabilities in a public issue. Follow [SECURITY.md](SECURITY.md)
-and email `security@modulo.run` with reproduction details.
+Do not report vulnerabilities in a public issue. Use GitHub's private **Report a vulnerability** flow or email `security@modulo.run` with reproduction details. See [SECURITY.md](SECURITY.md).
 
 ## License
 
