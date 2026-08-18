@@ -176,7 +176,7 @@ def _validate_mapped_guardrail(control: PolicyControl) -> str | None:
     ``control.mapped`` invariant (mapped ⇒ guardrail present) is enforced by
     the model validator, so the guardrail is never None here.
     """
-    assert control.guardrail is not None
+    assert control.guardrail is not None  # nosec B101 - enforced by _sync_mapped (mapped ⇒ guardrail) + validate_pack guard
     try:
         validate_config_set(GuardrailConfigSet(guardrails=[control.guardrail]))
     except GuardrailConfigError as exc:
