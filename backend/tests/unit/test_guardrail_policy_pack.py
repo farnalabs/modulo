@@ -390,6 +390,22 @@ def test_rollout_excludes_unmapped_controls():
     assert [item.id for item in config_set.guardrails] == ["no-aws-keys"]
 
 
+@pytest.mark.parametrize("mode", ["observe", "warn", "block"])
+def test_rollout_preserves_redact_action_under_every_mode(mode):
+    pack = _pack(
+        [
+            _control(cid="CC6.1", guardrail=_guardrail(gid="redact-key", action="redact")),
+            _control(cid="CC7.1", guardrail=_guardrail(gid="no-aws-keys", action="observe")),
+        ]
+    )
+    config_set = pack_rollout_config(pack, mode=mode)
+    by_id = {item.id: item for item in config_set.guardrails}
+    # A redact-action control keeps REDACT — a rollout never silences it.
+    assert by_id["redact-key"].action == GuardrailAction.REDACT
+    # The non-redact control is coerced to the rollout mode as usual.
+    assert by_id["no-aws-keys"].action == GuardrailAction(mode)
+
+
 # ---------------------------------------------------------------------------
 # load_pack_file — reading a pack YAML from disk
 # ---------------------------------------------------------------------------

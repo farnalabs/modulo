@@ -285,7 +285,12 @@ def pack_rollout_config(
             f"Invalid rollout mode {mode!r}; observe, warn, and block only (redact is not a rollout mode)."
         )
     config_set = instantiate_pack(pack)
-    rolled_guardrails = [item.model_copy(update={"action": action}) for item in config_set.guardrails]
+    # A rollout never silences a redact into another action (module invariant
+    # _ROLLOUT_MODES): a guardrail that declares REDACT on its own keeps it.
+    rolled_guardrails = [
+        item if item.action == GuardrailAction.REDACT else item.model_copy(update={"action": action})
+        for item in config_set.guardrails
+    ]
     return config_set.model_copy(update={"guardrails": rolled_guardrails})
 
 
