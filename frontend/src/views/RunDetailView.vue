@@ -1107,8 +1107,7 @@ function nodeSummary(node: NodeEntry): string | null {
   return typeof telemetrySummary === 'string' && telemetrySummary.length > 0 ? telemetrySummary : null
 }
 
-const statusBadgeClass = computed(() => {
-  const s = run.value?.status ?? ''
+function statusBadgeClassFor(status: string | undefined): string {
   const map: Record<string, string> = {
     running: 'badge badge-status-primary',
     complete: 'badge badge-status-success',
@@ -1118,20 +1117,17 @@ const statusBadgeClass = computed(() => {
     pending: 'badge badge-status-muted',
     awaiting_human: 'badge badge-status-pending',
   }
-  return map[s] ?? 'badge badge-context-slate'
-})
+  return map[status ?? ''] ?? 'badge badge-context-slate'
+}
+
+const statusBadgeClass = computed(() => statusBadgeClassFor(run.value?.status))
 
 const isTerminal = computed(() => run.value != null && isTerminalStatus(run.value.status))
 
 const canCancel = computed(() => run.value != null && !isTerminalStatus(run.value.status))
 
 function nodeStatusBadgeClass(node: NodeEntry): string {
-  const map: Record<string, string> = {
-    running: 'badge badge-status-primary',
-    complete: 'badge badge-status-success',
-    failed: 'badge badge-status-destructive',
-  }
-  return map[node.status] ?? 'badge badge-context-slate'
+  return statusBadgeClassFor(node.status)
 }
 
 const runTimestamps = computed(() => {
@@ -1567,16 +1563,7 @@ const heartbeatAge = computed<number | null>(() => {
 })
 
 function childRunBadgeClass(status: string | undefined): string {
-  const map: Record<string, string> = {
-    running: 'badge badge-status-primary',
-    complete: 'badge badge-status-success',
-    failed: 'badge badge-status-destructive',
-    stalled: 'badge badge-status-destructive',
-    cancelled: 'badge badge-status-warning',
-    pending: 'badge badge-status-muted',
-    awaiting_human: 'badge badge-status-pending',
-  }
-  return map[status ?? ''] ?? 'badge badge-context-slate'
+  return statusBadgeClassFor(status)
 }
 
 async function fetchHitlGates(runId: string) {

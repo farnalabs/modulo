@@ -1860,6 +1860,7 @@ class TestGetRunObservability:
         assert resp.status_code == 200
         body = resp.json()
         assert body["trigger_actor"] == "duncan@modulo.run"
+        assert body["trigger_type"] == "manual"
         assert body["trigger_id"] == str(run.trigger_id)
         assert body["heartbeat_at"] == run.heartbeat_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
         assert body["work_item_refs"] == run.work_item_refs
@@ -1884,6 +1885,7 @@ class TestGetRunObservability:
         assert resp.status_code == 200
         body = resp.json()
         assert body["trigger_actor"] is None
+        assert body["trigger_type"] == "manual"
         assert body["trigger_id"] is None
         assert body["heartbeat_at"] is None
         assert body["work_item_refs"] is None

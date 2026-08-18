@@ -555,6 +555,7 @@ class RunResponse(BaseModel):
     # runs; `work_item_refs` and `child_runs` are populated only on detail.
     # The trigger response surfaces `trigger_id`/`heartbeat_at` from the
     # created run row (getattr fallbacks in `_build_run_response`).
+    trigger_type: str | None = None
     trigger_actor: str | None = None
     trigger_id: uuid.UUID | None = None
     heartbeat_at: datetime | None = None
@@ -667,6 +668,7 @@ def _build_run_response(
         blocked_partial_summary=blocked_partial_summary,
         guardrail_summary=_guardrail_summary_from_run(run),
         trigger_actor=trigger_actor,
+        trigger_type=getattr(run, "trigger_type", None),
         trigger_id=trigger_id if trigger_id is not None else getattr(run, "trigger_id", None),
         heartbeat_at=heartbeat_at if heartbeat_at is not None else getattr(run, "heartbeat_at", None),
         work_item_refs=work_item_refs,

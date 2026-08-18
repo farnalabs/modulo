@@ -94,7 +94,7 @@
             <span class="text-xs text-muted-foreground">{{ triggerTypeLabel(value as string | null | undefined, t) }}</span>
           </template>
           <template #cell-trigger_actor="{ row }">
-            <span :data-testid="`runs-list-trigger-actor-${row.run_id}`" class="text-xs text-muted-foreground">{{ row.trigger_actor || '—' }}</span>
+            <span :data-testid="`runs-list-trigger-actor-${row.run_id}`" class="text-xs text-muted-foreground">{{ row.trigger_actor || triggerTypeLabel(row.trigger_type as string | null | undefined, t) }}</span>
           </template>
           <template #cell-heartbeat="{ row }">
             <span
