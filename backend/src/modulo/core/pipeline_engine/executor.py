@@ -316,6 +316,7 @@ _NEVER_RETRYABLE_SCRIPT_CODES: frozenset[str] = frozenset(
         "script.invalid_output",
         "script.side_effect_unknown",
         "script.session_lost",
+        "script.budget_killed",
     }
 )
 _NEVER_RETRYABLE_SCRIPT_RAW: frozenset[str] = frozenset(
@@ -323,6 +324,7 @@ _NEVER_RETRYABLE_SCRIPT_RAW: frozenset[str] = frozenset(
         "ScriptFailedError",
         "ScriptInvalidOutputError",
         "ScriptSideEffectUnknownError",
+        "ScriptBudgetKilledError",
         "script.schema_failed",
         "script.no_output",
     }

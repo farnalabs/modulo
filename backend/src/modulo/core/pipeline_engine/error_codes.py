@@ -109,6 +109,13 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity="critical",
         guidance="Script-mode sandbox session was lost after the script process started (post-claim, terminal).",
     ),
+    "script.budget_killed": ErrorCodeSpec(
+        error_class="script",
+        retryable=False,
+        alert_severity="critical",
+        guidance="Script-mode sandbox exceeded its resource limits and was killed by "
+        "the platform-side runtime killer (post-claim, terminal).",
+    ),
     # --- harness (machinery) codes ---------------------------------------
     # ``harness.unknown`` is the fallback for unmapped legacy codes — any code
     # that has no alias and no registry entry resolves here so presentation
@@ -365,6 +372,7 @@ LEGACY_ALIASES: dict[str, str] = {
     "ScriptFailedError": "script.failed",
     "ScriptInvalidOutputError": "script.invalid_output",
     "ScriptSideEffectUnknownError": "script.side_effect_unknown",
+    "ScriptBudgetKilledError": "script.budget_killed",
     # Harness machinery (§3.2). ``TypeError``/``OperationalError`` are the
     # raw exception class names that executor's generic catch publishes.
     "OperationalError": "harness.db.connection_lost",

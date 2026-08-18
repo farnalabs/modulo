@@ -57,7 +57,7 @@ from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from contextlib import suppress
 from contextvars import ContextVar
 from functools import partial
-from typing import Any
+from typing import Any, TypeGuard
 
 import jinja2
 import jmespath
@@ -188,6 +188,16 @@ class ScriptInvalidOutputError(ScriptModeError):
     """
 
 
+class ScriptBudgetKilledError(ScriptModeError):
+    """The script's sandbox was killed by the platform-side resource-cap
+    killer (FAR-296 Phase 3b-3). Post-claim, TERMINAL (never retryable)."""
+
+
+def _script_budget_killed_message(node_id: str) -> str:
+    """Message for a platform-side resource-cap kill (ScriptBudgetKilledError)."""
+    return f"Script-mode sandbox exceeded resource limits for node '{node_id}' — killed by platform-side runtime killer"
+
+
 class OutputSchemaValidationError(ValueError):
     """A node's output failed validation against its output_schema_json.
 
@@ -252,6 +262,27 @@ _STREAM_FLUSH_INTERVAL = 1.0  # min seconds between live stdout/stderr chunk pub
 _SANDBOX_LOG_PATH = "/home/user/agent.log"
 _SANDBOX_TAIL_INTERVAL = 5.0  # seconds between sandbox log drain probes
 _SANDBOX_TAIL_READ_TIMEOUT = 10.0  # per-drain probe wait_for timeout
+# FAR-296 Phase 3b-3: platform-side resource-cap killer cadence. The killer
+# polls sandbox.get_metrics() once every N _tick invocations; _tick runs every
+# _SANDBOX_TAIL_INTERVAL (5s), so 6 ticks = a 30s poll cadence.
+_SANDBOX_BUDGET_POLL_INTERVAL_TICKS = 6
+# Bounds for the killer's get_metrics / kill calls (never let the SDK hang a
+# tick forever; the shield keeps SDK internal tasks alive).
+_SANDBOX_METRICS_POLL_TIMEOUT = 10.0
+_SANDBOX_KILL_TIMEOUT = 15.0
+
+
+# The raw returned value is a non-metric Python number (int/float, not bool).
+def _is_real_number(value: Any) -> TypeGuard[int | float]:
+    """True when *value* is a usable numeric metric (int/float, never bool).
+
+    Guards the resource-cap killer against non-numeric / missing metric
+    fields (an SDK or mock that reports None or an absent attribute must not
+    be treated as an exceeded cap).
+    """
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 # D3 drain-probe bound: the E2B files API has NO offset/range read (only
 # path/format/user/timeout), so every drain re-transfers the whole log — O(n)
 # per tick, O(n^2) total on a long agent run. Bounding the retained/processed
@@ -2244,22 +2275,24 @@ def make_sandbox_agent_fn(
     # shared validators (sandbox_mode) have already rejected any unknown
     # egress_policy / resource_limits keys at save-time AND here at run-time.
     egress_policy: str | None = node_def.get("egress_policy")
+    egress_allowlist: list[dict[str, Any]] | None = node_def.get("egress_allowlist")
     resource_limits: dict[str, Any] | None = node_def.get("resource_limits")
-    # FAR-296 Phase 3: script mode that REQUESTS enforcement (egress denial or
+    # FAR-296 Phase 3: script mode that REQUIRES enforcement (egress denial or
     # resource limits) requires a REMOTE E2B provider (the E2B API key) because
     # local providers have no egress/resource enforcement point — deny_all /
-    # resource_limits would silently no-op. Fail closed ONLY when enforcement is
-    # actually requested; a plain script-mode node with no egress/resource config
-    # runs fine on any provider (there is nothing to enforce). This keeps the
-    # refusal scoped to exactly the security concern it guards.
+    # selected (allowlist) / resource_limits would silently no-op. Fail closed
+    # ONLY when enforcement is actually requested; a plain script-mode node with
+    # no egress/resource config runs fine on any provider (there is nothing to
+    # enforce). This keeps the refusal scoped to exactly the security concern it
+    # guards.
     if (
         sandbox_mode == "script"
-        and (egress_policy == "deny_all" or resource_limits)
+        and (egress_policy in ("deny_all", "selected") or resource_limits)
         and not (os.environ.get("MODULO_E2B_API_KEY") or os.environ.get("E2B_API_KEY"))
     ):
         raise ValueError(
             f"sandbox_agent node '{node_id}' mode='script' requests egress/resource "
-            "enforcement (egress_policy='deny_all' or resource_limits) which requires a "
+            "enforcement (egress_policy='deny_all'/'selected' or resource_limits) which requires a "
             "remote E2B provider (set MODULO_E2B_API_KEY or E2B_API_KEY) — local "
             "providers have no egress or resource-limit enforcement point for script mode"
         )
@@ -2460,6 +2493,14 @@ def make_sandbox_agent_fn(
         # a fault with ``_script_lease_claimed`` True is POST-CLAIM (terminal,
         # never retryable); before it the fault is PRE-CLAIM (retryable).
         _script_lease_claimed = False
+        # FAR-296 Phase 3b-3: platform-side resource-cap killer state. Per-run
+        # closure vars (never LangGraph state): ``_budget_check_ticks`` counts
+        # _tick invocations to pace the get_metrics() poll; ``_budget_killed``
+        # flips True the instant the killer kills the sandbox so the post-watchdog
+        # classification raises ScriptBudgetKilledError (never a generic
+        # side-effect-unknown / failed misclassification).
+        _budget_check_ticks = 0
+        _budget_killed = False
         # Per-node, per-claim-attempt idempotency key (dist/cleanup-idempotency D5):
         # ``run:{run_id}:node:{node_id}:{claim_count}``. Derived from the run row's
         # claim_count inside the fenced acquire, carried by the dispatch marker, and
@@ -2791,19 +2832,24 @@ def make_sandbox_agent_fn(
                 )
             dispatch_marker_set = True
 
-            # FAR-296 Phase 3: egress control + resource limits. deny_all maps
-            # to allow_internet_access=False; resource_limits is carried as
-            # sandbox metadata (e2b tags) so a server-side template/config can
-            # enforce them.
+            # FAR-296 Phase 3/3b-3: egress control + resource limits. deny_all
+            # and selected map to allow_internet_access=False; resource_limits
+            # and the selected-mode host:port allowlist are carried as sandbox
+            # metadata (e2b tags) so a server-side template/config can enforce
+            # them (the e2b SDK has no native allowlist / cap enforcement).
             _metadata: dict[str, str] = {}
             if resource_limits:
                 _metadata["resource_limits"] = json.dumps(resource_limits)
+            if egress_policy == "selected" and egress_allowlist:
+                _metadata["egress_allowlist"] = json.dumps(egress_allowlist)
             sandbox = await asyncio.wait_for(
                 AsyncSandbox.create(
                     template=template_id,
                     timeout=sandbox_timeout,
-                    allow_internet_access=(egress_policy != "deny_all"),
-                    # deny_all -> no internet; default/None -> internet allowed (e2b default).
+                    allow_internet_access=(egress_policy not in ("deny_all", "selected")),
+                    # deny_all/selected -> no internet; default/None -> internet
+                    # allowed (e2b default). The selected-mode allowlist is
+                    # carried as metadata, not an SDK egress control.
                     metadata=_metadata or None,
                 ),
                 timeout=min(sandbox_timeout, 120),
@@ -3157,12 +3203,106 @@ def make_sandbox_agent_fn(
                     if changed:
                         _stall.touch("filesystem")
 
+                # FAR-296 Phase 3b-3: platform-side resource-cap killer. Polls
+                # sandbox.get_metrics() on a bounded cadence (every
+                # _SANDBOX_BUDGET_POLL_INTERVAL_TICKS ticks = 30s) and kills the
+                # sandbox when an observable cap is exceeded. Fail-open in every
+                # direction: a metrics failure logs a warning and returns False —
+                # the sandbox timeout remains the backstop.
+                async def _enforce_resource_limits() -> bool:
+                    """Platform-side resource-cap killer (FAR-296 Phase 3b-3).
+
+                    Polls sandbox.get_metrics() (bounded wait_for), compares the
+                    observable caps (cpu_used_pct vs cpu_count, mem_used vs
+                    memory_mb, disk_used vs disk_mb), and kills the sandbox when a
+                    cap is exceeded. Returns True when the sandbox was killed (the
+                    caller maps the outcome to ``script.budget_killed``).
+                    """
+                    nonlocal _budget_killed
+                    if not resource_limits or sandbox_mode != "script" or sandbox is None:
+                        return False
+                    try:
+                        # get_metrics is a fresh coroutine per call, so wait_for is
+                        # safe to cancel; shield for consistency with the SDK-task
+                        # lesson (never cancel long-lived SDK internal tasks).
+                        metrics_raw = await asyncio.wait_for(
+                            asyncio.shield(sandbox.get_metrics()),
+                            timeout=_SANDBOX_METRICS_POLL_TIMEOUT,
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        # Fail-open: metrics unavailable (SDK too old / sandbox
+                        # unreachable) — never kill on a measurement failure.
+                        _log.warning(
+                            "sandbox_agent.resource_metrics_unavailable",
+                            extra={"node_id": node_id, "run_id": run_id},
+                        )
+                        return False
+                    # get_metrics returns a LIST of SandboxMetrics samples —
+                    # compare against the latest (most recent instantaneous sample).
+                    metrics = metrics_raw[-1] if isinstance(metrics_raw, (list, tuple)) and metrics_raw else metrics_raw
+                    if metrics is None:
+                        return False
+                    killed = False
+                    try:
+                        # Observable caps only. max_processes / max_fds /
+                        # max_sockets are NOT observable via the SDK — they stay
+                        # metadata-only (template-side enforcement).
+                        cpu_cap = resource_limits.get("cpu_count")
+                        if cpu_cap is not None:
+                            cpu_used_pct = getattr(metrics, "cpu_used_pct", None)
+                            if _is_real_number(cpu_used_pct) and cpu_used_pct > float(cpu_cap):
+                                killed = True
+                        mem_cap = resource_limits.get("memory_mb")
+                        if mem_cap is not None and not killed:
+                            mem_used = getattr(metrics, "mem_used", None)
+                            if _is_real_number(mem_used) and mem_used > float(mem_cap) * 1024 * 1024:
+                                killed = True
+                        disk_cap = resource_limits.get("disk_mb")
+                        if disk_cap is not None and not killed:
+                            # Disk is only enforced when the SDK reports disk
+                            # fields (older envd/API versions may omit them).
+                            disk_used = getattr(metrics, "disk_used", None)
+                            if _is_real_number(disk_used) and disk_used > float(disk_cap) * 1024 * 1024:
+                                killed = True
+                    except Exception:
+                        _log.exception(
+                            "sandbox_agent.resource_metrics_compare_failed",
+                            extra={"node_id": node_id},
+                        )
+                        return False
+                    if not killed:
+                        return False
+                    _budget_killed = True
+                    _log.warning(
+                        "sandbox_agent.budget_killed",
+                        extra={"node_id": node_id, "run_id": run_id},
+                    )
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.shield(sandbox.kill(request_timeout=10)),
+                            timeout=_SANDBOX_KILL_TIMEOUT,
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        _log.exception(
+                            "sandbox_agent.resource_kill_failed",
+                            extra={"node_id": node_id},
+                        )
+                    return True
+
                 async def _tick() -> None:
+                    nonlocal _budget_check_ticks
                     await _drain_sandbox_log()
                     if watch_log_path is not None:
                         await _probe_log_growth()
                     if watch_globs:
                         await _probe_filesystem()
+                    _budget_check_ticks += 1
+                    if _budget_check_ticks % _SANDBOX_BUDGET_POLL_INTERVAL_TICKS == 0:
+                        await _enforce_resource_limits()
 
                 _drain_fn = _drain_sandbox_log
 
@@ -3400,6 +3540,12 @@ def make_sandbox_agent_fn(
                     stderr_length=_stderr_len,
                     delivery_sentinel=delivery_sentinel,
                 )
+                if _budget_killed:
+                    # FAR-296 Phase 3b-3: the platform-side resource-cap killer
+                    # fired — the sandbox was killed for exceeding its limits.
+                    # TERMINAL (never retryable, exactly-once) and distinct from
+                    # an unknown side-effect state: the kill REASON is known.
+                    raise ScriptBudgetKilledError(_script_budget_killed_message(node_id)) from None
                 if sandbox_mode == "script" and _script_lease_claimed:
                     # FAR-296 Phase 2 stage-split (3): the script PROCESS started
                     # (fencing lease claimed) and was terminated mid-execution
@@ -3624,6 +3770,11 @@ def make_sandbox_agent_fn(
                 # POST-CLAIM fault — TERMINAL, never retryable (exactly-once).
                 # Re-dispatching could double-execute the side-effecting script.
                 if exit_code != 0:
+                    if _budget_killed:
+                        # The command died BECAUSE the platform-side resource-cap
+                        # killer killed the sandbox — never misclassify the kill
+                        # as a generic script.failed.
+                        raise ScriptBudgetKilledError(_script_budget_killed_message(node_id)) from None
                     raise ScriptFailedError(f"Script-mode sandbox exited with code {exit_code} (post-claim, terminal)")
                 # FAR-296 script mode: the raw parsed output IS the node output.
                 # No LLM envelope extraction (summary/changed_files/pr_url/

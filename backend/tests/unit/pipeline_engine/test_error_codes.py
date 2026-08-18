@@ -325,6 +325,7 @@ def test_script_codes_are_never_retryable():
         "script.invalid_output",
         "script.side_effect_unknown",
         "script.session_lost",
+        "script.budget_killed",
     ):
         assert is_retryable(code) is False, code
         assert ERROR_CODE_REGISTRY[code].error_class == "script"
@@ -346,10 +347,12 @@ def test_script_exception_class_names_map_to_script_codes():
     assert map_legacy_code("ScriptFailedError") == "script.failed"
     assert map_legacy_code("ScriptInvalidOutputError") == "script.invalid_output"
     assert map_legacy_code("ScriptSideEffectUnknownError") == "script.side_effect_unknown"
+    assert map_legacy_code("ScriptBudgetKilledError") == "script.budget_killed"
     for name in (
         "ScriptFailedError",
         "ScriptInvalidOutputError",
         "ScriptSideEffectUnknownError",
+        "ScriptBudgetKilledError",
     ):
         assert is_retryable(name) is False, name
 
@@ -364,3 +367,16 @@ def test_script_codes_are_known_and_expand():
     assert "contract.schema" in expand_code_variants("script.schema_failed")
     assert "contract.no_output" in expand_code_variants("script.no_output")
     assert "script.failed" in expand_code_variants("ScriptFailedError")
+
+
+def test_script_budget_killed_is_known_and_expands():
+    """script.budget_killed is a known code that expands to the class name and
+    vice versa (FAR-296 Phase 3b-3 platform-side runtime killer)."""
+    known = known_error_codes()
+    assert "script.budget_killed" in known
+    assert "ScriptBudgetKilledError" in known
+    assert "script.budget_killed" in expand_code_variants("ScriptBudgetKilledError")
+    assert "ScriptBudgetKilledError" in expand_code_variants("script.budget_killed")
+    assert map_legacy_code("script.budget_killed") == "script.budget_killed"
+    assert class_for("script.budget_killed") == "script"
+    assert class_for("ScriptBudgetKilledError") == "script"

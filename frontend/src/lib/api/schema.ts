@@ -12067,7 +12067,11 @@ export interface components {
             /** Script Command */
             script_command?: string | null;
             /** Egress Policy */
-            egress_policy?: ("default" | "deny_all") | null;
+            egress_policy?: ("default" | "deny_all" | "selected") | null;
+            /** Egress Allowlist */
+            egress_allowlist?: {
+                [key: string]: unknown;
+            }[] | null;
             /** Resource Limits */
             resource_limits?: {
                 [key: string]: unknown;
