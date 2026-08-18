@@ -461,6 +461,7 @@ async def create_run(
     pinned_defs: list[Any] = []
     skipped_guardrails: list[GuardrailSkip] = []
     snap_pins: list[dict[str, Any]] | None = None
+    saved_fingerprint: str | None = None
     if is_replay and snapshot_id is not None:
         try:
             snap_pin_row = (
@@ -480,15 +481,18 @@ async def create_run(
             # unavailable, so the replay falls back to the live rows
             # (pre-pinning behaviour).
             _log.warning("guardrails.pins_read_unavailable", extra={"org_id": str(org_id)})
-        if snap_pins:
-            # Run-start snapshot-integrity re-verify (FAR-309 PR B): the
-            # fingerprint saved at snapshot creation must match the CURRENT
-            # pins. A mismatch means the snapshot's pin set was tampered with
-            # (or drifted) since creation — fail CLOSED as a mechanism error
-            # (a terminal eval_failed run): the tampered pins are NEVER
-            # evaluated and the live rows are NEVER silently used. A legacy
-            # snapshot WITHOUT a saved fingerprint is still trusted (the
-            # fingerprint is verified only when present).
+        # Run-start snapshot-integrity re-verify (FAR-309 PR B): the
+        # fingerprint saved at snapshot creation must match the CURRENT
+        # pins. A mismatch means the snapshot's pin set was tampered with
+        # (or drifted) since creation — fail CLOSED as a mechanism error
+        # (a terminal eval_failed run): the tampered pins are NEVER
+        # evaluated and the live rows are NEVER silently used. A legacy
+        # snapshot WITHOUT a saved fingerprint is still trusted (the
+        # fingerprint is verified only when present). The check also runs
+        # when the stored pins are an EMPTY list but a fingerprint exists —
+        # zeroing the pin set is itself a tamper and must not fall back to
+        # the live rows.
+        if snap_pins or saved_fingerprint is not None:
             recomputed_fingerprint = fingerprint_guardrail_pins(snap_pins)
             if saved_fingerprint is not None and recomputed_fingerprint != saved_fingerprint:
                 guardrail_blocked = True
@@ -509,7 +513,7 @@ async def create_run(
                     },
                     run_id=run_id,
                 )
-            else:
+            elif snap_pins:
                 live_by_name = {row.name: row for row in guardrail_rows}
                 for entry in snap_pins:
                     if not isinstance(entry, dict) or not entry.get("name"):
@@ -533,7 +537,15 @@ async def create_run(
         # to the live rows: the skip audit + enforcement-gap alert is then the
         # sole signal that the pinned control is not enforcing. Only a
         # snapshot with NO pins (pre-migration / read failure) falls back.
-        guardrail_defs = pinned_defs if snap_pins else [to_engine_definition(row) for row in guardrail_rows]
+        # FAR-309 PR B: a snapshot carrying a SAVED fingerprint is a pinned
+        # snapshot even when its stored pin list is empty (a zeroed set is a
+        # tamper, not a legacy no-pin snapshot) — it never falls back to live
+        # rows either.
+        guardrail_defs = (
+            pinned_defs
+            if (snap_pins or saved_fingerprint is not None)
+            else [to_engine_definition(row) for row in guardrail_rows]
+        )
 
         # Item 7 — cap enforcement (fail closed): a single node binding more
         # than the per-node guardrail cap is a mechanism error. Graph-save

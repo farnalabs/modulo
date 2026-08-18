@@ -602,27 +602,33 @@ async def delete_eval_definition(
             # instance no longer exposes attributes.
             eval_id_str = str(eval_def.id)
             eval_name = eval_def.name
-            soft = eval_def.eval_type == "guardrail" and not purge
+            is_guardrail = eval_def.eval_type == "guardrail"
+            soft = is_guardrail and not purge
             if soft:
                 eval_def.deleted_at = datetime.now(UTC)
                 eval_def.deleted_by = principal.account_id
             else:
                 await session.delete(eval_def)
-            try:
-                await append_audit_event(
-                    session,
-                    org_id=principal.organisation_id,
-                    event_type="eval_definition.soft_deleted" if soft else "eval_definition.purged",
-                    actor_user_id=principal.account_id,
-                    resource_type="eval_definition",
-                    resource_id=eval_id,
-                    payload_json={"eval_id": eval_id_str, "name": eval_name, "purge": purge},
-                )
-            except Exception:
-                _log.exception(
-                    "evals.delete_eval_definition_audit_failed",
-                    extra={"org_id": str(principal.organisation_id), "eval_id": eval_id_str},
-                )
+            # The two-step soft-delete audit applies to GUARDRAIL rows only —
+            # a non-guardrail eval keeps its pre-PR-B hard delete (no audit
+            # event). ``eval_definition.soft_deleted`` / ``eval_definition.purged``
+            # are the only two event types this seam emits.
+            if is_guardrail:
+                try:
+                    await append_audit_event(
+                        session,
+                        org_id=principal.organisation_id,
+                        event_type="eval_definition.soft_deleted" if soft else "eval_definition.purged",
+                        actor_user_id=principal.account_id,
+                        resource_type="eval_definition",
+                        resource_id=eval_id,
+                        payload_json={"eval_id": eval_id_str, "name": eval_name, "purge": purge},
+                    )
+                except Exception:
+                    _log.exception(
+                        "evals.delete_eval_definition_audit_failed",
+                        extra={"org_id": str(principal.organisation_id), "eval_id": eval_id_str},
+                    )
     except HTTPException:
         raise
     except IntegrityError:

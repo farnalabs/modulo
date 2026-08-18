@@ -130,6 +130,7 @@ async def _seed_snapshot_with_pins(
     guardrail_defs: list[EvalDefinition],
     fingerprint: str | None = None,
     tamper: bool = False,
+    zero_pins: bool = False,
 ) -> None:
     pins = [serialize_guardrail_pin(d) for d in guardrail_defs]
     if tamper:
@@ -137,6 +138,12 @@ async def _seed_snapshot_with_pins(
         # fingerprint was computed over. We store a fingerprint of the
         # ORIGINAL pins but persist the tampered pins, so a re-verify fails.
         pins = [{**pins[0], "name": f"{pins[0]['name']}-tampered"}]
+        stored_fingerprint = fingerprint_guardrail_pins([serialize_guardrail_pin(d) for d in guardrail_defs])
+    elif zero_pins:
+        # Zeroed pin set: the stored pins are an EMPTY list while a fingerprint
+        # of the original set is retained — a tamper, since a created snapshot
+        # with no guardrails stores NULL pins (and a NULL fingerprint).
+        pins = []
         stored_fingerprint = fingerprint_guardrail_pins([serialize_guardrail_pin(d) for d in guardrail_defs])
     else:
         stored_fingerprint = fingerprint if fingerprint is not None else fingerprint_guardrail_pins(pins)
@@ -412,6 +419,28 @@ async def test_create_run_replay_fingerprint_mismatch_fails_closed(session: Asyn
     assert run.error_code == "eval_blocked"
     assert "fingerprint mismatch" in (run.error_detail or "")
     # Nothing evaluated and nothing skipped — the tampered set is not trusted.
+    s = _summary(run)
+    assert s["bound"] == 0
+    assert s["evaluated"] == 0
+    assert s["skipped"] == 0
+    assert _invariant(s)
+
+
+async def test_create_run_replay_pins_zeroed_with_saved_fingerprint_fails_closed(session: AsyncSession):
+    """A replay whose stored pins were zeroed to an EMPTY list while a
+    fingerprint was saved (a tamper — a created snapshot with no guardrails
+    stores NULL pins and a NULL fingerprint) FAILS CLOSED instead of silently
+    falling back to the live rows."""
+    await _seed(session)
+    gid = await _seed_guardrail(session, name="no-secrets", action="block")
+    pinned = await _get_guardrail_row(session, gid)
+    await _seed_snapshot_with_pins(session, guardrail_defs=[pinned], zero_pins=True)
+
+    run = await _create(session, input_payload={"body": "leak SECRET_ABC12345"}, is_replay=True)
+    assert run.status == "eval_failed"
+    assert run.error_code == "eval_blocked"
+    assert "fingerprint mismatch" in (run.error_detail or "")
+    # Nothing evaluated and the live rows are NOT silently bound.
     s = _summary(run)
     assert s["bound"] == 0
     assert s["evaluated"] == 0

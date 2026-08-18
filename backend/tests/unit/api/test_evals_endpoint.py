@@ -735,3 +735,31 @@ class TestDeleteEvalDefinitionTwoStep:
         resp = admin_client.delete(f"{self.URL}/{_EVAL_DEF_ID}")
         assert resp.status_code == 204
         mock_session.delete.assert_called_once()
+
+    def test_delete_non_guardrail_eval_writes_no_audit_event(
+        self, admin_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The two-step soft-delete audit applies to GUARDRAIL rows only — a
+        non-guardrail eval keeps its pre-PR-B hard delete WITHOUT an audit
+        event (``eval_definition.soft_deleted``/``eval_definition.purged`` are
+        guardrail-row events)."""
+        audit = AsyncMock()
+        monkeypatch.setattr(evals_routes, "append_audit_event", audit)
+        mock_session = _make_mock_session()
+        mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
+            _make_result(scalar_value=None),  # set_rls_org
+            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
+            _make_result(scalar_one_value=_make_eval_def(eval_type="regex")),
+        ]
+        mock_session.delete = AsyncMock()
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        resp = admin_client.delete(f"{self.URL}/{_EVAL_DEF_ID}")
+        assert resp.status_code == 204
+        mock_session.delete.assert_called_once()
+        audit.assert_not_awaited()
