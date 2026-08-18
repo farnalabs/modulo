@@ -1848,9 +1848,27 @@ async def _update_pipeline_graph_impl(
     # guarded function hardcodes is_privileged=False when
     # caller_type=="mcp" (no DB query); the literal below is enforced by a
     # .semgrep/ rule (mcp call site must pass the literal, not a variable).
-    from modulo.api.routes.pipelines import PipelineGraphUpdate, _is_privileged
+    from fastapi import HTTPException, status
+
+    from modulo.api.routes.pipelines import (
+        PipelineGraphUpdate,
+        _enforce_guardrail_binding_strip,
+        _is_privileged,
+    )
+    from modulo.auth.jwt import TenantPrincipal
 
     is_privileged = _is_privileged(_ctx_role_val())
+
+    # FAR-309 PR A review: mirror the REST mutation-time enforcement so the
+    # MCP surface cannot be used to strip a guardrail binding from a node.
+    # The caller's org role is resolved into a TenantPrincipal so
+    # _is_guardrail_admin resolves correctly (non-admin MCP caller denied).
+    _mcp_principal = TenantPrincipal(
+        username="",
+        organisation_id=org_id,
+        account_id=_ctx_user_id.get(uuid.UUID(int=0)),
+        org_role=_ctx_role_val() or "",
+    )
 
     # Validate graph structure using Pydantic models (same as REST endpoint)
     from pydantic import ValidationError as _PydanticValidationError
@@ -1891,6 +1909,16 @@ async def _update_pipeline_graph_impl(
                     "error": CONNECTOR_TEAM_MISMATCH,
                     "detail": connector_team_mismatch_detail(mismatches),
                 }
+            # FAR-309 PR A review: a non-admin MCP caller may not strip a
+            # guardrail binding by removing a guardrail-bound node from the
+            # graph — same field-level enforcement as the REST graph-save.
+            await _enforce_guardrail_binding_strip(
+                s,
+                pipeline_id=pid,
+                org_id=org_id,
+                incoming_node_ids={str(n.get("id")) for n in nodes if n.get("id")},
+                principal=_mcp_principal,
+            )
             result = await replace_pipeline_graph(
                 s,
                 pipeline_id=pid,
@@ -1913,6 +1941,10 @@ async def _update_pipeline_graph_impl(
                 {"source_node_id": k[0], "target_node_id": k[1], "edge_type": k[2]} for k in exc.correlation_keys
             ],
         }
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_403_FORBIDDEN:
+            return {"error": "guardrail_strip_forbidden", "detail": str(exc.detail)}
+        raise
 
     return {
         "pipeline_id": pipeline_id,
