@@ -72,7 +72,7 @@ docker compose -f docker-compose.yml -f docker-compose.mariadb.yml up -d
 ```
 
 The backend auto-detects MariaDB and configures the connection string
-(`mysql+aiomysql://modulo:modulo@localhost:3306/modulo`). Note that MariaDB is
+(`mysql+aiomysql://modulo:modulo@localhost:5435/modulo`). Note that MariaDB is
 deprecated (2026-07-11); PostgreSQL is the supported primary database.
 
 ---
@@ -104,7 +104,7 @@ cd ..
 
 # 6. Configure environment
 $env:SECRET_KEY = "dev-secret-key-32-bytes-at-least-here!"
-$env:FERNET_KEY = "dev-fernet-key-32-bytes-at-least-here!"
+$env:FERNET_KEY = "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
 $env:DATABASE_URL = "postgresql+asyncpg://modulo:modulo@localhost:5434/modulo"
 $env:REDIS_URL = "redis://localhost:6380/0"
 $env:MODULO_USERS = "admin:admin"
@@ -161,7 +161,7 @@ auto-seeds an admin user based on the `MODULO_USERS` environment variable.
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `SECRET_KEY` | Yes | — | JWT signing key (min 32 bytes) |
-| `FERNET_KEY` | Yes | — | Fernet encryption key for credentials |
+| `FERNET_KEY` | Yes | — | Fernet encryption key for credentials (valid urlsafe-base64 key, min 32 bytes) |
 | `DATABASE_URL` | Yes | `postgresql+asyncpg://modulo:modulo@localhost:5434/modulo` | Database connection string (no default; the SQLite URL applies only when `MODULO_DB=sqlite`) |
 | `MODULO_DB` | No | `postgres` | Database dialect (`postgres`, `sqlite`, `mariadb`) |
 | `REDIS_URL` | No | `redis://localhost:6380/0` | Redis connection for the SAQ broker (required in production) |
@@ -214,7 +214,7 @@ modulo/
 │   ├── security/                 # Security documentation
 │   └── deployment/               # Deployment guides
 ├── docker-compose.yml            # Full stack: Postgres + Redis + backend + workers + frontend
-├── docker-compose.local.yml      # Local dev infra: Postgres + Redis + observability (for out-of-container dev)
+├── docker-compose.local.yml      # Local dev infra: Postgres + Redis + observability
 └── docker-compose.mariadb.yml    # MariaDB override
 ```
 
@@ -449,7 +449,8 @@ exist in the devtools tooling repo.
 ### Before submitting
 
 1. Ensure your branch is up to date with `main`
-2. Run the test suites and lint checks relevant to your change (see [Testing](#testing) and [Coding Standards](#coding-standards))
+2. Run the test suites and lint checks relevant to your change (see
+   [Testing](#testing) and [Coding Standards](#coding-standards))
 3. Verify coverage thresholds are met
 4. Update the product map entry for any feature changes (see `docs/product-map/`)
 5. Update the PRD if your change introduces new behaviour

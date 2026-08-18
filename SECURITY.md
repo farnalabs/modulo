@@ -102,7 +102,7 @@ researchers who:
 ## Attribution
 
 Researchers are acknowledged in the release notes of the release that fixes
-their report, with permission.
+their report, with permission. To be added, let us know when you report.
 
 ## Further Reading
 
