@@ -20,13 +20,18 @@
 
 <script setup lang="ts">
 import { computed, defineAsyncComponent } from "vue";
+import { useI18n } from "vue-i18n";
 import { buildChartOption, type AnalyticsBucket, type AnalyticsMeasure } from "../../stores/analytics";
+import { errorCodeLabel } from "../../utils/runUtils";
 
 const props = defineProps<{
   series: AnalyticsBucket[];
   measure: AnalyticsMeasure;
   groupBy: string;
+  dimension?: string | null;
 }>();
+
+const { t } = useI18n();
 
 const ChartRenderer = defineAsyncComponent(async () => {
   await import("echarts");
@@ -35,6 +40,12 @@ const ChartRenderer = defineAsyncComponent(async () => {
 });
 
 const chartOption = computed(() =>
-  buildChartOption(props.series, props.measure, props.groupBy),
+  buildChartOption(
+    props.series,
+    props.measure,
+    props.groupBy,
+    props.dimension,
+    (key) => errorCodeLabel(key, t),
+  ),
 );
 </script>
