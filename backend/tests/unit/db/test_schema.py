@@ -36,6 +36,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "nodes",
         "notification_delivery_log",
         "notification_endpoints",
+        "notification_preferences",
         "notifications",
         "onboarding_progress",
         "oauth_authorization_codes",

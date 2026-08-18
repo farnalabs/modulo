@@ -32,7 +32,8 @@ import pytest
 from alembic.script import ScriptDirectory
 
 _MIGRATION_0008 = "0110_schema_pipeline_runtime"
-_HEAD_MIGRATION = "0113_guardrail_summary"
+_MIGRATION_0113 = "0113_guardrail_summary"
+_HEAD_MIGRATION = "0114_notification_preferences"
 
 
 _VERSIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
@@ -57,11 +58,11 @@ def migration_0008() -> ModuleType:
 
 @pytest.fixture(scope="module")
 def migration_0113() -> ModuleType:
-    path = _VERSIONS_DIR / f"{_HEAD_MIGRATION}.py"
+    path = _VERSIONS_DIR / f"{_MIGRATION_0113}.py"
     assert path.exists(), f"Migration file missing: {path}"
     import importlib.util
 
-    spec = importlib.util.spec_from_file_location(f"migration_{_HEAD_MIGRATION}", path)
+    spec = importlib.util.spec_from_file_location(f"migration_{_MIGRATION_0113}", path)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)

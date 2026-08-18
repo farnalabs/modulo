@@ -26,7 +26,8 @@ from alembic.script import ScriptDirectory
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 
 _MIGRATION_0006 = "0108_schema_org_identity"
-_HEAD_MIGRATION = "0113_guardrail_summary"
+_MIGRATION_0113 = "0113_guardrail_summary"
+_HEAD_MIGRATION = "0114_notification_preferences"
 
 
 def _source(name: str) -> str:
@@ -40,7 +41,7 @@ def _script() -> ScriptDirectory:
 
 
 class TestKillSwitchMigration:
-    def test_single_head_is_0113(self) -> None:
+    def test_single_head_is_0114(self) -> None:
         heads = _script().get_heads()
         assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
 
@@ -66,6 +67,6 @@ class TestKillSwitchMigration:
     def test_kill_switch_owned_by_0108_not_0113(self) -> None:
         # The kill-switch flag shipped in PR A's reconciliation (0108), not in
         # PR B's head migration (0113, which only adds runs.guardrail_summary_json).
-        source_0113 = _source(_HEAD_MIGRATION)
+        source_0113 = _source(_MIGRATION_0113)
         assert "guardrails_kill_switch" not in source_0113
         assert "guardrail_summary_json" in source_0113

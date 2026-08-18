@@ -41,8 +41,9 @@ _MIGRATION_PATH = (
 )
 
 # The chain head after the FAR-210 feedback correction_state migration (0112),
-# now topped by the FAR-223 PR B guardrail_summary migration (0113).
-_CHAIN_HEAD_MIGRATION_NAME = "0113_guardrail_summary"
+# topped by the FAR-223 PR B guardrail_summary migration (0113) and the
+# FAR-247 notification preferences migration (0114).
+_CHAIN_HEAD_MIGRATION_NAME = "0114_notification_preferences"
 
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 

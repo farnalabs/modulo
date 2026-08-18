@@ -8,12 +8,12 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import ColumnElement, delete, func, select
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from modulo.db.models.notification import Dismissal, Notification
+from modulo.db.models.notification import Dismissal, Notification, NotificationPreference
 
 LEVEL_RANK: dict[str, int] = {
     "debug": 0,
@@ -33,6 +33,28 @@ def _visible_to_user_clause(user_id: uuid.UUID) -> ColumnElement[bool]:
         | (Notification.scope == "admin")
         | ((Notification.scope == "user") & (Notification.target_user_id == user_id))
     )
+
+
+def apply_prefs_filter(query, account_id: uuid.UUID):
+    """Restrict a notifications query to categories the user has NOT opted out of.
+
+    Shared by every notification read path (dashboard list, full list, count,
+    unread count) so badge/list/count always agree (FAR-247 read-time model).
+
+    The opt-out subquery is correlated on ``Notification.organisation_id`` so
+    it is org-scoped regardless of backend: on Postgres the org-scope SELECT
+    RLS policy also applies, on generic dev backends the correlation carries
+    the outer query's already-scoped org.
+    """
+    opted_out_categories = (
+        select(NotificationPreference.category)
+        .where(
+            NotificationPreference.account_id == account_id,
+            NotificationPreference.organisation_id == Notification.organisation_id,
+        )
+        .scalar_subquery()
+    )
+    return query.where(Notification.category.notin_(opted_out_categories))
 
 
 async def create_notification(
@@ -103,17 +125,14 @@ async def get_dashboard_notifications(
         select(dismissal_alias.notification_id).where(dismissal_alias.dismissed_by_user_id == user_id).subquery()
     )
 
-    q = (
-        select(Notification)
-        .where(
-            Notification.organisation_id == org_id,
-            Notification.level.in_(allowed_levels),
-            Notification.id.notin_(select(dismissed_subq.c.notification_id)),
-            _visible_to_user_clause(user_id),
-        )
-        .order_by(Notification.created_at.desc())
-        .limit(limit)
+    q = select(Notification).where(
+        Notification.organisation_id == org_id,
+        Notification.level.in_(allowed_levels),
+        Notification.id.notin_(select(dismissed_subq.c.notification_id)),
+        _visible_to_user_clause(user_id),
     )
+    q = apply_prefs_filter(q, account_id=user_id)
+    q = q.order_by(Notification.created_at.desc()).limit(limit)
     try:
         result = await session.execute(q)
         return list(result.scalars().all())
@@ -137,6 +156,7 @@ async def get_notifications_for_user(
         Notification.organisation_id == org_id,
         _visible_to_user_clause(user_id),
     )
+    q = apply_prefs_filter(q, account_id=user_id)
 
     if level is not None:
         q = q.where(Notification.level == level)
@@ -195,6 +215,7 @@ async def count_notifications_for_user(
         Notification.organisation_id == org_id,
         _visible_to_user_clause(user_id),
     )
+    q = apply_prefs_filter(q, account_id=user_id)
 
     if level is not None:
         q = q.where(Notification.level == level)
@@ -314,8 +335,60 @@ async def get_unread_count(
         Notification.id.notin_(select(dismissed_subq.c.notification_id)),
         _visible_to_user_clause(user_id),
     )
+    q = apply_prefs_filter(q, account_id=user_id)
     try:
         result = await session.execute(q)
         return result.scalar_one()
     except ProgrammingError:
         return 0
+
+
+async def get_opted_out_categories(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID,
+) -> set[str]:
+    """Return the categories the user has opted out of in this org."""
+    result = await session.execute(
+        select(NotificationPreference.category).where(
+            NotificationPreference.organisation_id == org_id,
+            NotificationPreference.account_id == account_id,
+        )
+    )
+    return set(result.scalars().all())
+
+
+async def set_notification_preferences(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID,
+    opt_outs: dict[str, bool],
+) -> None:
+    """Apply a partial opt-out mapping for a user.
+
+    For each key, ``True`` opts out (row ensured), ``False`` opts back in
+    (row removed). Keys absent from the mapping are left untouched, so a
+    client may PUT a single toggle or the full map returned by GET.
+    """
+    if not opt_outs:
+        return
+    existing = await get_opted_out_categories(session, org_id=org_id, account_id=account_id)
+    to_remove = existing & {category for category, opted_out in opt_outs.items() if not opted_out}
+    to_add = {category for category, opted_out in opt_outs.items() if opted_out} - existing
+
+    if to_remove:
+        await session.execute(
+            delete(NotificationPreference).where(
+                NotificationPreference.organisation_id == org_id,
+                NotificationPreference.account_id == account_id,
+                NotificationPreference.category.in_(sorted(to_remove)),
+            )
+        )
+    if to_add:
+        session.add_all(
+            NotificationPreference(organisation_id=org_id, account_id=account_id, category=category)
+            for category in sorted(to_add)
+        )
+    await session.flush()
