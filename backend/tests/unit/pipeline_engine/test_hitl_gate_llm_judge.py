@@ -174,3 +174,64 @@ def test_no_model_backend_id_falls_back_to_zero_and_fires_gate() -> None:
     )
 
     assert interrupted is True
+
+
+def test_gate_json_schema_eval_uses_contract_output() -> None:
+    """FAR-311: a json_schema gate eval validates the agent's CONTRACT output
+    (``artifacts[0].output.output_json``), not the telemetry envelope in state.
+
+    The state's outer ``output`` is a telemetry summary without pr_url, but the
+    artifact's ``output_json`` carries the contract fields — so the schema
+    passes, the gate proceeds to the autonomy check, and the node interrupts.
+    Pre-fix the eval validated the state shape (telemetry only) and raised
+    ``EvalBlockedError`` instead.
+    """
+    contract_schema = {
+        "type": "object",
+        "properties": {
+            "status": {"type": "string"},
+            "pr_url": {"type": "string"},
+            "changed_files": {"type": "array", "items": {"type": "string"}},
+        },
+        "if": {"properties": {"status": {"const": "completed"}}, "required": ["status"]},
+        "then": {"required": ["pr_url", "changed_files"]},
+    }
+    eval_def = EvalDefinition(
+        id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        node_id="n1",
+        name="pr-contract-check",
+        eval_type=EvalType.JSON_SCHEMA,
+        config={"schema": contract_schema},
+        failure_behaviour="block",
+    )
+    state = {
+        "output": {"status": "completed", "summary": "telemetry only"},
+        "artifacts": [
+            {
+                "node_id": "n1",
+                "status": "completed",
+                "output": {
+                    "status": "completed",
+                    "summary": "opened PR",
+                    "pr_url": "https://github.com/farnalabs/modulo/pull/1554",
+                    "changed_files": ["a.py"],
+                    "output_json": {
+                        "status": "completed",
+                        "summary": "opened PR",
+                        "pr_url": "https://github.com/farnalabs/modulo/pull/1554",
+                        "changed_files": ["a.py"],
+                    },
+                },
+            }
+        ],
+        "run_context": {"autonomy_recommendation": "manual_approval"},
+    }
+
+    interrupted = _run_gate_fn(
+        {"gate_id": "gate-contract"},
+        state,
+        [eval_def],
+    )
+
+    assert interrupted is True

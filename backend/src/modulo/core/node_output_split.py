@@ -38,6 +38,7 @@ __all__ = [
     "extend_node_type_map_from_edges",
     "node_return",
     "node_telemetry",
+    "resolve_eval_target",
     "split_node_output",
 ]
 
@@ -130,6 +131,33 @@ def _add_lossless(
             continue
         if key not in telemetry:
             telemetry[key] = value
+
+
+def resolve_eval_target(envelope: dict[str, Any]) -> dict[str, Any]:
+    """The agent's contract output for eval validation (FAR-311).
+
+    sandbox_agent envelopes bury the agent's structured return at
+    ``artifacts[0].output.output_json`` while the outer ``output`` is a
+    telemetry summary that omits contract fields (``pr_url``,
+    ``changed_files``). Eval schemas are authored against the agent's
+    contract output, so resolve that shape first, falling back through the
+    artifact output, then the outer output, then the whole envelope:
+
+    ``artifacts[0].output.output_json`` -> ``artifacts[0].output`` ->
+    ``envelope["output"]`` -> ``envelope``.
+    """
+    a0 = _first_artifact(envelope)
+    if a0 is not None:
+        inner = a0.get("output")
+        if isinstance(inner, dict):
+            output_json = inner.get("output_json")
+            if isinstance(output_json, dict):
+                return output_json
+            return inner
+    inner_output = envelope.get("output")
+    if isinstance(inner_output, dict):
+        return inner_output
+    return envelope
 
 
 def _legacy_inner_output(outputs_json: Any, node_id: str) -> dict[str, Any] | None:

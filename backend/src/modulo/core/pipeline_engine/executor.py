@@ -61,6 +61,7 @@ from modulo.core.graph_validator import GraphValidator
 from modulo.core.graph_validator._types import ValidationResult
 from modulo.core.hitl_manager import HITLManager
 from modulo.core.model_backend_hub import ModelBackendHub
+from modulo.core.node_output_split import resolve_eval_target
 from modulo.core.notifier import EVENT_HITL_AWAITING
 from modulo.core.pipeline_engine.decorator import (
     RunCancelledError,
@@ -1184,9 +1185,11 @@ class PipelineExecutor:
 
         This is the non-HITL counterpart to ``make_hitl_gate_fn``'s
         eval-before-interrupt: it evaluates each of the node's eval definitions
-        against the node's *inner* output dict (``envelope["output"]`` — the
-        agent's actual ``output.json`` content, matching what the HITL gate
-        evaluates against state) and persists the results to the ``eval_results``
+        against the node's agent contract output (FAR-311) — resolved
+        artifact-first via ``node_output_split.resolve_eval_target``
+        (``artifacts[0].output.output_json`` for sandbox_agent nodes, which
+        carry the structured return there while the outer ``output`` is a
+        telemetry summary) — and persists the results to the ``eval_results``
         table so post-run suite-level threshold checks can read them.
 
         If a ``block`` eval fails, ``EvalBlockedError`` propagates to
@@ -1197,11 +1200,12 @@ class PipelineExecutor:
         if not eval_defs:
             return
         # The captured ``output`` is the envelope ``{"artifacts": [...],
-        # "output": {...}}``. Validate the INNER output dict (what the agent
-        # produced), falling back to the whole envelope if it isn't a dict.
-        inner_output = envelope.get("output")
-        if not isinstance(inner_output, dict):
-            inner_output = envelope
+        # "output": {...}}``. Resolve the agent's CONTRACT output (FAR-311):
+        # sandbox_agent envelopes bury it at ``artifacts[0].output.output_json``
+        # while the outer ``output`` is a telemetry summary that omits contract
+        # fields (``pr_url``, ``changed_files``) — eval schemas are authored
+        # against the contract output.
+        inner_output = resolve_eval_target(envelope)
 
         engine = EvalEngine()
         results: dict[str, EngineEvalResult] = {}

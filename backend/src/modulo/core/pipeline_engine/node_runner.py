@@ -71,6 +71,7 @@ from modulo.core.cost_controller.breakdown.constants import (
 )
 from modulo.core.cost_controller.breakdown.metrics import record_out_of_band
 from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult, EvalType
+from modulo.core.node_output_split import resolve_eval_target
 from modulo.core.pipeline_engine.decorator import cancellable_node
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
 from modulo.core.pipeline_engine.input_truncation import truncate_input
@@ -1610,7 +1611,27 @@ def make_hitl_gate_fn(
                             hub,
                             str(eval_def.config["model_backend_id"]),
                         )
-                eval_result = engine.evaluate(state, eval_def, llm_judge_callable=llm_judge_callable)
+                # FAR-311: llm_judge evals keep the raw state shape (the judge
+                # callable extracts ``eval_def.config["field"]`` from the target,
+                # e.g. FAR-302's ``field: "output"``), but schema/regex/custom/
+                # guardrail evals must validate the agent's CONTRACT output —
+                # sandbox_agent state buries it at
+                # ``artifacts[0].output.output_json`` while ``state["output"]``
+                # is a telemetry summary that omits contract fields. Resolve the
+                # contract output from a reconstructed envelope; only switch
+                # targets when the resolver found a real dict-valued output,
+                # otherwise keep the raw state (top-level eval fields live there
+                # for non-sandbox state shapes).
+                if eval_def.eval_type == EvalType.LLM_JUDGE:
+                    eval_target: dict[str, Any] = state
+                else:
+                    envelope: dict[str, Any] = {
+                        "artifacts": state.get("artifacts"),
+                        "output": state.get("output"),
+                    }
+                    resolved = resolve_eval_target(envelope)
+                    eval_target = state if resolved is envelope else resolved
+                eval_result = engine.evaluate(eval_target, eval_def, llm_judge_callable=llm_judge_callable)
                 eval_results_by_name[eval_def.name] = eval_result
                 _log.info(
                     "hitl_gate.eval_result",

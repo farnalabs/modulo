@@ -70,6 +70,52 @@ NODE_UUID = uuid.UUID("00000000-0000-0000-0000-0000000000d4")
 
 PASSING_SCHEMA = {"type": "object", "required": ["summary"], "properties": {"summary": {"type": "string"}}}
 
+# FAR-301-style schema: when the contract output reports status "completed" it
+# MUST carry pr_url + changed_files (the agent's structured return contract).
+CONTRACT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "status": {"type": "string"},
+        "summary": {"type": "string"},
+        "pr_url": {"type": "string"},
+        "changed_files": {"type": "array", "items": {"type": "string"}},
+    },
+    "if": {"properties": {"status": {"const": "completed"}}, "required": ["status"]},
+    "then": {"required": ["pr_url", "changed_files"]},
+}
+
+
+def _sandbox_agent_envelope(artifact_output: dict[str, Any]) -> dict[str, Any]:
+    """A REAL sandbox_agent envelope: the outer ``output`` is telemetry only,
+    the agent's structured return lives at ``artifacts[0].output`` (with the
+    pure contract at ``output_json``)."""
+    return {
+        "artifacts": [
+            {
+                "node_id": "node-a",
+                "status": "completed",
+                "output": artifact_output,
+            }
+        ],
+        "output": {
+            "status": "completed",
+            "summary": "telemetry only",
+            "wall_clock_time_ms": 1,
+        },
+    }
+
+
+def _sandbox_agent_event(envelope: dict[str, Any], name: str = "node-a") -> dict[str, Any]:
+    """An ``on_chain_end`` event whose ``data.output`` IS the node envelope
+    directly (matching production — the node returns the envelope as its
+    output state; unlike ``_node_event`` which wraps it in an extra
+    ``{"output": ...}`` layer)."""
+    return {
+        "event": "on_chain_end",
+        "name": name,
+        "data": {"output": envelope},
+    }
+
 
 def _make_executor(
     session: _RecordingSession | None = None, monkeypatch: pytest.MonkeyPatch | None = None
@@ -243,3 +289,90 @@ async def test_persistence_writes_correct_org_run_node_eval_ids(monkeypatch: pyt
     assert row.run_id == RUN_ID
     assert row.node_id == NODE_UUID
     assert row.eval_id == EVAL_ID
+
+
+async def test_sandbox_agent_envelope_valid_artifact_passes_pr_url_schema(monkeypatch: pytest.MonkeyPatch):
+    """FAR-311: a sandbox_agent envelope whose artifact output_json carries the
+    contract fields PASSES a pr_url-requiring schema.
+
+    The pre-fix code validated the telemetry-only OUTER output (no pr_url /
+    changed_files), so every completed run failed with EvalBlockedError. The fix
+    resolves the agent's contract output (``artifacts[0].output.output_json``)
+    before evaluating, so the schema passes and the run completes.
+    """
+    from modulo.db.models.eval_result import EvalResult as EvalResultModel
+
+    session = _RecordingSession()
+    executor, _ = _make_executor(session, monkeypatch)
+    artifact_output = {
+        "status": "completed",
+        "summary": "opened PR",
+        "pr_url": "https://github.com/farnalabs/modulo/pull/1554",
+        "changed_files": ["a.py"],
+        "output_json": {
+            "status": "completed",
+            "summary": "opened PR",
+            "pr_url": "https://github.com/farnalabs/modulo/pull/1554",
+            "changed_files": ["a.py"],
+        },
+    }
+    event = _sandbox_agent_event(_sandbox_agent_envelope(artifact_output))
+    eval_def = EvalDefinition(
+        id=EVAL_ID,
+        org_id=ORG_ID,
+        node_id=str(NODE_UUID),
+        name="pr-contract-check",
+        eval_type=EvalType.JSON_SCHEMA,
+        config={"schema": CONTRACT_SCHEMA},
+        failure_behaviour="warn",
+    )
+
+    result, _broker = await _run_stream_graph(
+        [event],
+        {"node-a": [eval_def]},
+        executor,
+    )
+
+    final_status, error_code, _error_detail, _node_token_usage = result
+    assert final_status == "complete"
+    assert error_code is None
+    assert len(session.added) == 1
+    row = session.added[0]
+    assert isinstance(row, EvalResultModel)
+    assert row.passed is True
+
+
+async def test_sandbox_agent_envelope_missing_pr_url_blocks(monkeypatch: pytest.MonkeyPatch):
+    """FAR-311: the fix only changed WHICH dict is validated, not the
+    enforcement — a contract output that omits pr_url / changed_files still
+    blocks the run (EvalBlockedError -> eval_failed / eval_blocked)."""
+    executor, _ = _make_executor(monkeypatch=monkeypatch)
+    artifact_output = {
+        "status": "completed",
+        "summary": "no pr",
+        "output_json": {
+            "status": "completed",
+            "summary": "no pr",
+        },
+    }
+    event = _sandbox_agent_event(_sandbox_agent_envelope(artifact_output))
+    eval_def = EvalDefinition(
+        id=EVAL_ID,
+        org_id=ORG_ID,
+        node_id=str(NODE_UUID),
+        name="pr-contract-check",
+        eval_type=EvalType.JSON_SCHEMA,
+        config={"schema": CONTRACT_SCHEMA},
+        failure_behaviour="block",
+    )
+
+    result, _broker = await _run_stream_graph(
+        [event],
+        {"node-a": [eval_def]},
+        executor,
+    )
+
+    final_status, error_code, error_detail, _node_token_usage = result
+    assert final_status == "eval_failed"
+    assert error_code == "eval_blocked"
+    assert error_detail is not None
