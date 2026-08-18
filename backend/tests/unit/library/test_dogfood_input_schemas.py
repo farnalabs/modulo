@@ -85,15 +85,14 @@ def _reference_files() -> list[Path]:
 def test_reference_copies_match_seed_definitions() -> None:
     """Version-controlled copies under devtools/dogfood/schemas stay in sync."""
     seeds = {entry["name"]: entry for entry in SCHEMAS}
-    refs = _reference_files()
+    refs = [json.loads(ref.read_text()) for ref in _reference_files()]
     assert refs, "No dogfood schema reference copies found"
 
-    for ref in refs:
-        data = json.loads(ref.read_text())
+    for data in refs:
         seed = seeds.get(data["name"])
-        assert seed is not None, f"Reference copy {ref.name} has no matching seed schema"
+        assert seed is not None, f"Reference copy {data['name']} has no matching seed schema"
         assert data["name"] == seed["name"]
         assert data["description"] == seed["description"]
         assert data["definition"] == seed["definition"]
 
-    assert {json.loads(f.read_text())["name"] for f in refs} == {"pr-review-input", "ticket-input"}
+    assert {data["name"] for data in refs} == {"pr-review-input", "ticket-input"}

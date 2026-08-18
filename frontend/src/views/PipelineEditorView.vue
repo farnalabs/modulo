@@ -407,6 +407,15 @@
             />
           </div>
 
+          <!-- FAR-295: retry-safety indicator for every node type -->
+          <div>
+            <dt class="text-muted-foreground text-xs uppercase tracking-wider" data-testid="pipeline-editor-idempotent-label">{{ $t('views.PipelineEditorView.idempotent') }}</dt>
+            <dd data-testid="pipeline-editor-idempotent-value">
+              {{ selectedNodeData.idempotent === false ? $t('views.PipelineEditorView.disabled') : $t('views.PipelineEditorView.enabled') }}
+            </dd>
+            <p class="mt-0.5 text-[11px] text-muted-foreground">{{ $t('views.PipelineEditorView.idempotent_description') }}</p>
+          </div>
+
           <!-- Manual node: Output Schema -->
           <div v-if="selectedNodeData.node_type === 'manual' && selectedNodeData.output_schema_id">
             <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.output_schema') }}</dt>
@@ -1654,6 +1663,7 @@ async function saveEdgeConfig() {
           output_schema_id: n.output_schema_id || null,
           model_backend_id: n.model_backend_id || null,
           role: n.role || null,
+          idempotent: n.idempotent !== false,
           timeout_seconds: n.timeout_seconds || null,
           stall_timeout_seconds: n.stall_timeout_seconds || null,
           enable_heartbeat: n.enable_heartbeat === false ? false : true,
@@ -1929,6 +1939,7 @@ async function saveGraph() {
           output_schema_id: n.output_schema_id || null,
           model_backend_id: n.model_backend_id || null,
           role: n.role || null,
+          idempotent: n.idempotent !== false,
           timeout_seconds: n.timeout_seconds || null,
           stall_timeout_seconds: n.stall_timeout_seconds || null,
           enable_heartbeat: n.enable_heartbeat === false ? false : true,

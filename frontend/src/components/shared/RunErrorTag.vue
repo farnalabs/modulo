@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { errorCodeLabel } from '../../utils/runUtils'
 
 const props = defineProps<{
   code?: string | null
@@ -27,12 +28,7 @@ const CLASS_STYLES: Record<string, string> = {
 }
 
 const normalized = computed(() => props.code ?? '')
-const label = computed(() => {
-  if (!normalized.value) return ''
-  const key = `errorCodes.${normalized.value}`
-  const translated = t(key)
-  return translated === key ? t('errorCodes._unknown') : translated
-})
+const label = computed(() => errorCodeLabel(props.code, t))
 const pillClass = computed(() => {
   const cls = normalized.value.split('.')[0]
   return CLASS_STYLES[cls] ?? 'bg-muted text-muted-foreground'

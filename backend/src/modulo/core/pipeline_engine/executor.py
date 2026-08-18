@@ -500,6 +500,26 @@ def _sandbox_agent_for_snapshot(snapshot_id: uuid.UUID, graph_json: dict[str, An
     return result
 
 
+def _graph_is_idempotent(graph_json: dict[str, Any] | None) -> bool:
+    """True when every node in the graph is safe to re-run (FAR-295).
+
+    A node is idempotent unless it EXPLICITLY declares ``idempotent=false``:
+    the field defaults to ``true`` on the ``PipelineGraphNode`` schema, and a
+    missing/None value (legacy graphs persisted before the field existed) is
+    treated as idempotent so old graphs keep their retry behaviour unchanged.
+    Returns False when ANY node is non-idempotent — a retry re-executes the
+    whole run, so a single side-effecting node makes re-running the run unsafe.
+    """
+    if not isinstance(graph_json, dict):
+        return True
+    for node in graph_json.get("nodes", []) or []:
+        if not isinstance(node, dict):
+            continue
+        if node.get("idempotent") is False:
+            return False
+    return True
+
+
 def _graph_has_script_mode(graph_json: dict[str, Any] | None) -> bool:
     """True when the graph contains a ``sandbox_agent`` node in ``mode="script"``.
 
@@ -2141,6 +2161,12 @@ class PipelineExecutor:
         single_sandbox_node: bool = (
             sum(1 for n in graph_json.get("nodes", []) if str(n.get("node_type", "")).strip() == "sandbox_agent") == 1
         )
+        # FAR-295: computed ONCE per run — a graph containing ANY node declared
+        # non-idempotent (idempotent=false) suppresses every retry path below
+        # (the node-level transient retry and the run-level retry_policy
+        # re-dispatch), because either retry re-executes the whole run and
+        # would re-run the side-effecting node.
+        graph_idempotent = _graph_is_idempotent(graph_json)
         # FAR-228: set when guard B suppressed a transient retry — gates the
         # eval-suite/fire_agent_signal block and publishes run_completed.
         gate_suppressed = False
@@ -2349,7 +2375,9 @@ class PipelineExecutor:
                 # below — fall through to the existing finalization with
                 # final_status="complete". run_completed is published after the
                 # eval-skip point (below), while the broker is still open.
-            elif node_attempt_count < retries and not superseded and not stalled and script_lease_ok:
+            elif (
+                node_attempt_count < retries and not superseded and not stalled and script_lease_ok and graph_idempotent
+            ):
                 # Fenced pending-reset: a conditional UPDATE guarded by OUR
                 # captured claim token + status='running' so a superseded
                 # original cannot demote the successor's running row, a stalled
@@ -2425,7 +2453,20 @@ class PipelineExecutor:
                     )
                 else:
                     error_code = "node_cancelled"
-                    if isinstance(exc, NodeCancelledError):
+                    if not graph_idempotent and node_attempt_count < retries:
+                        # FAR-295: the run was NOT retried because a node in the
+                        # graph is non-idempotent (idempotent=false) — a retry
+                        # would re-execute a side-effecting step. Distinguish
+                        # this from the retries-exhausted message so the run
+                        # detail readout explains WHY it terminal-failed on the
+                        # first attempt.
+                        error_detail = _sanitize_detail(
+                            "Sandbox node failed (transient); retry suppressed because a node in the "
+                            "graph is non-idempotent (idempotent=false) and re-running could double-execute "
+                            "a side effect: " + str(exc),
+                            limit=5000,
+                        )
+                    elif isinstance(exc, NodeCancelledError):
                         error_detail = _sanitize_detail(
                             "Sandbox node cancelled (transient) after retries exhausted: " + str(exc), limit=5000
                         )
@@ -2460,7 +2501,11 @@ class PipelineExecutor:
         # favour of ``runs.claim_token`` fencing (settings.py F3a note), so the
         # fenced pending-reset below IS the fence release.
         retry_budget = _retry_after_policy(pipeline_retry_policy, final_status, error_code, error_detail)
-        if retry_budget is not None and not is_correction_run:
+        # FAR-295: a run whose graph contains a non-idempotent node is NEVER
+        # re-dispatched by the retry_policy — re-running the run would
+        # re-execute the side-effecting node. The run terminal-fails instead
+        # (mirrors the FAR-210 correction-run exclusion below).
+        if retry_budget is not None and not is_correction_run and graph_idempotent:
             node_attempt_count = 0
             current_claim_token: str | None = None
             async with self._session_factory() as session, session.begin():
