@@ -585,17 +585,49 @@ def _check_sandbox_output_schema(node: dict[str, Any], nid: str, result: Validat
 
 
 def _check_sandbox_egress(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
-    """Sandbox check 9: egress_policy must be None / "default" / "deny_all" (FAR-296)."""
-    from modulo.core.pipeline_engine.sandbox_mode import _SANDBOX_EGRESS_POLICIES
+    """Sandbox check 9: egress_policy + egress_allowlist (FAR-296, fail-closed).
+
+    egress_policy must be None / "default" / "deny_all" / "selected". The
+    host:port ``egress_allowlist`` is cross-checked via the shared
+    sandbox_mode validator: ``selected`` REQUIRES a non-empty allowlist,
+    any other policy must NOT carry one, and every entry must have a
+    non-empty ``host`` + an int ``port`` in [1, 65535].
+    """
+    from modulo.core.pipeline_engine.sandbox_mode import (
+        _SANDBOX_EGRESS_POLICIES,
+        _validate_sandbox_egress_allowlist_config,
+    )
 
     egress_policy = node.get("egress_policy")
-    if egress_policy is None:
-        return
-    if not isinstance(egress_policy, str) or egress_policy not in _SANDBOX_EGRESS_POLICIES:
+    if egress_policy is not None and (
+        not isinstance(egress_policy, str) or egress_policy not in _SANDBOX_EGRESS_POLICIES
+    ):
         result.error(
             "SANDBOX_EGRESS_POLICY_INVALID",
             f"Sandbox agent node '{nid}' egress_policy {egress_policy!r} is invalid — "
-            "expected None, 'default' or 'deny_all'",
+            "expected None, 'default', 'deny_all' or 'selected'",
+            node_id=nid,
+        )
+    try:
+        _validate_sandbox_egress_allowlist_config(egress_policy, node.get("egress_allowlist"), nid)
+    except ValueError as exc:
+        result.error(
+            "SANDBOX_EGRESS_ALLOWLIST_INVALID",
+            f"Sandbox agent node '{nid}' egress allowlist is invalid: {exc}",
+            node_id=nid,
+        )
+    if egress_policy == "selected":
+        # FAR-296 Phase 3b-3 limitation: ``selected`` currently DENIES ALL egress
+        # (allow_internet_access=False); the allowlist is metadata-only until a
+        # template-side enforcement point exists. Warn (not error) so an operator
+        # expecting specific hosts to be reachable sees the limitation at
+        # save-time instead of discovering a deny_all-equivalent sandbox at run.
+        result.warning(
+            "SANDBOX_EGRESS_SELECTED_METADATA_ONLY",
+            f"Sandbox agent node '{nid}' egress_policy='selected' currently denies "
+            "ALL egress — the egress_allowlist is carried as sandbox metadata and "
+            "is NOT honored at runtime yet (it awaits a template-side enforcement "
+            "point). Functionally equivalent to 'deny_all' until then.",
             node_id=nid,
         )
 

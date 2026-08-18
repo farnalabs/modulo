@@ -17,16 +17,19 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from e2b.exceptions import SandboxException
 from pydantic import ValidationError
 
 from modulo.api.routes.pipelines import PipelineGraphNode
 from modulo.core.graph_validator import GraphValidator, ValidationResult
 from modulo.core.pipeline_engine.node_runner import (
+    ScriptBudgetKilledError,
     ScriptFailedError,
     ScriptInvalidOutputError,
     make_sandbox_agent_fn,
 )
 from modulo.core.pipeline_engine.sandbox_mode import (
+    _validate_sandbox_egress_allowlist_config,
     _validate_sandbox_egress_config,
     _validate_sandbox_mode_config,
     _validate_sandbox_resource_limits_config,
@@ -75,6 +78,7 @@ def _script_sandbox_mock(*, output_json: str = '{"result": "ok"}', log_content: 
     sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=len(log_content)))
     sandbox.commands.run = AsyncMock(return_value=handle)
     sandbox.kill = AsyncMock()
+    sandbox.get_metrics = AsyncMock(return_value=MagicMock(cpu_used_pct=1.0, mem_used=1, disk_used=1))
     return sandbox
 
 
@@ -692,8 +696,11 @@ def test_shared_validator_rejects_unknown_resource_limit_keys():
         _validate_sandbox_resource_limits_config({"id": "n1", "resource_limits": {"cpu_count": -1}})
     with pytest.raises(ValueError, match="expected an object"):
         _validate_sandbox_resource_limits_config({"id": "n1", "resource_limits": [1, 2]})
-    # Valid keys pass.
-    _validate_sandbox_resource_limits_config({"id": "n1", "resource_limits": {"cpu_count": 2, "memory_mb": 512.5}})
+    # Valid keys pass — including cpu_usage_pct (the enforceable percentage cap,
+    # distinct from the metadata-only cpu_count core count).
+    _validate_sandbox_resource_limits_config(
+        {"id": "n1", "resource_limits": {"cpu_count": 2, "cpu_usage_pct": 90, "memory_mb": 512.5}}
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -835,3 +842,255 @@ async def test_llm_mode_does_not_inject_run_api_key():
 
     envs = sandbox.commands.run.call_args.kwargs["envs"]
     assert "MODULO_API_KEY" not in envs
+
+
+# ---------------------------------------------------------------------------
+# 7. FAR-296 Phase 3b-3: egress "selected" allowlist + platform-side resource killer
+# ---------------------------------------------------------------------------
+
+_BUDGET_PATCH = "modulo.core.pipeline_engine.node_runner._SANDBOX_BUDGET_POLL_INTERVAL_TICKS"
+
+
+def _killer_kill_timeouts(sandbox) -> set:
+    """request_timeout values the resource-cap killer's kill() used (10s)."""
+    return {c.kwargs.get("request_timeout") for c in sandbox.kill.call_args_list}
+
+
+def _killed_sandbox_mock(output_json: str = '{"result": "ok"}'):
+    """Sandbox mock that simulates the REAL platform-side kill path.
+
+    After ``sandbox.kill()`` the sandbox is dead: ``files.read`` raises an
+    e2b ``SandboxException`` (output.json becomes unreadable) and the command
+    handle's ``wait()`` raises ``SandboxException`` on the next poll — NOT a
+    Python ``TimeoutError``. This is the path a production resource-cap kill
+    takes; mocking ``TimeoutError`` would route the run through the timeout
+    branch, which the real kill never exercises.
+    """
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = "script stdout"
+    cmd_result.stderr = ""
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=SandboxException("sandbox was killed"))
+
+    state = {"killed": False}
+
+    async def _kill(*_args: Any, **_kwargs: Any) -> None:
+        state["killed"] = True
+
+    def _read(path, format="text", **kwargs):
+        if state["killed"]:
+            raise SandboxException("sandbox is dead")
+        if str(path).endswith("output.json"):
+            return output_json
+        return ""
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=0))
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock(side_effect=_kill)
+    sandbox.get_metrics = AsyncMock(return_value=MagicMock(cpu_used_pct=1.0, mem_used=1, disk_used=1))
+    return sandbox
+
+
+async def test_egress_selected_maps_to_no_internet_and_allowlist_metadata():
+    """egress_policy='selected' -> no internet at the boolean level AND the
+    host:port allowlist is carried as sandbox metadata for template-side
+    enforcement (the e2b SDK has no native egress allowlist)."""
+    allowlist = [{"host": "api.github.com", "port": 443}]
+    node_def = _script_node_def(egress_policy="selected", egress_allowlist=allowlist)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _script_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create_mock:
+        await fn(_run_state())
+
+    create_mock.assert_awaited_once()
+    kwargs = create_mock.await_args.kwargs
+    assert kwargs["allow_internet_access"] is False
+    import json
+
+    assert json.loads(kwargs["metadata"]["egress_allowlist"]) == allowlist
+
+
+def test_egress_selected_without_allowlist_rejected_at_save_time():
+    """selected WITHOUT an allowlist is rejected at save-time by the Pydantic
+    model (fail-closed) — an allowlist control must never silently no-op."""
+    node = _script_node_def(egress_policy="selected")
+    with pytest.raises(ValidationError):
+        PipelineGraphNode.model_validate(node)
+
+
+async def test_resource_killer_kills_when_cpu_exceeds():
+    """The platform-side resource-cap killer kills the sandbox when the
+    cpu_usage_pct (0-100 PERCENTAGE) cap is exceeded and the run fails with
+    the terminal ScriptBudgetKilledError.
+
+    The command handle raises an e2b SandboxException (the REAL kill path),
+    not a builtin TimeoutError — this test fails on the pre-fix code where the
+    dead-sandbox no-output path misclassified the kill as
+    ScriptInvalidOutputError.
+    """
+    node_def = _script_node_def(resource_limits={"cpu_usage_pct": 80})
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _killed_sandbox_mock()
+    metrics = MagicMock(cpu_used_pct=95.0, mem_used=1024, disk_used=1024)
+    sandbox.get_metrics = AsyncMock(return_value=metrics)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch(_BUDGET_PATCH, 1),
+        pytest.raises(ScriptBudgetKilledError, match="resource limits"),
+    ):
+        await fn(_run_state())
+
+    assert 10 in _killer_kill_timeouts(sandbox)
+
+
+async def test_resource_killer_kills_when_memory_exceeds():
+    """memory_mb cap is enforced against the raw mem_used bytes (real
+    SandboxException kill path, like the cpu test)."""
+    node_def = _script_node_def(resource_limits={"memory_mb": 512})
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _killed_sandbox_mock()
+    metrics = MagicMock(cpu_used_pct=10.0, mem_used=1024 * 1024 * 1024, disk_used=1024)
+    sandbox.get_metrics = AsyncMock(return_value=metrics)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch(_BUDGET_PATCH, 1),
+        pytest.raises(ScriptBudgetKilledError, match="resource limits"),
+    ):
+        await fn(_run_state())
+
+    assert 10 in _killer_kill_timeouts(sandbox)
+
+
+async def test_resource_killer_cpu_count_alone_never_kills():
+    """cpu_count is a CORE COUNT, metadata-only — never a percentage threshold.
+
+    The pre-fix code compared cpu_used_pct against cpu_count and would kill a
+    2-core sandbox at >2% CPU usage. The fix ignores cpu_count entirely: a
+    2-core sandbox at 95% usage with NO cpu_usage_pct cap must NOT be killed.
+    """
+    node_def = _script_node_def(resource_limits={"cpu_count": 2})
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _script_sandbox_mock()
+    metrics = MagicMock(cpu_used_pct=95.0, mem_used=1024, disk_used=1024)
+    sandbox.get_metrics = AsyncMock(return_value=metrics)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch(_BUDGET_PATCH, 1),
+    ):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    assert 10 not in _killer_kill_timeouts(sandbox)
+
+
+async def test_resource_killer_does_not_kill_within_limits():
+    """Metrics within every configured cap -> no killer kill, node completes.
+
+    Uses a realistic cpu_count=2 (a core count, NOT a percentage) alongside
+    cpu_usage_pct=90: at 40% CPU usage the sandbox stays well under the
+    percentage cap and is not killed (the pre-fix code killed at >2%).
+    """
+    node_def = _script_node_def(
+        resource_limits={"cpu_count": 2, "cpu_usage_pct": 90, "memory_mb": 512, "disk_mb": 1024},
+    )
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _script_sandbox_mock()
+    metrics = MagicMock(
+        cpu_used_pct=40.0,
+        mem_used=100 * 1024 * 1024,
+        disk_used=100 * 1024 * 1024,
+    )
+    sandbox.get_metrics = AsyncMock(return_value=metrics)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch(_BUDGET_PATCH, 1),
+    ):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    assert 10 not in _killer_kill_timeouts(sandbox)
+
+
+async def test_resource_killer_fails_open_on_metrics_error():
+    """get_metrics raising -> the killer degrades gracefully: no kill, no crash
+    (the sandbox timeout remains the backstop)."""
+    node_def = _script_node_def(resource_limits={"cpu_usage_pct": 80})
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _script_sandbox_mock()
+
+    async def _boom(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("metrics unavailable")
+
+    sandbox.get_metrics = AsyncMock(side_effect=_boom)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch(_BUDGET_PATCH, 1),
+    ):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    assert 10 not in _killer_kill_timeouts(sandbox)
+
+
+def test_shared_validator_rejects_selected_without_allowlist():
+    """egress_policy='selected' REQUIRES a non-empty allowlist (fail-closed)."""
+    with pytest.raises(ValueError, match="requires a non-empty"):
+        _validate_sandbox_egress_allowlist_config("selected", None, "n1")
+    with pytest.raises(ValueError, match="requires a non-empty"):
+        _validate_sandbox_egress_allowlist_config("selected", [], "n1")
+
+
+def test_shared_validator_rejects_allowlist_without_selected():
+    """An allowlist on any non-selected policy is rejected (it would no-op)."""
+    allowlist = [{"host": "api.github.com", "port": 443}]
+    with pytest.raises(ValueError, match="only valid with egress_policy='selected'"):
+        _validate_sandbox_egress_allowlist_config("default", allowlist, "n1")
+    with pytest.raises(ValueError, match="only valid with egress_policy='selected'"):
+        _validate_sandbox_egress_allowlist_config(None, allowlist, "n1")
+    with pytest.raises(ValueError, match="only valid with egress_policy='selected'"):
+        _validate_sandbox_egress_allowlist_config("deny_all", allowlist, "n1")
+
+
+def test_shared_validator_rejects_invalid_allowlist_entries():
+    """Invalid entries — bad port, missing host, unknown key — raise ValueError."""
+    _validate_sandbox_egress_allowlist_config("selected", [{"host": "a.com", "port": 443}], "n1")
+    _validate_sandbox_egress_allowlist_config("selected", [{"host": "a.com", "port": 65535}], "n1")
+    with pytest.raises(ValueError, match="port"):
+        _validate_sandbox_egress_allowlist_config("selected", [{"host": "a.com", "port": 0}], "n1")
+    with pytest.raises(ValueError, match="port"):
+        _validate_sandbox_egress_allowlist_config("selected", [{"host": "a.com", "port": 70000}], "n1")
+    with pytest.raises(ValueError, match="port"):
+        _validate_sandbox_egress_allowlist_config("selected", [{"host": "a.com", "port": "443"}], "n1")
+    with pytest.raises(ValueError, match="host"):
+        _validate_sandbox_egress_allowlist_config("selected", [{"port": 443}], "n1")
+    with pytest.raises(ValueError, match="host"):
+        _validate_sandbox_egress_allowlist_config("selected", [{"host": "  ", "port": 443}], "n1")
+    with pytest.raises(ValueError, match="unknown keys"):
+        _validate_sandbox_egress_allowlist_config("selected", [{"host": "a.com", "port": 443, "proto": "tcp"}], "n1")
+    with pytest.raises(ValueError, match="must be an object"):
+        _validate_sandbox_egress_allowlist_config("selected", ["api.github.com:443"], "n1")
+
+
+def test_script_mode_local_provider_refused_for_selected(monkeypatch: pytest.MonkeyPatch):
+    """egress_policy='selected' without a remote E2B provider is refused —
+    the allowlist has no local enforcement point (fail-closed)."""
+    monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+    monkeypatch.delenv("E2B_API_KEY", raising=False)
+
+    node_def = _script_node_def(
+        egress_policy="selected",
+        egress_allowlist=[{"host": "api.github.com", "port": 443}],
+    )
+    with pytest.raises(ValueError, match="requires a remote E2B provider"):
+        make_sandbox_agent_fn(node_def)

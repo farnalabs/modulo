@@ -1271,11 +1271,74 @@ async def test_sandbox_egress_valid_values_pass():
 
 
 async def test_sandbox_egress_invalid_value_is_error():
-    """An egress_policy outside default/deny_all is a hard error (fail-closed)."""
+    """An egress_policy outside default/deny_all/selected is a hard error (fail-closed)."""
     graph = {"nodes": [_sandbox_node(egress_policy="allow_all")], "edges": []}
     result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
     assert not result.is_valid
     assert any(i.code == "SANDBOX_EGRESS_POLICY_INVALID" for i in result.issues)
+
+
+async def test_sandbox_egress_selected_with_allowlist_passes():
+    """egress_policy='selected' WITH a valid host:port allowlist passes graph
+    validation (FAR-296 Phase 3b-3) — but warns that the allowlist is
+    metadata-only and 'selected' currently denies ALL egress."""
+    graph = {
+        "nodes": [
+            _sandbox_node(
+                egress_policy="selected",
+                egress_allowlist=[{"host": "api.github.com", "port": 443}],
+            )
+        ],
+        "edges": [],
+    }
+    result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+    assert result.is_valid
+    assert any(i.code == "SANDBOX_EGRESS_SELECTED_METADATA_ONLY" for i in result.issues)
+    assert not any(i.code.startswith("SANDBOX_EGRESS_") and i.severity == "error" for i in result.issues)
+
+
+async def test_sandbox_egress_non_selected_has_no_metadata_only_warning():
+    """The metadata-only limitation warning fires ONLY for egress_policy='selected'."""
+    for policy in (None, "default", "deny_all"):
+        overrides = {} if policy is None else {"egress_policy": policy}
+        graph = {"nodes": [_sandbox_node(**overrides)], "edges": []}
+        result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+        assert result.is_valid
+        assert not any(i.code == "SANDBOX_EGRESS_SELECTED_METADATA_ONLY" for i in result.issues)
+
+
+async def test_sandbox_egress_selected_without_allowlist_is_error():
+    """egress_policy='selected' REQUIRES a non-empty allowlist (fail-closed)."""
+    graph = {"nodes": [_sandbox_node(egress_policy="selected")], "edges": []}
+    result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+    assert not result.is_valid
+    assert any(i.code == "SANDBOX_EGRESS_ALLOWLIST_INVALID" for i in result.issues)
+
+
+async def test_sandbox_egress_allowlist_without_selected_is_error():
+    """An allowlist on a non-selected policy is a hard error (it would no-op)."""
+    allowlist = [{"host": "api.github.com", "port": 443}]
+    for policy in ("default", "deny_all"):
+        graph = {"nodes": [_sandbox_node(egress_policy=policy, egress_allowlist=allowlist)], "edges": []}
+        result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+        assert not result.is_valid
+        assert any(i.code == "SANDBOX_EGRESS_ALLOWLIST_INVALID" for i in result.issues)
+
+
+async def test_sandbox_egress_invalid_allowlist_entry_is_error():
+    """A malformed allowlist entry (bad port) is a hard error."""
+    graph = {
+        "nodes": [
+            _sandbox_node(
+                egress_policy="selected",
+                egress_allowlist=[{"host": "api.github.com", "port": 0}],
+            )
+        ],
+        "edges": [],
+    }
+    result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+    assert not result.is_valid
+    assert any(i.code == "SANDBOX_EGRESS_ALLOWLIST_INVALID" for i in result.issues)
 
 
 async def test_sandbox_resource_limits_known_keys_pass():
