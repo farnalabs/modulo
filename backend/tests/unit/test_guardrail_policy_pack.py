@@ -26,6 +26,8 @@ from modulo.core.guardrails.policy_pack import (
     dump_pack,
     instantiate_pack,
     load_pack,
+    load_pack_file,
+    main,
     pack_rollout_config,
     validate_pack,
 )
@@ -384,3 +386,83 @@ def test_rollout_excludes_unmapped_controls():
     pack = _pack([_control(cid="CC6.1", guardrail=_guardrail()), _control(cid="CC7.2")])
     config_set = pack_rollout_config(pack, mode="block")
     assert [item.id for item in config_set.guardrails] == ["no-aws-keys"]
+
+
+# ---------------------------------------------------------------------------
+# load_pack_file — reading a pack YAML from disk
+# ---------------------------------------------------------------------------
+
+
+def test_load_pack_file_reads_yaml_from_disk(tmp_path):
+    pack_file = tmp_path / "pack.yaml"
+    pack_file.write_text(_PACK_YAML, encoding="utf-8")
+    pack = load_pack_file(str(pack_file))
+    assert pack.id == "soc2"
+    assert pack.controls[0].id == "CC6.1"
+    assert pack.controls[0].mapped
+    assert pack.controls[0].guardrail is not None
+
+
+def test_load_pack_file_missing_file_raises(tmp_path):
+    missing = tmp_path / "does-not-exist.yaml"
+    with pytest.raises(GuardrailConfigError):
+        load_pack_file(str(missing))
+
+
+# ---------------------------------------------------------------------------
+# Unsafe YAML must be rejected (safe-load only)
+# ---------------------------------------------------------------------------
+
+
+def test_load_pack_rejects_unsafe_yaml_constructor():
+    # ``!!python/object`` requires yaml.unsafe_load / a custom loader — the
+    # framework must refuse it via safe_load, never construct arbitrary
+    # objects from pack content.
+    unsafe = "!!python/object/apply:os.system ['echo pwned']\n"
+    with pytest.raises(GuardrailConfigError):
+        load_pack(unsafe)
+
+
+# ---------------------------------------------------------------------------
+# CI gate — error message carries the gap details
+# ---------------------------------------------------------------------------
+
+
+def test_assert_pack_ci_ready_error_lists_gaps():
+    pack = _pack(
+        [
+            _control(cid="CC6.1", guardrail=_guardrail()),
+            _control(cid="CC7.2"),
+        ]
+    )
+    with pytest.raises(GuardrailConfigError) as exc_info:
+        assert_pack_ci_ready(pack)
+    message = str(exc_info.value)
+    assert "soc2" in message
+    assert "1 unmapped control" in message
+    assert "CC7.2" in message
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point (CI gate wiring)
+# ---------------------------------------------------------------------------
+
+
+def test_main_cli_returns_zero_for_ready_pack(tmp_path):
+    pack_file = tmp_path / "ready.yaml"
+    pack_file.write_text(_PACK_YAML, encoding="utf-8")
+    assert main([str(pack_file)]) == 0
+
+
+def test_main_cli_returns_one_for_gapped_pack(tmp_path):
+    gapped_yaml = """
+id: soc2
+name: SOC 2
+version: 1.0.0
+controls:
+  - id: CC7.2
+    title: Unmapped control
+"""
+    pack_file = tmp_path / "gapped.yaml"
+    pack_file.write_text(gapped_yaml, encoding="utf-8")
+    assert main([str(pack_file)]) == 1
