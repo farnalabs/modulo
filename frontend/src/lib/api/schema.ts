@@ -6582,8 +6582,38 @@ export interface paths {
         /**
          * Get Guardrail Config
          * @description Export the org's applied guardrail config as YAML + pin metadata.
+         *
+         *     The standard (non-admin) read MASKS the deny-rule internals (regex
+         *     patterns, JSON schemas, redaction field paths) — a viewer can see the
+         *     guardrail topology and actions without the sensitive rule bodies. Admins
+         *     use ``GET /elevated`` (``guardrail.manage``) for the full unmasked config.
          */
         get: operations["get_guardrail_config_api_v1_guardrails_config_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/guardrails/config/elevated": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Guardrail Config Elevated
+         * @description Elevated (admin-only) export of the FULL unmasked guardrail config.
+         *
+         *     Requires ``guardrail.manage`` (admin). Returns the actual regex patterns,
+         *     JSON schemas, and redaction field paths that the standard read masks —
+         *     the safety-control internals an operator needs to author/audit rules but a
+         *     non-admin viewer must not see (FAR-309 PR A elevated read).
+         */
+        get: operations["get_guardrail_config_elevated_api_v1_guardrails_config_elevated_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -31005,6 +31035,37 @@ export interface operations {
         };
     };
     get_guardrail_config_api_v1_guardrails_config_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GuardrailConfigResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_guardrail_config_elevated_api_v1_guardrails_config_elevated_get: {
         parameters: {
             query?: {
                 _fresh?: boolean;
