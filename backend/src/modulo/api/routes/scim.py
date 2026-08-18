@@ -1067,27 +1067,35 @@ async def _apply_add_group_op(session: AsyncSession, group: Any, op: Any, org_id
                     )
 
 
+async def _remove_member_by_path(session: AsyncSession, group: Any, path: str) -> None:
+    # Extract user ID from path: members[value eq "uuid"]
+    import re as _re
+
+    m = _re.search(r'value\s+eq\s+"([^"]+)"', path)
+    if m:
+        uid = _parse_member_uuid(m.group(1))
+        if uid is not None:
+            await scim_remove_group_member(session, group.id, uid)
+
+
+async def _remove_members_from_value(session: AsyncSession, group: Any, value: Any) -> None:
+    if isinstance(value, dict) and "value" in value:
+        uid = _parse_member_uuid(value["value"])
+        if uid is not None:
+            await scim_remove_group_member(session, group.id, uid)
+    elif isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict) and "value" in item:
+                uid = _parse_member_uuid(item["value"])
+                if uid is not None:
+                    await scim_remove_group_member(session, group.id, uid)
+
+
 async def _apply_remove_group_op(session: AsyncSession, group: Any, op: Any) -> None:
     if op.path and op.path.startswith("members"):
-        # Extract user ID from path: members[value eq "uuid"]
-        import re as _re
-
-        m = _re.search(r'value\s+eq\s+"([^"]+)"', op.path)
-        if m:
-            uid = _parse_member_uuid(m.group(1))
-            if uid is not None:
-                await scim_remove_group_member(session, group.id, uid)
+        await _remove_member_by_path(session, group, op.path)
     elif op.value:
-        if isinstance(op.value, dict) and "value" in op.value:
-            uid = _parse_member_uuid(op.value["value"])
-            if uid is not None:
-                await scim_remove_group_member(session, group.id, uid)
-        elif isinstance(op.value, list):
-            for item in op.value:
-                if isinstance(item, dict) and "value" in item:
-                    uid = _parse_member_uuid(item["value"])
-                    if uid is not None:
-                        await scim_remove_group_member(session, group.id, uid)
+        await _remove_members_from_value(session, group, op.value)
 
 
 async def _build_group_member_refs(session: AsyncSession, group: Any, base_url: str) -> list[dict[str, str]]:
