@@ -1521,16 +1521,21 @@ async def get_org_run_concurrency_limit(session: AsyncSession, org_id: uuid.UUID
 async def get_run_api_key_ttl_seconds(session_factory: Any, org_id: uuid.UUID, node_timeout_seconds: int) -> int:
     """Per-run API-key TTL for script-mode sandboxes (FAR-296 Phase 3b).
 
-    TTL = max(15 min, node_timeout_seconds + 5 min), capped by the org-level
-    ``run_api_key_max_ttl_seconds`` setting (default 3600 = 1 hour). Read via
-    the existing org settings_json resolution pattern (``_read_org_int_limit``)
-    on a fresh session. Fail-open: a settings read failure falls back to the
-    default cap.
+    TTL = max(RUN_API_KEY_DEFAULT_TTL_SECONDS, node_timeout_seconds + 5 min),
+    capped by the org-level ``run_api_key_max_ttl_seconds`` setting (default
+    3600 = 1 hour). The floor comes from the ``run_api_key_default_ttl_seconds``
+    setting (default 900 = 15 min) so operators can tune the leaked-key
+    exposure window without redeploying. Read via the existing org
+    settings_json resolution pattern (``_read_org_int_limit``) on a fresh
+    session. Fail-open: a settings/org read failure falls back to the defaults.
     """
     from modulo.db.rls import set_rls_org
+    from modulo.settings import get_settings
 
+    settings_floor = 900
     org_max = 3600
     try:
+        settings_floor = int(get_settings().run_api_key_default_ttl_seconds)
         async with session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             raw = await _read_org_int_limit(
@@ -1547,7 +1552,7 @@ async def get_run_api_key_ttl_seconds(session_factory: Any, org_id: uuid.UUID, n
         raise
     except Exception:
         _log.exception("run_api_key_ttl.read_failed", extra={"org_id": str(org_id)})
-    return min(max(900, node_timeout_seconds + 300), org_max)
+    return min(max(settings_floor, node_timeout_seconds + 300), org_max)
 
 
 def _percentile(sorted_data: list[float], p: float) -> float:

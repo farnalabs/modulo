@@ -1930,8 +1930,8 @@ class PipelineExecutor:
         )
         # FAR-296 Phase 3b: revoke the per-run runner-role API key (if any was
         # minted for a script-mode sandbox). Failure-isolated — a revocation
-        # failure never crashes terminalization (the key is short-TTL and the
-        # housekeeping sweep is the backstop).
+        # failure never crashes terminalization (the key's short-TTL expiry in
+        # validate_api_key is the backstop).
         try:
             await self._revoke_run_api_key(run_id=run_id, org_id=org_id)
         except asyncio.CancelledError:
@@ -1944,7 +1944,7 @@ class PipelineExecutor:
         """Revoke the per-run runner-role API key minted for a script-mode sandbox.
 
         Failure-isolated at the call site — a revocation failure never crashes
-        terminalization (the key is short-TTL and the housekeeping sweep is the
+        terminalization (the key's short-TTL expiry in validate_api_key is the
         backstop).
         """
         if self._session_factory is None:

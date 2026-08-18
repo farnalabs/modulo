@@ -117,11 +117,14 @@ async def mint_run_api_key(
     """Mint a short-TTL RUNNER-ROLE API key for a script-mode sandbox run.
 
     FAR-296 Phase 3b: the key gives the script a restricted identity to call
-    the Modulo API (trigger/list runs only — runner role, never
-    pipelines/connectors/secrets). TTL is clamped to ``[300, 86400]`` so a
-    leaked key expires quickly. Fail-open: the caller decides whether a failed
-    mint blocks the dispatch (it should NOT — the sandbox runs without the key
-    rather than failing).
+    the Modulo API. Runner is the tightest role that can trigger/list runs; it
+    also grants run.cancel, run.evals, api_key.create/update/revoke,
+    hitl.claim/list, library.copy, and housekeeping.list — NOT
+    pipeline/connector/secret access. Escalation risk from a leaked key (e.g.
+    minting further runner-scope keys) is mitigated by the short TTL (clamped
+    to ``[300, 86400]``s), per-run linkage, and revocation at run finalization.
+    Fail-open: the caller decides whether a failed mint blocks the dispatch
+    (it should NOT — the sandbox runs without the key rather than failing).
     """
     ttl_seconds = max(300, min(ttl_seconds, 86400))
     try:
