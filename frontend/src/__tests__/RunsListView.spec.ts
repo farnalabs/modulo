@@ -567,7 +567,7 @@ describe('RunsListView', () => {
   })
 
   it('renders the heartbeat column as Xs ago for a running run with a recent heartbeat', async () => {
-    const heartbeatAt = new Date(Date.now() - 5000).toISOString()
+    const heartbeatAt = new Date(Date.now() - 5000).toISOString() // nosemgrep: new-date-without-guard
     mockResponses['/api/v1/runs'] = listWith([
       { ...baseRun, status: 'running', completed_at: null, heartbeat_at: heartbeatAt },
     ])
