@@ -12068,6 +12068,12 @@ export interface components {
             } | null;
             /** Delivery Sentinel */
             delivery_sentinel?: string | null;
+            /**
+             * Idempotent
+             * @description Whether the node's action is safe to re-run. Set to false when the action has an external side effect that must not be duplicated — an auto-retry re-runs the whole pipeline, so a non-idempotent node suppresses automatic retries.
+             * @default true
+             */
+            idempotent: boolean;
             /** Env Vars */
             env_vars?: {
                 [key: string]: string;
