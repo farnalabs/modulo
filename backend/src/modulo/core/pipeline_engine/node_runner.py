@@ -71,6 +71,11 @@ from modulo.core.cost_controller.breakdown.constants import (
 )
 from modulo.core.cost_controller.breakdown.metrics import record_out_of_band
 from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult, EvalType
+from modulo.core.node_output_split import (
+    DEFAULT_NODE_TYPE,
+    SPLITTABLE_NODE_TYPES,
+    resolve_node_contract_output,
+)
 from modulo.core.pipeline_engine.decorator import cancellable_node
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
 from modulo.core.pipeline_engine.input_truncation import truncate_input
@@ -1460,6 +1465,69 @@ def _build_llm_judge_callable(
     return _judge
 
 
+def _resolve_gate_eval_target(
+    state: dict[str, Any],
+    node_id: str | None,
+    node_type_map: dict[str, str] | None,
+) -> Any:
+    """Resolve the output a HITL gate's eval should validate (FAR-311).
+
+    Gate evals are node-scoped to the edge's SOURCE node, but LangGraph merges
+    each node's envelope into the state at its TOP-LEVEL keys — the node id is
+    not a state key — so ``state["output"]`` holds the outer ``output``
+    envelope (telemetry for a sandbox_agent: status/summary/cost, no pr_url /
+    changed_files) and ``state["artifacts"]`` accumulates every completed
+    node's artifact. The source node's own artifact is located by its
+    ``node_id`` (not position — parallel fan-out concatenates artifacts in
+    completion order, so the last artifact may belong to a sibling). That
+    artifact's ``output.output_json`` is the sandbox agent's CONTRACT return;
+    re-assembling the envelope and running it through ``split_node_output``
+    yields the SAME contract output the standalone ``_run_post_node_evals``
+    path validates (FAR-311).
+
+    Falls back to the whole *state* when the shape cannot be resolved (no type
+    map, unknown node type, or a state with no envelope keys) so legacy
+    non-graph states keep their historical behaviour.
+    """
+    if not isinstance(state, dict) or not node_id or not node_type_map:
+        return state
+    node_type = node_type_map.get(node_id) or DEFAULT_NODE_TYPE
+    if node_type not in SPLITTABLE_NODE_TYPES:
+        return state
+    artifacts = state.get("artifacts")
+    matching = (
+        [a for a in artifacts if isinstance(a, dict) and a.get("node_id") == node_id]
+        if isinstance(artifacts, list)
+        else []
+    )
+    if not matching and "output" not in state:
+        return state
+    envelope: dict[str, Any] = {}
+    if matching:
+        # The source node's most recent artifact (a reject/correction re-run
+        # appends another entry under the same node_id). Its ``output`` is the
+        # source's OWN output — for an ``agent`` source the contract return is
+        # ``envelope["output"]``, so it must come from the matched artifact
+        # (``state["output"]`` is last-write-wins across a fan-out and can
+        # belong to a sibling).
+        matched = matching[-1]
+        envelope["artifacts"] = [matched]
+        if "output" in matched:
+            envelope["output"] = matched["output"]
+        elif "output" in state:
+            envelope["output"] = state["output"]
+    elif "output" in state:
+        envelope["output"] = state["output"]
+    found, contract_output = resolve_node_contract_output(envelope, node_type)
+    if found:
+        return contract_output
+    _log.debug(
+        "hitl_gate.eval.missing_contract_output",
+        extra={"node_id": str(node_id), "node_type": node_type},
+    )
+    return state
+
+
 def make_hitl_gate_fn(
     hitl_gate_config: dict[str, Any],
     *,
@@ -1467,6 +1535,7 @@ def make_hitl_gate_fn(
     eval_definitions: Sequence[EvalDefinition] | None = None,
     session_factory: Callable[..., Any] | None = None,
     org_id: uuid.UUID | None = None,
+    node_type_map: dict[str, str] | None = None,
 ) -> Any:
     """Return a node function that raises a HITL interrupt.
 
@@ -1484,6 +1553,13 @@ def make_hitl_gate_fn(
       against the current state *after* the condition check but *before*
       the interrupt.  Any eval with ``failure_behaviour='block'`` that
       fails raises ``EvalBlockedError``, preventing the interrupt.
+
+      Evals target the SOURCE node's CONTRACT output (the agent's actual
+      return) when ``node_type_map`` is provided — the same target the
+      standalone ``_run_post_node_evals`` path validates — rather than the
+      whole merged state (whose ``output`` key holds the outer envelope /
+      telemetry for a sandbox_agent).  Without a type map the whole state is
+      used as before.
 
       If ``session_factory`` is provided, eval results are persisted to
       the ``eval_results`` table so that post-run suite-level threshold
@@ -1610,7 +1686,11 @@ def make_hitl_gate_fn(
                             hub,
                             str(eval_def.config["model_backend_id"]),
                         )
-                eval_result = engine.evaluate(state, eval_def, llm_judge_callable=llm_judge_callable)
+                eval_result = engine.evaluate(
+                    _resolve_gate_eval_target(state, eval_def.node_id, node_type_map),
+                    eval_def,
+                    llm_judge_callable=llm_judge_callable,
+                )
                 eval_results_by_name[eval_def.name] = eval_result
                 _log.info(
                     "hitl_gate.eval_result",
@@ -2589,6 +2669,82 @@ def make_sandbox_agent_fn(
                     # so the caller never marks the lease claimed.
                     raise SupersededNodeError("script lease denied — run superseded or not running")
 
+        async def _mint_run_api_key_for_sandbox() -> str | None:
+            """Mint a short-TTL runner-role API key for this script-mode sandbox (FAR-296 Phase 3b).
+
+            Returns the raw key value, or None when minting is unavailable/failed
+            (fail-open — the sandbox runs without the key rather than failing the
+            dispatch). TTL = max(15 min, node_timeout + 5 min), capped by the
+            org-level max (default 1 hour). The raw value is returned to the
+            caller only, which injects it into the sandbox envs — it is NEVER
+            logged, checkpointed, or placed in LangGraph state.
+            """
+            if session_factory is None:
+                return None
+            org_id_raw = state.get("_org_id")
+            try:
+                org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
+            except (TypeError, ValueError):
+                org_uuid = None
+            if org_uuid is None:
+                return None
+            try:
+                run_uuid = uuid.UUID(str(run_id))
+            except (TypeError, ValueError):
+                return None
+            try:
+                from modulo.auth.api_key import mint_run_api_key
+                from modulo.db.crud.run import get_run_api_key_ttl_seconds
+
+                ttl_seconds = await get_run_api_key_ttl_seconds(session_factory, org_uuid, sandbox_timeout)
+                async with session_factory() as session, session.begin():
+                    await set_rls_org(session, org_uuid)
+                    # account_id: the run's triggering user; fall back to the
+                    # first active admin in the org when the run row has none.
+                    from sqlalchemy import text as _sql_text
+
+                    row = (
+                        await session.execute(
+                            _sql_text("SELECT account_id FROM runs WHERE id=:rid AND organisation_id=:oid"),
+                            {"rid": str(run_uuid), "oid": str(org_uuid)},
+                        )
+                    ).fetchone()
+                    account_id_raw = row[0] if row else None
+                    if account_id_raw is None:
+                        admin_row = (
+                            await session.execute(
+                                _sql_text(
+                                    "SELECT a.id FROM accounts a JOIN org_memberships om ON om.account_id = a.id "
+                                    "WHERE om.organisation_id=:oid AND om.role='admin' AND om.deactivated_at IS NULL "
+                                    "ORDER BY a.created_at LIMIT 1"
+                                ),
+                                {"oid": str(org_uuid)},
+                            )
+                        ).fetchone()
+                        account_id_raw = admin_row[0] if admin_row else None
+                    if account_id_raw is None:
+                        return None
+                    minted = await mint_run_api_key(
+                        session,
+                        org_id=org_uuid,
+                        run_id=run_uuid,
+                        node_id=node_id,
+                        account_id=uuid.UUID(str(account_id_raw)),
+                        ttl_seconds=ttl_seconds,
+                    )
+                    if minted is None:
+                        return None
+                    _key_row, full_key = minted
+                    return full_key
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception(
+                    "sandbox_agent.run_api_key_mint_failed",
+                    extra={"run_id": run_id, "node_id": node_id},
+                )
+                return None
+
         async def _clear_dispatch_marker() -> None:
             """Fenced marker clear — only when the claim token still matches.
 
@@ -2652,7 +2808,8 @@ def make_sandbox_agent_fn(
                 ),
                 timeout=min(sandbox_timeout, 120),
             )
-            assert sandbox is not None, "Sandbox was not created before use"
+            if sandbox is None:
+                raise RuntimeError("Sandbox was not created before use")
             _sandbox_id = getattr(sandbox, "sandbox_id", None) or None
             # Persist the real sandbox id so the heartbeat-lost path
             # (run_executor_with_watchdog) can kill the sandbox by id.
@@ -3046,6 +3203,15 @@ def make_sandbox_agent_fn(
                 if sandbox_mode == "script":
                     await _store_script_lease()
                     _script_lease_claimed = True
+                    # FAR-296 Phase 3b: mint a short-TTL runner-role API key so
+                    # the script can authenticate to the Modulo API with a
+                    # restricted identity. The key is per-run, revoked at run
+                    # finalization, and never the long-lived host credentials.
+                    # Fail-open: a mint failure leaves the key absent (the
+                    # sandbox still runs).
+                    _run_api_key = await _mint_run_api_key_for_sandbox()
+                    if _run_api_key:
+                        sandbox_envs["MODULO_API_KEY"] = _run_api_key
                 _bridge_wrapped_command = rendered_agent_command
                 # FAR-211: start the loop-interception callback server + write
                 # the bridge client into the sandbox. Best-effort and

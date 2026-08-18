@@ -133,7 +133,8 @@ def _detect_backend(url: str) -> str:
 
 
 def run_migrations_offline() -> None:
-    assert config is not None
+    if config is None:
+        raise RuntimeError("Alembic config is unavailable")
     url = config.get_main_option("sqlalchemy.url") or ""
     backend = _detect_backend(url)
     _log.info("Running migrations offline for %s backend", backend)
@@ -247,7 +248,8 @@ def run_migrations_online() -> None:
     is an upgrade (never a downgrade), skip the advisory lock and the alembic
     run entirely so boot is instant and machines never contend for the lock.
     """
-    assert config is not None
+    if config is None:
+        raise RuntimeError("Alembic config is unavailable")
     url = config.get_main_option("sqlalchemy.url") or ""
     sync_url = _to_sync_url(url)
 

@@ -16,7 +16,7 @@ constraint with the FULL 21-value vocabulary. This file asserts:
 * the chain has a single linear head ``0110_schema_pipeline_runtime`` (the
   FAR-213 ``0111_run_blocked_partial_summary``, FAR-210
   ``0112_feedback_correction_state``, and FAR-223
-  ``0113_guardrail_summary`` migrations chain on top of it).
+  ``0114_org_api_keys_run_id`` migrations chain on top of it).
 
 The old SQLite round-trip (which ran the migration's upgrade/downgrade against
 a mock ``op``) is obsolete: the reconciliation migration expresses the
@@ -41,9 +41,10 @@ _MIGRATION_PATH = (
 )
 
 # The chain head after the FAR-210 feedback correction_state migration (0112),
-# topped by the FAR-223 PR B guardrail_summary migration (0113) and the
-# FAR-247 notification preferences migration (0114).
-_CHAIN_HEAD_MIGRATION_NAME = "0114_notification_preferences"
+# topped by the FAR-223 guardrail_summary migration (0113), the FAR-296 Phase 3b
+# run-API-key migration (0114) and the FAR-247 notification preferences
+# migration (0115).
+_CHAIN_HEAD_MIGRATION_NAME = "0115_notification_preferences"
 
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 

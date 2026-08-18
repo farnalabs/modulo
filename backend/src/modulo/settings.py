@@ -113,6 +113,11 @@ class Settings(BaseSettings):
     # DB heartbeat cadence for execute_run — keep well below the 300s SAQ sweep
     # threshold (cadence equal to the sweep threshold leaves zero margin).
     run_heartbeat_seconds: int = Field(default=30, alias="RUN_HEARTBEAT_SECONDS", ge=1, le=120)
+    # FAR-296 Phase 3b: per-run runner-role API-key TTL floor for script-mode
+    # sandboxes. The effective TTL is max(this, node_timeout + 5 min), capped by
+    # the org-level ``run_api_key_max_ttl_seconds`` settings_json knob (default
+    # 1 hour). A leaked per-run key expires quickly by construction.
+    run_api_key_default_ttl_seconds: int = Field(default=900, alias="RUN_API_KEY_DEFAULT_TTL_SECONDS", ge=300, le=86400)
     # Cutover hold gate: healthz/ready 503-gates when THIS machine's SAQ workers
     # are stale (default true during the hold). Set false via deploy-time flag
     # after the hold to relax the gate to degraded (alerting continues).

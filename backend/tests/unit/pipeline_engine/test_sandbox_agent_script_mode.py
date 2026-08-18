@@ -694,3 +694,144 @@ def test_shared_validator_rejects_unknown_resource_limit_keys():
         _validate_sandbox_resource_limits_config({"id": "n1", "resource_limits": [1, 2]})
     # Valid keys pass.
     _validate_sandbox_resource_limits_config({"id": "n1", "resource_limits": {"cpu_count": 2, "memory_mb": 512.5}})
+
+
+# ---------------------------------------------------------------------------
+# 6. FAR-296 Phase 3b: per-run runner-role API-key minting for script mode
+# ---------------------------------------------------------------------------
+
+_RUN_ID = str(uuid.UUID("11111111-2222-3333-4444-666666666666"))
+_ACCOUNT_ID = uuid.UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+_FAKE_RUN_KEY = "mk_run_fake_key"
+
+
+def _run_api_key_session_factory(account_id: uuid.UUID | None = _ACCOUNT_ID):
+    """Session factory mock for the mint helper's DB reads.
+
+    The runs query returns a row carrying ``account_id`` (or None to exercise
+    the admin fallback path); the mint helper then calls the patched
+    ``mint_run_api_key``. ``set_rls_org`` takes the generic-backend branch
+    (the mock's dialect is not 'postgresql') and only writes ``session.info``.
+    """
+    session = AsyncMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=session)
+
+    run_result = MagicMock()
+    run_result.fetchone.return_value = (str(account_id),) if account_id else None
+    session.execute = AsyncMock(return_value=run_result)
+
+    return MagicMock(return_value=session)
+
+
+def _run_state_with_run_id(run_id: str = _RUN_ID, payload: Any = None) -> dict:
+    """Run state with a valid UUID ``_run_id`` (the mint helper requires it)."""
+    state = _run_state(payload)
+    state["_run_id"] = run_id
+    return state
+
+
+async def test_script_mode_injects_run_api_key_env():
+    """Script mode mints a per-run runner-role key and injects it as MODULO_API_KEY.
+
+    The key is short-TTL, per-run, and separate from the long-lived host
+    credentials (which Phase 3a already removed from script-mode envs).
+    """
+    node_def = _script_node_def()
+    fn = make_sandbox_agent_fn(node_def, session_factory=_run_api_key_session_factory())
+    sandbox = _script_sandbox_mock()
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.auth.api_key.mint_run_api_key", new=AsyncMock(return_value=(MagicMock(), _FAKE_RUN_KEY))),
+        patch("modulo.db.crud.run.get_run_api_key_ttl_seconds", new=AsyncMock(return_value=1800)),
+    ):
+        result = await fn(_run_state_with_run_id())
+
+    assert result["output"]["status"] == "completed"
+    envs = sandbox.commands.run.call_args.kwargs["envs"]
+    assert envs["MODULO_API_KEY"] == _FAKE_RUN_KEY
+
+
+async def test_script_mode_mint_failure_fails_open():
+    """A mint failure leaves MODULO_API_KEY absent — the sandbox still runs."""
+
+    async def _raise_boom(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("mint boom")
+
+    node_def = _script_node_def()
+    fn = make_sandbox_agent_fn(node_def, session_factory=_run_api_key_session_factory())
+    sandbox = _script_sandbox_mock()
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.auth.api_key.mint_run_api_key", new=_raise_boom),
+    ):
+        result = await fn(_run_state_with_run_id())
+
+    assert result["output"]["status"] == "completed"
+    envs = sandbox.commands.run.call_args.kwargs["envs"]
+    assert "MODULO_API_KEY" not in envs
+
+
+async def test_script_mode_mint_none_fails_open():
+    """A mint that returns None (fail-open) leaves MODULO_API_KEY absent."""
+    node_def = _script_node_def()
+    fn = make_sandbox_agent_fn(node_def, session_factory=_run_api_key_session_factory())
+    sandbox = _script_sandbox_mock()
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.auth.api_key.mint_run_api_key", new=AsyncMock(return_value=None)),
+    ):
+        result = await fn(_run_state_with_run_id())
+
+    assert result["output"]["status"] == "completed"
+    envs = sandbox.commands.run.call_args.kwargs["envs"]
+    assert "MODULO_API_KEY" not in envs
+
+
+async def test_script_mode_mint_skipped_without_session_factory():
+    """No session_factory -> no mint -> no MODULO_API_KEY (and no crash)."""
+    node_def = _script_node_def()
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _script_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state_with_run_id())
+
+    assert result["output"]["status"] == "completed"
+    envs = sandbox.commands.run.call_args.kwargs["envs"]
+    assert "MODULO_API_KEY" not in envs
+
+
+async def test_llm_mode_does_not_inject_run_api_key():
+    """LLM mode never mints/injects MODULO_API_KEY — even with a session_factory.
+
+    The per-run key is a script-mode-only facility; LLM mode keeps the existing
+    long-lived host credential injection.
+    """
+    node_def: dict[str, Any] = {
+        "id": str(uuid.uuid4()),
+        "node_type": "sandbox_agent",
+        "position": {"x": 0, "y": 0},
+        "template_id": "opencode",
+        "mode": "llm",
+        "agent_command": "opencode run --auto --format json < /home/user/prompt.md",
+        "agent_prompt": "Do the thing",
+    }
+    fn = make_sandbox_agent_fn(node_def, session_factory=_run_api_key_session_factory())
+    sandbox = _script_sandbox_mock()
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch(
+            "modulo.auth.api_key.mint_run_api_key",
+            side_effect=AssertionError("must not be called in llm mode"),
+        ),
+    ):
+        await fn(_run_state_with_run_id())
+
+    envs = sandbox.commands.run.call_args.kwargs["envs"]
+    assert "MODULO_API_KEY" not in envs

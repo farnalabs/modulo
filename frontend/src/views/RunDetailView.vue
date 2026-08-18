@@ -109,6 +109,12 @@
         <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.completed') }}</span> {{ runTimestamps.completed }}</div>
       </div>
 
+      <!-- Run Input Payload — the parameters provided when the run was scheduled -->
+      <div v-if="runIO?.input_payload" data-testid="run-detail-input-payload" class="rounded-lg border border-border bg-card p-4 mb-4">
+        <h3 class="text-sm font-semibold mb-1">{{ $t('views.RunDetailView.run_input') }}</h3>
+        <JsonViewer :data="runIO.input_payload" :show-toolbar="true" :max-height="'16rem'" />
+      </div>
+
       <!-- Cancel button for non-terminal runs -->
       <div v-if="canCancel" class="my-4">
         <button
@@ -180,11 +186,6 @@
           />
         </div>
         <pre class="text-xs whitespace-pre-wrap font-mono text-destructive/80">{{ run.error_detail }}</pre>
-      </div>
-
-      <div v-if="run.status === 'failed' && !run.error_detail && runIO?.input_payload" class="rounded-lg border border-border bg-card p-4 mb-4">
-        <h3 class="text-sm font-semibold mb-1">{{ $t('views.RunDetailView.run_input') }}</h3>
-        <JsonViewer :data="runIO.input_payload" :show-toolbar="true" :max-height="'16rem'" />
       </div>
 
       <!-- Guardrail Summary -->

@@ -10,7 +10,7 @@ Import contract (enforced by import-linter):
 
 import asyncio
 import logging
-import random
+import secrets
 import threading
 from typing import Any
 from uuid import UUID
@@ -135,8 +135,13 @@ class LangGraphOtelBridge(BaseCallbackHandler):
 
     @staticmethod
     def _new_span_id() -> int:
-        """Random 8-byte span id as an int (the OTel SpanContext type)."""
-        return random.getrandbits(64)
+        """Random 8-byte span id as an int (the OTel SpanContext type).
+
+        Uses ``secrets`` because span ids must be unpredictable: a guessable
+        span id lets a caller forge/collide trace ids and break the OTel
+        trace-correlation invariant (B311).
+        """
+        return secrets.randbits(64)
 
     def span_id_for_run(self, run_id: Any) -> str | None:
         """Return the 16-hex span id for a LangChain run_id, or ``None``.

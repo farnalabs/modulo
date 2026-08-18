@@ -17,7 +17,9 @@ from modulo.auth.api_key import (
     create_api_key,
     generate_api_key,
     list_api_keys,
+    mint_run_api_key,
     revoke_api_key,
+    revoke_run_api_key,
     update_api_key,
     validate_api_key,
 )
@@ -455,6 +457,121 @@ async def test_update_api_key_updates_expires_at() -> None:
 # SQL query (OrgApiKey.revoked_at.is_(None)). When the key is revoked, the
 # query returns no results and ApiKeyInvalidError is raised via the "not found"
 # path. This is tested by test_validate_api_key_not_found_raises above.
+
+
+# ---------------------------------------------------------------------------
+# mint_run_api_key / revoke_run_api_key (FAR-296 Phase 3b per-run keys)
+# ---------------------------------------------------------------------------
+
+
+def _mint_session() -> AsyncMock:
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+    return session
+
+
+@pytest.mark.asyncio
+async def test_mint_run_api_key_mints_runner_role_with_ttl() -> None:
+    session = _mint_session()
+    org_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    account_id = uuid.uuid4()
+    ttl = 1800
+
+    key, full_key = await mint_run_api_key(
+        session,
+        org_id=org_id,
+        run_id=run_id,
+        node_id="n1",
+        account_id=account_id,
+        ttl_seconds=ttl,
+    )
+    assert key is not None
+    assert full_key.startswith("mk_")
+    assert key.role == "runner"
+    assert key.run_id == run_id
+    assert key.organisation_id == org_id
+    assert key.account_id == account_id
+    assert key.name == f"run:{run_id}:node:n1"
+    expected_expiry = datetime.now(UTC) + timedelta(seconds=ttl)
+    assert key.expires_at > expected_expiry - timedelta(seconds=5)
+    assert key.expires_at <= expected_expiry + timedelta(seconds=5)
+
+
+@pytest.mark.asyncio
+async def test_mint_run_api_key_clamps_ttl() -> None:
+    session = _mint_session()
+    org_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+
+    key, _full_key = await mint_run_api_key(
+        session,
+        org_id=org_id,
+        run_id=run_id,
+        node_id="n1",
+        account_id=uuid.uuid4(),
+        ttl_seconds=10**9,
+    )
+    expected_expiry = datetime.now(UTC) + timedelta(seconds=86400)
+    assert key.expires_at > expected_expiry - timedelta(seconds=5)
+    assert key.expires_at <= expected_expiry + timedelta(seconds=5)
+
+
+@pytest.mark.asyncio
+async def test_mint_run_api_key_fails_open_on_error() -> None:
+    """A mint failure returns None (fail-open) instead of raising."""
+    session = _mint_session()
+    session.flush = AsyncMock(side_effect=RuntimeError("flush boom"))
+
+    result = await mint_run_api_key(
+        session,
+        org_id=uuid.uuid4(),
+        run_id=uuid.uuid4(),
+        node_id="n1",
+        account_id=uuid.uuid4(),
+        ttl_seconds=1800,
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_revoke_run_api_key_revokes_linked_keys() -> None:
+    """The revocation UPDATE targets ONLY keys linked to the run_id + org.
+
+    The ``revoked_at IS NULL`` + ``run_id`` predicates are compiled into the
+    statement, so keys minted for other runs are untouched.
+    """
+    org_id = uuid.uuid4()
+    run_a = uuid.uuid4()
+    result = MagicMock()
+    result.rowcount = 2
+
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=result)
+
+    revoked = await revoke_run_api_key(session, run_id=run_a, org_id=org_id)
+    assert revoked == 2
+
+    stmt = session.execute.await_args.args[0]
+    compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+    assert run_a.hex in compiled
+    assert org_id.hex in compiled
+    assert "revoked_at" in compiled
+    assert "IS NULL" in compiled.upper()
+
+
+@pytest.mark.asyncio
+async def test_revoke_run_api_key_zero_rows_returns_zero() -> None:
+    """No linked keys -> rowcount 0 -> returns 0 (not None)."""
+    result = MagicMock()
+    result.rowcount = 0
+
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=result)
+
+    revoked = await revoke_run_api_key(session, run_id=uuid.uuid4(), org_id=uuid.uuid4())
+    assert revoked == 0
 
 
 # ---------------------------------------------------------------------------

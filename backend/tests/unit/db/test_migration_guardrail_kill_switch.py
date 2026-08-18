@@ -27,7 +27,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 
 _MIGRATION_0006 = "0108_schema_org_identity"
 _MIGRATION_0113 = "0113_guardrail_summary"
-_HEAD_MIGRATION = "0114_notification_preferences"
+_HEAD_MIGRATION = "0115_notification_preferences"
 
 
 def _source(name: str) -> str:
@@ -66,7 +66,11 @@ class TestKillSwitchMigration:
 
     def test_kill_switch_owned_by_0108_not_0113(self) -> None:
         # The kill-switch flag shipped in PR A's reconciliation (0108), not in
-        # PR B's head migration (0113, which only adds runs.guardrail_summary_json).
+        # the guardrail-summary migration (0113, which only adds
+        # runs.guardrail_summary_json), the FAR-296 run-API-key migration
+        # (0114), nor the FAR-247 notification-preferences head (0115).
         source_0113 = _source(_MIGRATION_0113)
         assert "guardrails_kill_switch" not in source_0113
         assert "guardrail_summary_json" in source_0113
+        source_0114 = _source(_HEAD_MIGRATION)
+        assert "guardrails_kill_switch" not in source_0114

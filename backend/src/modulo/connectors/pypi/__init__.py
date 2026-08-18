@@ -24,7 +24,7 @@ _API_BASE = "https://pypi.org/pypi"
 
 
 class PyPIConnector(ConnectorBase):
-    def __init__(self, token: str = "") -> None:
+    def __init__(self, token: str = "") -> None:  # nosec B107 — empty default, token is injected via connector credentials at instantiation
         self._token = token
 
     @property

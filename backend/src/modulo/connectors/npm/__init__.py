@@ -22,7 +22,7 @@ _NPM_MAX_SEARCH_SIZE = 250
 
 
 class NpmConnector(ConnectorBase):
-    def __init__(self, token: str = "") -> None:
+    def __init__(self, token: str = "") -> None:  # nosec B107 — empty default, token is injected via connector credentials at instantiation
         self._token = token
 
     @property
