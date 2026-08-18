@@ -29,29 +29,6 @@ GitHub's `ubicloud-standard-2` runner (2 vCPU). Facts and rules:
 
 ## Lessons Learned
 
-### reka-ui v2.10.1 ships `index.d.cts` but `package.json.types` points to `index.d.ts`
-
-The `reka-ui` npm package v2.10.1 ships its type declarations as `dist/index.d.cts` (CommonJS TypeScript)
-but its `package.json` `types` field points to the non-existent `dist/index.d.ts`. This causes
-`@vue/compiler-sfc` to fail with "Unresolvable type reference" when resolving
-`defineProps<RekaUiProps>()` in `.vue` components, breaking both `pnpm run build` and `pnpm run test:unit`.
-
-The `postinstall` script in `package.json` (at `scripts/reka-ui-patch.ps1`) copies
-`index.d.cts` → `index.d.ts` after each `pnpm install`.
-
-**Verification:** After `pnpm install`, run:
-```powershell
-Test-Path node_modules/reka-ui/dist/index.d.ts
-# Should be True
-```
-
-When upgrading reka-ui, verify the package still ships only `.d.cts` (not `.d.ts`)
-and that `scripts/reka-ui-patch.ps1` still applies. If reka-ui ships proper `.d.ts`
-in a future version, remove `scripts/reka-ui-patch.ps1` and the `postinstall` script.
-
-**Note:** The postinstall only runs on `pnpm install`. If `scripts/reka-ui-patch.ps1`
-is edited, re-run `pnpm install` (not just the script) to ensure the hook fires.
-
 ### Permission gating: `canSeeItem()` must check `requiredPermissions`
 
 - The sidebar nav gating function was ignoring `requiredPermissions` from navigation config, causing unauthorized items to be visible (though non-functional). Always verify that permission-gated nav items actually check permissions — not just feature flags but also role-based `requiredPermissions`. Add an explicit assertion per item: `if (item.requiredPermissions && !userHasPermission(item.requiredPermissions)) return false;`.
@@ -99,10 +76,6 @@ is edited, re-run `pnpm install` (not just the script) to ensure the hook fires.
 ### Skills change signal: after adding/editing/deleting a skill, signal the store to rebuild system prompt
 
 - The Remy system prompt is built once per session and caches the skill list. When a user adds or modifies a skill (via `RemySkillManager.vue` or `UserRemySkillsView.vue`), the store needs a `signalSkillsChanged()` mechanism (e.g. incrementing a `skillsVersion` ref) so the next Remy session `/stream` call re-fetches skills and includes the new one. Without this signal, newly added skills don't appear in the conversation until a page refresh. Pattern: maintain a `skillsVersion` counter in `useRemyStore.ts`, increment it on skill change, and read it when building the stream request payload.
-
-### reka-ui TooltipContent + vue-i18n: `$t()` crashes inside Teleported content
-
-- reka-ui's `TooltipContent` uses `Teleport` internally. `$t()` called directly inside a `<TooltipContent>` template throws `TypeError: _ctx.t is not a function` because the teleported content loses access to `app.config.globalProperties`. **Fix:** pre-translate the text in the parent component (or use plain English strings) and reference the variable in the tooltip — never call `$t()` inside `TooltipContent`.
 
 ### Null-guard computed properties that access nested properties of async-loaded refs
 

@@ -25,13 +25,13 @@ async function main() {
   const pinia = createPinia()
   app.use(pinia)
   app.use(i18n)
-app.use(PrimeVue, {
+  app.use(PrimeVue, {
     theme: {
       preset: Aura,
       options: {
         // PrimeVue's darkModeSelector selects the DARK token set. Our app is
         // dark by default (`:root` in style.css) and light is toggled via the
-        // `html.light` class, so the dark selector is ":root:not(.light)" —?
+        // `html.light` class, so the dark selector is ":root:not(.light)" —
         // dark when light is absent, light when the class is present.
         darkModeSelector: ':root:not(.light)',
       },

@@ -7,7 +7,7 @@
       type="button"
       class="flex w-full items-center justify-between rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50 [&>svg]:shrink-0 transition-colors"
       aria-haspopup="dialog"
-      aria-expanded="false"
+      :aria-expanded="open"
       @click="togglePopover"
     >
       <span v-if="selectedLabel">{{ selectedLabel }}</span>
@@ -17,7 +17,7 @@
         :class="open && 'rotate-180'"
       />
     </button>
-    <Popover ref="popoverRef" :dismissable="true">
+    <Popover ref="popoverRef" :dismissable="true" @show="open = true" @hide="open = false">
       <div class="min-w-[200px] p-1">
         <button
           type="button"
