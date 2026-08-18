@@ -180,11 +180,15 @@ def test_gate_json_schema_eval_uses_contract_output() -> None:
     """FAR-311: a json_schema gate eval validates the agent's CONTRACT output
     (``artifacts[0].output.output_json``), not the telemetry envelope in state.
 
-    The state's outer ``output`` is a telemetry summary without pr_url, but the
-    artifact's ``output_json`` carries the contract fields — so the schema
-    passes, the gate proceeds to the autonomy check, and the node interrupts.
-    Pre-fix the eval validated the state shape (telemetry only) and raised
-    ``EvalBlockedError`` instead.
+    The state's outer ``output`` is a telemetry summary without pr_url, and the
+    artifact's ``output_json`` carries the contract fields. The state also has a
+    top-level ``status: "completed"`` but no top-level ``pr_url``/``changed_files``.
+    Pre-fix the eval target was the whole state dict, so the schema's conditional
+    ``if`` fired (top-level ``status`` present) and ``then`` required the missing
+    top-level ``pr_url``/``changed_files`` — the eval failed and ``EvalBlockedError``
+    was raised (the gate does not interrupt on a blocked eval). Post-fix the target
+    resolves to the contract output where the schema passes, the gate proceeds to
+    the autonomy check, and the node interrupts.
     """
     contract_schema = {
         "type": "object",
@@ -206,6 +210,7 @@ def test_gate_json_schema_eval_uses_contract_output() -> None:
         failure_behaviour="block",
     )
     state = {
+        "status": "completed",
         "output": {"status": "completed", "summary": "telemetry only"},
         "artifacts": [
             {
