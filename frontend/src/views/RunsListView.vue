@@ -88,11 +88,11 @@
           </template>
           <template #cell-input_preview="{ row }">
             <span
-              v-if="inputPayloadText(row.input_payload as Record<string, unknown> | null | undefined)"
+              v-if="inputPreviews[row.run_id as string]"
               class="block max-w-[260px] truncate font-mono text-xs text-muted-foreground"
-              :title="inputPayloadText(row.input_payload as Record<string, unknown> | null | undefined)"
+              :title="inputPreviews[row.run_id as string]"
               :data-testid="`runs-list-input-${row.run_id}`"
-            >{{ inputPayloadText(row.input_payload as Record<string, unknown> | null | undefined) }}</span>
+            >{{ inputPreviews[row.run_id as string] }}</span>
             <span v-else class="text-muted-foreground">—</span>
           </template>
           <template #cell-run_number="{ value }">
@@ -316,6 +316,14 @@ const childCounts = computed<Record<string, number>>(() => {
   for (const run of runs.value) {
     const count = run.child_runs_count
     if (Number.isInteger(count) && (count ?? 0) > 0) byRunId[run.run_id] = count as number
+  }
+  return byRunId
+})
+
+const inputPreviews = computed<Record<string, string>>(() => {
+  const byRunId: Record<string, string> = {}
+  for (const run of runs.value) {
+    byRunId[run.run_id] = inputPayloadText(run.input_payload as Record<string, unknown> | null | undefined)
   }
   return byRunId
 })
