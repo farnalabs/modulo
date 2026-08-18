@@ -60,7 +60,8 @@
               </Tooltip>
             </TooltipProvider>
             <button
-              :aria-label="'Copy gate ID'"
+              data-testid="run-detail-copy-gate-id"
+              :aria-label="$t('views.RunDetailView.copy_gate_id')"
               class="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/10"
               @click="copyText(gate.gate_id)"
             >
@@ -286,7 +287,8 @@
               <td class="py-3 pr-4 font-medium" :title="node.name">
                 <span class="select-all">{{ nodeLabel(node.name) }}</span>
                 <button
-                  :aria-label="'Copy node ID'"
+                  data-testid="run-detail-copy-node-id"
+                  :aria-label="$t('views.RunDetailView.copy_node_id')"
                   class="ml-1 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium text-primary hover:bg-primary/10"
                   @click="copyText(node.name)"
                 >

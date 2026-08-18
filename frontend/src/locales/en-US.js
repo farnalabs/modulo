@@ -1088,6 +1088,8 @@ export default {
       "share_summary": "Share Summary",
       "copy_node_trace_id": "Copy node trace ID",
       "copy_node_span_id": "Copy node span ID",
+      "copy_gate_id": "Copy gate ID",
+      "copy_node_id": "Copy node ID",
       "view_trace": "View trace",
       "execution_trace": "Execution Trace",
       "no_run_id_provided": "No run ID provided",
