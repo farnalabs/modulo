@@ -1000,12 +1000,13 @@ async def get_run_io_endpoint(
 
     masked_outputs = _mask_output_value(normalized_outputs)
     masked_telemetry = _mask_output_value(normalized_telemetry)
+    masked_input = _mask_output_value(run.input_payload) if run.input_payload else None
 
     resp = RunIOResponse(
         run_id=run.id,
         run_number=run.run_number,
         status=run.status,
-        input_payload=_mask_output_value(run.input_payload) if run.input_payload else None,
+        input_payload=masked_input,
         outputs_json=masked_outputs,
         node_telemetry=masked_telemetry,
     )
