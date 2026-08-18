@@ -16,6 +16,21 @@ export function runStatusBadgeClass(status: string): string {
   return map[status] ?? 'bg-muted text-muted-foreground'
 }
 
+export function triggerTypeLabel(type: string | null | undefined): string {
+  const map: Record<string, string> = {
+    manual: 'Manual',
+    webhook: 'Webhook',
+    cron: 'Scheduled',
+    polling: 'Polling',
+    agent_signal: 'Agent signal',
+    ongoing: 'Ongoing',
+    correction: 'Correction',
+    slack_app_mention: 'Slack mention',
+  }
+  if (!type) return '—'
+  return map[type] ?? type
+}
+
 export function formatRunDate(dateStr: string | null): string {
   if (!dateStr) return '—'
   const d = toDate(dateStr)

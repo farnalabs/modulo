@@ -126,7 +126,7 @@
         <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.created') }}</span> {{ runTimestamps.created }}</div>
         <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.started') }}</span> {{ runTimestamps.started }}</div>
         <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.completed') }}</span> {{ runTimestamps.completed }}</div>
-        <div data-testid="run-detail-trigger-actor"><span class="font-medium text-foreground">{{ $t('views.RunDetailView.triggered_by') }}</span> {{ run.trigger_actor || run.trigger_type || '—' }}</div>
+        <div data-testid="run-detail-trigger-actor"><span class="font-medium text-foreground">{{ $t('views.RunDetailView.triggered_by') }}</span> {{ run.trigger_actor || triggerTypeLabel(run.trigger_type) }}</div>
         <div data-testid="run-detail-heartbeat">
           <span class="font-medium text-foreground">{{ $t('views.RunDetailView.last_heartbeat') }}</span>
           <span :class="isHeartbeatStale ? 'font-medium text-warning' : ''">{{ formatHeartbeat(heartbeatAgeSeconds) }}<span v-if="isHeartbeatStale"> ({{ $t('views.RunDetailView.stale') }})</span></span>
@@ -705,6 +705,7 @@ import Button from '../components/ui/button/Button.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { requestRunCancellation } from '../lib/api/runs'
 import { isTerminalStatus } from '../constants/runStatuses'
+import { triggerTypeLabel } from '../utils/runUtils'
 import { shortId, formatRun } from '../utils/format'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
