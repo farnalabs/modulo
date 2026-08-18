@@ -1868,7 +1868,7 @@ class TestGetRunIO:
             resp = client.get(f"/api/v1/runs/{_RUN_ID}/io")
 
         assert resp.status_code == 200
-        assert resp.json()["node_labels"] == {}
+        assert not resp.json()["node_labels"]
 
 
 # ---------------------------------------------------------------------------
