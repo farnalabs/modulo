@@ -1,6 +1,6 @@
 # Modulo
 
-Modulo is a self-hosted orchestration layer for building governed, repeatable
+Modulo is a self-hosted agent governance platform for building governed, repeatable
 AI-assisted software delivery pipelines. It connects atomic agents to tools
 such as GitHub, Linear, and Notion while keeping execution, approvals, audit
 data, and credentials under the operator's control.

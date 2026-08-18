@@ -21,7 +21,7 @@
           </div>
         </div>
         <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.LoginView.modulo') }}</h1>
-        <p class="mt-1 text-muted-foreground">{{ $t('views.LoginView.governed_orchestration_for_your_agentic_sdlc') }}</p>
+        <p class="mt-1 text-muted-foreground">{{ $t('views.LoginView.agent_governance_for_your_agentic_sdlc') }}</p>
       </div>
 
       <div v-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
