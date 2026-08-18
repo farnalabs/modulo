@@ -59,6 +59,8 @@ _TRUST_COLUMNS = {
 
 _ADD_COLUMN_RE = re.compile(r'op\.add_column\(\s*"(\w+)"\s*,\s*sa\.Column\(\s*"(\w+)"')
 _DROP_COLUMN_RE = re.compile(r'op\.drop_column\(\s*"(\w+)"\s*,\s*"(\w+)"')
+_CREATE_INDEX_RE = re.compile(r'op\.create_index\(\s*"(\w+)"\s*,\s*"(\w+)"')
+_DROP_INDEX_RE = re.compile(r'op\.drop_index\(\s*"(\w+)"\s*,\s*table_name="(\w+)"')
 
 
 def _load_migration(revision: str) -> ModuleType:
@@ -79,6 +81,37 @@ def _source(revision: str) -> str:
 def _migration_columns(source: str, op_name: str) -> set[tuple[str, str]]:
     pattern = _ADD_COLUMN_RE if op_name == "add_column" else _DROP_COLUMN_RE
     return {(match.group(1), match.group(2)) for match in pattern.finditer(source)}
+
+
+def _index_ops(source: str, op_name: str) -> set[tuple[str, str]]:
+    pattern = _CREATE_INDEX_RE if op_name == "create_index" else _DROP_INDEX_RE
+    return {(match.group(1), match.group(2)) for match in pattern.finditer(source)}
+
+
+def _assert_drift_free(
+    model_columns: dict[str, set[str]],
+    migration_columns: dict[str, set[tuple[str, str]]],
+    trust_columns: dict[tuple[str, str], str] | None = None,
+) -> None:
+    """Raise on any trust-surface drift between the ORM models and the migrations.
+
+    Checks both directions: every ``_TRUST_COLUMNS`` column must exist on its
+    ORM model AND be created by the migration that owns it; every column a
+    migration creates must exist on its ORM model. Any drift on either side —
+    a trust column removed from a migration, a migration column absent from
+    its model, or a model column whose owning migration stopped creating it —
+    raises AssertionError. The mismatched-input cases make this the
+    prove-the-fix harness: feed a synthetic mismatch and it must fail.
+    """
+    trust_columns = trust_columns or _TRUST_COLUMNS
+    all_migration_columns = {
+        (table, column) for revision_columns in migration_columns.values() for table, column in revision_columns
+    }
+    for (table, column), revision in trust_columns.items():
+        assert column in model_columns[table], f"model {table} is missing trust column {column}"
+        assert (table, column) in migration_columns[revision], f"migration {revision} must create {table}.{column}"
+    for table, column in all_migration_columns:
+        assert column in model_columns[table], f"{table}.{column} created by a migration but absent from the ORM model"
 
 
 def _scaffold(conn: sa.Connection) -> None:
@@ -189,17 +222,26 @@ class TestDowngradeDataSafety:
             conn.execute(sa.text("INSERT INTO runs (id, input_payload) VALUES (1, '{}')"))
         migration = _load_migration(_REVISION_0113)
         _run(sqlite_engine, migration, "upgrade")
+        # A run carrying the feature's own data: the downgrade must drop the
+        # column without losing the run row itself.
+        with sqlite_engine.begin() as conn:
+            conn.execute(sa.text('UPDATE runs SET guardrail_summary_json = \'{"bound": 1, "passed": 1}\' WHERE id = 1'))
         _run(sqlite_engine, migration, "downgrade")
         with sqlite_engine.connect() as conn:
             assert conn.execute(sa.text("SELECT id FROM runs")).scalar_one() == 1
 
     def test_downgrade_drops_exactly_what_upgrade_added(self) -> None:
-        # Symmetry invariant: the downgrade drops exactly the columns the
-        # upgrade added — nothing more, and never the owning table.
+        # Symmetry invariant: the downgrade drops exactly the columns AND
+        # indexes the upgrade added — nothing more, and never the owning table.
+        # Index symmetry matters on SQLite, where DROP COLUMN of an indexed
+        # column fails unless the index was already dropped by the downgrade.
         for revision in (_REVISION_0113, _REVISION_0116):
             source = _source(revision)
             assert _migration_columns(source, "add_column") == _migration_columns(source, "drop_column"), (
                 f"migration {revision} downgrade must drop exactly its upgrade columns"
+            )
+            assert _index_ops(source, "create_index") == _index_ops(source, "drop_index"), (
+                f"migration {revision} downgrade must drop exactly its upgrade indexes"
             )
 
     def test_downgrades_never_drop_the_tables(self) -> None:
@@ -251,17 +293,38 @@ class TestModelMigrationConsistency:
             "pipeline_snapshots": set(PipelineSnapshot.__table__.c.keys()),
             "runs": set(Run.__table__.c.keys()),
         }
-        all_migration_columns = {
-            (table, column)
+        migration_columns = {
+            revision: _migration_columns(_source(revision), "add_column")
             for revision in (_REVISION_0113, _REVISION_0116)
-            for table, column in _migration_columns(_source(revision), "add_column")
         }
-        for (table, column), revision in _TRUST_COLUMNS.items():
-            assert column in model_columns[table], f"model {table} is missing trust column {column}"
-            assert (table, column) in _migration_columns(_source(revision), "add_column"), (
-                f"migration {revision} must create {table}.{column}"
-            )
-        for table, column in all_migration_columns:
-            assert column in model_columns[table], (
-                f"{table}.{column} created by a migration but absent from the ORM model"
-            )
+        _assert_drift_free(model_columns, migration_columns)
+
+    def test_drift_guard_catches_model_migration_mismatch(self) -> None:
+        # Prove-the-fix: the drift guard must FAIL when the trust surface
+        # drifts. Feed synthetic mismatches — a trust column removed from its
+        # owning migration, and a migration column absent from its model —
+        # and assert the guard raises instead of silently passing.
+        from modulo.db.models.eval_definition import EvalDefinition
+        from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+        from modulo.db.models.run import Run
+
+        model_columns = {
+            "eval_definitions": set(EvalDefinition.__table__.c.keys()),
+            "pipeline_snapshots": set(PipelineSnapshot.__table__.c.keys()),
+            "runs": set(Run.__table__.c.keys()),
+        }
+        real_migration_columns = {
+            revision: _migration_columns(_source(revision), "add_column")
+            for revision in (_REVISION_0113, _REVISION_0116)
+        }
+        # (a) a migration stops creating a trust column (e.g. a column dropped
+        # from 0116's upgrade) — the downgrade symmetry guard would also fire.
+        migration_removed = {rev: set(cols) for rev, cols in real_migration_columns.items()}
+        migration_removed[_REVISION_0116].discard(("eval_definitions", "deleted_at"))
+        with pytest.raises(AssertionError):
+            _assert_drift_free(model_columns, migration_removed)
+        # (b) the ORM model loses a column a migration still creates.
+        model_missing = {table: set(cols) for table, cols in model_columns.items()}
+        model_missing["runs"].discard("guardrail_summary_json")
+        with pytest.raises(AssertionError):
+            _assert_drift_free(model_missing, real_migration_columns)
