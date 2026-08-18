@@ -244,6 +244,7 @@ async def _do_list_runs(
                     "child_runs_count": child_count,
                     "aggregate_cost_usd": _quantize_cost_rollup(own_cost + child_cost),
                     "account_id": str(run.account_id) if run.account_id else None,
+                    "input_payload": _mask_output_value(run.input_payload) if run.input_payload else None,
                 }
             )
     return {
@@ -945,7 +946,8 @@ async def get_run_io_endpoint(
     column) are byte-identical to today's envelope shape, and P1+ runs expose
     the split surfaces. Telemetry-only nodes (e.g. ``skipped`` recovery
     markers without an ``outputs_json`` entry) still appear under
-    ``node_telemetry``. Both surfaces are masked for secrets.
+    ``node_telemetry``. All surfaces — input payload, outputs, telemetry —
+    are masked for secrets.
     """
     try:
         async with session.begin():
@@ -1003,7 +1005,7 @@ async def get_run_io_endpoint(
         run_id=run.id,
         run_number=run.run_number,
         status=run.status,
-        input_payload=run.input_payload,
+        input_payload=_mask_output_value(run.input_payload) if run.input_payload else None,
         outputs_json=masked_outputs,
         node_telemetry=masked_telemetry,
     )

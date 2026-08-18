@@ -18,6 +18,7 @@ export interface RunListItem extends Record<string, unknown> {
   child_runs_cost_usd?: string | null
   child_runs_count?: number
   aggregate_cost_usd?: string | null
+  input_payload?: Record<string, unknown> | null
 }
 
 export interface RunListResponse {
