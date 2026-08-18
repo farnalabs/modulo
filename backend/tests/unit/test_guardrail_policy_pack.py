@@ -124,7 +124,8 @@ def test_dump_pack_round_trip_preserves_semantics():
     assert reloaded.id == pack.id
     assert [c.id for c in reloaded.controls] == [c.id for c in pack.controls]
     reloaded_guardrail = reloaded.controls[0].guardrail
-    assert reloaded_guardrail is not None and pack.controls[0].guardrail is not None
+    assert reloaded_guardrail is not None
+    assert pack.controls[0].guardrail is not None
     assert reloaded_guardrail.id == pack.controls[0].guardrail.id
     assert reloaded_guardrail.detection.pattern == pack.controls[0].guardrail.detection.pattern
 
@@ -237,7 +238,7 @@ def test_validate_pack_clean_pack_reports_mapped():
     assert report.unmapped == 0
     assert report.uninstantiable == 0
     assert report.ci_ready is True
-    assert report.errors == []
+    assert not report.errors
 
 
 def test_validate_pack_reports_unmapped_controls():
@@ -265,7 +266,8 @@ def test_validate_pack_reports_uninstantiable_with_error():
     assert len(report.uninstantiable_controls) == 1
     control_id, error = report.uninstantiable_controls[0]
     assert control_id == "CC6.1"
-    assert "pattern" in error and "field" in error
+    assert "pattern" in error
+    assert "field" in error
     assert any("uninstantiable" in err for err in report.errors)
 
 
