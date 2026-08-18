@@ -262,7 +262,9 @@
 
             <div v-if="ownership.owner_team_id" class="bg-muted rounded-lg p-4">
               <p class="text-xs text-muted-foreground mb-1">{{ $t('views.CopyPipelineWizard.target_team') }}</p>
-              <p class="text-sm font-medium text-foreground">{{ ownership.owner_team_id }}</p>
+              <p class="text-sm font-medium text-foreground" :title="ownership.owner_team_id">
+                <span class="select-all font-mono">{{ shortId(ownership.owner_team_id) }}</span>
+              </p>
             </div>
           </div>
         </div>
@@ -381,6 +383,7 @@ import OwnershipPicker from '../components/OwnershipPicker.vue'
 import type { OwnershipValue } from '../components/OwnershipPicker.vue'
 import { api } from '../lib/api/client'
 import { formatDateShort } from '../lib/formatDate'
+import { shortId } from '../utils/format'
 
 interface PipelineItem {
   id: string

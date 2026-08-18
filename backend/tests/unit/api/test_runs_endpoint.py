@@ -1811,3 +1811,54 @@ class TestGetRunIO:
         body = resp.json()
         assert body["input_payload"]["prompt"] == "Hello"
         assert body["input_payload"]["api_key"] == SENSITIVE_VALUE_MASK
+
+    def test_io_populates_node_labels_from_snapshot_graph(self, client: TestClient, mock_session: AsyncMock) -> None:
+        run = _make_io_run(
+            input_payload={"prompt": "Hello"},
+            outputs_json={"planner": {"result": "ok"}},
+            node_telemetry_json=None,
+        )
+        run.snapshot_id = _SNAPSHOT_ID
+
+        snapshot = MagicMock()
+        snapshot.graph_json = {
+            "nodes": [
+                {"id": "planner", "label": "Planner Agent"},
+                {"id": "coder", "node_type": "sandbox_agent"},
+                {"id": "unlabeled"},
+            ],
+            "edges": [],
+        }
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = snapshot
+        mock_session.execute.return_value = exec_result
+
+        with (
+            patch("modulo.api.routes.runs.get_run", return_value=run),
+            patch("modulo.api.routes.runs.set_rls_org"),
+        ):
+            resp = client.get(f"/api/v1/runs/{_RUN_ID}/io")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["node_labels"] == {
+            "planner": "Planner Agent",
+            "coder": "sandbox_agent",
+            "unlabeled": "unlabeled",
+        }
+
+    def test_io_node_labels_empty_without_snapshot(self, client: TestClient, mock_session: AsyncMock) -> None:
+        run = _make_io_run(
+            input_payload={"prompt": "Hello"},
+            outputs_json={"planner": {"result": "ok"}},
+            node_telemetry_json=None,
+        )
+
+        with (
+            patch("modulo.api.routes.runs.get_run", return_value=run),
+            patch("modulo.api.routes.runs.set_rls_org"),
+        ):
+            resp = client.get(f"/api/v1/runs/{_RUN_ID}/io")
+
+        assert resp.status_code == 200
+        assert resp.json()["node_labels"] == {}

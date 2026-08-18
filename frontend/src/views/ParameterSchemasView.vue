@@ -486,7 +486,7 @@
                     class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                   >
                     <option :value="undefined"></option>
-                    <option v-for="mb in modelBackends" :key="mb.id" :value="mb.id">{{ mb.name || mb.id }}</option>
+                    <option v-for="mb in modelBackends" :key="mb.id" :value="mb.id">{{ mb.name || shortId(mb.id) }}</option>
                   </select>
                 </div>
                 <div v-else-if="param.type === 'schema_ref'">
@@ -496,7 +496,7 @@
                     class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                   >
                     <option :value="undefined"></option>
-                    <option v-for="s in allSchemas" :key="s.id" :value="s.id">{{ s.name || s.id }}</option>
+                    <option v-for="s in allSchemas" :key="s.id" :value="s.id">{{ s.name || shortId(s.id) }}</option>
                   </select>
                 </div>
               </div>
@@ -559,7 +559,7 @@
               <ul v-else class="space-y-1">
                 <li v-for="agent in references.agents" :key="agent.id" class="text-sm">
                   <router-link :to="`/admin/agents/${agent.id}`" class="text-indigo-500 hover:text-indigo-400">
-                    {{ agent.name || agent.id }}
+                    {{ agent.name || shortId(agent.id) }}
                   </router-link>
                 </li>
               </ul>
@@ -568,7 +568,7 @@
               <div v-if="!references.sets?.length" class="text-sm text-muted-foreground">—</div>
               <ul v-else class="space-y-1">
                 <li v-for="set in references.sets" :key="set.id" class="text-sm text-muted-foreground">
-                  {{ set.name || set.id }}
+                  {{ set.name || shortId(set.id) }}
                 </li>
               </ul>
             </div>
@@ -659,6 +659,7 @@ import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
+import { shortId } from '../utils/format'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'

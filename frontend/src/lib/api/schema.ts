@@ -10063,6 +10063,8 @@ export interface components {
             decision?: string | null;
             /** Decision At */
             decision_at?: string | null;
+            /** Label */
+            label?: string | null;
         };
         /** GetOrgGuardrailsKillSwitchResponse */
         GetOrgGuardrailsKillSwitchResponse: {
@@ -13180,6 +13182,10 @@ export interface components {
             fixture_map?: {
                 [key: string]: string;
             } | null;
+            /** Node Labels */
+            node_labels?: {
+                [key: string]: string;
+            };
         };
         /** RunResponse */
         RunResponse: {

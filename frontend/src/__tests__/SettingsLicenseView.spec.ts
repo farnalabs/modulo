@@ -18,7 +18,7 @@ const mockLicenseTeam = {
   tier: 'team',
   features: ['parallel_branches', 'eval_system'],
   expires_at: '2026-12-31T23:59:59Z',
-  org_id: 'Acme Corp',
+  org_id: '11111111-2222-3333-4444-555555555555',
 }
 
 const mockFlagsFree = {
@@ -134,7 +134,7 @@ describe('SettingsLicenseView', () => {
     await nextTick()
     await nextTick()
     expect(wrapper.text()).toContain('Team')
-    expect(wrapper.text()).toContain('Acme Corp')
+    expect(wrapper.text()).toContain('#11111111')
     expect(wrapper.text()).toContain('December')
     expect(wrapper.text()).toContain('Team license key active')
   })

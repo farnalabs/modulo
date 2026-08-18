@@ -85,6 +85,11 @@ def _make_mock_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # The /io endpoint resolves the snapshot for node_labels; default to no
+    # snapshot so node_labels is empty unless a test stubs one explicitly.
+    exec_result = MagicMock()
+    exec_result.scalar_one_or_none.return_value = None
+    session.execute.return_value = exec_result
     return session
 
 
