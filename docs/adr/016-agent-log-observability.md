@@ -17,7 +17,7 @@ Modulo already has infrastructure that makes solving this tractable:
 - **SSE EventBus**: Real-time frontend sync via WebSocket fan-out, providing live run updates without polling.
 - **Run inspection API**: The existing run status and output API endpoints serve per-node state from LangGraph checkpoint snapshots.
 
-The PRD establishes two related requirements. First, a table-stakes requirement at 6.6: "OpenTelemetry-native observability  –  plugs into existing monitoring without custom work." Second, a scope boundary at 6.20: "Modulo is the SDLC orchestration layer  –  dispatch, auth, audit, cost tracking, eval gates, HITL  –  not the agent loop itself." Agent log observability sits at the intersection of these: it's observability, but it's observability of the dispatched agent, not of Modulo's internal execution.
+The PRD establishes two related requirements. First, a table-stakes requirement at 6.6: "OpenTelemetry-native observability  –  plugs into existing monitoring without custom work." Second, a scope boundary at 6.20: "Modulo is the SDLC governance layer  –  dispatch, auth, audit, cost tracking, eval gates, HITL  –  not the agent loop itself." Agent log observability sits at the intersection of these: it's observability, but it's observability of the dispatched agent, not of Modulo's internal execution.
 
 ---
 
@@ -88,7 +88,7 @@ Searching across agent logs (full-text search, filtering by time range or node t
 
 ## References
 
-- ADR 003: Agent Dispatch Model  –  establishes Modulo's scope boundary as orchestration, not agent runtime
+- ADR 003: Agent Dispatch Model  –  establishes Modulo's scope boundary as governance, not agent runtime
 - ADR 005: Agent Architecture Two-Tier  –  E2B template and sandbox architecture
 - PRD 6.6: OpenTelemetry  –  existing OTel strategy and table-stakes requirement
 - PRD 6.20: Agent Dispatch Model  –  output contract and observability requirements

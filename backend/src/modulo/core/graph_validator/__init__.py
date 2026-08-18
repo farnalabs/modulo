@@ -853,6 +853,7 @@ class GraphValidator:
 
         self._check_edges(graph_json, result)
         self._check_sandbox_agent_config(graph_json, result)
+        self._check_node_idempotent(graph_json, result)
         self._check_parallel_run_context_writes(graph_json, result)
         self._check_schema_compatibility(graph_json, result)
         await self._check_connector_bindings(connector_bindings or [], session, result)
@@ -936,6 +937,9 @@ class GraphValidator:
 
         # Sandbox agent config check.
         self._check_sandbox_agent_config(snapshot.graph_json, result)
+
+        # Node idempotency flag check (FAR-295).
+        self._check_node_idempotent(snapshot.graph_json, result)
 
         # Edge validation.
         self._check_edges(snapshot.graph_json, result)
@@ -2068,6 +2072,32 @@ class GraphValidator:
             _check_sandbox_stall_detectors(node, nid, result)
             _check_sandbox_egress(node, nid, result)
             _check_sandbox_resource_limits(node, nid, result)
+
+    # ------------------------------------------------------------------
+    # Node idempotency
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _check_node_idempotent(graph_json: dict[str, Any], result: ValidationResult) -> None:
+        """Validate the ``idempotent`` flag on every node (FAR-295).
+
+        ``idempotent`` defaults to ``true``; a node that sets it must use an
+        actual boolean. A non-boolean value (e.g. the string ``"false"``) would
+        be silently treated as idempotent by the executor's retry gate — and a
+        non-idempotent side effect could then be re-run by an auto-retry. Fail
+        closed at save time instead.
+        """
+        for node in graph_json.get("nodes", []) or []:
+            if not isinstance(node, dict) or "idempotent" not in node:
+                continue
+            if not isinstance(node.get("idempotent"), bool):
+                nid = _string_or_default(node.get("id"))
+                result.error(
+                    "NODE_IDEMPOTENT_INVALID",
+                    f"Node '{nid}': idempotent must be a boolean (true = safe to re-run, "
+                    f"false = never auto-retry), got {node.get('idempotent')!r}",
+                    node_id=nid,
+                )
 
     # ------------------------------------------------------------------
     # Pipeline retry_policy

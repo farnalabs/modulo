@@ -498,6 +498,27 @@ def test_pipeline_graph_node_delivery_sentinel_round_trip() -> None:
     assert legacy.delivery_sentinel is None
 
 
+def test_pipeline_graph_node_idempotent_round_trip() -> None:
+    """FAR-295: PipelineGraphNode carries ``idempotent`` on every executor type
+    and defaults it to true for legacy nodes."""
+    node = PipelineGraphNode.model_validate({**_sandbox_node_json(), "idempotent": False})
+    assert node.idempotent is False
+
+    agent_node = PipelineGraphNode.model_validate(
+        {
+            "id": uuid.uuid4(),
+            "node_type": "agent",
+            "position": {"x": 0, "y": 0},
+            "agent_id": uuid.uuid4(),
+            "idempotent": False,
+        }
+    )
+    assert agent_node.idempotent is False
+
+    legacy = PipelineGraphNode.model_validate(_sandbox_node_json())
+    assert legacy.idempotent is True
+
+
 def test_pipeline_graph_node_stall_detector_round_trip() -> None:
     """FAR-306: PipelineGraphNode carries the opt-in stall-detector fields and
     defaults them safely for legacy nodes."""

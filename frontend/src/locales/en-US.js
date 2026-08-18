@@ -356,7 +356,7 @@ export default {
       "annual": "Annual"
     },
     "LoginView": {
-      "governed_orchestration_for_your_agentic_sdlc": "Governed orchestration for your agentic SDLC",
+      "agent_governance_for_your_agentic_sdlc": "Agent governance for your agentic SDLC",
       "login_failed": "Login failed:",
       "enter_your_password": "Enter your password",
       "modulo": "Modulo"
