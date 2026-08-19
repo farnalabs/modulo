@@ -351,6 +351,32 @@
         </p>
       </div>
 
+      <!-- Live Output — real-time stdout during execution -->
+      <section
+        v-if="!isTerminal && Object.keys(liveOutput).length > 0"
+        class="space-y-2 rounded-lg border border-primary/30 bg-card p-6 mb-4"
+        data-testid="run-detail-live-output-section"
+      >
+        <h2 class="text-base font-semibold tracking-tight">{{ $t('views.RunDetailView.live_output') }}</h2>
+        <div v-for="(text, nodeId) in liveOutput" :key="nodeId" class="rounded-lg border bg-muted p-4">
+          <button
+            type="button"
+            class="flex w-full items-center justify-between text-left text-sm font-medium"
+            :aria-expanded="expandedLiveLogs.has(nodeId)"
+            :aria-controls="`live-log-${nodeId}`"
+            @click="toggleLiveLog(nodeId)"
+          >
+            <span class="truncate">{{ nodeLabel(nodeId) }}</span>
+            <span class="ml-2 shrink-0 text-xs text-muted-foreground">
+              {{ expandedLiveLogs.has(nodeId) ? $t('views.RunDetailView.hide') : $t('views.RunDetailView.view') }}
+            </span>
+          </button>
+          <div v-if="expandedLiveLogs.has(nodeId)" :id="`live-log-${nodeId}`" role="region" :aria-label="nodeLabel(nodeId)" class="mt-2">
+            <pre class="max-h-96 overflow-auto rounded bg-background p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap"><code>{{ text }}</code></pre>
+          </div>
+        </div>
+      </section>
+
       <!-- Per-Node Execution Trace -->
       <section class="space-y-4 rounded-lg border bg-card p-6">
         <div class="flex items-baseline justify-between gap-4">
@@ -833,6 +859,7 @@ const run = ref<RunResponse | null>(null)
 const runIO = ref<RunIOResponse | null>(null)
 const expandedNodes = ref(new Set<string>())
 const expandedLogs = ref(new Set<string>())
+const expandedLiveLogs = ref(new Set<string>())
 const copied = ref(false)
 const shareCopied = ref(false)
 const promptCopied = ref(false)
@@ -1010,6 +1037,12 @@ function toggleNodeIO(name: string) {
 
 function toggleNodeLogs(name: string) {
   const s = expandedLogs.value
+  if (s.has(name)) s.delete(name)
+  else s.add(name)
+}
+
+function toggleLiveLog(name: string) {
+  const s = expandedLiveLogs.value
   if (s.has(name)) s.delete(name)
   else s.add(name)
 }
