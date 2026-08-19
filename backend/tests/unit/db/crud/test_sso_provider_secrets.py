@@ -59,6 +59,7 @@ async def test_update_provider_encrypts_client_secret() -> None:
         updated = await update_provider(
             session,
             provider.id,
+            org_id=provider.organisation_id,
             fernet_key=key,
             client_secret="update-secret",
         )

@@ -126,7 +126,9 @@ async def run_determination(
         try:
             async with session.begin():
                 await set_rls_org(session, principal.organisation_id)
-                instances = await list_connector_instances(session, page_size=100)
+                instances = await list_connector_instances(
+                    session, organisation_id=principal.organisation_id, page_size=100
+                )
 
         except ProgrammingError:
             logger.exception("routes.determination")
@@ -204,7 +206,9 @@ async def create_determination_draft(
         try:
             async with session.begin():
                 await set_rls_org(session, principal.organisation_id)
-                instances = await list_connector_instances(session, page_size=100)
+                instances = await list_connector_instances(
+                    session, organisation_id=principal.organisation_id, page_size=100
+                )
 
         except ProgrammingError:
             logger.exception("routes.determination")

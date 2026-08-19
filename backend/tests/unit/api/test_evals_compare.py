@@ -339,6 +339,8 @@ class TestEvalFromRun:
             pipeline_id=_PIPELINE_ID,
             outputs_json={str(_NODE_1): {"result": "hello world"}},
         )
+        mock_pipeline = MagicMock()
+        mock_pipeline.id = _PIPELINE_ID
 
         mock_session.execute.side_effect = [
             _make_result(),  # require_permission authz_enforce (kill-switch) read
@@ -346,6 +348,7 @@ class TestEvalFromRun:
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
             _make_result(scalar_one_value=run),
+            _make_result(scalar_one_value=mock_pipeline),  # pipeline ownership check
         ]
         mock_session.add = MagicMock()
         mock_session.flush = AsyncMock()
@@ -385,6 +388,8 @@ class TestEvalFromRun:
                 }
             },
         )
+        mock_pipeline = MagicMock()
+        mock_pipeline.id = _PIPELINE_ID
 
         mock_session.execute.side_effect = [
             _make_result(),  # require_permission authz_enforce (kill-switch) read
@@ -392,6 +397,7 @@ class TestEvalFromRun:
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
             _make_result(scalar_one_value=run),
+            _make_result(scalar_one_value=mock_pipeline),  # pipeline ownership check
         ]
         mock_session.add = MagicMock()
         mock_session.flush = AsyncMock()
@@ -424,6 +430,8 @@ class TestEvalFromRun:
             outputs_json={},
             node_telemetry_json={str(_NODE_1): {"status": "failed", "summary": "no return"}},
         )
+        mock_pipeline = MagicMock()
+        mock_pipeline.id = _PIPELINE_ID
 
         mock_session.execute.side_effect = [
             _make_result(),  # require_permission authz_enforce (kill-switch) read
@@ -431,6 +439,7 @@ class TestEvalFromRun:
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
             _make_result(scalar_one_value=run),
+            _make_result(scalar_one_value=mock_pipeline),  # pipeline ownership check
         ]
         mock_session.add = MagicMock()
         mock_session.flush = AsyncMock()
@@ -505,12 +514,16 @@ class TestEvalFromRun:
                 outputs_json={str(_NODE_1): {"output_field": "test value"}},
             )
 
+            mock_pipeline = MagicMock()
+            mock_pipeline.id = _PIPELINE_ID
+
             mock_session.execute.side_effect = [
                 _make_result(),  # require_permission authz_enforce (kill-switch) read
                 _make_result(scalar_one_value=None),  # set_rls_org
                 _make_result(scalar_value=None),  # set_rls_user_context (user_id)
                 _make_result(scalar_value=None),  # set_rls_user_context (org_role)
                 _make_result(scalar_one_value=run),
+                _make_result(scalar_one_value=mock_pipeline),  # pipeline ownership check
             ]
             mock_session.add = MagicMock()
             mock_session.flush = AsyncMock()
