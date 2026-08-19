@@ -109,7 +109,7 @@ class ConcurrentRunLimitError(RuntimeError):
 
 
 class PipelineRateLimitError(RuntimeError):
-    def __init__(self, pipeline_id: uuid.UUID, key: str, max_triggers: int, window_seconds: int) -> None:
+    def __init__(self, pipeline_id: uuid.UUID, key: str | None, max_triggers: int, window_seconds: int) -> None:
         super().__init__(
             f"Pipeline {pipeline_id} rate limit exceeded: {max_triggers} triggers per {window_seconds}s for key {key}"
         )
