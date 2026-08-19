@@ -45,6 +45,7 @@ async def _clear_tiers_cache() -> None:
             await redis.aclose()
     yield
 
+
 _STANDARD_TIERS = [
     {
         "tier_id": "community",
