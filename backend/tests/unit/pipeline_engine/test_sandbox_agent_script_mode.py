@@ -1253,3 +1253,159 @@ async def test_e2b_rate_limit_retry_is_cancellable():
         pytest.raises(asyncio.CancelledError),
     ):
         await fn(_run_state())
+
+
+# ---------------------------------------------------------------------------
+# FAR-296 Phase 5a: OTel span events at script-mode lifecycle milestones
+# ---------------------------------------------------------------------------
+
+
+@patch("opentelemetry.trace.get_current_span")
+async def test_script_mode_emits_lifecycle_events(mock_get_span):
+    """Script-mode run emits OTel span events at provision, lease, start, finalize."""
+    mock_span = MagicMock()
+    mock_span.is_recording.return_value = True
+    mock_get_span.return_value = mock_span
+
+    node_def = _script_node_def()
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _script_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new_callable=AsyncMock, return_value=sandbox):
+        await fn(_run_state())
+
+    # Collect all span event names
+    event_names = [call.args[0] for call in mock_span.add_event.call_args_list]
+    assert "script.provisioned" in event_names
+    assert "script.lease_claimed" in event_names
+    assert "script.command_started" in event_names
+    assert "script.finalized" in event_names
+
+
+@patch("opentelemetry.trace.get_current_span")
+async def test_script_mode_budget_killed_emits_event(mock_get_span):
+    """Budget-killed path emits script.budget_killed span event."""
+    mock_span = MagicMock()
+    mock_span.is_recording.return_value = True
+    mock_get_span.return_value = mock_span
+
+    node_def = _script_node_def(wallclock_budget_seconds=1)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _killed_sandbox_mock()
+
+    clock = {"now": 0.0}
+
+    def _monotonic() -> float:
+        return clock["now"]
+
+    async def _get_info(*_args, **_kwargs):
+        clock["now"] = 60.0
+        return MagicMock(size=0)
+
+    sandbox.files.get_info = AsyncMock(side_effect=_get_info)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new_callable=AsyncMock, return_value=sandbox),
+        patch(_WALLCLOCK_MONOTONIC_PATCH, side_effect=_monotonic),
+        pytest.raises(ScriptBudgetKilledError, match="budget"),
+    ):
+        await fn(_run_state())
+
+    event_names = [call.args[0] for call in mock_span.add_event.call_args_list]
+    assert "script.budget_killed" in event_names
+    # Provisioned and lease claimed happen before the kill
+    assert "script.provisioned" in event_names
+    assert "script.lease_claimed" in event_names
+
+
+@patch("opentelemetry.trace.get_current_span")
+async def test_script_mode_provisioned_event_contains_sandbox_id(mock_get_span):
+    """The script.provisioned event includes sandbox_id, template, and mode."""
+    mock_span = MagicMock()
+    mock_span.is_recording.return_value = True
+    mock_get_span.return_value = mock_span
+
+    node_def = _script_node_def(template_id="my-template")
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _script_sandbox_mock()
+    sandbox.sandbox_id = "test-sandbox-abc"
+
+    with patch("e2b.AsyncSandbox.create", new_callable=AsyncMock, return_value=sandbox):
+        await fn(_run_state())
+
+    # Find the provisioned event
+    provisioned_calls = [call for call in mock_span.add_event.call_args_list if call.args[0] == "script.provisioned"]
+    assert len(provisioned_calls) == 1
+    attrs = provisioned_calls[0].args[1]
+    assert attrs["sandbox_id"] == "test-sandbox-abc"
+    assert attrs["template"] == "my-template"
+    assert attrs["mode"] == "script"
+
+
+@patch("opentelemetry.trace.get_current_span")
+async def test_script_mode_command_started_event_contains_command(mock_get_span):
+    """The script.command_started event includes the truncated script command."""
+    mock_span = MagicMock()
+    mock_span.is_recording.return_value = True
+    mock_get_span.return_value = mock_span
+
+    node_def = _script_node_def(script_command="python3 /home/user/main.py --flag")
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _script_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new_callable=AsyncMock, return_value=sandbox):
+        await fn(_run_state())
+
+    started_calls = [call for call in mock_span.add_event.call_args_list if call.args[0] == "script.command_started"]
+    assert len(started_calls) == 1
+    attrs = started_calls[0].args[1]
+    assert attrs["command"] == "python3 /home/user/main.py --flag"
+
+
+@patch("opentelemetry.trace.get_current_span")
+async def test_script_mode_finalized_event_contains_details(mock_get_span):
+    """The script.finalized event includes elapsed, budget_killed, exit_code."""
+    mock_span = MagicMock()
+    mock_span.is_recording.return_value = True
+    mock_get_span.return_value = mock_span
+
+    node_def = _script_node_def()
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _script_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new_callable=AsyncMock, return_value=sandbox):
+        await fn(_run_state())
+
+    finalized_calls = [call for call in mock_span.add_event.call_args_list if call.args[0] == "script.finalized"]
+    assert len(finalized_calls) == 1
+    attrs = finalized_calls[0].args[1]
+    assert "elapsed_seconds" in attrs
+    assert attrs["budget_killed"] == "False"
+    assert attrs["exit_code"] == "0"
+
+
+@patch("opentelemetry.trace.get_current_span")
+async def test_script_mode_rate_limited_retry_emits_event(mock_get_span):
+    """E2B rate-limit retry emits script.rate_limited_retry span event."""
+    mock_span = MagicMock()
+    mock_span.is_recording.return_value = True
+    mock_get_span.return_value = mock_span
+
+    node_def = _script_node_def()
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _script_sandbox_mock()
+    create = AsyncMock(side_effect=[RateLimitException("rate limited"), sandbox])
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=create),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_RATE_LIMIT_BASE_BACKOFF_S", 0),
+    ):
+        await fn(_run_state())
+
+    rate_limited_calls = [
+        call for call in mock_span.add_event.call_args_list if call.args[0] == "script.rate_limited_retry"
+    ]
+    assert len(rate_limited_calls) == 1
+    attrs = rate_limited_calls[0].args[1]
+    assert attrs["attempt"] == "1"
+    assert attrs["backoff_seconds"] == "0"

@@ -2487,6 +2487,15 @@ def make_sandbox_agent_fn(
     from e2b.exceptions import RateLimitException  # type: ignore[import-untyped]
     from opentelemetry import trace as _otel_trace
 
+    def _emit_script_span_event(name: str, attrs: dict) -> None:
+        """Emit an OTel span event for script-mode milestones (FAR-296 Phase 5a)."""
+        try:
+            _span = _otel_trace.get_current_span()
+            if _span.is_recording():
+                _span.add_event(name, {k: str(v)[:_MAX_OTEL_LOG_ATTR] for k, v in attrs.items()})
+        except Exception:  # noqa: S110 -- never fail on observability
+            pass
+
     @cancellable_node(
         timeout=(timeout or sandbox_timeout) + _OUTPUT_READ_TIMEOUT + _DECORATOR_GRACE,
         role="sandbox_agent",
@@ -3021,6 +3030,13 @@ def make_sandbox_agent_fn(
                             "backoff_seconds": _backoff,
                         },
                     )
+                    _emit_script_span_event(
+                        "script.rate_limited_retry",
+                        {
+                            "attempt": _rate_limit_attempt,
+                            "backoff_seconds": _backoff,
+                        },
+                    )
                     try:
                         await asyncio.wait_for(
                             asyncio.sleep(_backoff),
@@ -3031,6 +3047,14 @@ def make_sandbox_agent_fn(
             if sandbox is None:
                 raise RuntimeError("Sandbox was not created before use")
             _sandbox_id = getattr(sandbox, "sandbox_id", None) or None
+            _emit_script_span_event(
+                "script.provisioned",
+                {
+                    "sandbox_id": _sandbox_id,
+                    "template": template_id,
+                    "mode": sandbox_mode,
+                },
+            )
             # Persist the real sandbox id so the heartbeat-lost path
             # (run_executor_with_watchdog) can kill the sandbox by id.
             await _store_dispatch_marker_sandbox(_sandbox_id)
@@ -3390,6 +3414,15 @@ def make_sandbox_agent_fn(
                         "sandbox_agent.budget_killed",
                         extra={"node_id": node_id, "run_id": run_id, "reason": reason},
                     )
+                    _emit_script_span_event(
+                        "script.budget_killed",
+                        {
+                            "run_id": run_id,
+                            "node_id": node_id,
+                            "reason": reason,
+                            "elapsed_seconds": round(time.monotonic() - start_time, 1),
+                        },
+                    )
                     try:
                         await asyncio.wait_for(
                             asyncio.shield(sandbox.kill(request_timeout=10)),
@@ -3602,6 +3635,13 @@ def make_sandbox_agent_fn(
                 if sandbox_mode == "script":
                     await _store_script_lease()
                     _script_lease_claimed = True
+                    _emit_script_span_event(
+                        "script.lease_claimed",
+                        {
+                            "run_id": run_id,
+                            "node_id": node_id,
+                        },
+                    )
                     # FAR-296 Phase 3b: mint a short-TTL runner-role API key so
                     # the script can authenticate to the Modulo API with a
                     # restricted identity. The key is per-run, revoked at run
@@ -3702,6 +3742,14 @@ def make_sandbox_agent_fn(
                         envs=sandbox_envs,
                     ),
                     timeout=min(sandbox_timeout, 120),
+                )
+                _emit_script_span_event(
+                    "script.command_started",
+                    {
+                        "run_id": run_id,
+                        "node_id": node_id,
+                        "command": agent_command[:200] if sandbox_mode == "script" else "llm",
+                    },
                 )
                 cmd_result, stall_reason = await _wait_command_with_idle_watchdog(
                     cmd_handle,
@@ -3963,6 +4011,18 @@ def make_sandbox_agent_fn(
                     stdout_length=_stdout_len,
                     stderr_length=_stderr_len,
                     delivery_sentinel=delivery_sentinel,
+                )
+
+            if sandbox_mode == "script":
+                _emit_script_span_event(
+                    "script.finalized",
+                    {
+                        "run_id": run_id,
+                        "node_id": node_id,
+                        "elapsed_seconds": round(time.monotonic() - start_time, 1),
+                        "budget_killed": _budget_killed,
+                        "exit_code": exit_code if cmd_result is not None else None,
+                    },
                 )
 
             _span = _otel_trace.get_current_span()
