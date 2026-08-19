@@ -31,7 +31,8 @@
           </span>
           <span
             v-else-if="deltaAbs != null && noBaselineLabel"
-            class="inline-flex items-center gap-0.5 text-xs font-medium text-muted-foreground"
+            class="inline-flex items-center gap-0.5 text-xs font-medium"
+            :class="deltaAbsClass"
             data-testid="stat-no-baseline"
             role="img"
             :aria-label="noBaselineLabel"
@@ -61,6 +62,7 @@ const props = defineProps<{
   to?: string;
   delta?: StatDelta | null;
   noBaselineLabel?: string;
+  inverted?: boolean;
 }>();
 
 const iconBgClass = computed(() => {
@@ -105,28 +107,40 @@ const deltaAbsText = computed(() => {
   return `${sign}${formatted}`;
 });
 
+function arrowFor(delta: number, inverted: boolean): string {
+  if (delta > 0) return inverted ? '▼' : '▲'
+  if (delta < 0) return inverted ? '▲' : '▼'
+  return '→'
+}
+
+function classFor(delta: number, inverted: boolean): string {
+  if (delta > 0) return inverted ? 'text-destructive' : 'text-success'
+  if (delta < 0) return inverted ? 'text-success' : 'text-destructive'
+  return 'text-muted-foreground'
+}
+
 const deltaArrow = computed(() => {
   const d = deltaPct.value;
   if (d == null) return "";
-  if (d > 0) return "▲";
-  if (d < 0) return "▼";
-  return "→";
+  return arrowFor(d, props.inverted ?? false);
 });
 
 const deltaAbsArrow = computed(() => {
   const d = deltaAbs.value;
   if (d == null) return "";
-  if (d > 0) return "▲";
-  if (d < 0) return "▼";
-  return "→";
+  return arrowFor(d, props.inverted ?? false);
 });
 
 const deltaClass = computed(() => {
   const d = deltaPct.value;
   if (d == null) return "";
-  if (d > 0) return "text-success";
-  if (d < 0) return "text-destructive";
-  return "text-muted-foreground";
+  return classFor(d, props.inverted ?? false);
+});
+
+const deltaAbsClass = computed(() => {
+  const d = deltaAbs.value;
+  if (d == null) return "";
+  return classFor(d, props.inverted ?? false);
 });
 
 const deltaPctText = computed(() => {
