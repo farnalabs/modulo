@@ -197,7 +197,7 @@ test.describe('View Modes Admin CRUD', { tag: "@regression" }, () => {
 
     await page.goto('/admin/views', { timeout: 120000 })
 
-    const editButtons = page.getByTestId('admin-views-edit')
+    const editButtons = page.locator('table tbody').getByRole('button', { name: 'Edit' })
     await expect(editButtons).toHaveCount(2)
     await editButtons.first().evaluate((el: HTMLElement) => el.click())
 
@@ -224,13 +224,13 @@ test.describe('View Modes Admin CRUD', { tag: "@regression" }, () => {
 
     await page.goto('/admin/views', { timeout: 120000 })
 
-    const deleteButtons = page.getByTestId('admin-views-delete')
+    const deleteButtons = page.locator('table tbody').getByRole('button', { name: 'Delete' })
     await expect(deleteButtons).toHaveCount(2)
     await deleteButtons.first().evaluate((el: HTMLElement) => el.click())
 
     await expect(page.getByTestId('admin-views-delete-confirm')).toBeVisible()
     await expect(page.getByTestId('admin-views-delete-cancel')).toBeVisible()
-    await expect(page.getByTestId('admin-views-delete')).toHaveCount(2)
+    await expect(page.locator('table tbody').getByRole('button', { name: 'Delete' })).toHaveCount(2)
 
     await page.getByTestId('admin-views-delete-cancel').evaluate((el: HTMLElement) => el.click())
     await expect(page.getByTestId('admin-views-delete-confirm')).not.toBeVisible({ timeout: 3000 })
