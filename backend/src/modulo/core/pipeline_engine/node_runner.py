@@ -3422,8 +3422,13 @@ def make_sandbox_agent_fn(
                     # without re-declaring (it is only written inside the kill
                     # closure). The guard ``and not _budget_killed`` prevents a
                     # second kill if the resource-cap killer already fired.
+                    # Gated to script mode only — LLM-mode nodes do not take a
+                    # wall-clock budget; raising ScriptBudgetKilledError
+                    # (script-specific, terminal) for an LLM-mode node would be
+                    # a misclassification.
                     if (
-                        wallclock_budget_seconds is not None
+                        sandbox_mode == "script"
+                        and wallclock_budget_seconds is not None
                         and (time.monotonic() - start_time) >= wallclock_budget_seconds
                         and not _budget_killed
                     ):
@@ -3472,14 +3477,16 @@ def make_sandbox_agent_fn(
                 sandbox_envs.update(env_vars_extra)
                 # FAR-296 Phase 4a: wall-clock spend budget — non-tick path.
                 # A very slow provisioning sequence may already have consumed the
-                # budget before the script process starts; check BEFORE the script
-                # lease is claimed (so this stays a PRE-CLAIM / retryable-budget
-                # failure, never a post-claim terminal misclassification). Script
-                # mode checks here (before the lease) and again before
-                # commands.run (a safe no-op when the lease is already claimed —
-                # the post-claim terminal path applies).
+                # budget before the script process starts. Even though no side
+                # effects occurred, the budget was exhausted — re-dispatching
+                # would waste another provisioning cycle on a run that already
+                # consumed its budget allocation. Script mode only: LLM-mode
+                # nodes do not take a wall-clock budget; raising
+                # ScriptBudgetKilledError for an LLM-mode node would be a
+                # misclassification.
                 if (
-                    wallclock_budget_seconds is not None
+                    sandbox_mode == "script"
+                    and wallclock_budget_seconds is not None
                     and (time.monotonic() - start_time) >= wallclock_budget_seconds
                     and not _budget_killed
                 ):
@@ -3572,9 +3579,11 @@ def make_sandbox_agent_fn(
                 # slow bridge / env setup may have consumed the budget; do not
                 # start the command past the budget. ``_budget_killed`` may
                 # already be set by the pre-lease check above (script mode) —
-                # guard against a double kill/raise.
+                # guard against a double kill/raise. Script mode only: same
+                # rationale as the pre-lease check.
                 if (
-                    wallclock_budget_seconds is not None
+                    sandbox_mode == "script"
+                    and wallclock_budget_seconds is not None
                     and (time.monotonic() - start_time) >= wallclock_budget_seconds
                     and not _budget_killed
                 ):
