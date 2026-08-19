@@ -2213,6 +2213,25 @@ def step_jira_attachment_content_returned(ctx):
     assert record.get("attachment_id"), f"Expected attachment_id but got {record}"
 
 
+@when("I perform a health check")
+def step_generic_health_check(ctx):
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].health_check())
+        ctx["health_result"] = result
+    except Exception as exc:
+        ctx["health_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the health result is ok")
+def step_health_result_is_ok(ctx):
+    result = ctx.get("health_result")
+    assert result is not None, "No health check result"
+    assert result.ok is True, f"Health check failed: {result.detail}"
+
+
 # ============================================================================
 # connectors/slack_connector.feature  —  14 scenarios
 # ============================================================================
