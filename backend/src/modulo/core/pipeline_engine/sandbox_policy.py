@@ -155,8 +155,11 @@ def build_git_scoped_script() -> str:
         # Register the helper in the AGENT's git config file (not /root's —
         # the agent runs as the sandbox default non-root user and reads
         # /home/user/.gitconfig). The agent reads .gitconfig, so the scoped
-        # helper is genuinely in force for its git operations.
-        f"git config --global --file {_AGENT_GIT_CONFIG} credential.helper "
+        # helper is genuinely in force for its git operations. Note: the flag
+        # is ONLY ``--file`` — ``--global --file`` together makes git exit with
+        # "error: only one config file at a time" (exit 129), which would fail
+        # this enforcement-critical step for every scoped/none sandbox.
+        f"git config --file {_AGENT_GIT_CONFIG} credential.helper "
         f'"{_WORKSPACE}/.git-policy/cred-helper.sh"\n'
     )
 
@@ -175,7 +178,9 @@ def build_git_none_script() -> str:
         "set -e\n"
         "printf '#!/bin/sh\\nexit 1\\n' > /tmp/modulo-git-refuse-helper.sh\n"
         "chmod +x /tmp/modulo-git-refuse-helper.sh\n"
-        f"git config --global --file {_AGENT_GIT_CONFIG} credential.helper /tmp/modulo-git-refuse-helper.sh\n"
+        # --file only, never --global --file together (git rejects that combo
+        # with "only one config file at a time", exit 129).
+        f"git config --file {_AGENT_GIT_CONFIG} credential.helper /tmp/modulo-git-refuse-helper.sh\n"
     )
 
 

@@ -9,6 +9,9 @@ derivable from validated + enforced config).
 
 from __future__ import annotations
 
+import os
+import subprocess
+
 import pytest
 
 from modulo.core.pipeline_engine.sandbox_mode import (
@@ -66,6 +69,109 @@ def test_egress_selected_script_drops_then_allows() -> None:
     assert "DROP" in script.upper()
     assert "api.example.com" in script
     assert "443" in script
+
+
+# ---------------------------------------------------------------------------
+# Execution tests (FAR-212 PR B review, MAJOR 2): the enforcement scripts are
+# security-critical, so they must not just CONTAIN the right strings — they
+# must actually EXIT 0 when run. The previous string+step-order tests passed
+# even though `git config --global --file` fails at runtime (MAJOR 1, exit 129
+# "only one config file at a time"), which broke every scoped/none sandbox.
+# These tests render each script, substitute the hardcoded /home/user workspace
+# for an isolated temp dir, execute it under `sh`, and assert exit 0 + the
+# git credential helper actually installs.
+# ---------------------------------------------------------------------------
+
+_WORKSPACE_SENTINEL = "/home/user"
+
+
+def _render_for_temp_workspace(script: str, workspace: str) -> str:
+    """Return the script with the hardcoded /home/user workspace swapped for a
+    temp dir so executing it does not touch the real filesystem."""
+    return script.replace(_WORKSPACE_SENTINEL, workspace)
+
+
+def _run_script(script: str, workspace: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    """Execute a policy script under sh in an isolated temp workspace.
+
+    HOME and GIT_CONFIG are pointed at the temp workspace so git writes the
+    agent gitconfig there (mirroring the real non-root agent reading
+    /home/user/.gitconfig), and GIT_CONFIG_NOSYSTEM pins an empty system config.
+    """
+    rerendered = _render_for_temp_workspace(script, workspace)
+    run_env = {
+        "HOME": workspace,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "PATH": os.environ["PATH"],
+    }
+    if env:
+        run_env.update(env)
+    return subprocess.run(  # noqa: S603 - executing our own generated policy script in tests
+        ["sh", "-c", rerendered],  # noqa: S607 - `sh` is on the fixed PATH, safe in tests
+        capture_output=True,
+        text=True,
+        env=run_env,
+        cwd=workspace,
+    )
+
+
+def test_git_scoped_script_executes_and_installs_helper(tmp_path) -> None:
+    """The scoped script must EXIT 0 and register the helper in the agent
+    gitconfig (this catches the `--global --file` exit-129 regression)."""
+    script = build_git_scoped_script()
+    assert _WORKSPACE_SENTINEL in script
+    result = _run_script(script, str(tmp_path))
+    assert result.returncode == 0, f"scoped script failed: {result.stdout}\n{result.stderr}"
+    gitconfig = tmp_path / ".gitconfig"
+    assert gitconfig.exists(), "agent gitconfig not written"
+    assert "cred-helper.sh" in gitconfig.read_text()
+    helper = tmp_path / ".git-policy" / "cred-helper.sh"
+    assert helper.exists() and os.access(helper, os.X_OK)
+
+
+def test_git_none_script_executes_and_installs_refuse_helper(tmp_path) -> None:
+    """The 'none' script must EXIT 0 and register the refuse helper (also
+    catches the `--global --file` exit-129 regression)."""
+    script = build_git_none_script()
+    result = _run_script(script, str(tmp_path))
+    assert result.returncode == 0, f"none script failed: {result.stdout}\n{result.stderr}"
+    gitconfig = tmp_path / ".gitconfig"
+    assert gitconfig.exists(), "agent gitconfig not written"
+    assert "modulo-git-refuse-helper.sh" in gitconfig.read_text()
+
+
+def test_read_only_script_executes_clearly(tmp_path) -> None:
+    """The read-only seal must EXIT 0 (chmod + re-open runtime writes)."""
+    script = build_read_only_script()
+    result = _run_script(script, str(tmp_path))
+    assert result.returncode == 0, f"read-only script failed: {result.stdout}\n{result.stderr}"
+
+
+def test_scoped_helper_grants_token_only_to_allowed_host() -> None:
+    """Executing the credential helper itself: it echoes the token for
+    github.com and nothing for any other host (executes the real sh snippet)."""
+    from modulo.core.pipeline_engine.sandbox_policy import _credential_helper_script
+
+    helper = _credential_helper_script()
+    token = "ghp_testtoken123"
+    allowed = subprocess.run(  # noqa: S603 - executing our own helper script in tests
+        ["sh", "-c", helper],  # noqa: S607 - `sh` is on the fixed PATH, safe in tests
+        input="protocol=https\nhost=github.com\n\n",
+        capture_output=True,
+        text=True,
+        env={"GITHUB_TOKEN": token, "PATH": os.environ["PATH"]},
+    )
+    assert allowed.returncode == 0
+    assert f"password={token}" in allowed.stdout
+    denied = subprocess.run(  # noqa: S603 - executing our own helper script in tests
+        ["sh", "-c", helper],  # noqa: S607 - `sh` is on the fixed PATH, safe in tests
+        input="protocol=https\nhost=gitlab.com\n\n",
+        capture_output=True,
+        text=True,
+        env={"GITHUB_TOKEN": token, "PATH": os.environ["PATH"]},
+    )
+    assert denied.returncode == 0
+    assert "password=" not in denied.stdout
 
 
 # ---------------------------------------------------------------------------
