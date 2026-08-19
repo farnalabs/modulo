@@ -1315,7 +1315,7 @@ class TestDispatcherWiring:
         redis_cls = MagicMock()
         redis_cls.from_url.return_value = redis_client
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_open_system_factory", return_value=factory),
             patch.object(
                 ch,
                 "get_settings",
@@ -1362,7 +1362,7 @@ class TestDispatcherWiring:
         redis_cls = MagicMock()
         redis_cls.from_url.return_value = redis_client
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_open_system_factory", return_value=factory),
             patch.object(
                 ch,
                 "get_settings",

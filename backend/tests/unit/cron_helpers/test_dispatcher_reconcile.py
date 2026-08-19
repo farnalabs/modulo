@@ -170,7 +170,7 @@ async def _run_reconcile(
     redis_cls.from_url.return_value = redis_client
 
     with (
-        patch.object(ch, "_open_factory", return_value=factory),
+        patch.object(ch, "_open_system_factory", return_value=factory),
         patch.object(ch, "get_settings", return_value=_settings()),
         patch.object(ch, "AsyncRedis", redis_cls),
         patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
@@ -426,7 +426,7 @@ class TestReconcileRedisFailSafe:
         redis_cls.from_url.return_value = redis_client
 
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_open_system_factory", return_value=factory),
             patch.object(ch, "get_settings", return_value=_settings()),
             patch.object(ch, "AsyncRedis", redis_cls),
             patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
@@ -460,7 +460,7 @@ class TestNoSaqEvictionRedispatch:
         redis_cls.from_url.return_value = redis_client
 
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_open_system_factory", return_value=factory),
             patch.object(ch, "get_settings", return_value=_settings()),
             patch.object(ch, "AsyncRedis", redis_cls),
             patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
@@ -497,7 +497,7 @@ class TestNoSaqEvictionRedispatch:
         redis_cls.from_url.return_value = redis_client
 
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_open_system_factory", return_value=factory),
             patch.object(ch, "get_settings", return_value=_settings()),
             patch.object(ch, "AsyncRedis", redis_cls),
             patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
@@ -578,7 +578,7 @@ class TestEnqueueFailedRecovery:
         redis_cls.from_url.return_value = redis_client
 
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_open_system_factory", return_value=factory),
             patch.object(ch, "get_settings", return_value=_settings()),
             patch.object(ch, "AsyncRedis", redis_cls),
             patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
@@ -794,7 +794,7 @@ class TestReconcilePersistsSharedStats:
         redis_cls = MagicMock()
         redis_cls.from_url.return_value = redis_client
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_open_system_factory", return_value=factory),
             patch.object(ch, "get_settings", return_value=_settings()),
             patch.object(ch, "AsyncRedis", redis_cls),
         ):
@@ -821,7 +821,7 @@ class TestReconcilePrefixAware:
         redis_cls.from_url.return_value = redis_client
 
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_open_system_factory", return_value=factory),
             patch.object(ch, "get_settings", return_value=_settings(saq_runs_queue="staging-runs")),
             patch.object(ch, "AsyncRedis", redis_cls),
             patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
@@ -954,7 +954,7 @@ class TestRunApiKeySweepWiring:
         redis_cls = MagicMock()
         redis_cls.from_url.return_value = redis_client
         return factory, [
-            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_open_system_factory", return_value=factory),
             patch.object(ch, "get_settings", return_value=_settings()),
             patch.object(ch, "AsyncRedis", redis_cls),
             patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
