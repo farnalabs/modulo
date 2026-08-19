@@ -7,7 +7,7 @@
     @pointerleave="onPointerLeave"
   >
     <svg
-      :viewBox="`0 0 ${width} ${height}`"
+      :viewBox="`0 0 ${adjustedWidth} ${height}`"
       class="h-full w-full overflow-hidden"
       preserveAspectRatio="none"
       role="img"
@@ -29,21 +29,50 @@
           stroke-linejoin="round"
           :points="linePoints"
         />
+        <!-- Y-axis labels -->
+        <template v-if="showYAxis">
+          <text
+            v-for="(val, ti) in yTickValues"
+            :key="'ytick-' + ti"
+            x="0"
+            :y="yFor(val)"
+            font-size="9"
+            :fill="color"
+            fill-opacity="0.6"
+            dominant-baseline="middle"
+            class="sparkline-y-label"
+          >{{ formatValue(val) }}</text>
+        </template>
+        <!-- X-axis ticks -->
+        <template v-if="showXTicks">
+          <line
+            v-for="ti in xTickIndices"
+            :key="'xtick-' + ti"
+            class="sparkline-x-tick"
+            :x1="xFor(ti)"
+            :y1="height - padding"
+            :x2="xFor(ti)"
+            :y2="height - padding - 2"
+            :stroke="color"
+            stroke-opacity="0.3"
+            stroke-width="1"
+          />
+        </template>
       </template>
       <!-- Muted placeholder when there are fewer than two real data points — a
            fabricated line would read as a misleading zero/flat trend. -->
       <template v-else>
         <line
-          :x1="padding"
+          :x1="adjustedPadding"
           :y1="height / 2"
-          :x2="width - padding"
+          :x2="adjustedWidth - padding"
           :y2="height / 2"
           :stroke="color"
           stroke-opacity="0.25"
           stroke-dasharray="3 3"
         />
         <text
-          :x="width / 2"
+          :x="adjustedWidth / 2"
           :y="height / 2"
           text-anchor="middle"
           dominant-baseline="middle"
@@ -109,13 +138,22 @@ const props = withDefaults(
     labels?: string[];
     // Optional unit (e.g. "runs", "%", "$") appended to values.
     unit?: string;
+    // Show y-axis labels (min/max values on left side).
+    showYAxis?: boolean;
+    // Show x-axis tick marks at data points.
+    showXTicks?: boolean;
+    // Number of y-axis ticks (default 3).
+    tickCount?: number;
   }>(),
   {
     color: "currentColor",
     width: 200,
-    height: 40,
+    height: 60,
     labels: () => [],
     unit: "",
+    showYAxis: false,
+    showXTicks: false,
+    tickCount: 3,
   },
 );
 
@@ -146,7 +184,7 @@ const stepX = computed(
 );
 
 function xFor(i: number): number {
-  return clamp(padding + i * stepX.value, padding, props.width - padding);
+  return clamp(adjustedPadding.value + i * stepX.value, adjustedPadding.value, adjustedWidth.value - padding);
 }
 
 function yFor(v: number): number {
@@ -174,6 +212,29 @@ const areaPoints = computed(() => {
   return `${firstX},${props.height - padding} ${pts.join(" ")} ${lastX},${props.height - padding}`;
 });
 
+// --- Axis labels / ticks ----------------------------------------------------
+const yAxisLabelWidth = computed(() => (props.showYAxis ? 40 : 0));
+
+const adjustedWidth = computed(() => props.width + yAxisLabelWidth.value);
+
+const adjustedPadding = computed(() => padding + yAxisLabelWidth.value);
+
+const yTickValues = computed(() => {
+  if (!props.showYAxis || !hasData.value) return [];
+  const n = Math.max(2, props.tickCount);
+  const step = range.value > 0 ? range.value / (n - 1) : 0;
+  return Array.from({ length: n }, (_, i) => min.value + step * i);
+});
+
+const xTickIndices = computed(() => {
+  if (!props.showXTicks || !hasData.value) return [];
+  const count = chartData.value.length;
+  if (count <= 8) return chartData.value.map((_, i) => i);
+  // Show every Nth tick to avoid overcrowding
+  const everyN = Math.ceil(count / 8);
+  return chartData.value.map((_, i) => i).filter(i => i % everyN === 0 || i === count - 1);
+});
+
 // --- Hover tooltip ---------------------------------------------------------
 const containerRef = ref<HTMLElement | null>(null);
 const hoveredIndex = ref(-1);
@@ -187,11 +248,11 @@ function onPointerMove(e: PointerEvent): void {
   const rect = el.getBoundingClientRect();
   // jsdom reports 0-sized rects; fall back to the viewBox width so the nearest
   // index still resolves in unit tests.
-  const denom = rect.width || props.width;
+  const denom = rect.width || adjustedWidth.value;
   const x = clamp(e.clientX - rect.left, 0, denom);
-  const viewboxX = (x / denom) * props.width;
+  const viewboxX = (x / denom) * adjustedWidth.value;
   const idx = clamp(
-    Math.round((viewboxX - padding) / stepX.value),
+    Math.round((viewboxX - adjustedPadding.value) / stepX.value),
     0,
     chartData.value.length - 1,
   );
