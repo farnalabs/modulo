@@ -1978,7 +1978,8 @@ def _mask_prompt_text(text: str) -> str:
     """Mask sensitive credential-like values in prompt text.
 
     Replaces values following sensitive keys (token, secret, api_key,
-    password, key, credential) with bullet characters.
+    password, key, credential) with bullet characters. Also redacts
+    Authorization/Bearer headers and JWT-like tokens regardless of key name.
     """
     import re
 
@@ -1990,6 +1991,13 @@ def _mask_prompt_text(text: str) -> str:
         (r'(password["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
         (r'(credential["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
         (r'(passwd["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
+        # Redact Authorization headers (Bearer tokens, Basic auth, etc.)
+        # Captures the full "Authorization: <value>" or "authorization: <value>"
+        (r'(Authorization["\']?\s*[:=]\s*["\']?)\s*(?:Bearer\s+)?[^\s"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
+        # Redact standalone Bearer tokens (value may contain spaces)
+        (r'(Bearer\s+)[^\n"\'}]+', r"\1" + _MASKED_PLACEHOLDER),
+        # Redact JWT-like tokens (three base64 segments separated by dots)
+        (r"eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", _MASKED_PLACEHOLDER),
     ]
     for pattern, replacement in patterns:
         masked = re.sub(pattern, replacement, masked, flags=re.IGNORECASE)

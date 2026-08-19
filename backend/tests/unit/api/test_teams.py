@@ -615,6 +615,38 @@ class TestRemoveMember:
         assert resp.status_code == 204
 
 
+class TestRemoveMemberPrivilegeGuard:
+    """SECURITY #1194 — operator cannot remove a member with equal/higher team role."""
+
+    def test_operator_cannot_remove_equal_role(self, operator_client: TestClient) -> None:
+        caller = _make_membership(role="operator")
+        target = _make_membership(account_id=uuid.uuid4(), role="operator")
+        with (
+            patch("modulo.api.routes.teams.get_membership_by_team_and_account", return_value=caller),
+            patch("modulo.api.routes.teams.get_membership", return_value=target),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+        ):
+            resp = operator_client.delete(f"/api/v1/teams/{_TEAM_ID}/members/{_MEMBERSHIP_ID}")
+        assert resp.status_code == 403
+        assert "Cannot remove member" in resp.json()["detail"]
+
+    def test_operator_can_remove_lower_role(self, operator_client: TestClient) -> None:
+        caller = _make_membership(role="operator")
+        target = _make_membership(account_id=uuid.uuid4(), role="viewer")
+        with (
+            patch("modulo.api.routes.teams.get_membership_by_team_and_account", return_value=caller),
+            patch("modulo.api.routes.teams.get_membership", return_value=target),
+            patch("modulo.api.routes.teams.remove_team_member", return_value=True),
+            patch("modulo.api.routes.teams._assert_not_last_operator", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+            patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock()),
+        ):
+            resp = operator_client.delete(f"/api/v1/teams/{_TEAM_ID}/members/{_MEMBERSHIP_ID}")
+        assert resp.status_code == 204
+
+
 class TestChangeMemberRole:
     def test_returns_200(self, client: TestClient) -> None:
         existing = _make_membership(role="viewer")
@@ -716,6 +748,47 @@ class TestChangeMemberRole:
             )
         assert resp.status_code == 200
         assert resp.json()["role"] == "operator"
+
+
+class TestChangeMemberRolePrivilegeGuard:
+    """SECURITY #1194 — operator cannot demote a member with equal/higher team role."""
+
+    def test_operator_cannot_demote_equal_role(self, operator_client: TestClient) -> None:
+        caller = _make_membership(role="operator")
+        target = _make_membership(account_id=uuid.uuid4(), role="operator")
+        with (
+            patch("modulo.api.routes.teams.get_team", return_value=_make_team()),
+            patch("modulo.api.routes.teams.get_membership_by_team_and_account", return_value=caller),
+            patch("modulo.api.routes.teams.get_membership", return_value=target),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+        ):
+            resp = operator_client.patch(
+                f"/api/v1/teams/{_TEAM_ID}/members/{_MEMBERSHIP_ID}",
+                json={"role": "viewer"},
+            )
+        assert resp.status_code == 403
+        assert "Cannot change role of member" in resp.json()["detail"]
+
+    def test_operator_can_demote_lower_role(self, operator_client: TestClient) -> None:
+        caller = _make_membership(role="operator")
+        target = _make_membership(account_id=uuid.uuid4(), role="runner")
+        updated = _make_membership(account_id=target.account_id, role="viewer")
+        with (
+            patch("modulo.api.routes.teams.get_team", return_value=_make_team()),
+            patch("modulo.api.routes.teams.get_membership_by_team_and_account", return_value=caller),
+            patch("modulo.api.routes.teams.get_membership", return_value=target),
+            patch("modulo.api.routes.teams.update_member_role", return_value=updated),
+            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+            patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock()),
+        ):
+            resp = operator_client.patch(
+                f"/api/v1/teams/{_TEAM_ID}/members/{_MEMBERSHIP_ID}",
+                json={"role": "viewer"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["role"] == "viewer"
 
 
 class TestAdminCreateTeam:

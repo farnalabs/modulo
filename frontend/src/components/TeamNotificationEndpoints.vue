@@ -55,7 +55,7 @@
               </span>
             </div>
           </div>
-          <div class="ml-2 flex shrink-0 items-center gap-1">
+          <div v-if="canManage" class="ml-2 flex shrink-0 items-center gap-1">
             <span
               class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium"
               :class="
@@ -292,7 +292,7 @@
       </div>
 
       <button
-        v-if="!showAddForm && !editingId"
+        v-if="canManage && !showAddForm && !editingId"
         class="mt-3 flex items-center gap-1 text-sm text-primary hover:underline"
         data-testid="team-notif-add-button"
         @click="showAddForm = true"
@@ -306,7 +306,8 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
-import { api } from "../lib/api/client";
+import { api, getAccessToken } from "../lib/api/client";
+import { decodeJwtPayload } from "../lib/jwt";
 import Button from 'primevue/button'
 import { formatApiError } from "../lib/api/formatError";
 import type { components } from "../lib/api/client";
@@ -362,6 +363,14 @@ const testingId = ref<string | null>(null);
 const teamEndpoints = computed(() =>
   endpoints.value.filter((ep) => ep.team_id === props.teamId),
 );
+
+// notification.manage resolves to operator; only operator+ may create/update/
+// delete webhook endpoints (SECURITY #1462).
+const canManage = computed(() => {
+  const payload = decodeJwtPayload(getAccessToken()) as Record<string, unknown> | null;
+  const role = payload?.org_role as string | undefined;
+  return role === "operator" || role === "admin";
+});
 
 async function loadEndpoints() {
   loading.value = true;

@@ -17,7 +17,7 @@ from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.api.middleware.rate_limiter import get_auth_rate_limiter
-from modulo.api.routes.remy import clear_all_session_approvals
+from modulo.api.routes.remy import clear_session_approvals_for_account
 from modulo.auth.dependencies import (
     OrganisationMembershipNotFound,
     get_current_user,
@@ -517,7 +517,11 @@ async def logout(
         except ValueError:
             _log.warning("logout.invalid_token_family", extra={"token_family": family_id_val})
 
-    clear_all_session_approvals()
+    # Scope the approval clear to the caller's account only (FAR-1470).
+    # Previously this cleared EVERY user's in-memory approvals.
+    account_id_val = claims.get("account_id") or claims.get("user_id")
+    if isinstance(account_id_val, str):
+        clear_session_approvals_for_account(account_id_val)
 
     content = LogoutResponse(detail="Logged out").model_dump()
     response = JSONResponse(content=content)
@@ -755,9 +759,9 @@ def _clear_auth_cookies(response: Response, settings: Settings) -> None:
 
 
 def _client_ip(request: Request) -> str:
+    if request.client:
+        return request.client.host
     forwarded = request.headers.get("X-Forwarded-For", "")
     if forwarded:
         return forwarded.split(",")[0].strip()
-    if request.client:
-        return request.client.host
     return "unknown"

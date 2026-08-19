@@ -160,6 +160,13 @@ async def list_oauth_clients_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> list[OAuthClientItem]:
+    # SECURITY (#1307): match the create/delete role gate — viewers should not
+    # enumerate OAuth clients (exposes redirect_uris, scopes attack surface).
+    if principal.org_role not in ("admin", "operator"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin or operator users can list OAuth clients",
+        )
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)

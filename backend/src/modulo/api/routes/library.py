@@ -1267,7 +1267,7 @@ async def create_pipeline_from_template_endpoint(
     primitive_id: uuid.UUID,
     req: CreatePipelineFromTemplateRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.create"),
 ) -> PipelineFromTemplateResponse:
     try:
         primitive = await get_primitive(session, principal.organisation_id, primitive_id)

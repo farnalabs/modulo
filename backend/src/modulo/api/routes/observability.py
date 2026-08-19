@@ -21,6 +21,7 @@ from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
 _CODE_OBSERVABILITY_VIEW = "observability.view"
+_CODE_OBSERVABILITY_MANAGE = "observability.manage"
 
 
 _log = logging.getLogger(__name__)
@@ -172,7 +173,7 @@ async def get_observability_settings(
 async def update_observability_settings(
     req: OtelSettingsUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_OBSERVABILITY_VIEW),
+    principal: TenantPrincipal = require_permission(_CODE_OBSERVABILITY_MANAGE),
     settings: Settings = Depends(get_settings),
 ) -> OtelSettingsResponse:
     updates: dict[str, Any] = {}

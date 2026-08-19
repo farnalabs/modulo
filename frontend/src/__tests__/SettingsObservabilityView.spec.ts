@@ -8,6 +8,18 @@ async function nextTick() {
   await flushPromises()
 }
 
+function adminJwt(): string {
+  const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))
+  const payload = btoa(
+    JSON.stringify({
+      sub: 'test@example.com',
+      org_id: '00000000-0000-0000-0000-000000000001',
+      org_role: 'admin',
+    }),
+  )
+  return `${header}.${payload}.signature`
+}
+
 vi.mock('../lib/api/client', () => ({
   api: {
     GET: vi.fn().mockResolvedValue({
@@ -25,7 +37,7 @@ vi.mock('../lib/api/client', () => ({
     PUT: vi.fn().mockResolvedValue({ data: null, error: undefined }),
     POST: vi.fn().mockResolvedValue({ data: null, error: undefined }),
   },
-  getAccessToken: vi.fn().mockReturnValue('mock-token'),
+  getAccessToken: vi.fn().mockReturnValue(adminJwt()),
 }))
 
 import { api } from '../lib/api/client'

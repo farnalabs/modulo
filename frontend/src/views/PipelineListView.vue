@@ -2,39 +2,22 @@
   <div class="min-h-screen bg-background flex flex-col">
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="mx-auto flex flex-wrap items-center justify-between gap-3 max-w-6xl">
-        <PageHeader :title="$t('views.PipelineListView.title')" />
-        <div class="w-48 sm:w-auto">
-          <FilterBar
-            :search="{ placeholder: $t('views.PipelineListView.search_pipelines') }"
-            :search-value="search"
-            @update:search="search = $event; page = 1"
-          />
-        </div>
-        <div class="flex items-center gap-1 border border-border rounded-lg p-0.5" role="group" :aria-label="$t('views.PipelineListView.view_mode')">
-          <button
-            :class="viewMode === 'table' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:text-foreground'"
-            class="rounded p-1.5 transition-colors"
-            @click="setViewMode('table')"
-            :aria-label="$t('views.PipelineListView.table_view')"
-            :aria-pressed="viewMode === 'table'"
-            data-testid="pipeline-view-toggle-table"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="3" x2="21" y2="3"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="3" y1="21" x2="21" y2="21"/></svg>
-          </button>
-          <button
-            :class="viewMode === 'card' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:text-foreground'"
-            class="rounded p-1.5 transition-colors"
-            @click="setViewMode('card')"
-            :aria-label="$t('views.PipelineListView.card_view')"
-            :aria-pressed="viewMode === 'card'"
-            data-testid="pipeline-view-toggle-card"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-          </button>
-        </div>
-          <Button :class="allPipelines.length > 0 && !loading ? '' : 'invisible'" as="router-link" to="/library" data-testid="pipeline-list-new-pipeline">
-            {{ $t('views.PipelineListView.new_pipeline') }}
-          </Button>
+        <PageHeader :title="$t('views.PipelineListView.title')">
+          <template #right>
+            <div class="flex items-center gap-2">
+              <div class="w-48 sm:w-auto">
+                <FilterBar
+                  :search="{ placeholder: $t('views.PipelineListView.search_pipelines') }"
+                  :search-value="search"
+                  @update:search="search = $event"
+                />
+              </div>
+              <Button :class="allPipelines.length > 0 && !loading ? '' : 'invisible'" as="router-link" to="/library" data-testid="pipeline-list-new-pipeline">
+                {{ $t('views.PipelineListView.new_pipeline') }}
+              </Button>
+            </div>
+          </template>
+        </PageHeader>
       </div>
     </header>
 
@@ -68,7 +51,7 @@
           <div class="mb-4" aria-hidden="true">
             <div class="h-6 w-40 bg-muted rounded animate-pulse" />
           </div>
-          <div v-if="viewMode === 'table'" class="card rounded-lg border border-border overflow-hidden animate-pulse" aria-hidden="true">
+          <div class="card rounded-lg border border-border overflow-hidden animate-pulse" aria-hidden="true">
             <div class="overflow-x-auto">
               <table class="w-full text-left text-sm">
                 <thead class="bg-muted/50 text-xs font-medium uppercase text-muted-foreground">
@@ -86,15 +69,6 @@
                   </tr>
                 </tbody>
               </table>
-            </div>
-          </div>
-          <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            <div v-for="i in 6" :key="i" class="card p-5 animate-pulse">
-              <div class="h-5 w-3/4 bg-muted rounded mb-2" />
-              <div class="h-3 w-full bg-muted rounded mb-1" />
-              <div class="h-3 w-2/3 bg-muted rounded mb-4" />
-              <div class="h-4 w-16 bg-muted rounded mb-3" />
-              <div class="h-9 w-full bg-muted rounded" />
             </div>
           </div>
         </div>
@@ -151,64 +125,8 @@
             </template>
             <h2 v-else class="text-base font-semibold text-foreground">{{ $t('views.PipelineListView.all_pipelines') }}</h2>
           </div>
-          <!-- Card view -->
-          <div v-if="viewMode === 'card'" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
-              v-for="p in pagedPipelines"
-              :key="p.id"
-              class="card card-hover p-5 cursor-pointer"
-              @click="openPipeline(p)"
-              data-testid="pipeline-list-card"
-              draggable="true"
-              @dragstart="onPipelineDragStart(p, $event)"
-              @dragover.prevent
-              @drop="onPipelineDrop(p, $event)"
-            >
-              <div class="flex items-start justify-between gap-2 mb-3">
-                <h3 class="text-base font-medium text-foreground truncate">{{ p.name }}</h3>
-                <div class="flex items-center gap-1 shrink-0">
-                  <span
-                    v-if="p.archived_at"
-                    class="badge text-xs badge-status-warning"
-                  >{{ $t('views.PipelineListView.archived') }}</span>
-                  <span
-                    class="badge text-xs"
-                    :class="p.visibility === 'org' ? 'badge-context-blue' : 'badge-context-purple'"
-                    data-testid="pipeline-list-visibility-badge"
-                  >
-                    {{ p.visibility === 'org' ? 'Org' : 'Team' }}
-                  </span>
-                  <button class="rounded p-1 hover:bg-accent" data-testid="pipeline-list-action-menu" :aria-label="$t('views.PipelineListView.pipeline_actions')" @click.stop="openActionMenu($event, p)">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
-                  </button>
-                </div>
-              </div>
-
-              <p v-if="p.description" class="text-sm text-muted-foreground mb-4 line-clamp-2">
-                {{ p.description }}
-              </p>
-              <div v-else class="mb-10" />
-
-              <div class="flex items-center gap-3 text-xs text-muted-foreground">
-                <span class="flex items-center gap-1">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="10"/></svg>
-                  Created {{ formatDate(p.created_at) }}
-                </span>
-              </div>
-
-              <div class="mt-4 pt-3 border-t border-border flex gap-2">
-                <Button class="flex-1" data-testid="pipeline-list-open-editor">
-                  {{ $t('views.PipelineListView.open_in_editor') }}
-                </Button>
-                <Button severity="secondary" outlined class="flex-1" @click.stop="openRunDialog(p)" data-testid="pipeline-list-run">
-                  {{ $t('views.PipelineListView.run') }}
-                </Button>
-              </div>
-            </div>
-          </div>
-
           <!-- Table / Tree view -->
-          <div v-else class="card rounded-lg border border-border overflow-hidden">
+          <div class="card rounded-lg border border-border overflow-hidden">
             <div class="overflow-x-auto">
               <table class="w-full text-left text-sm">
               <thead class="bg-muted/50 text-xs font-medium uppercase text-muted-foreground">
@@ -229,7 +147,7 @@
                       <button
                         class="flex w-full items-center gap-2 text-sm font-medium text-foreground text-left"
                         @click="toggleFolder((row.data as FolderItem).id)"
-                        :aria-expanded="expandedFolders.has((row.data as FolderItem).id)"
+                        :aria-expanded="isFolderExpanded((row.data as FolderItem).id)"
                         data-testid="pipeline-tree-folder-toggle"
                       >
                         <svg
@@ -242,7 +160,7 @@
                           stroke-width="2"
                           stroke-linecap="round"
                           stroke-linejoin="round"
-                          :class="{ 'rotate-90': expandedFolders.has((row.data as FolderItem).id) }"
+                          :class="{ 'rotate-90': isFolderExpanded((row.data as FolderItem).id) }"
                           class="transition-transform shrink-0"
                         >
                           <polyline points="9 18 15 12 9 6" />
@@ -296,14 +214,6 @@
                     </td>
                     <td class="px-4 py-3">
                       <div class="flex justify-end items-center gap-1">
-                        <router-link
-                          :to="{ name: 'runs-list', query: { pipeline_id: (row.data as PipelineItem).id } }"
-                          class="rounded px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                          @click.stop
-                          data-testid="pipeline-list-runs-link"
-                        >
-                          {{ $t('views.PipelineListView.runs') }}
-                        </router-link>
                         <button class="rounded p-1 hover:bg-accent" :aria-label="$t('views.PipelineListView.pipeline_actions')" data-testid="pipeline-list-action-menu" @click.stop="openActionMenu($event, row.data as PipelineItem)">
                           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
                         </button>
@@ -317,127 +227,8 @@
           </div>
         </div>
 
-        <div v-if="viewMode === 'card' && totalPages > 1 && !loading" class="flex justify-center items-center gap-2 mt-8">
-          <button
-            :disabled="page <= 1"
-            class="px-4 py-2 text-sm border border-input bg-background rounded-lg disabled:opacity-30 hover:bg-accent transition-colors"
-            @click="prevPage"
-            data-testid="pipeline-list-prev-page"
-          >
-            {{ $t('views.PipelineListView.previous') }}
-          </button>
-          <span class="px-4 py-2 text-sm text-muted-foreground">
-            {{ $t('views.PipelineListView.page_x_of_y', { page, total: totalPages }) }}
-          </span>
-          <button
-            :disabled="page >= totalPages"
-            class="px-4 py-2 text-sm border border-input bg-background rounded-lg disabled:opacity-30 hover:bg-accent transition-colors"
-            @click="nextPage"
-            data-testid="pipeline-list-next-page"
-          >
-            {{ $t('views.PipelineListView.next') }}
-          </button>
-        </div>
       </main>
     </div>
-      <!-- Run dialog modal -->
-      <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
-        v-if="showRunDialog"
-        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-        @click.self="closeRunDialog"
-      >
-        <div class="bg-card border border-border rounded-xl shadow-xl w-full max-w-lg mx-4 p-6 space-y-4">
-          <div class="flex items-center justify-between">
-            <h2 class="text-base font-semibold text-foreground">{{ $t('views.PipelineListView.run_pipeline') }}</h2>
-            <button
-              class="text-muted-foreground hover:text-foreground transition-colors"
-              @click="closeRunDialog"
-              data-testid="pipeline-list-run-dialog-close"
-              aria-label="Close"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            </button>
-          </div>
-
-          <p class="text-sm text-muted-foreground">
-            Run <span class="font-medium text-foreground">{{ selectedPipeline?.name }}</span>
-          </p>
-
-          <div class="space-y-2">
-            <label for="pipelinelistview-field-3" class="block text-sm font-medium text-foreground">{{ $t('views.PipelineListView.prompt') }}</label>
-            <textarea id="pipelinelistview-field-3"
-              v-model="prompt"
-              placeholder="Enter a prompt (optional)"
-              rows="4"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary"
-              data-testid="pipeline-list-run-prompt"
-            />
-          </div>
-
-          <div>
-            <button
-              class="text-sm text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
-              @click="showAdvanced = !showAdvanced"
-              data-testid="pipeline-list-run-advanced-toggle"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                :class="{ 'rotate-180': showAdvanced }"
-                class="transition-transform"
-              ><polyline points="6 9 12 15 18 9"/></svg>
-              {{ $t('views.PipelineListView.advanced') }}
-            </button>
-          </div>
-
-          <div v-if="showAdvanced" class="space-y-2">
-            <label for="pipelinelistview-field-2" class="block text-sm font-medium text-foreground">{{ $t('views.PipelineListView.input_payload_json') }}</label>
-            <textarea id="pipelinelistview-field-2"
-              v-model="advancedPayload"
-              placeholder='{"prompt": "...", "temperature": 0.7}'
-              rows="4"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-primary"
-              data-testid="pipeline-list-run-advanced-payload"
-            />
-          </div>
-
-          <div v-if="runError" class="rounded-lg bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive" data-testid="pipeline-list-run-error">
-            {{ runError }}
-          </div>
-
-          <div v-if="emptyRunWarning" class="rounded-lg bg-warning/10 border border-warning/30 p-3 text-sm text-warning" data-testid="pipeline-list-run-empty-warning">
-            {{ emptyRunWarning }}
-          </div>
-
-          <div class="flex justify-end gap-2 pt-2">
-            <button
-              class="px-4 py-2 border border-input bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
-              @click="closeRunDialog"
-              data-testid="pipeline-list-run-cancel"
-            >
-              {{ $t('common.cancel') }}
-            </button>
-            <Button :disabled="running" class="border-primary/30" @click="triggerRun" data-testid="pipeline-list-run-submit">
-              <svg
-                v-if="running"
-                class="animate-spin h-4 w-4"
-                xmlns="http://www.w3.org/2000/svg"
-                fill="none"
-                viewBox="0 0 24 24"
-              >
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
-              {{ running ? $t('views.PipelineListView.running') : $t('views.PipelineListView.run_pipeline') }}
-            </Button>
-          </div>
-        </div>
-      </div>
 
       <!-- Move to Folder dialog -->
       <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
@@ -774,7 +565,6 @@ async function onMovePipeline(ev: { pipelineId: string; folderId: string | null 
 
 function onSelectFolder(folderId: string | null) {
   selectedFolderId.value = folderId
-  page.value = 1
   loadPipelines()
   loadFolders()
   loadTotalCount()
@@ -794,46 +584,32 @@ const renaming = ref(false)
 const showDeleteConfirm = ref(false)
 const deleteTarget = ref<PipelineItem | null>(null)
 const deleteError = ref<string | null>(null)
-const showRunDialog = ref(false)
-const selectedPipeline = ref<PipelineItem | null>(null)
-const prompt = ref('')
-const showAdvanced = ref(false)
-const advancedPayload = ref('')
-const running = ref(false)
-const runError = ref<string | null>(null)
-const confirmEmptyRun = ref(false)
-const emptyRunWarning = ref<string | null>(null)
-
-watch([prompt, advancedPayload, showAdvanced], () => {
-  if (confirmEmptyRun.value) {
-    confirmEmptyRun.value = false
-    emptyRunWarning.value = null
-  }
-})
 
 const search = ref('')
-const page = ref(1)
-const pageSize = 12
 
-const viewMode = ref<'card' | 'table'>(
-  (() => {
-    const stored = localStorage.getItem('pipeline-view-mode')
-    return stored === 'card' || stored === 'table' ? stored : 'table'
-  })()
-)
+const FOLDERS_STORAGE_KEY = 'modulo.pipelines.expandedFolders'
 
-function setViewMode(mode: 'card' | 'table') {
-  viewMode.value = mode
-  localStorage.setItem('pipeline-view-mode', mode)
+function loadExpandedFolders(): Set<string> {
+  try {
+    const raw = localStorage.getItem(FOLDERS_STORAGE_KEY)
+    if (raw) return new Set(JSON.parse(raw))
+  } catch {}
+  return new Set()
 }
+
+function persistExpandedFolders() {
+  try {
+    localStorage.setItem(FOLDERS_STORAGE_KEY, JSON.stringify([...expandedFolders.value]))
+  } catch {}
+}
+
+const expandedFolders = ref<Set<string>>(loadExpandedFolders())
 
 interface TreeRow {
   type: 'folder' | 'pipeline' | 'uncategorised-header'
   depth: number
   data: PipelineItem | FolderItem | null
 }
-
-const expandedFolders = ref<Set<string>>(new Set())
 
 function toggleFolder(folderId: string) {
   const next = new Set(expandedFolders.value)
@@ -843,6 +619,11 @@ function toggleFolder(folderId: string) {
     next.add(folderId)
   }
   expandedFolders.value = next
+  persistExpandedFolders()
+}
+
+function isFolderExpanded(folderId: string): boolean {
+  return expandedFolders.value.has(folderId) || folderId === selectedFolderId.value
 }
 
 const pipelineFolderCount = computed(() => {
@@ -865,7 +646,7 @@ const treeRows = computed<TreeRow[]>(() => {
 
     rows.push({ type: 'folder', depth: 0, data: folder })
 
-    if (expandedFolders.value.has(folder.id)) {
+    if (isFolderExpanded(folder.id)) {
       const folderPipelines = filteredPipelines.value
         .filter(p => p.folder_id === folder.id)
         .sort((a, b) => a.name.localeCompare(b.name))
@@ -898,21 +679,6 @@ const filteredPipelines = computed(() => {
   )
 })
 
-const totalPages = computed(() => Math.ceil(filteredPipelines.value.length / pageSize))
-
-const pagedPipelines = computed(() => {
-  const start = (page.value - 1) * pageSize
-  return filteredPipelines.value.slice(start, start + pageSize)
-})
-
-function prevPage() {
-  page.value--
-}
-
-function nextPage() {
-  page.value++
-}
-
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr)
   if (isNaN(d.getTime())) return dateStr
@@ -944,17 +710,6 @@ const actionMenuItems = computed(() => {
 function openActionMenu(event: MouseEvent, p: PipelineItem) {
   actionMenuPipeline.value = p
   actionMenuRef.value?.toggle(event)
-}
-
-function openRunDialog(p: PipelineItem) {
-  selectedPipeline.value = p
-  prompt.value = ''
-  showAdvanced.value = false
-  advancedPayload.value = ''
-  runError.value = null
-  confirmEmptyRun.value = false
-  emptyRunWarning.value = null
-  showRunDialog.value = true
 }
 
 function openRename(p: PipelineItem) {
@@ -1051,57 +806,7 @@ async function handleDelete() {
   }
 }
 
-function closeRunDialog() {
-  showRunDialog.value = false
-  selectedPipeline.value = null
-  prompt.value = ''
-  runError.value = null
-  confirmEmptyRun.value = false
-  emptyRunWarning.value = null
-}
-
-async function triggerRun() {
-  if (!selectedPipeline.value) return
-  let inputPayload: Record<string, unknown>
-  if (showAdvanced.value && advancedPayload.value.trim()) {
-    try {
-      inputPayload = JSON.parse(advancedPayload.value)
-    } catch {
-      runError.value = t('views.PipelineListView.invalid_json_in_advanced_payload')
-      return
-    }
-  } else if (prompt.value.trim()) {
-    inputPayload = { prompt: prompt.value }
-  } else {
-    inputPayload = {}
-  }
-  if (Object.keys(inputPayload ?? {}).length === 0) {
-    if (!confirmEmptyRun.value) {
-      confirmEmptyRun.value = true
-      emptyRunWarning.value = 'No input provided \u2014 this pipeline will run with an empty input payload. Are you sure?'
-      return
-    }
-    emptyRunWarning.value = null
-  }
-  running.value = true
-  runError.value = null
-  try {
-    const { data } = await api.POST('/api/v1/runs', {
-      body: {
-        pipeline_id: selectedPipeline.value.id,
-        input_payload: inputPayload,
-      },
-    })
-    showRunDialog.value = false
-    if (data) router.push({ name: 'run-detail', params: { id: (data as any).id } })
-  } catch (e) {
-    runError.value = formatApiError(e)
-  } finally {
-    running.value = false
-  }
-}
-
-onMounted(() => {
+onMounted(async () => {
   loadFolders()
   loadTotalCount()
 })

@@ -70,6 +70,10 @@ async def test_api_key_runner_principal_is_accepted() -> None:
             return_value=_FakeFactory(_make_session()),
         ),
         patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("runner")) as validate_patch,
+        patch(
+            "modulo.auth.dependencies.resolve_role_from_membership",
+            new=AsyncMock(return_value="runner"),
+        ),
     ):
         principal = await get_current_tenant_user_or_api_key(
             credentials=_credentials(_KEY),
@@ -144,6 +148,10 @@ async def test_api_key_postgres_dialect_uses_lookup_function() -> None:
             return_value=_FakeFactory(session),
         ),
         patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("runner")),
+        patch(
+            "modulo.auth.dependencies.resolve_role_from_membership",
+            new=AsyncMock(return_value="runner"),
+        ),
     ):
         principal = await get_current_tenant_user_or_api_key(
             credentials=_credentials(_KEY),
@@ -166,6 +174,10 @@ async def test_api_key_operator_role_principal_is_accepted() -> None:
             return_value=_FakeFactory(_make_session()),
         ),
         patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
+        patch(
+            "modulo.auth.dependencies.resolve_role_from_membership",
+            new=AsyncMock(return_value="operator"),
+        ),
     ):
         principal = await get_current_tenant_user_or_api_key(
             credentials=_credentials(_KEY),
@@ -176,6 +188,103 @@ async def test_api_key_operator_role_principal_is_accepted() -> None:
     assert principal.account_id == _USER_ID
     assert principal.org_role == "operator"
     assert principal.is_system_admin is False
+
+
+@pytest.mark.asyncio
+async def test_api_key_minted_operator_live_runner_is_demoted() -> None:
+    """A key minted as operator whose live membership is runner must degrade to runner."""
+    settings = get_settings()
+    with (
+        patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+        patch(
+            "modulo.api.dependencies.get_or_create_session_factory",
+            return_value=_FakeFactory(_make_session()),
+        ),
+        patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
+        patch(
+            "modulo.auth.dependencies.resolve_role_from_membership",
+            new=AsyncMock(return_value="runner"),
+        ),
+    ):
+        principal = await get_current_tenant_user_or_api_key(
+            credentials=_credentials(_KEY),
+            settings=settings,
+        )
+
+    assert principal.org_role == "runner"
+
+
+@pytest.mark.asyncio
+async def test_api_key_minted_runner_live_operator_does_not_escalate() -> None:
+    """A runner key must never escalate to a higher live role (min-by-hierarchy)."""
+    settings = get_settings()
+    with (
+        patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+        patch(
+            "modulo.api.dependencies.get_or_create_session_factory",
+            return_value=_FakeFactory(_make_session()),
+        ),
+        patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("runner")),
+        patch(
+            "modulo.auth.dependencies.resolve_role_from_membership",
+            new=AsyncMock(return_value="operator"),
+        ),
+    ):
+        principal = await get_current_tenant_user_or_api_key(
+            credentials=_credentials(_KEY),
+            settings=settings,
+        )
+
+    assert principal.org_role == "runner"
+
+
+@pytest.mark.asyncio
+async def test_api_key_minted_operator_live_admin_does_not_escalate_to_admin() -> None:
+    """An operator key must never escalate to admin even if the live role is admin."""
+    settings = get_settings()
+    with (
+        patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+        patch(
+            "modulo.api.dependencies.get_or_create_session_factory",
+            return_value=_FakeFactory(_make_session()),
+        ),
+        patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
+        patch(
+            "modulo.auth.dependencies.resolve_role_from_membership",
+            new=AsyncMock(return_value="admin"),
+        ),
+    ):
+        principal = await get_current_tenant_user_or_api_key(
+            credentials=_credentials(_KEY),
+            settings=settings,
+        )
+
+    assert principal.org_role == "operator"
+
+
+@pytest.mark.asyncio
+async def test_api_key_removed_member_raises_401() -> None:
+    """A key whose account has no live membership (removed/deactivated) is denied (401)."""
+    settings = get_settings()
+    with (
+        patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+        patch(
+            "modulo.api.dependencies.get_or_create_session_factory",
+            return_value=_FakeFactory(_make_session()),
+        ),
+        patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("runner")),
+        patch(
+            "modulo.auth.dependencies.resolve_role_from_membership",
+            new=AsyncMock(return_value=None),
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await get_current_tenant_user_or_api_key(
+            credentials=_credentials(_KEY),
+            settings=settings,
+        )
+
+    assert exc_info.value.status_code == 401
 
 
 @pytest.mark.asyncio
