@@ -3084,7 +3084,7 @@ async def _sandbox_agent_impl(
     single_sandbox_node: bool,
     node_id: str,
 ) -> dict[str, Any]:
-    from e2b import AsyncSandbox  # type: ignore[import-untyped]
+    from e2b import AsyncSandbox
     from opentelemetry import trace as _otel_trace
 
     from modulo.core.guardrails.loop_intercept import (
