@@ -9,20 +9,21 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import TenantPrincipal
+from modulo.auth.dependencies import get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _ADMIN_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _VIEWER_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
 
 
-def _admin_principal(role: str = "admin") -> TenantPrincipal:
-    return TenantPrincipal(
+def _admin_principal(role: str = "admin") -> AuthenticatedPrincipal:
+    return AuthenticatedPrincipal(
         username="admin@test",
         organisation_id=_ORG_ID,
         account_id=_ADMIN_ID if role == "admin" else _VIEWER_ID,
         org_role=role,
+        is_system_admin=(role == "admin"),
     )
 
 
@@ -35,14 +36,14 @@ def _make_mock_session() -> AsyncMock:
     return session
 
 
-def _make_client(session: AsyncMock, principal: TenantPrincipal) -> AsyncClient:
+def _make_client(session: AsyncMock, principal: AuthenticatedPrincipal) -> AsyncClient:
     from modulo.api.main import app
 
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_db_session] = lambda: session
-    app.dependency_overrides[get_current_tenant_user] = lambda: principal
+    app.dependency_overrides[get_current_user] = lambda: principal
     transport = ASGITransport(app=app)
     return AsyncClient(transport=transport, base_url="http://test")
 

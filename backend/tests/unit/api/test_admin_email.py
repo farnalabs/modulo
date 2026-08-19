@@ -1,5 +1,6 @@
 """Tests for the admin email settings API."""
 
+import base64
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -11,6 +12,7 @@ from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.settings import Settings, get_settings
 
 ORG_ID = uuid4()
 USER_ID = uuid4()
@@ -33,6 +35,17 @@ SYSTEM_ADMIN_PRINCIPAL = AuthenticatedPrincipal(
     org_role="admin",
     is_system_admin=True,
 )
+
+FERNET_KEY = base64.urlsafe_b64encode(b"a" * 32).decode()  # valid Fernet key
+
+
+def _make_settings() -> Settings:
+    return Settings(
+        database_url="postgresql+asyncpg://localhost/test",
+        secret_key="a" * 32,
+        fernet_key=FERNET_KEY,
+        modulo_admin_password="testpass",
+    )
 
 
 @pytest.fixture
@@ -59,6 +72,7 @@ def client_admin(mock_session):
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_db_session] = lambda: mock_session
     app.dependency_overrides[get_current_user] = lambda: ADMIN_PRINCIPAL
+    app.dependency_overrides[get_settings] = _make_settings
     mock_session.execute = AsyncMock(return_value=_FakeResult())
     transport = ASGITransport(app=app)
     client = AsyncClient(transport=transport, base_url="http://test")
@@ -241,7 +255,10 @@ class TestPutEmailSettings:
             admin_email.update_organisation.assert_called_once()
             call_updates = admin_email.update_organisation.call_args[0][2]
             assert call_updates["settings_json"]["email"]["smtp_host"] == "smtp.new.com"
-            assert call_updates["settings_json"]["email"]["smtp_password"] == "newpass"
+            # Password should be encrypted, not stored as plaintext
+            stored_password = call_updates["settings_json"]["email"]["smtp_password"]
+            assert stored_password != "newpass"
+            assert stored_password.startswith("gAAAAA")  # Fernet prefix
         finally:
             admin_email.get_organisation = original_get
             admin_email.update_organisation = original_update

@@ -53,6 +53,7 @@ from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.auth.secret_storage import decode_stored_secret
 from modulo.connectors.base import ConnectorQuery
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys as _uuid_to_lock_keys
 from modulo.core.secrets_backend import create_secrets_backend
@@ -363,7 +364,16 @@ class TriggerEngine:
 
             # HMAC validation (only if secret is configured)
             cfg = trigger.config_json or {}
-            hmac_secret: str | None = cfg.get("hmac_secret")
+            hmac_secret_raw: str | None = cfg.get("hmac_secret")
+            hmac_secret: str | None = None
+            if hmac_secret_raw is not None:
+                try:
+                    from modulo.settings import get_settings as _get_settings
+
+                    hmac_secret = decode_stored_secret(hmac_secret_raw, _get_settings().fernet_key)
+                except Exception:
+                    _log.exception("trigger_engine.hmac_secret_decrypt_failed trigger=%s", trigger_id)
+                    hmac_secret = hmac_secret_raw
             if hmac_secret is not None and not verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
                 _log.warning("Webhook HMAC validation failed for trigger %s", trigger_id)
                 await self._log_event(

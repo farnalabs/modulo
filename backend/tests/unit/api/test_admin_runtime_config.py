@@ -76,7 +76,11 @@ def admin_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="admin", organisation_id=_ORG_ID, account_id="u1", org_role="admin"
+        username="admin",
+        organisation_id=_ORG_ID,
+        account_id="u1",
+        org_role="admin",
+        is_system_admin=True,
     )
     app.dependency_overrides[get_plan_context] = override_plan_context
     yield TestClient(app)

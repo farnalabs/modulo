@@ -37,6 +37,7 @@ from modulo.api.dependencies import (
 )
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.permissions import PermissionDenied, assert_org_role
+from modulo.auth.secret_storage import decode_stored_secret
 from modulo.core.dispatch import dispatch_run
 from modulo.core.error_tracking import ErrorIngestionService
 from modulo.core.exceptions import SnapshotLockNotAvailableError, TriggersPausedError
@@ -217,7 +218,14 @@ async def receive_webhook(
             # typed errors are rolled back with the request (documented
             # pre-existing limitation).
             cfg = trigger.config_json or {}
-            hmac_secret: str | None = cfg.get("hmac_secret")
+            hmac_secret_raw: str | None = cfg.get("hmac_secret")
+            hmac_secret: str | None = None
+            if hmac_secret_raw is not None:
+                try:
+                    hmac_secret = decode_stored_secret(hmac_secret_raw, get_settings().fernet_key)
+                except Exception:
+                    _log.exception("webhooks.hmac_secret_decrypt_failed trigger=%s", trigger_id)
+                    hmac_secret = hmac_secret_raw
             if hmac_secret is not None:
                 ts = verify_timestamp(modulo_timestamp)
                 if not verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
@@ -436,9 +444,14 @@ async def replay_webhook(
                 modulo_timestamp = request.headers.get("X-Modulo-Timestamp")
                 ts = verify_timestamp(modulo_timestamp)
                 cfg = trigger.config_json or {}
-                hmac_secret: str | None = cfg.get("hmac_secret")
-                if hmac_secret is None:
+                hmac_secret_raw: str | None = cfg.get("hmac_secret")
+                if hmac_secret_raw is None:
                     raise HmacValidationError()
+                try:
+                    hmac_secret = decode_stored_secret(hmac_secret_raw, get_settings().fernet_key)
+                except Exception:
+                    _log.exception("webhooks.hmac_secret_decrypt_failed trigger=%s", trigger_id)
+                    hmac_secret = hmac_secret_raw
                 payload_row = await session.execute(
                     select(WebhookPayload).where(
                         WebhookPayload.trigger_event_id == event_id,

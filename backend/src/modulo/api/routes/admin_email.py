@@ -13,6 +13,7 @@ from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_target_org_role
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.secret_storage import decode_stored_secret, encrypt_stored_secret
 from modulo.core.email_service import (
     EmailSendingError,
     EmailSendLimiter,
@@ -21,6 +22,7 @@ from modulo.core.email_service import (
     send_email,
 )
 from modulo.db.crud.organisation import get_organisation, update_organisation
+from modulo.settings import Settings, get_settings
 
 _MSG_ORGANISATION_NOT_FOUND = "Organisation not found"
 _CODE_ADMIN_EMAIL_ADMIN_UPDATE = "admin_email.admin_update_email_settings"
@@ -117,6 +119,7 @@ async def admin_update_email_settings(
     req: EmailSettingsUpdate,
     _: AuthenticatedPrincipal = require_target_org_role("org.email.manage", "admin"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ) -> EmailSettingsResponse:
     try:
         async with session.begin():
@@ -157,7 +160,7 @@ async def admin_update_email_settings(
     if req.clear_password:
         merged["smtp_password"] = ""  # nosec B105 -- clears the stored SMTP password (clear_password request); empty string is a clear signal, NOT a hardcoded secret
     elif req.smtp_password:
-        merged["smtp_password"] = req.smtp_password
+        merged["smtp_password"] = encrypt_stored_secret(req.smtp_password, settings.fernet_key).decode()
     merged["email_from"] = req.email_from
     merged["smtp_timeout"] = req.smtp_timeout
     settings_json["email"] = merged
@@ -204,6 +207,7 @@ async def admin_test_email_settings(
     req: TestEmailRequest,
     _: AuthenticatedPrincipal = require_target_org_role("org.email.manage", "admin"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -269,7 +273,11 @@ async def admin_test_email_settings(
     temp_settings.smtp_host = smtp_host
     temp_settings.smtp_port = email_cfg.get("smtp_port", 587)
     temp_settings.smtp_username = email_cfg.get("smtp_username", "")
-    temp_settings.smtp_password = email_cfg.get("smtp_password", "")
+    try:
+        temp_settings.smtp_password = decode_stored_secret(email_cfg.get("smtp_password", ""), settings.fernet_key)
+    except Exception:
+        logger.exception("admin_email.test_send_smtp_password_decrypt_failed")
+        temp_settings.smtp_password = email_cfg.get("smtp_password", "")
     temp_settings.email_from = email_cfg.get("email_from", "")
     temp_settings.smtp_timeout = email_cfg.get("smtp_timeout", 30)
 

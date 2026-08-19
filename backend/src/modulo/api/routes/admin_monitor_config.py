@@ -8,9 +8,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_permission
-from modulo.auth.jwt import TenantPrincipal
+from modulo.api.dependencies import get_db_session, require_system_permission
+from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.crud.system_config import get_config, set_config
+
+# WARNING: system.config.manage is currently ONLY assignable to is_system_admin
+# users. There is NO in-product path to grant is_system_admin. Self-hosted
+# single-org deployments that lock themselves out will need manual DB
+# intervention to recover. A follow-up design decision is needed for an
+# emergency-recovery path before this permission can be safely broadened.
 
 _log = logging.getLogger(__name__)
 
@@ -82,7 +88,7 @@ def _merge(entry: Any | None) -> dict[str, Any]:
 @router.get("", response_model=MonitorConfigResponse)
 @handle_db_errors("admin.monitor_config.get_monitor_config")
 async def get_monitor_config(
-    current_user: TenantPrincipal = require_permission("monitor_config.manage"),
+    current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     try:
@@ -115,7 +121,7 @@ async def get_monitor_config(
 @handle_db_errors("admin.monitor_config.set_monitor_config")
 async def set_monitor_config(
     req: MonitorConfigUpdate,
-    current_user: TenantPrincipal = require_permission("monitor_config.manage"),
+    current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     try:
