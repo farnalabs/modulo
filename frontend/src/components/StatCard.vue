@@ -61,6 +61,7 @@ const props = defineProps<{
   to?: string;
   delta?: StatDelta | null;
   noBaselineLabel?: string;
+  inverted?: boolean;
 }>();
 
 const iconBgClass = computed(() => {
@@ -105,28 +106,34 @@ const deltaAbsText = computed(() => {
   return `${sign}${formatted}`;
 });
 
+function arrowFor(delta: number): string {
+  if (delta > 0) return '▲'
+  if (delta < 0) return '▼'
+  return '→'
+}
+
+function classFor(delta: number, inverted: boolean): string {
+  if (delta > 0) return inverted ? 'text-destructive' : 'text-success'
+  if (delta < 0) return inverted ? 'text-success' : 'text-destructive'
+  return 'text-muted-foreground'
+}
+
 const deltaArrow = computed(() => {
   const d = deltaPct.value;
   if (d == null) return "";
-  if (d > 0) return "▲";
-  if (d < 0) return "▼";
-  return "→";
+  return arrowFor(d);
 });
 
 const deltaAbsArrow = computed(() => {
   const d = deltaAbs.value;
   if (d == null) return "";
-  if (d > 0) return "▲";
-  if (d < 0) return "▼";
-  return "→";
+  return arrowFor(d);
 });
 
 const deltaClass = computed(() => {
   const d = deltaPct.value;
   if (d == null) return "";
-  if (d > 0) return "text-success";
-  if (d < 0) return "text-destructive";
-  return "text-muted-foreground";
+  return classFor(d, props.inverted ?? false);
 });
 
 const deltaPctText = computed(() => {
