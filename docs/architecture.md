@@ -9,7 +9,7 @@ Modulo is a self-hosted agent governance platform for building governed, repeata
 │                    Browser UI (Vue 3 SPA)                     │
 │  Standard Theme (light) │ Agent Theme (dark, v1)             │
 │  Pinia stores → Composables → Views → Components             │
-│  shadcn-vue / Radix Vue primitives                           │
+│  PrimeVue component library                             │
 └──────────────────────┬───────────────────────────────────────┘
                        │ HTTP REST + WebSocket (Event Bus)
 ┌──────────────────────▼───────────────────────────────────────┐
@@ -58,7 +58,7 @@ Modulo is a self-hosted agent governance platform for building governed, repeata
 | **Observability** | OpenTelemetry | Tracing, metrics |
 | **Frontend** | Vue 3 + TypeScript | SPA |
 | **State** | Pinia | Client-side state |
-| **UI primitives** | shadcn-vue / Radix Vue | Component library |
+| **UI primitives** | PrimeVue | Component library (themed via `primevue-theme.ts` token bridge) |
 | **Routing** | Vue Router | Client-side routing |
 | **Styling** | CSS custom properties | Theming (standard/agent) |
 | **Database** | PostgreSQL 16 | Primary data store |

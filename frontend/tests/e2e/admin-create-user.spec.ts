@@ -1,4 +1,10 @@
 ﻿import { test, expect, setupLocalMockApi, loginAsAdmin } from './setup/fixtures'
+import type { Page } from '@playwright/test'
+
+async function selectRole(page: Page, value: string) {
+  await page.getByTestId('admin-users-create-role').click()
+  await page.locator(`[data-value="${value}"]`).click()
+}
 
 test.describe('Admin Create User', { tag: ['@regression'] }, () => {
   test('opens create user dialog and submits user creation', { tag: "@regression" }, async ({ page, env }) => {
@@ -18,7 +24,7 @@ test.describe('Admin Create User', { tag: ['@regression'] }, () => {
     await page.getByTestId('admin-users-create-email').fill('newuser@example.com')
     await page.getByTestId('admin-users-create-display-name').fill('New User')
     await page.getByTestId('admin-users-create-password').fill('Password1')
-    await page.getByTestId('admin-users-create-role').selectOption('operator')
+    await selectRole(page, 'operator')
 
     await page.getByRole('button', { name: 'Create' }).click()
 
@@ -37,7 +43,7 @@ test.describe('Admin Create User', { tag: ['@regression'] }, () => {
     await page.getByTestId('admin-users-create-email').fill('bad-email')
     await page.getByTestId('admin-users-create-display-name').fill('New User')
     await page.getByTestId('admin-users-create-password').fill('Password1')
-    await page.getByTestId('admin-users-create-role').selectOption('operator')
+    await selectRole(page, 'operator')
 
     await page.getByRole('button', { name: 'Create' }).click()
 
@@ -56,7 +62,7 @@ test.describe('Admin Create User', { tag: ['@regression'] }, () => {
     await page.getByTestId('admin-users-create-email').fill('enter@example.com')
     await page.getByTestId('admin-users-create-display-name').fill('Enter User')
     await page.getByTestId('admin-users-create-password').fill('Password1')
-    await page.getByTestId('admin-users-create-role').selectOption('admin')
+    await selectRole(page, 'admin')
 
     await page.getByTestId('admin-users-create-password').press('Enter')
 

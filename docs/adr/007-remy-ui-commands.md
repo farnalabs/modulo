@@ -23,7 +23,7 @@ Concretely:
 - New tools (`navigate`, `click`, `fill`, `extract`, `get_page_interactables`, `go_back`, `wait`, `press`) are defined alongside MCP tools and injected into the LLM's `tools` parameter.
 - The existing SSE stream (`POST /sessions/{id}/stream`) becomes an **agentic loop**: multiple LLM turns within a single stream, separated by frontend execution pauses.
 - When the LLM emits UI tool calls, the backend yields `event: ui_command_batch`, then awaits execution results via `asyncio.Event` + HTTP POST from the frontend.
-- The frontend `UiCommandExecutor` executes commands sequentially using `data-testid` first, with DOM stability detection (`waitForDomStable`) and shadcn/vue component awareness.
+- The frontend `UiCommandExecutor` executes commands sequentially using `data-testid` first, with DOM stability detection (`waitForDomStable`) and PrimeVue component awareness.
 - A permission system gates destructive actions: mode presets (safe/full_auto/locked_down), destructive selector pattern detection, and per-(tool, page) session approvals with 30min TTL.
 
 ## Why Not Server-Side Playwright
@@ -45,7 +45,7 @@ Concretely:
 | Session approvals | In-memory dict keyed by `(session_id, tool_name, page_path)` with 30min TTL, cleaned on lookup and logout |
 | Selector strategy | `data-testid` first, CSS selector fallback, `get_page_interactables()` for discovery |
 | DOM readiness | `waitForDomStable()`  –  MutationObserver scoped to `<main>`, 200ms quiet, spinner detection |
-| Component handling | shadcn/vue-aware dispatch  –  combobox, switch, select, native input detection |
+| Component handling | PrimeVue-aware dispatch  –  combobox (Select), switch, select, native input detection |
 | Visual feedback | Element highlighting (outline flash), navigation toast, execution overlay with pointer-events |
 | Stop/abort | Per-call `AbortController`, `cancelled_by_user` results, `abort_summary` event skips LLM turn |
 | Non-tool models | Text-only description of UI tools via `_build_tool_definitions_for_text()` |

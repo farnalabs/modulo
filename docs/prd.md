@@ -12,7 +12,7 @@
 - v0.32 — §8.29 Remy Context Sources: configurable knowledge domains with always-on/tool/off modes, per-skill source_mode, `source_contexts` field on RemyConfig, 4 new MCP retrieval tools (search_documentation, get_integration_status, get_org_config, get_available_features). §8.30 Remy Product Primer: auto-generated always-on product overview in system prompt, primer generator script reading PRD + product map + manifest + live counts. ADR 011.
 - v0.31 — §8.25.1 Frontend Monitor Backend Abstraction: plugable MonitorBackend interface (builtin/sentry/datadog-rum/grafana-faro), dual-layer config (build-time VITE_* + runtime MODULO_MONITOR_CONFIG), ErrorTracker refactor with MonitorBackendRegistry dispatch, CSP superset strategy, per-backend privacy data sheets, unauthenticated error ingest endpoint, i18n missing-key capture, 2 existing pipeline bugfixes. ADR 009.
 - v0.30 — §8.28 Core Shared Manifest: single YAML source of truth for routes, elements, sidebar, permissions, tiers, product map refs, i18n keys. Binary consumption (frontend Vite import + backend startup load). `get_manifest(path?)` Remy tool. 7-rule pre-commit + CI validator. ADR 008.
-- v0.29 — §8.27 Remy UI Commands: frontend-mediated browser automation for Remy, 11 UI commands (navigate, click, fill, select, extract, extract_all, get_page_interactables, wait, go_back, get_url, press), permission system with 3 modes + destructive selector detection, agentic loop (multi-turn LLM within single SSE stream), shadcn/vue component support, visual feedback (highlighting, toast, overlay, turn separators), 3 new endpoints, ADR 007.
+- v0.29 — §8.27 Remy UI Commands: frontend-mediated browser automation for Remy, 11 UI commands (navigate, click, fill, select, extract, extract_all, get_page_interactables, wait, go_back, get_url, press), permission system with 3 modes + destructive selector detection, agentic loop (multi-turn LLM within single SSE stream), PrimeVue component support, visual feedback (highlighting, toast, overlay, turn separators), 3 new endpoints, ADR 007.
 - v0.28 — §8.26 Navigation Restructure: Breadcrumb component with route meta chain, sidebar hierarchical subgroups (SidebarSubgroup), new Remy group consolidating user skills + admin config, secondary nav tab bars (PageTabs), back-to-parent links on 5 detail views.
 - v0.27 — §8.25 Native Error Tracking: backend + frontend error capture, Postgres-backed storage, fingerprinting/dedup, admin dashboard, built-in alerting, Prometheus metrics, external forwarders to Sentry/DataDog/PagerDuty/Rollbar/OpsGenie/Grafana Loki; Community tier for core, Team tier for integrations.
 - v0.26 — §8.23 Remy In-App AI Assistant: floating draggable/dockable/maximisable chat panel on every page, page awareness via `useRemyContext()`, Multi-window independent sessions with last-activity-winner, tool execution via ViewModel API + MCP server, Markdown skill loading from `remy_skills` table (org-level admin-managed + user-level self-service), context-window-aware conversation reconstruction with automatic pruning and summarization, `chat_sessions` + `chat_messages` + `remy_skills` data model, full CRUD API + SSE streaming endpoint, admin config page at `/admin/remy`, Team-tier feature gate with org-level access list.
@@ -20,7 +20,7 @@
 - v0.24 — Tier rename: free→Community, enterprise→Team across all UI text, API responses, backend code, docs, and tests. Community Edition (free, no license key) and Team Edition (self-serve paid, feature-gated, no SLA/support commitment). §6.2 updated to reflect new naming; §6.2.1 Tier System Architecture added describing the future-state flexible tier catalog.
 - v0.23 — §8.21 View Modes (Enterprise): multiple named UI views with admin-defined feature visibility per view, assignment to users/teams/org roles, enforcement, self-lockout prevention guards; `view_modes` enterprise feature flag replaces previously planned `view_mode` + `view_mode_enforcement`
 - v0.22 — Enterprise tier clarified: no SLAs, no dedicated support, no bespoke services. Enterprise = self-serve feature gate only (SSO, RBAC, audit viewer, admin spend limits). Pricing page updated. BSL 1.1 LICENSE file created at repo root; `Dev-Harness/tools/release.ps1` release script created with placeholder steps for Docker Hub, GitHub release, etc.
-- v0.21 — shadcn-vue + Radix Vue added as component library foundation (replaces build-from-scratch UI primitives); tier badge spec (Free/Enterprise pill in sidebar nav footer; lock icon on gated features); `/settings/license` page spec; `planStore` added to Pinia stores; `GET /api/v1/license` endpoint; frontend tech stack table updated
+- v0.21 — PrimeVue added as component library foundation (replaces build-from-scratch UI primitives); tier badge spec (Free/Enterprise pill in sidebar nav footer; lock icon on gated features); `/settings/license` page spec; `planStore` added to Pinia stores; `GET /api/v1/license` endpoint; frontend tech stack table updated
 - v0.20 — Licensing and monetization model: BSL/Fair Source with 3-year Apache 2.0 auto-conversion; cryptographic offline license key replaces modulo-cloud plan injection for self-hosted; DefaultPlanContext now defaults to Free Tier (not permissive); enterprise feature gate defined (SSO, team RBAC, audit viewer, admin spend limits); modulo-cloud deferred to V3; billing changed from telemetry-metered to flat annual fee (token counting remains for internal cost controls only); MODULO_LICENSE_KEY env var added; audit event *recording* stays free, viewer/export is enterprise; open question on audit gate documented
 - v0.2 — first reviewer critique; shareable workflows, user management, SSO
 - v0.3 — security hardening, distribution strategy, community library, runner role, plugin API
@@ -450,7 +450,7 @@ Future themes (`dark`, `high-contrast`, `compact`) are additive CSS layers — n
 
 ### Tier Badge and License Page
 
-**Sidebar tier badge**: a small pill badge rendered in the sidebar nav footer, next to the org name, on every authenticated page. Uses the shadcn-vue `Badge` primitive.
+**Sidebar tier badge**: a small pill badge rendered in the sidebar nav footer, next to the org name, on every authenticated page. Uses the PrimeVue `Badge` component.
 
 | State | Display | Behaviour |
 |---|---|---|
@@ -461,8 +461,8 @@ Future themes (`dark`, `high-contrast`, `compact`) are additive CSS layers — n
 The badge reads from `planStore` (see below) — it does not make its own API call.
 
 **Team-gated features in the UI**: features gated behind the Team tier are **never hidden**. They render with:
-- A lock icon (`🔒` via Radix Vue `LockClosedIcon`) adjacent to the feature label
-- A `Team` badge (shadcn-vue `Badge` variant `outline`) inline
+- A lock icon (`🔒`) adjacent to the feature label
+- A `Team` badge (PrimeVue `Badge` severity `secondary`) inline
 - On click/focus, a tooltip: "Requires a Team license — see `/settings/license`"
 - The underlying control is `disabled` and `aria-disabled="true"`
 
@@ -2867,14 +2867,14 @@ This allows multi-step workflows in a single stream: "Let me check the current c
 
 #### 8.27.7 Component Support
 
-The `fill` and `select` commands detect and handle common shadcn/vue component types:
+The `fill` and `select` commands detect and handle common PrimeVue component types:
 
 | Component | Strategy |
 |---|---|
 | Native `<input>` / `<textarea>` | Set value via native setter + dispatch `input`/`change` events |
-| shadcn `<Select>` | Click trigger → wait for popover → click `[role="option"][data-value="X"]` |
-| shadcn `<Combobox>` | Click → type in `<CommandInput>` → select option |
-| shadcn `<Switch>` | Click the `[role="switch"]` button |
+| PrimeVue `<Select>` | Click trigger → wait for popover → click `[role="option"][data-value="X"]` |
+| PrimeVue `<Combobox>` | Click → type in search input → select option |
+| PrimeVue `<SelectButton>` / `<ToggleButton>` | Click the `[role="switch"]` / button element |
 | `contenteditable` | Set `textContent` + dispatch `input` event |
 
 #### 8.27.8 Non-Tool Models
@@ -3498,7 +3498,7 @@ Telemetry is opt-in and disabled by default. The OTel bridge (`setup_otel`) is c
 |---|---|---|
 | Framework | Vue 3 (Composition API) | MVVM-native |
 | State | Pinia | All stores carry org context |
-| Component library | shadcn-vue + Radix Vue | Headless accessible primitives (buttons, dialogs, dropdowns, badges, tooltips, etc.) styled via Tailwind + CSS custom properties. Copy-paste model — components live in `src/components/ui/`. Agent theme `[data-theme]` overrides work cleanly because shadcn-vue uses the same CSS custom property token approach. Never build button/dialog/focus logic from scratch. |
+| Component library | PrimeVue | Accessible component library (buttons, dialogs, dropdowns, badges, tooltips, select, etc.) styled via Tailwind + CSS custom properties bridged through `frontend/src/lib/primevue-theme.ts`. Agent theme `[data-theme]` overrides flow through the token bridge. Never build button/dialog/focus logic from scratch. (Migrated from shadcn-vue + Radix Vue in FAR-317 — see ADR 024.) |
 | Graph | Vue Flow | Fractal nesting = breadcrumb drill-down. >80 nodes/canvas degrades. |
 | Styling | Tailwind CSS | Standard + agent themes via `[data-theme]` CSS custom property layers |
 | Real-time | Native WebSocket + Vue composable | Separate from ViewModel REST |
@@ -3653,7 +3653,7 @@ V1 Feature Tests (separate suite, not in alpha CI — these features do not exis
 
 **Frontend**
 - [ ] Vue 3 + Pinia scaffold; org context in all stores; `planStore` hydrated from `GET /api/v1/license` on page load
-- [ ] shadcn-vue component library initialised: `Button`, `Badge`, `Dialog`, `Tooltip`, `DropdownMenu`, `Input`, `Label`, `Separator` installed as baseline primitives before any feature UI is built; components live in `src/components/ui/`
+- [ ] PrimeVue component library in use: `Button`, `Badge`, `Dialog`, `Tooltip`, `DropdownMenu`, `Input`, `Label`, `Separator`, `Select` etc. themed through the `primevue-theme.ts` token bridge (migrated from shadcn-vue + Radix Vue in FAR-317)
 - [ ] Theme system: `data-theme` on root element; `standard` and `agent` themes in alpha; `?theme=<name>` query param override; `localStorage` persistence; admin deployment default
 - [ ] Sidebar tier badge: `Community` / `Team` / `License expired` pill in nav footer; reads from `planStore`; links to `/settings/license`
 - [ ] `/settings/license` page: current tier card, active feature checklist, license key paste + verify + apply, upgrade CTA on Community tier
@@ -4568,7 +4568,7 @@ A dedicated `GET /api/v1/analytics/concurrency` endpoint (and the `query_analyti
 | claim_token alpha | Cryptographically random opaque string stored in DB with 15-min TTL. JWT-based claim_token deferred to v1 when JWT infrastructure ships with full user management. |
 | Rating system scope | Deferred to v1. Alpha is single-user internal — no user community to rate. |
 | Demo mode env var | ~~Auto-configures StubModelBackend + FilesystemConnector with pre-canned data. Demo walkable with zero external API keys.~~ — **removed/descoped (FAR-308)** |
-| Component library | shadcn-vue + Radix Vue. Headless accessible primitives styled via Tailwind + CSS custom properties. Copy-paste model (`src/components/ui/`). Chosen because it uses the same `[data-theme]` CSS custom property token approach as the Modulo theme system — no theming conflict. Never build button/dialog/focus logic from scratch. |
+| Component library | PrimeVue. Accessible component library styled via Tailwind + CSS custom properties, themed through the `frontend/src/lib/primevue-theme.ts` token bridge. Chosen (ADR 024) to replace the shadcn-vue + Radix Vue copy-paste model (which duplicated a headless runtime and carried a copy-paste maintenance burden); the token bridge keeps the Modulo `[data-theme]` theming system authoritative. Never build button/dialog/focus logic from scratch. |
 | Tier badge placement | Sidebar nav footer pill, every authenticated page. Reads `planStore`; links to `/settings/license`. Team-gated features show lock icon + disabled control + tooltip instead of being hidden — passive upgrade funnel. |
 | MODULO_LICENSE_KEY | Base64-encoded signed JSON team license payload. Verified against embedded Ed25519 public key on startup. If absent, invalid, or expired: FreeTierPlanContext applies (team features disabled). No outbound network call required. V1. |
 | License model | BSL 1.1 — source-available (`Development/Product/LICENSE`). Free for all internal use (personal, commercial, production) except resale or paid hosting. Team tier = gated features only (SSO, RBAC, audit viewer, admin spend limits) — no SLAs, no dedicated support. Each version auto-converts to Apache 2.0 three years after its release date. The semver release process updates the LICENSE file's version and Change Date. Flat annual fee for team license key; no telemetry billing. |

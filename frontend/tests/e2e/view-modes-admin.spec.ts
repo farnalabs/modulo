@@ -1,4 +1,10 @@
 import { test, expect, loginAsAdmin } from './setup/fixtures'
+import type { Page } from '@playwright/test'
+
+async function selectOption(page: Page, testId: string, value: string) {
+  await page.getByTestId(testId).click()
+  await page.locator(`[data-value="${value}"]`).click()
+}
 
 const sampleViews = {
   items: [
@@ -91,7 +97,6 @@ test.describe('View Modes Admin CRUD', { tag: "@regression" }, () => {
   })
 
   test('create a new view with all fields', { tag: "@regression" }, async ({ page, env }) => {
-    test.skip(env.name !== 'local', 'Uses selectOption on non-native select - view type dropdown is not a <select> element')
     let createdPayload: unknown = null
     await loginAsAdmin(page, env)
     await page.route('**/api/v1/views**', async (route, request) => {
@@ -118,13 +123,13 @@ test.describe('View Modes Admin CRUD', { tag: "@regression" }, () => {
     await nameInput.fill('My Test View')
     const typeSelect = page.getByTestId('admin-views-type-select')
     await expect(typeSelect).toBeVisible()
-    await page.getByTestId('admin-views-type-select').selectOption('grid')
+    await selectOption(page, 'admin-views-type-select', 'grid')
     await page.getByTestId('admin-views-filters-input').fill('{"status": "active", "env": "prod"}')
     await page.getByTestId('admin-views-columns-input').fill('name, status, created_at')
     await page.getByTestId('admin-views-sort-by-input').fill('created_at')
     const sortOrderSelect = page.getByTestId('admin-views-sort-order-select')
     await expect(sortOrderSelect).toBeVisible()
-    await page.getByTestId('admin-views-sort-order-select').selectOption('asc')
+    await selectOption(page, 'admin-views-sort-order-select', 'asc')
 
     const saveButton = page.getByTestId('admin-views-save')
     await expect(saveButton).toBeVisible()
@@ -185,7 +190,6 @@ test.describe('View Modes Admin CRUD', { tag: "@regression" }, () => {
   })
 
   test('edit an existing view shows pre-populated fields', { tag: "@regression" }, async ({ page, env }) => {
-    test.skip(env.name !== 'local', 'Uses selectOption on non-native select - view type dropdown is not a <select> element')
     await loginAsAdmin(page, env)
     await page.route('**/api/v1/views**', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleViews) })
@@ -199,15 +203,14 @@ test.describe('View Modes Admin CRUD', { tag: "@regression" }, () => {
 
     await expect(page.getByTestId('admin-views-form-title')).toHaveText('Edit View')
     await expect(page.getByTestId('admin-views-name-input')).toHaveValue('Active Runs')
-    await expect(page.getByTestId('admin-views-type-select')).toHaveValue('table')
+    await expect(page.getByTestId('admin-views-type-select')).toContainText('Table')
     await expect(page.getByTestId('admin-views-filters-input')).toHaveValue(/status/)
     await expect(page.getByTestId('admin-views-columns-input')).toHaveValue('name, status, created_at')
     await expect(page.getByTestId('admin-views-sort-by-input')).toHaveValue('created_at')
-    await expect(page.getByTestId('admin-views-sort-order-select')).toHaveValue('desc')
+    await expect(page.getByTestId('admin-views-sort-order-select')).toContainText('Descending')
   })
 
   test('delete a view with confirmation', { tag: "@regression" }, async ({ page, env }) => {
-    test.skip(env.name !== 'local', 'Uses selectOption on non-native select - view type dropdown is not a <select> element')
     await loginAsAdmin(page, env)
     await page.route('**/api/v1/views**', async (route, request) => {
       if (request.method() === 'GET') {
