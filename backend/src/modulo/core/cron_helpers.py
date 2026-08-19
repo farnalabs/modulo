@@ -219,6 +219,8 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     "run_api_key_scanned": 0,
     "run_api_key_revoked": 0,
     "run_api_key_errors": 0,
+    "rollback_thresholds_checked": 0,
+    "rollback_thresholds_flagged": 0,
 }
 
 
@@ -247,6 +249,8 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["run_api_key_scanned"] = stats.get("run_api_key_scanned", 0)
     _dispatcher_reconcile_stats["run_api_key_revoked"] = stats.get("run_api_key_revoked", 0)
     _dispatcher_reconcile_stats["run_api_key_errors"] = stats.get("run_api_key_errors", 0)
+    _dispatcher_reconcile_stats["rollback_thresholds_checked"] = stats.get("rollback_thresholds_checked", 0)
+    _dispatcher_reconcile_stats["rollback_thresholds_flagged"] = stats.get("rollback_thresholds_flagged", 0)
 
 
 # Shared Redis key for dispatcher_reconcile outcome stats (cross-process).
@@ -3578,6 +3582,18 @@ async def _run_reconcile_sweeps(redis_client: AsyncRedis, summary: dict[str, Any
         raise
     except Exception:
         _log.warning("dispatcher_reconcile.run_api_key_sweep_failed", exc_info=True)
+    try:
+        from modulo.core.rollback_thresholds import evaluate_rollback_thresholds
+
+        threshold_result = await evaluate_rollback_thresholds(_open_factory())
+        summary["rollback_thresholds_checked"] = threshold_result.get("orgs_checked", 0)
+        summary["rollback_thresholds_flagged"] = len(threshold_result.get("flagged_orgs", []))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        summary["rollback_thresholds_checked"] = 0
+        summary["rollback_thresholds_flagged"] = 0
+        _log.warning("dispatcher_reconcile.rollback_thresholds_failed", exc_info=True)
 
 
 async def _update_reconcile_telemetry(summary: dict[str, Any]) -> None:
