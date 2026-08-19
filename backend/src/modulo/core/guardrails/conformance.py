@@ -107,17 +107,23 @@ def _capabilities_for_agent(row: Any) -> set[str]:
 # Sandbox capabilities whose block-guarantee is a DENY/negative guarantee —
 # ``required_capabilities=["sandbox.write_files"]`` certifies writes are
 # IMPOSSIBLE and ``["sandbox.egress"]`` certifies no egress, so the RAW
-# mechanical polarity (True = risk present) is INVERTED when stamped into the
-# manifest. ``sandbox.git_credentials`` is NOT here: its guarantee is positive
-# (certifies git credentials are scoped/limited), so its raw polarity already
-# matches the manifest (True = scoped = the certified state). Keyed on the
-# capability names from ``sandbox_mode.SANDBOX_CAPABILITY_*``.
-_SANDBOX_DENY_POLARITY_CAPS = frozenset(
-    {
-        "sandbox.write_files",
-        "sandbox.egress",
-    }
-)
+# mechanical polarity (True = risk present) would be INVERTED when stamped into
+# the manifest. ``sandbox.git_credentials`` is a POSITIVE guarantee (certifies
+# git credentials are scoped/limited) whose raw polarity already matches the
+# manifest, so it is never inverted. The set is resolved LAZILY from the
+# ``sandbox_mode`` vocabulary constants (never re-hard-coded literals) so a
+# renamed/removed capability can never drift silently from the polarity set.
+# NOTE (FAR-212 PR A): ``sandbox.write_files`` / ``sandbox.git_credentials``
+# today always derive None (no enforced read-only-mount / git-credential-surface
+# exists yet), so they fail CLOSED as unknown — only ``sandbox.egress`` is a
+# live certifyable surface.
+def _sandbox_deny_polarity_caps() -> frozenset[str]:
+    from modulo.core.pipeline_engine.sandbox_mode import (
+        SANDBOX_CAPABILITY_EGRESS,
+        SANDBOX_CAPABILITY_WRITE_FILES,
+    )
+
+    return frozenset({SANDBOX_CAPABILITY_WRITE_FILES, SANDBOX_CAPABILITY_EGRESS})
 
 
 def _add_sandbox_surface(registered: dict[str, bool | None], sandbox_caps: dict[str, bool | None]) -> None:
@@ -146,10 +152,11 @@ def _add_sandbox_surface(registered: dict[str, bool | None], sandbox_caps: dict[
     surface. Never contains credentials — only capability names and their
     confirmed state.
     """
+    deny_polarity = _sandbox_deny_polarity_caps()
     for capability, value in sandbox_caps.items():
         if value is None:
             registered[capability] = None
-        elif capability in _SANDBOX_DENY_POLARITY_CAPS:
+        elif capability in deny_polarity:
             registered[capability] = not value
         else:
             registered[capability] = value
@@ -178,9 +185,10 @@ async def build_live_manifest(
     block-action guardrail then fails CLOSED (unknown blocks).
 
     For a ``sandbox_agent`` node, *node_def* additionally contributes the
-    sandbox capability surface (``sandbox.write_files`` / ``sandbox.egress`` /
-    ``sandbox.git_credentials``), mechanically derived from the node's actual
-    config and stamped with conformance polarity (FAR-212 PR A).
+    sandbox capability surface (``sandbox.egress`` — mechanically certified
+    from the enforced egress policy; ``sandbox.write_files`` and
+    ``sandbox.git_credentials`` stay unknown until their enforcement surfaces
+    land in PR B), stamped with conformance polarity (FAR-212 PR A).
 
     IMPORTANT: a capability that is absent from ``registered`` entirely also
     resolves to ``None`` (unknown) in ``derive_conformance_state`` — a surface

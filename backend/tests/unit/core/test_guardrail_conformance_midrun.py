@@ -762,9 +762,15 @@ async def test_build_live_manifest_unreadable_surface_fails_closed(monkeypatch: 
 
 # ---------------------------------------------------------------------------
 # Sandbox capability surface (FAR-212 PR A): mechanically derived from the
-# node's actual config, stamped into the manifest with conformance polarity
-# (a block guardrail's required_capabilities on the sandbox surface is a
-# deny/negative guarantee — confirmed-absent write/egress is the certification).
+# node's actual enforced config, stamped into the manifest with conformance
+# polarity (a block guardrail's required_capabilities on the sandbox surface is
+# a deny/negative guarantee — confirmed-absent write/egress is the
+# certification). Only ``sandbox.egress`` is genuinely mechanical today:
+# ``sandbox.write_files`` and ``sandbox.git_credentials`` have no validated,
+# enforced product surface yet (PipelineGraphNode has no such field; node_runner
+# never reads them), so they always resolve unknown (fail-closed) — a derivative
+# value would certify an unenforced deny-guarantee and fail open via the raw
+# workflow-import path.
 # ---------------------------------------------------------------------------
 
 
@@ -788,9 +794,11 @@ async def test_build_live_manifest_sandbox_egress_denied_is_certified():
     assert registered.get("sandbox.egress") is True
 
 
-async def test_build_live_manifest_sandbox_read_only_is_certified():
-    """read_only=True -> mechanical write_files False -> the manifest's
-    sandbox.write_files is True (writes confirmed impossible)."""
+async def test_build_live_manifest_sandbox_write_surface_always_unknown():
+    """The write-files surface is NEVER certified: even a smuggled read_only key
+    derives to unknown (None) — the manifest's sandbox.write_files is None and a
+    block guardrail fails CLOSED. There is no read-only-workspace enforcement
+    surface to mechanically confirm against (FAR-212 PR B)."""
     registered = await build_live_manifest(
         AsyncMock(),
         org_id=_ORG_ID,
@@ -799,21 +807,24 @@ async def test_build_live_manifest_sandbox_read_only_is_certified():
         agent_id=None,
         node_def=_sandbox_node(read_only=True),
     )
-    assert registered.get("sandbox.write_files") is True
+    assert registered.get("sandbox.write_files") is None
+    derivation = decide_conformance(["sandbox.write_files"], registered)
+    assert derivation.state == "unknown"
 
 
-async def test_build_live_manifest_sandbox_writable_violates_claim():
-    """A writable sandbox -> mechanical write_files True -> the manifest's
-    sandbox.write_files is False (the no-writes claim is violated)."""
+async def test_build_live_manifest_sandbox_git_credentials_always_unknown():
+    """The git-credential surface is NEVER certified: even a smuggled
+    git_credentials key derives to unknown (None) — no scoped-git enforcement
+    surface exists, so a block guardrail fails CLOSED (FAR-212 PR B)."""
     registered = await build_live_manifest(
         AsyncMock(),
         org_id=_ORG_ID,
         connector_instance_ids=[],
         environment_profile_id=None,
         agent_id=None,
-        node_def=_sandbox_node(read_only=False),
+        node_def=_sandbox_node(git_credentials="scoped"),
     )
-    assert registered.get("sandbox.write_files") is False
+    assert registered.get("sandbox.git_credentials") is None
 
 
 async def test_build_live_manifest_non_sandbox_node_no_surface():
@@ -896,17 +907,18 @@ async def _run_hoisted_check(
     )
 
 
-async def test_check_node_start_sandbox_read_only_certifies_write_guardrail(monkeypatch: pytest.MonkeyPatch):
-    """A block guardrail requiring sandbox.write_files on a read-only sandbox is
-    CERTIFIED (present) — the conformance hard-block confirms writes are
-    impossible rather than trusting a declaration."""
+async def test_check_node_start_sandbox_write_claim_blocks_unknown(monkeypatch: pytest.MonkeyPatch):
+    """A block guardrail requiring sandbox.write_files BLOCKS with state
+    unknown: the write surface is not mechanically confirmable yet (no enforced
+    read-only mount exists — FAR-212 PR B), so the claim fails CLOSED even when
+    a read_only key is smuggled into the node def."""
     result = await _run_hoisted_check(
         monkeypatch,
         guardrails=[_gr("g_nowrite", "block", ["sandbox.write_files"])],
         node_def=_sandbox_node(read_only=True),
     )
-    assert result.blocked is False
-    assert result.state == "present"
+    assert result.blocked is True
+    assert result.state == "unknown"
     assert result.claimed is True
 
 
@@ -923,19 +935,6 @@ async def test_check_node_start_sandbox_deny_all_certifies_egress_guardrail(monk
     assert result.claimed is True
 
 
-async def test_check_node_start_sandbox_writable_blocks_write_guardrail(monkeypatch: pytest.MonkeyPatch):
-    """A block guardrail requiring sandbox.write_files on a WRITABLE sandbox is
-    non-conformant (absent) -> fail-closed block: the no-writes claim is false."""
-    result = await _run_hoisted_check(
-        monkeypatch,
-        guardrails=[_gr("g_nowrite", "block", ["sandbox.write_files"])],
-        node_def=_sandbox_node(read_only=False),
-    )
-    assert result.blocked is True
-    assert result.state == "absent"
-    assert result.gate_id == "guardrail_conformance_g_nowrite"
-
-
 async def test_check_node_start_sandbox_unknown_fails_closed(monkeypatch: pytest.MonkeyPatch):
     """No sandbox surface (no node_def) -> the capability is unknown -> the
     block guardrail fails CLOSED (never fail-open on an unreadable surface)."""
@@ -948,72 +947,16 @@ async def test_check_node_start_sandbox_unknown_fails_closed(monkeypatch: pytest
     assert result.state == "unknown"
 
 
-async def test_build_live_manifest_sandbox_git_credentials_scoped_is_certified():
-    """Scoped git credentials are the SAFE state and are NOT polarity-inverted:
-    raw scoped=True -> the manifest's sandbox.git_credentials is True (the
-    'git credentials are scoped' guarantee is confirmed)."""
-    registered = await build_live_manifest(
-        AsyncMock(),
-        org_id=_ORG_ID,
-        connector_instance_ids=[],
-        environment_profile_id=None,
-        agent_id=None,
-        node_def=_sandbox_node(git_credentials="scoped"),
-    )
-    assert registered.get("sandbox.git_credentials") is True
-
-
-async def test_build_live_manifest_sandbox_git_credentials_unscoped_violates_claim():
-    """Unscoped/full-access git credentials -> raw False -> the manifest's
-    sandbox.git_credentials is False (the scoped-git guarantee is violated)."""
-    registered = await build_live_manifest(
-        AsyncMock(),
-        org_id=_ORG_ID,
-        connector_instance_ids=[],
-        environment_profile_id=None,
-        agent_id=None,
-        node_def=_sandbox_node(git_credentials="unscoped"),
-    )
-    assert registered.get("sandbox.git_credentials") is False
-
-
-async def test_build_live_manifest_sandbox_git_credentials_undeclared_is_unknown():
-    """An undeclared git-credential surface cannot be confirmed either way ->
-    the capability is absent from the manifest (unknown) -> fail-closed."""
-    registered = await build_live_manifest(
-        AsyncMock(),
-        org_id=_ORG_ID,
-        connector_instance_ids=[],
-        environment_profile_id=None,
-        agent_id=None,
-        node_def=_sandbox_node(),
-    )
-    assert registered.get("sandbox.git_credentials") is None
-
-
-async def test_check_node_start_sandbox_scoped_git_certifies_guardrail(monkeypatch: pytest.MonkeyPatch):
-    """A block guardrail requiring sandbox.git_credentials on a node with SCOPED
-    git credentials is CERTIFIED (present) — confirmed the credentials are
-    limited, not full-access."""
+async def test_check_node_start_sandbox_git_credentials_claim_blocks_unknown(monkeypatch: pytest.MonkeyPatch):
+    """A block guardrail requiring sandbox.git_credentials BLOCKS with state
+    unknown: no scoped-git enforcement surface exists, so the claim fails
+    CLOSED even when a git_credentials key is smuggled into the node def
+    (FAR-212 PR B)."""
     result = await _run_hoisted_check(
         monkeypatch,
         guardrails=[_gr("g_scopedgit", "block", ["sandbox.git_credentials"])],
         node_def=_sandbox_node(git_credentials="scoped"),
-    )
-    assert result.blocked is False
-    assert result.state == "present"
-    assert result.claimed is True
-
-
-async def test_check_node_start_sandbox_unscoped_git_blocks_guardrail(monkeypatch: pytest.MonkeyPatch):
-    """A block guardrail requiring sandbox.git_credentials on a node with
-    UNscoped git credentials is non-conformant (absent) -> fail-closed block:
-    the scoped-git guarantee is false."""
-    result = await _run_hoisted_check(
-        monkeypatch,
-        guardrails=[_gr("g_scopedgit", "block", ["sandbox.git_credentials"])],
-        node_def=_sandbox_node(git_credentials="unscoped"),
     )
     assert result.blocked is True
-    assert result.state == "absent"
-    assert result.gate_id == "guardrail_conformance_g_scopedgit"
+    assert result.state == "unknown"
+    assert result.claimed is True
