@@ -4479,7 +4479,7 @@ async def _sandbox_cancel_retention_persist(
     # running event loop always exists; the rule's own `async def` exclusion
     # applies. CI's --baseline-commit mode flags it only because this helper is
     # new on this branch.
-    _persist_task = asyncio.create_task(
+    _persist_task = asyncio.create_task(  # nosemgrep: create-task-without-guard
         _persist_raw_output_marker(
             session_factory,
             run_id=run_id,
