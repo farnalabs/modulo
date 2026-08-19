@@ -62,7 +62,13 @@ def _configure_tiers_failure(request, exc) -> None:
 @when("I request GET /api/v1/admin/tiers")
 def _bdd_get_tiers(request) -> None:
     tiers_mock = getattr(request.node, _TIERS_MOCK_ATTR, AsyncMock(return_value=_STANDARD_TIERS))
-    with patch(_TIERS_PATCH_TARGET, tiers_mock):
+    with (
+        patch(_TIERS_PATCH_TARGET, tiers_mock),
+        patch(
+            "modulo.api.routes.admin_tiers.Redis.from_url",
+            side_effect=RuntimeError("no redis in hermetic BDD scenarios"),
+        ),
+    ):
         request.node._resp = _active_client(request).get("/api/v1/admin/tiers")
 
 
