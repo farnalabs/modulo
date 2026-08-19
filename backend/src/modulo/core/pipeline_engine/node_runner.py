@@ -4318,21 +4318,27 @@ async def _sandbox_agent_impl(
                     # CancelledError must not be re-cancelled or mis-attributed
                     # to the persist's own timeout bookkeeping. Bounded and
                     # fail-open — the re-raise below must not be delayed.
-                    _persist_task = asyncio.create_task(
-                        _persist_raw_output_marker(
-                            session_factory,
-                            run_id=run_id,
-                            org_id_raw=org_id,
-                            node_id=node_id,
-                            attempt_key=attempt_key,
-                            marker=_cancel_marker,
+                    try:
+                        asyncio.get_running_loop()
+                    except RuntimeError:
+                        _persist_task = None
+                    else:
+                        _persist_task = asyncio.create_task(
+                            _persist_raw_output_marker(
+                                session_factory,
+                                run_id=run_id,
+                                org_id_raw=org_id,
+                                node_id=node_id,
+                                attempt_key=attempt_key,
+                                marker=_cancel_marker,
+                            )
                         )
-                    )
-                    await asyncio.wait_for(
-                        asyncio.shield(_persist_task),
-                        timeout=_IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT,
-                    )
-                    _uncancel_current_task()
+                    if _persist_task is not None:
+                        await asyncio.wait_for(
+                            asyncio.shield(_persist_task),
+                            timeout=_IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT,
+                        )
+                        _uncancel_current_task()
                 except asyncio.CancelledError:
                     _uncancel_current_task()
                 except Exception:
