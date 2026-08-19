@@ -2696,8 +2696,13 @@ class TestAccumulateChatModelTokens:
 
     def test_at_budget_does_not_raise(self) -> None:
         output = {"llm_output": {"token_usage": {"prompt_tokens": 50, "completion_tokens": 0, "total_tokens": 50}}}
-        _accumulate_chat_model_tokens(self._event("node-a", output), {}, None, {"node-a": 50})
-        _accumulate_chat_model_tokens(self._event("node-a", output), {}, None, {"node-a": 100})
+        usage: dict[str, dict[str, int]] = {}
+        # Exactly at budget (50 == 50) must NOT raise RunawayRunError (strictly-greater check).
+        _accumulate_chat_model_tokens(self._event("node-a", output), usage, None, {"node-a": 50})
+        assert usage["node-a"]["total_tokens"] == 50
+        # Second call at a higher budget also accumulates without raising.
+        _accumulate_chat_model_tokens(self._event("node-a", output), usage, None, {"node-a": 100})
+        assert usage["node-a"]["total_tokens"] == 100
 
     def test_ignores_events_without_node_name(self) -> None:
         usage: dict[str, dict[str, int]] = {}
