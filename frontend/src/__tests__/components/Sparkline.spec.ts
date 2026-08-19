@@ -29,10 +29,10 @@ describe('Sparkline', () => {
     const ys = polyline.attributes('points')!
       .split(' ')
       .map(p => Number(p.split(',')[1]))
-    // Every y must stay inside the plot area (2..38 for a 40-tall viewBox).
+    // Every y must stay inside the plot area (2..58 for a 60-tall viewBox).
     ys.forEach(y => {
       expect(y).toBeGreaterThanOrEqual(2)
-      expect(y).toBeLessThanOrEqual(38)
+      expect(y).toBeLessThanOrEqual(58)
     })
   })
 
@@ -53,7 +53,7 @@ describe('Sparkline', () => {
       .attributes('points')!
       .split(' ')
       .map(p => Number(p.split(',')[1]))
-    ys.forEach(y => expect(y).toBe(20))
+    ys.forEach(y => expect(y).toBe(30)) // height / 2 (default height 60)
   })
 
   it('shows a no-data placeholder instead of a misleading line for empty data', () => {
