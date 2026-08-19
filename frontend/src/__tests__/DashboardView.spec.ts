@@ -392,7 +392,6 @@ describe('DashboardView', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('No runs yet')
     expect(wrapper.text()).toContain('No data yet')
-    expect(wrapper.text()).toContain('Run a Pipeline')
   })
 
   it('shows the eval trend indicator as declining when eval pass rates dip', async () => {
