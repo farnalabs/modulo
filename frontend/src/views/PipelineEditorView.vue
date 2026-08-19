@@ -371,7 +371,7 @@
         <dl class="space-y-4 text-sm">
           <div>
             <dt class="text-muted-foreground text-xs uppercase tracking-wider">ID</dt>
-            <dd class="font-mono text-[10px] text-muted-foreground break-all select-all">{{ selectedNodeData.id }}</dd>
+            <dd class="font-mono text-[10px] text-muted-foreground break-all select-all" :title="selectedNodeData.id">{{ shortId(selectedNodeData.id) }}</dd>
           </div>
           <div>
             <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.type_label') }}</dt>
@@ -529,7 +529,7 @@
                     class="w-full rounded-lg border border-input bg-background px-2 py-1 text-xs"
                   >
                     <option :value="undefined"></option>
-                    <option v-for="mb in modelBackends" :key="mb.id" :value="mb.id">{{ mb.display_name || mb.name || mb.id }}</option>
+                    <option v-for="mb in modelBackends" :key="mb.id" :value="mb.id">{{ mb.display_name || mb.name || shortId(mb.id) }}</option>
                   </select>
                   <select
                     v-else-if="paramDefByKey(pkey)?.type === 'schema_ref'"
@@ -538,7 +538,7 @@
                     class="w-full rounded-lg border border-input bg-background px-2 py-1 text-xs"
                   >
                     <option :value="undefined"></option>
-                    <option v-for="s in schemas" :key="s.id" :value="s.id">{{ s.name || s.id }}</option>
+                    <option v-for="s in schemas" :key="s.id" :value="s.id">{{ s.name || shortId(s.id) }}</option>
                   </select>
                   <span v-else class="text-xs text-muted-foreground">—</span>
                 </div>
@@ -558,7 +558,7 @@
           <template v-if="selectedNodeData.node_type === 'sandbox_agent'">
             <div v-if="selectedNodeData.template_id">
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.template') }}</dt>
-              <dd class="font-mono text-xs">{{ selectedNodeData.template_id }}</dd>
+              <dd class="font-mono text-xs select-all" :title="selectedNodeData.template_id">{{ shortId(selectedNodeData.template_id) }}</dd>
             </div>
             <div v-if="selectedNodeData.agent_command">
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.command') }}</dt>

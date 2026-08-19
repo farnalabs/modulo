@@ -565,14 +565,14 @@ describe('RunsListView', () => {
     wrapper.unmount()
   })
 
-  it('renders a dash for the trigger actor when absent', async () => {
+  it('renders the trigger type label for the trigger actor when absent', async () => {
     mockResponses['/api/v1/runs'] = listWith([baseRun])
     const wrapper = mountView()
     await flushPromises()
     await nextTick()
     const cell = wrapper.find('[data-testid="runs-list-trigger-actor-run1"]')
     expect(cell.exists()).toBe(true)
-    expect(cell.text()).toBe('—')
+    expect(cell.text()).toBe('Manual')
     wrapper.unmount()
   })
 

@@ -56,6 +56,7 @@ import { useRemyStore } from "../composables/useRemyStore";
 import { useSidebarMode } from "../composables/useSidebarMode";
 import { useOnboardingStore } from "../composables/useOnboarding";
 import { abortUiCommands } from "../composables/useUiCommandExecutor";
+import { applyPrimeVueTokenBridge } from "../lib/primevue-theme";
 import OnboardingBanner from "./onboarding/OnboardingBanner.vue";
 import CommandPalette from "./CommandPalette.vue";
 import SpotlightOverlay from "./onboarding/SpotlightOverlay.vue";
@@ -102,6 +103,9 @@ function toggleTheme() {
   root.classList.toggle("light");
   root.classList.toggle("dark");
   isLight.value = root.classList.contains("light");
+  // Re-apply the PrimeVue token bridge so the `--p-*` mappings re-read the
+  // now-active (light/dark) source HSL variables (ADR 024 Decision 4).
+  applyPrimeVueTokenBridge();
 }
 
 function openCommandPalette() {

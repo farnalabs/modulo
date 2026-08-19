@@ -1,8 +1,8 @@
 # Quickstart
 
-Welcome to Modulo. Get up and running with a demo pipeline in under 10 minutes. No external API keys required.
+Welcome to Modulo. Get a local Modulo stack running in under 10 minutes.
 
-Modulo is a self-hosted agent governance platform for agentic SDLC pipelines. You run it on your own infrastructure; there is no hosted SaaS version yet. See [`docs/system-requirements.md`](./system-requirements.md) for supported platforms and minimum resource requirements.
+Modulo is a self-hosted agent governance platform for building governed, repeatable AI-assisted software delivery pipelines. You run it on your own infrastructure; there is no hosted SaaS version yet. See [`docs/system-requirements.md`](./system-requirements.md) for supported platforms and minimum resource requirements.
 
 ## Prerequisites
 
@@ -59,8 +59,8 @@ The API is now live at `http://localhost:8000`. OpenAPI docs at `http://localhos
 
 ## 3b. Start the SAQ workers (required for pipeline execution + cron)
 
-Modulo executes pipeline runs through SAQ workers (Celery was removed). Start
-them in separate terminals:
+Modulo executes pipeline runs through SAQ workers. Start them in separate
+terminals:
 
 ```powershell
 # Runs worker: executes run jobs (queue: runs)

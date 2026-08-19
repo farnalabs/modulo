@@ -6,6 +6,7 @@ import { nextTick } from 'vue'
 let mockRunStatus = 'complete'
 let mockInputPayload: Record<string, unknown> | null = null
 let mockTriggerActor: string | null = null
+let mockTriggerType: string | null = 'manual'
 let mockHeartbeatAt: string | null = null
 let mockWorkItemRefs: unknown = null
 let mockChildRuns: unknown = null
@@ -42,7 +43,7 @@ vi.mock('../lib/api/client', () => {
               token_consumption: null,
               node_token_usage: { 'node-a': { input_tokens: 10, output_tokens: 20, total_tokens: 30 } },
               trace_id: null,
-              trigger_type: 'manual',
+              trigger_type: mockTriggerType,
               trigger_actor: mockTriggerActor,
               heartbeat_at: mockHeartbeatAt,
               work_item_refs: mockWorkItemRefs,
@@ -135,6 +136,7 @@ describe('RunDetailView', () => {
     mockRunStatus = 'complete'
     mockInputPayload = null
     mockTriggerActor = null
+    mockTriggerType = 'manual'
     mockHeartbeatAt = null
     mockWorkItemRefs = null
     mockChildRuns = null
@@ -918,6 +920,19 @@ describe('RunDetailView', () => {
     expect(actor.exists()).toBe(true)
     expect(actor.text()).toContain('Triggered by')
     expect(actor.text()).toContain('Duncan (GitHub)')
+    wrapper.unmount()
+  })
+
+  it('shows a human-readable trigger type label when no actor is resolved', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      status: 'running',
+      trigger_type: 'agent_signal',
+      trigger_actor: null,
+    })
+    const row = wrapper.find('[data-testid="run-detail-trigger-actor"]')
+    expect(row.text()).toContain('Agent Signal')
+    expect(row.text()).not.toContain('agent_signal')
     wrapper.unmount()
   })
 
