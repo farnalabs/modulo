@@ -1,13 +1,50 @@
 """Step definitions for admin tier-catalog BDD scenarios."""
 
+import logging
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
+from redis.asyncio import Redis as AsyncRedis
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
-from tests.bdd.conftest import _active_client
+from tests.bdd.conftest import ORG_ID, _active_client, make_settings
 
 scenarios("tier_catalog.feature")
+
+_TIERS_CACHE_PREFIX = "tiers:"
+
+logger = logging.getLogger(__name__)
+
+
+@pytest.fixture(autouse=True)
+async def _clear_tiers_cache() -> None:
+    """Cold-start the org-scoped tier catalog cache before every scenario.
+
+    The admin tiers endpoint reads/writes a per-organisation Redis cache with a
+    300s TTL. An earlier scenario in this feature (e.g. "lists all plan tiers")
+    warms the ``tiers:<org>`` key, which would otherwise make the empty /
+    programming-error / database-error scenarios short-circuit inside the route
+    and serve the cached populated catalog instead of exercising the freshly
+    mocked ``list_tiers``. Deleting the key up front keeps each scenario
+    hermetic.
+    """
+    redis: AsyncRedis | None = None
+    try:
+        redis = AsyncRedis.from_url(
+            make_settings().redis_url,
+            decode_responses=True,
+            socket_connect_timeout=1.0,
+            socket_timeout=1.0,
+        )
+        await redis.delete(_TIERS_CACHE_PREFIX + str(ORG_ID))
+    except Exception:
+        logger.warning("tiers.cache_clear_failed", exc_info=True)
+    finally:
+        if redis is not None:
+            await redis.aclose()
+    yield
+
 
 _STANDARD_TIERS = [
     {
