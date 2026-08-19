@@ -850,14 +850,25 @@ async def update_run_outputs(
     return run
 
 
-async def get_run(session: AsyncSession, run_id: uuid.UUID) -> Run | None:
-    result = await session.execute(select(Run).where(Run.id == run_id))
+async def get_run(session: AsyncSession, run_id: uuid.UUID, *, organisation_id: uuid.UUID | None = None) -> Run | None:
+    """Fetch a single run by ID.
+
+    Defence-in-depth: when *organisation_id* is provided, the query also
+    filters on ``organisation_id`` so cross-tenant access is impossible even
+    if RLS is misconfigured. RLS-based callers (routes that already call
+    ``set_rls_org``) may omit it, but API-facing callers SHOULD pass it.
+    """
+    stmt = select(Run).where(Run.id == run_id)
+    if organisation_id is not None:
+        stmt = stmt.where(Run.organisation_id == organisation_id)
+    result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
 
 async def list_runs(
     session: AsyncSession,
     *,
+    organisation_id: uuid.UUID | None = None,
     pipeline_id: uuid.UUID | None = None,
     status: str | None = None,
     trigger_type: str | None = None,
@@ -867,6 +878,12 @@ async def list_runs(
     cursor: str | None = None,
     team_id: uuid.UUID | None = None,
 ) -> PageResult[Run]:
+    """List runs with optional org-scoped filtering.
+
+    Defence-in-depth: when *organisation_id* is provided, the query also
+    filters on ``organisation_id`` so cross-tenant access is impossible even
+    if RLS is misconfigured.
+    """
     q = (
         select(Run)
         .options(selectinload(Run.pipeline))
@@ -879,6 +896,9 @@ async def list_runs(
         .join(Pipeline, Run.pipeline_id == Pipeline.id, isouter=False)
         .where(Pipeline.deleted_at.is_(None))
     )
+    if organisation_id is not None:
+        q = q.where(Run.organisation_id == organisation_id)
+        count_q = count_q.where(Run.organisation_id == organisation_id)
     if team_id is not None:
         # A team-scoped caller sees runs for its own team's pipelines plus
         # org-level pipelines (no owner team) — the same boundary the MCP
