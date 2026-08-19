@@ -86,6 +86,21 @@ def validate_outbound_url(url: str) -> None:
 
     Performs synchronous DNS resolution. For use in sync contexts (Pydantic
     validators, route handlers). Raises ValueError if the URL is unsafe.
+
+    NOTE — Accepted residual risk (DNS rebinding): this function resolves the
+    hostname, verifies all resolved addresses are non-internal, then returns.
+    It does NOT pin the validated address onto the subsequent outbound
+    connection. A hostname under DNS control can therefore resolve to a public
+    address during validation and to an internal/metadata address during the
+    actual request that each call site performs on its own, bypassing this
+    check. The first line of defense is that the surrounding call sites are
+    permission-gated (admin/operator tier controls the URL) and the primary
+    documented mitigation is the ``SSRF_ALLOW_PRIVATE_RANGES`` allowlist, which
+    admins on private networks are expected to lock down to only their trusted
+    ranges. Fully closing the rebinding window requires pinning the connection
+    to the resolved address (e.g. an httpx transport that forces the validated
+    IP and requires SNI to match the hostname) — tracked separately from this
+    hardening PR.
     """
     decoded = _validate_url_syntax(url)
 

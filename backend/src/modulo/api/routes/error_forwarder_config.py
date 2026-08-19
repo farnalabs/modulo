@@ -7,6 +7,7 @@ import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select, update
@@ -108,18 +109,30 @@ def validate_forwarder_config(forwarder_type: str, config: dict[str, Any] | None
 
 
 def _validate_forwarder_urls(forwarder_type: str, config: dict[str, Any]) -> None:
-    """Validate outbound URLs in forwarder config to prevent SSRF."""
-    url_keys = {
-        "loki": ["push_url"],
-        "sentry": [],
-        "datadog": [],
-        "pagerduty": [],
-        "rollbar": [],
-        "opsgenie": [],
-    }
-    keys_to_check = url_keys.get(forwarder_type, [])
-    for key in keys_to_check:
-        url_value = config.get(key)
+    """Validate outbound URLs in forwarder config to prevent SSRF.
+
+    The final outbound target of each forwarder derives from a user-supplied
+    URL-bearing field, so each must be guarded, not just Loki's ``push_url``:
+      - loki:     ``push_url`` is POSTed to directly.
+      - sentry:   the ``dsn``'s hostname becomes the API base
+                  (``https://{host}/api/0/...``).
+      - datadog:  the ``site`` becomes the API base (``https://api.{site}/...``).
+    """
+    candidates: list[tuple[str, str]] = []
+    if forwarder_type == "loki":
+        candidates = [("push_url", config.get("push_url", ""))]
+    elif forwarder_type == "sentry":
+        dsn = config.get("dsn")
+        if isinstance(dsn, str) and dsn:
+            parsed = urlparse(dsn)
+            if parsed.scheme in ("http", "https") and parsed.hostname:
+                candidates = [("dsn", f"{parsed.scheme}://{parsed.hostname}")]
+    elif forwarder_type == "datadog":
+        site = config.get("site", "datadoghq.com")
+        if isinstance(site, str) and site:
+            candidates = [("site", f"https://api.{site}")]
+
+    for key, url_value in candidates:
         if isinstance(url_value, str) and url_value:
             try:
                 validate_outbound_url(url_value)

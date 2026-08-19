@@ -6,6 +6,7 @@ import { getAccessToken } from '../lib/api/client'
 import { usePlanStore } from '../stores/planStore'
 import manifest from '@/manifest.yaml'
 import LoginView from '../views/LoginView.vue'
+import AuthCallbackView from '../views/AuthCallbackView.vue'
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -123,6 +124,18 @@ const router = createRouter({
       path: '/login',
       name: 'login',
       component: LoginView,
+    },
+    {
+      // SSO (OIDC/SAML) success handoff: the backend redirects the browser to
+      // /auth/callback#access_token=...&refresh_token=... after a successful
+      // provider callback. This public route consumes the fragment tokens,
+      // stores them, strips them from the URL, and redirects to the dashboard.
+      // Public so the auth guard does not bounce an unauthenticated browser
+      // back to /login before the tokens are persisted.
+      path: '/auth/callback',
+      name: 'auth-callback',
+      component: AuthCallbackView,
+      meta: { public: true, breadcrumb: 'Signing in' },
     },
     {
       // OAuth browser consent route (ADR 017 A1b): the 302 target of

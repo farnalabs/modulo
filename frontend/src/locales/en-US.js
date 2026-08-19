@@ -877,6 +877,9 @@ export default {
       "queued": "queued",
       "ago": "{s}s ago",
     },
+    "AuthCallbackView": {
+      "signing_in": "Signing you in..."
+    },
     "AnalyticsView": {
       "analytics": "Analytics",
       "subtitle": "Run volume, cost, token, duration and success trends for your pipelines",
