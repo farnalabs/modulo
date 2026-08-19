@@ -237,8 +237,8 @@ def test_soc2_pack_detection_patterns_are_linear(pattern):
         ),
         (
             ANOMALY_PATTERN,
-            ["' OR '1'='1", "OR 1=1", "SELECT * FROM ../etc", "path/../"],
-            ["normal SELECT col FROM t", "or 1=2", ". . /"],
+            ["' OR '1'='1", "OR 1=1", "or 1=1", "Or 1 = 1", "SELECT * FROM ../etc", "path/../"],
+            ["normal SELECT col FROM t", "or 1=2", ". . /", "score 1=1"],
         ),
         (
             SSN_PATTERN,
@@ -324,6 +324,8 @@ def test_soc2_pack_cc72_anomaly_observe_detects_through_real_engine():
     engine = EvalEngine()
     results = evaluate_guardrails(engine, [eval_def], {"body": "select * from t where x OR 1=1"})
     assert results[0].passed is True  # regex matched the SQLi marker (a violation)
+    lower = evaluate_guardrails(engine, [eval_def], {"body": "select * from t where x or 1=1"})
+    assert lower[0].passed is True  # case-insensitive: lowercase 'or 1=1' is also a marker
     clean = evaluate_guardrails(engine, [eval_def], {"body": "a normal query for column col"})
     assert clean[0].passed is False  # no marker, no violation
 

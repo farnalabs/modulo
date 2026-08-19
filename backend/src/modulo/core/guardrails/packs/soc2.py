@@ -43,7 +43,11 @@ AWS_ACCESS_KEY_PATTERN = r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"
 EXECUTABLE_CONTENT_PATTERN = r"(?:<script[^>]*>|javascript:|TVpQ)"
 
 # CC7.2 — SQL-injection markers (' OR '1'='1 / OR 1=1) and path traversal.
-ANOMALY_PATTERN = r"(?:OR\s+['\"]?1['\"]?\s*=\s*['\"]?1|\.\./)"
+# The SQLi alternative is case-insensitive ((?i:...)) because SQL keywords are
+# case-insensitive — 'or 1=1' is an equally valid marker. The scope is confined
+# to the tautology structure (1 ... = ... 1), which keeps benign text (e.g.
+# 'or 1=2', 'score 1=1') from false-matching.
+ANOMALY_PATTERN = r"(?:(?i:OR\s+['\"]?1['\"]?\s*=\s*['\"]?1)|\.\./)"
 
 # P4.1 — PII marker detection for the redact-action guardrail (SSN, card, email).
 SSN_PATTERN = r"\b\d{3}-\d{2}-\d{4}\b"
