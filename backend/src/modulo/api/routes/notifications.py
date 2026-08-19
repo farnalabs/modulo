@@ -25,6 +25,7 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
 _CODE_NOTIFICATION_VIEW = "notification.view"
+_CODE_NOTIFICATION_MANAGE = "notification.manage"
 _CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING = "notifications.endpoint_table_missing"
 _MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN = (
     "Notifications are not available. Run database migrations to enable this feature."
@@ -130,7 +131,7 @@ async def list_endpoints(
 async def create_endpoint(
     req: NotificationEndpointCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_VIEW),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_MANAGE),
     settings: Settings = Depends(get_settings),
 ) -> NotificationEndpointResponse:
     from cryptography.fernet import Fernet
@@ -242,7 +243,7 @@ async def update_endpoint(
     endpoint_id: uuid.UUID,
     req: NotificationEndpointUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_VIEW),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_MANAGE),
     settings: Settings = Depends(get_settings),
 ) -> NotificationEndpointResponse:
     from cryptography.fernet import Fernet
@@ -310,7 +311,7 @@ async def update_endpoint(
 async def delete_endpoint(
     endpoint_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_VIEW),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_MANAGE),
 ) -> None:
     try:
         async with session.begin():
@@ -358,7 +359,7 @@ async def delete_endpoint(
 async def restore_endpoint(
     endpoint_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_VIEW),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_MANAGE),
 ) -> NotificationEndpointResponse:
     try:
         async with session.begin():

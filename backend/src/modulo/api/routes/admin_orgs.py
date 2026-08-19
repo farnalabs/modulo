@@ -246,11 +246,31 @@ async def admin_create_org_user(
                         status_code=status.HTTP_409_CONFLICT,
                         detail="A user with this email already exists in this organisation",
                     )
+                # SECURITY (#1189): refuse password hash overwrite when the
+                # account belongs to other orgs — prevents cross-tenant takeover.
+                if existing.password_hash is not None and existing.auth_provider == "local":
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=(
+                            "EMAIL_ACCOUNT_EXISTS: An account with this email exists"
+                            " in another organisation. Password-based adoption is not allowed."
+                        ),
+                    )
 
             pw_hash = hash_password(req.password)
 
             if existing is not None:
                 account = existing
+                # SECURITY (#1189): only allow password hash overwrite for
+                # accounts that have NO existing password (SSO/SCIM JIT).
+                if account.password_hash is not None:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=(
+                            "EMAIL_ACCOUNT_EXISTS: An account with this email exists"
+                            " in another organisation. Password-based adoption is not allowed."
+                        ),
+                    )
                 account.password_hash = pw_hash
             else:
                 account = await create_account(

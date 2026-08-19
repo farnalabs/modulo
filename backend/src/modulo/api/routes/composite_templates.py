@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.composite_engine.expander import (
@@ -159,7 +159,7 @@ async def list_composite_templates_endpoint(
 async def create_composite_template_endpoint(
     req: CompositeTemplateCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.create"),
 ) -> CompositeTemplateResponse:
     try:
         async with session.begin():
@@ -242,7 +242,7 @@ async def update_composite_template_endpoint(
     template_id: uuid.UUID,
     req: CompositeTemplateUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.update"),
 ) -> CompositeTemplateResponse:
     updates: dict[str, Any] = {}
     for k, v in req.model_dump(exclude_unset=True).items():
@@ -284,7 +284,7 @@ async def update_composite_template_endpoint(
 async def delete_composite_template_endpoint(
     template_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.delete"),
 ) -> None:
     try:
         async with session.begin():
@@ -319,7 +319,7 @@ async def delete_composite_template_endpoint(
 async def restore_composite_template_endpoint(
     template_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.create"),
 ) -> CompositeTemplateResponse:
     try:
         async with session.begin():
@@ -407,7 +407,7 @@ async def save_composite_editor_endpoint(
     template_id: uuid.UUID,
     req: EditorGraphUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.update"),
 ) -> EditorGraphResponse:
     try:
         async with session.begin():
@@ -563,7 +563,7 @@ async def publish_composite_endpoint(
     template_id: uuid.UUID,
     req: PublishRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission("pipeline.update"),
 ) -> PublishResponse:
     version = req.version or "1.0.0"
     try:

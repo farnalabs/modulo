@@ -1246,7 +1246,8 @@ export default {
       "saving": "Saving\u2026",
       "toggle_langsmith": "Toggle LangSmith",
       "save_failed": "Save failed:",
-      "failed_to_load_settings": "Failed to load settings:"
+      "failed_to_load_settings": "Failed to load settings:",
+      "viewer_readonly_note": "You have view-only access to observability settings. An operator or admin can make changes."
     },
     "AdminCostBreakdownView": {
       "cost_breakdown": "Cost Breakdown",
