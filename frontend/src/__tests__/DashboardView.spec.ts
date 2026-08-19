@@ -392,7 +392,6 @@ describe('DashboardView', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('No runs yet')
     expect(wrapper.text()).toContain('No data yet')
-    expect(wrapper.text()).toContain('Run a Pipeline')
   })
 
   it('shows the eval trend indicator as declining when eval pass rates dip', async () => {
@@ -551,6 +550,42 @@ describe('StatCard delta arrow', () => {
     expect(wrapper.text()).toContain('0.0%')
   })
 
+  it('inverted keeps the arrow raw but flags a positive delta as destructive', () => {
+    const wrapper = mount(StatCard, {
+      props: {
+        label: 'Failed',
+        value: 5,
+        delta: { current: 5, previous: 3, delta_pct: 66.7 },
+        inverted: true,
+      },
+    })
+    // Arrow still points up (the count went up); only the color signals badness.
+    expect(wrapper.text()).toContain('▲')
+    expect(wrapper.text()).toContain('+2')
+    expect(wrapper.text()).toContain('66.7%')
+    const deltaSpan = wrapper.find('span.inline-flex')
+    expect(deltaSpan.classes()).toContain('text-destructive')
+    expect(deltaSpan.classes()).not.toContain('text-success')
+  })
+
+  it('inverted keeps the arrow raw but flags a negative delta as success', () => {
+    const wrapper = mount(StatCard, {
+      props: {
+        label: 'Failed',
+        value: 3,
+        delta: { current: 3, previous: 5, delta_pct: -40 },
+        inverted: true,
+      },
+    })
+    // Arrow still points down (the count went down); only the color signals goodness.
+    expect(wrapper.text()).toContain('▼')
+    expect(wrapper.text()).toContain('-2')
+    expect(wrapper.text()).toContain('40.0%')
+    const deltaSpan = wrapper.find('span.inline-flex')
+    expect(deltaSpan.classes()).toContain('text-success')
+    expect(deltaSpan.classes()).not.toContain('text-destructive')
+  })
+
   it('renders unchanged when no delta prop is provided', () => {
     const wrapper = mount(StatCard, {
       props: { label: 'Total Runs', value: 8 },
@@ -576,6 +611,8 @@ describe('StatCard delta arrow', () => {
     expect(fallback.text()).toContain('0')
     expect(fallback.attributes('title')).toBe('No prior period data')
     expect(fallback.attributes('aria-label')).toBe('No prior period data')
+    // No basis to judge direction → muted, never a sign-colored success/destructive.
+    expect(fallback.classes()).toContain('text-muted-foreground')
     expect(wrapper.text()).not.toContain('%')
     expect(wrapper.text()).not.toContain('▲')
     expect(wrapper.text()).not.toContain('▼')

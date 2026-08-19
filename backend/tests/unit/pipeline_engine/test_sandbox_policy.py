@@ -45,16 +45,22 @@ def test_git_scoped_script_limits_to_github() -> None:
     assert "github.com" in script
     # The helper only grants the token when the host equals the allowlisted
     # github.com (scoped credential) — it outputs nothing for any other host.
-    assert "github.com" in script
-    # The helper checks the host field equals the allowlisted github.com.
     assert "host" in script
-    assert "github.com" in script
+    # FAR-212 PR B review (MAJOR 1): the helper must be registered in the AGENT's
+    # git config (/home/user/.gitconfig), the file the agent's non-root user
+    # actually reads — never /root/.gitconfig. A root-only registration would
+    # silently no-op and leave the scoped credential unenforced (fail-open).
+    assert "/home/user/.gitconfig" in script
+    assert "credential.helper" in script
 
 
 def test_git_none_script_provisions_no_credentials() -> None:
     script = build_git_none_script()
     # "none" must not disclose any credential — the helper always refuses.
     assert "exit 1" in script or "refuse" in script.lower()
+    # Like the scoped script, the refuse helper is registered in the AGENT's
+    # git config so it binds the agent's git, not a root config it never reads.
+    assert "/home/user/.gitconfig" in script
 
 
 def test_egress_selected_script_drops_then_allows() -> None:
@@ -66,20 +72,167 @@ def test_egress_selected_script_drops_then_allows() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Execution tests (FAR-212 PR B review, MAJOR 2): the enforcement scripts are
+# security-critical, so they must not just CONTAIN the right strings — they
+# must actually EXIT 0 when run. The previous string+step-order tests passed
+# even though `git config --global --file` fails at runtime (MAJOR 1, exit 129
+# "only one config file at a time"), which broke every scoped/none sandbox.
+# These tests render each script, substitute the hardcoded /home/user workspace
+# for an isolated temp dir, execute it under `sh`, and assert exit 0 + the
+# git credential helper actually installs.
+# ---------------------------------------------------------------------------
+
+_WORKSPACE_SENTINEL = "/home/user"
+
+
+def _render_for_temp_workspace(script: str, workspace: str) -> str:
+    """Return the script with the hardcoded /home/user workspace swapped for a
+    temp dir so executing it does not touch the real filesystem."""
+    return script.replace(_WORKSPACE_SENTINEL, workspace)
+
+
+def _run_script(script: str, workspace: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    r"""Execute a policy script under sh in an isolated temp workspace.
+
+    HOME and GIT_CONFIG are pointed at the temp workspace so git writes the
+    agent gitconfig there (mirroring the real non-root agent reading
+    /home/user/.gitconfig), and GIT_CONFIG_NOSYSTEM pins an empty system config.
+
+    On Windows, Git Bash (``C:\Program Files\Git\bin\bash.exe``) is used instead
+    of ``sh`` (which is not available).  The workspace path is converted to
+    POSIX format for Git Bash compatibility.
+    """
+    rerendered = _render_for_temp_workspace(script, workspace)
+    run_env = {
+        "HOME": workspace,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "PATH": os.environ["PATH"],
+    }
+    if env:
+        run_env.update(env)
+
+    # On Windows, use Git Bash instead of sh (sh is not available natively).
+    shell_cmd: list[str]
+    if os.name == "nt":
+        git_bash = r"C:\Program Files\Git\bin\bash.exe"
+        if not os.path.isfile(git_bash):
+            pytest.skip("Git Bash not available on this Windows system")
+        # Convert workspace path to POSIX for Git Bash (e.g. C:\Users\... → /c/Users/...).
+        posix_workspace = workspace
+        if len(workspace) >= 2 and workspace[1] == ":":
+            drive = workspace[0].lower()
+            rest = workspace[2:].replace("\\", "/")
+            posix_workspace = f"/{drive}{rest}"
+        rerendered = _render_for_temp_workspace(script, posix_workspace)
+        run_env["HOME"] = posix_workspace
+        shell_cmd = [git_bash, "-c", rerendered]
+    else:
+        shell_cmd = ["sh", "-c", rerendered]
+    return subprocess.run(  # noqa: S603 - executing our own generated policy script in tests
+        shell_cmd,
+        capture_output=True,
+        text=True,
+        env=run_env,
+        cwd=workspace,
+    )
+
+
+def test_git_scoped_script_executes_and_installs_helper(tmp_path) -> None:
+    """The scoped script must EXIT 0 and register the helper in the agent
+    gitconfig (this catches the `--global --file` exit-129 regression)."""
+    script = build_git_scoped_script()
+    assert _WORKSPACE_SENTINEL in script
+    result = _run_script(script, str(tmp_path))
+    assert result.returncode == 0, f"scoped script failed: {result.stdout}\n{result.stderr}"
+    gitconfig = tmp_path / ".gitconfig"
+    assert gitconfig.exists(), "agent gitconfig not written"
+    assert "cred-helper.sh" in gitconfig.read_text()
+    helper = tmp_path / ".git-policy" / "cred-helper.sh"
+    assert helper.exists() and os.access(helper, os.X_OK)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="script writes to /tmp which is unreliable on Windows Git Bash")
+def test_git_none_script_executes_and_installs_refuse_helper(tmp_path) -> None:
+    """The 'none' script must EXIT 0 and register the refuse helper (also
+    catches the `--global --file` exit-129 regression)."""
+    script = build_git_none_script()
+    result = _run_script(script, str(tmp_path))
+    assert result.returncode == 0, f"none script failed: {result.stdout}\n{result.stderr}"
+    gitconfig = tmp_path / ".gitconfig"
+    assert gitconfig.exists(), "agent gitconfig not written"
+    assert "modulo-git-refuse-helper.sh" in gitconfig.read_text()
+    # On Linux the refuse helper lands at /tmp/modulo-git-refuse-helper.sh.
+    # On Windows Git Bash, /tmp maps to $TEMP, so check both locations.
+    if os.name != "nt":
+        assert os.path.isfile("/tmp/modulo-git-refuse-helper.sh")
+    else:
+        win_temp = os.environ.get("TEMP", os.environ.get("TMP", ""))
+        if win_temp:
+            assert os.path.isfile(os.path.join(win_temp, "modulo-git-refuse-helper.sh"))
+
+
+def test_read_only_script_executes_clearly(tmp_path) -> None:
+    """The read-only seal must EXIT 0 (chmod + re-open runtime writes)."""
+    script = build_read_only_script()
+    result = _run_script(script, str(tmp_path))
+    assert result.returncode == 0, f"read-only script failed: {result.stdout}\n{result.stderr}"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Git Bash stdin handling differs from sh")
+def test_scoped_helper_grants_token_only_to_allowed_host() -> None:
+    """Executing the credential helper itself: it echoes the token for
+    github.com and nothing for any other host (executes the real sh snippet)."""
+    from modulo.core.pipeline_engine.sandbox_policy import _credential_helper_script
+
+    helper = _credential_helper_script()
+    token = "ghp_testtoken123"
+    # Use Git Bash on Windows, sh on Linux.
+    sh_cmd = ["sh", "-c", helper]
+    if os.name == "nt":
+        git_bash = r"C:\Program Files\Git\bin\bash.exe"
+        if os.path.isfile(git_bash):
+            sh_cmd = [git_bash, "-c", helper]
+    allowed = subprocess.run(  # noqa: S603 - executing our own helper script in tests
+        sh_cmd,
+        input="protocol=https\nhost=github.com\n\n",
+        capture_output=True,
+        text=True,
+        env={"GITHUB_TOKEN": token, "PATH": os.environ["PATH"]},
+    )
+    assert allowed.returncode == 0
+    assert f"password={token}" in allowed.stdout
+    denied = subprocess.run(  # noqa: S603 - executing our own helper script in tests
+        sh_cmd,
+        input="protocol=https\nhost=gitlab.com\n\n",
+        capture_output=True,
+        text=True,
+        env={"GITHUB_TOKEN": token, "PATH": os.environ["PATH"]},
+    )
+    assert denied.returncode == 0
+    assert "password=" not in denied.stdout
+
+
+# ---------------------------------------------------------------------------
 # apply_sandbox_policy step ordering
 # ---------------------------------------------------------------------------
 
 
 class _FakeSandbox:
-    def __init__(self) -> None:
-        self.commands = _FakeCommands()
+    def __init__(self, fail_on: set[int] | None = None) -> None:
+        self.commands = _FakeCommands(fail_on=fail_on)
 
 
 class _FakeCommands:
-    def __init__(self) -> None:
+    def __init__(self, fail_on: set[int] | None = None) -> None:
         self.runs: list[str] = []
+        self._fail_on = fail_on or set()
+        self._call_count = 0
 
     async def run(self, script: str, *, user: str = "root", timeout: float = 60.0) -> None:  # noqa: ASYNC109 - matches the e2b SDK signature
+        call = self._call_count
+        self._call_count += 1
+        if call in self._fail_on:
+            raise RuntimeError(f"policy step failed: {call}")
         self.runs.append(script)
 
 
@@ -113,6 +266,78 @@ async def test_apply_sandbox_policy_no_policy_no_steps() -> None:
         egress_allowlist=None,
     )
     assert not sandbox.commands.runs
+
+
+# ---------------------------------------------------------------------------
+# Failure semantics (FAR-212 PR B review, MAJOR 2): enforcement-critical steps
+# (read_only seal + git-credential helper install) RAISE on failure so the run
+# dispatches as a failure rather than silently certifying a deny-guarantee
+# nothing enforced; the egress step (drop-first fail-closed) stays best-effort.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_apply_sandbox_policy_read_only_failure_raises() -> None:
+    """A failed read-only chmod must RAISE: the workspace would stay writable yet
+    ``sandbox.write_files=False`` stays certified — fail-open if swallowed."""
+    sandbox = _FakeSandbox(fail_on={0})
+    with pytest.raises(RuntimeError):
+        await apply_sandbox_policy(
+            sandbox,
+            read_only=True,
+            git_credentials=None,
+            egress_policy="default",
+            egress_allowlist=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_apply_sandbox_policy_git_scoped_failure_raises() -> None:
+    """A failed git-helper install must RAISE: credentials would stay unscoped
+    yet ``sandbox.git_credentials`` (scoped) stays certified — fail-open."""
+    sandbox = _FakeSandbox(fail_on={0})
+    with pytest.raises(RuntimeError):
+        await apply_sandbox_policy(
+            sandbox,
+            read_only=False,
+            git_credentials="scoped",
+            egress_policy="default",
+            egress_allowlist=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_apply_sandbox_policy_egress_failure_is_best_effort() -> None:
+    """A failed egress step is best-effort (logged-and-continued): its script is
+    drop-first fail-closed, so it leaves deny-all — the safe direction. The
+    follow-on read-only seal must still run."""
+    sandbox = _FakeSandbox(fail_on={0})
+    await apply_sandbox_policy(
+        sandbox,
+        read_only=True,
+        git_credentials=None,
+        egress_policy="selected",
+        egress_allowlist=[{"host": "api.example.com", "port": 443}],
+    )
+    # egress failed (index 0, swallowed); read-only seal still ran (index 1).
+    assert len(sandbox.commands.runs) == 1
+    assert "chmod" in sandbox.commands.runs[0]
+
+
+@pytest.mark.asyncio
+async def test_apply_sandbox_policy_git_scoped_registers_agent_config() -> None:
+    """The scoped git step must register the helper under the AGENT's git config
+    file (/home/user/.gitconfig), never /root/.gitconfig — otherwise the
+    non-root agent's git never honours the scoped credential (fail-open)."""
+    sandbox = _FakeSandbox()
+    await apply_sandbox_policy(
+        sandbox,
+        read_only=False,
+        git_credentials="scoped",
+        egress_policy="default",
+        egress_allowlist=None,
+    )
+    assert "/home/user/.gitconfig" in sandbox.commands.runs[0]
 
 
 # ---------------------------------------------------------------------------
@@ -179,187 +404,3 @@ def test_derive_egress_selected_scoped() -> None:
     )
     # selected denies all egress at the boolean level (allow_internet_access=False).
     assert caps["sandbox.egress"] is False
-
-
-# ---------------------------------------------------------------------------
-# Execution-style tests — actually run the scripts under bash (MAJOR 2 fix)
-# ---------------------------------------------------------------------------
-
-# The scripts hardcode ``/home/user`` as the workspace.  In the test environment
-# that path does not exist, so each test creates a temp directory that mimics
-# the sandbox layout and rewrites ``/home/user`` in the script to the temp path.
-
-
-def _find_bash() -> str | None:
-    r"""Locate a usable bash binary (Git Bash on Windows, system bash on Linux).
-
-    WSL's ``bash.exe`` (``C:\WINDOWS\system32\bash.EXE``) is NOT usable for
-    running scripts -- it requires a WSL distribution and is unreliable in CI.
-    Git Bash (``C:\Program Files\Git\bin\bash.exe``) works on Windows without WSL.
-    """
-    import shutil
-
-    # Prefer Git Bash on Windows — it ships with Git for Windows and is a
-    # real MSYS2 bash, not a WSL shim.
-    git_bash = r"C:\Program Files\Git\bin\bash.exe"
-    if os.path.isfile(git_bash):
-        return git_bash
-    # On Linux, ``bash`` in PATH is fine.
-    system_bash = shutil.which("bash")
-    if system_bash is not None:
-        return system_bash
-    return None
-
-
-_BASH = _find_bash()
-_skip_no_bash = pytest.mark.skipif(_BASH is None, reason="bash not available on this system")
-
-
-def _make_sandbox_env(tmp_path: object) -> dict[str, str]:
-    """Create a fake HOME/WORKSPACE environment for script execution."""
-    workspace = tmp_path / "home" / "user"  # type: ignore[union-attr]
-    workspace.mkdir(parents=True)
-    home = tmp_path / "home"  # type: ignore[union-attr]
-    return {
-        "HOME": _to_posix(home),
-        "GITHUB_TOKEN": "ghp_test_token_abc123",
-        "_WORKSPACE": _to_posix(workspace),
-    }
-
-
-def _to_posix(path: object) -> str:
-    r"""Convert a Windows path to POSIX format for Git Bash.
-
-    Git Bash (MSYS2) uses ``/c/Users/...`` instead of ``C:\Users\...``.
-    On Linux this is a no-op (``pathlib`` already returns POSIX paths).
-    """
-    s = str(path)
-    # ``pathlib`` on Windows returns backslash-separated paths.
-    # Git Bash wants forward slashes with the drive letter lowercased.
-    if len(s) >= 2 and s[1] == ":":
-        drive = s[0].lower()
-        rest = s[2:].replace("\\", "/")
-        return f"/{drive}{rest}"
-    return s.replace("\\", "/")
-
-
-def _rewrite_workspace(script: str, tmp_path: object) -> str:
-    """Replace ``/home/user`` with the test's temp workspace path."""
-    workspace = tmp_path / "home" / "user"  # type: ignore[union-attr]
-    return script.replace("/home/user", _to_posix(workspace))
-
-
-def _run_script(script: str, env: dict[str, str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-    """Run a shell script with the fake environment and return the result."""
-    merged_env = {**os.environ, **env}
-    return subprocess.run(  # noqa: S603
-        [_BASH, "-c", script],  # type: ignore[list-item]
-        capture_output=True,
-        text=True,
-        timeout=30,
-        env=merged_env,
-        **kwargs,  # type: ignore[arg-type]
-    )
-
-
-@_skip_no_bash
-def test_read_only_script_execution(tmp_path: object) -> None:
-    """build_read_only_script must exit 0 under bash."""
-    env = _make_sandbox_env(tmp_path)
-    script = _rewrite_workspace(build_read_only_script(), tmp_path)
-    result = _run_script(script, env)
-    assert result.returncode == 0, f"Script failed: {result.stderr}"
-
-
-@_skip_no_bash
-def test_git_scoped_script_execution(tmp_path: object) -> None:
-    """build_git_scoped_script must exit 0 under bash and install the helper."""
-    env = _make_sandbox_env(tmp_path)
-    script = _rewrite_workspace(build_git_scoped_script(), tmp_path)
-    result = _run_script(script, env)
-    assert result.returncode == 0, f"Script failed: {result.stderr}"
-    # The credential helper must exist on disk after the script runs.
-    # Use tmp_path (native OS path) for the Python file existence check.
-    workspace = tmp_path / "home" / "user"  # type: ignore[union-attr]
-    cred_helper = workspace / ".git-policy" / "cred-helper.sh"
-    assert cred_helper.is_file(), f"Credential helper not found at {cred_helper}"
-
-
-@_skip_no_bash
-def test_git_none_script_execution(tmp_path: object) -> None:
-    """build_git_none_script must exit 0 under bash and install the refuse helper."""
-    env = _make_sandbox_env(tmp_path)
-    # Git Bash (MSYS2) maps /tmp to $TEMP; on Linux /tmp is the real /tmp.
-    # The script writes to /tmp/modulo-git-refuse-helper.sh, so we check both.
-    script = _rewrite_workspace(build_git_none_script(), tmp_path)
-    result = _run_script(script, env)
-    assert result.returncode == 0, f"Script failed: {result.stderr}"
-    # Check the POSIX path (works on Linux; on Windows Git Bash /tmp maps to $TEMP).
-    found = os.path.isfile("/tmp/modulo-git-refuse-helper.sh")
-    # Fallback: check the Windows temp dir (Git Bash's /tmp is $TEMP on Windows).
-    if not found:
-        win_temp = os.environ.get("TEMP", os.environ.get("TMP", ""))
-        if win_temp:
-            found = os.path.isfile(os.path.join(win_temp, "modulo-git-refuse-helper.sh"))
-    assert found, "Refuse helper not found at /tmp/modulo-git-refuse-helper.sh"
-
-
-@_skip_no_bash
-def test_egress_selected_script_execution(tmp_path: object) -> None:
-    """build_egress_selected_script must parse cleanly under bash.
-
-    iptables may not be available in the test environment, so we only verify
-    the script parses and runs without a shell syntax error — iptables failures
-    are expected (the script uses ``|| true`` for graceful fallback).
-    """
-    env = _make_sandbox_env(tmp_path)
-    script = _rewrite_workspace(build_egress_selected_script([{"host": "api.example.com", "port": 443}]), tmp_path)
-    result = _run_script(script, env)
-    # The script uses ``|| true`` for every iptables command, so it should
-    # always exit 0 even when iptables is absent.
-    assert result.returncode == 0, f"Script failed: {result.stderr}"
-
-
-# ---------------------------------------------------------------------------
-# Targeted git config --file test (MAJOR 1 regression guard)
-# ---------------------------------------------------------------------------
-
-
-def test_git_config_file_only_no_global_conflict(tmp_path: object) -> None:
-    """``git config --file <path>`` must work without ``--global``.
-
-    This is the core of MAJOR 1: ``git config --global --file <path>`` fails
-    with "only one config file at a time" (exit 129).  This test verifies the
-    generated scripts use ``--file`` alone, by executing ``git config --file``
-    directly via ``git.exe`` (available on both Windows and Linux).
-    """
-    git_cfg = tmp_path / "test-gitconfig"  # type: ignore[union-attr]
-    script_scoped = build_git_scoped_script()
-    script_none = build_git_none_script()
-    # Both scripts must use ``git config --file`` (not ``--global --file``).
-    assert "git config --file" in script_scoped
-    assert "git config --global" not in script_scoped
-    assert "git config --file" in script_none
-    assert "git config --global" not in script_none
-    # Execute ``git config --file`` directly to prove it works without error.
-    # Find git.exe on this system.
-    import shutil
-
-    git_exe = shutil.which("git")
-    if git_exe is None:
-        pytest.skip("git not available")
-    result = subprocess.run(  # noqa: S603
-        [git_exe, "config", "--file", str(git_cfg), "credential.helper", "/some/helper"],
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    assert result.returncode == 0, f"git config --file failed: {result.stderr}"
-    # Verify the value was written.
-    result_read = subprocess.run(  # noqa: S603
-        [git_exe, "config", "--file", str(git_cfg), "credential.helper"],
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    assert result_read.stdout.strip() == "/some/helper"

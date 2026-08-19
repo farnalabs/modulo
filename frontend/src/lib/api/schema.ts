@@ -12095,6 +12095,8 @@ export interface components {
             read_only: boolean;
             /** Git Credentials */
             git_credentials?: ("scoped" | "unscoped" | "none") | null;
+            /** Wallclock Budget Seconds */
+            wallclock_budget_seconds?: number | null;
             /** Delivery Sentinel */
             delivery_sentinel?: string | null;
             /** Env Vars */

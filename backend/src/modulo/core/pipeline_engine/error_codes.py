@@ -212,6 +212,21 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity="warning",
         guidance="Sandbox network failure.",
     ),
+    "sandbox.rate_limited": ErrorCodeSpec(
+        error_class="sandbox",
+        retryable=True,
+        alert_severity="warning",
+        guidance="E2B provisioner rate-limited sandbox creation (429); the run will be retried.",
+    ),
+    "sandbox.queue_timeout": ErrorCodeSpec(
+        error_class="sandbox",
+        retryable=True,
+        alert_severity="warning",
+        guidance=(
+            "Sandbox provisioning was retried but the rate-limit retry budget"
+            " was exhausted within the node timeout window."
+        ),
+    ),
     # --- node guard codes ------------------------------------------------
     _CODE_NODE_TIMEOUT: ErrorCodeSpec(
         error_class="node",
@@ -379,6 +394,20 @@ LEGACY_ALIASES: dict[str, str] = {
     "TypeError": "harness.state_serialization",
     "NodeCancelledError": "harness.sdk_task_cancelled",
     "SandboxNodeFailedError": "sandbox.no_output_json",
+    # FAR-296 Phase 4a: E2B concurrent-sandbox rate limits (429 / resource
+    # exhausted) are transient. The executor's generic catch publishes the raw
+    # exception class name (``SandboxRateLimitedError`` — our retryable wrapper,
+    # or the un-retried e2b ``RateLimitException``), both of which must resolve
+    # to the retryable ``sandbox.rate_limited`` code — never the permanent
+    # ``harness.unknown`` fallback.
+    "SandboxRateLimitedError": "sandbox.rate_limited",
+    "RateLimitException": "sandbox.rate_limited",
+    # FAR-296 Phase 4b: rate-limit retry exhaustion maps to the distinct
+    # ``sandbox.queue_timeout`` code (the "queue" for capacity timed out).
+    "SandboxQueueTimeoutError": "sandbox.queue_timeout",
+    "SandboxRateLimitExhaustedError": "sandbox.queue_timeout",
+    # FAR-296 Phase 4b: dispatch-time capacity gate maps to ``capacity.org``.
+    "SandboxCapacityExceededError": "capacity.org",
     "executor_setup_failed": _CODE_HARNESS_EXECUTOR_FAILED,
     "executor_failed": _CODE_HARNESS_EXECUTOR_FAILED,
     "executor_heartbeat_lost": "harness.executor_heartbeat_lost",
