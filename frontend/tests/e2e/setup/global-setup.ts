@@ -39,7 +39,7 @@ async function globalSetup(_config: FullConfig) {
   await page.waitForURL(/^(?!.*\/login).*$/, { timeout: 60000 })
 
   await page.evaluate(() => {
-    localStorage.removeItem('remy-panel-state')
+    localStorage.setItem('remy-panel-state', 'closed')
     localStorage.removeItem('remy-panel-position')
     localStorage.removeItem('remy-panel-size')
   })
