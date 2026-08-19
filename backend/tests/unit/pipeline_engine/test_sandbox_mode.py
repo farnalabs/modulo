@@ -6,11 +6,15 @@ node's ACTUAL config, so a conformance hard-block can certify writes/egress are
 impossible rather than merely un-declared.
 
 The polarity here is RAW (True = present / risked): ``sandbox.egress`` is False
-for ``deny_all``/``selected``, ``sandbox.write_files`` is False when the node
-declares a read-only workspace, ``sandbox.git_credentials`` is True when scoped
-and False when unscoped/absent. Unknown surfaces derive to None. The conformance
-polarity inversion (False = the certified guarantee) is covered by the
-conformance wiring tests in ``test_guardrail_conformance_midrun.py``.
+for ``deny_all``/``selected``, True for ``default``/absent, None when
+unrecognised. ``sandbox.write_files`` and ``sandbox.git_credentials`` ALWAYS
+derive None (unknown): the read-only / git-credential scope surfaces are NOT
+enforced until PR B (read-only mounts, git-credential scope), so a block
+guardrail on them fails CLOSED and the derivation never certifies from
+unvalidated/unenforced node keys (``read_only`` / ``git_credentials`` are not
+``PipelineGraphNode`` fields). The conformance polarity inversion (False = the
+certified guarantee) is covered by the conformance wiring tests in
+``test_guardrail_conformance_midrun.py``.
 """
 
 from __future__ import annotations
@@ -75,67 +79,71 @@ def test_egress_unrecognised_is_unknown():
 # sandbox.write_files
 # ---------------------------------------------------------------------------
 
+# NOTE (FAR-212 PR A review): ``sandbox.write_files`` always derives None
+# (unknown). The ``read_only`` key is NOT a PipelineGraphNode field (Pydantic
+# ``extra="ignore"`` silently drops it on the REST/MCP paths) and node_runner /
+# e2b never enforce a read-only filesystem, so the derivation must never
+# certify "writes are impossible" from a node config nothing enforces. It
+# resolves unknown (fail-closed block) until the PR B read-only mount surface
+# lands together with the PipelineGraphNode / GraphValidator / node_runner
+# enforcement.
 
-def test_write_files_read_only_is_false():
-    caps = derive_sandbox_capabilities(_sandbox_node(read_only=True))
-    assert caps[SANDBOX_CAPABILITY_WRITE_FILES] is False
 
-
-def test_write_files_writable_is_true():
-    caps = derive_sandbox_capabilities(_sandbox_node(read_only=False))
-    assert caps[SANDBOX_CAPABILITY_WRITE_FILES] is True
-
-
-def test_write_files_undeclared_is_true():
-    # An undeclared workspace surface means the workspace is writable (the
-    # sandbox default) — the mechanical fact, not a guess.
+def test_write_files_undeclared_is_unknown():
     caps = derive_sandbox_capabilities(_sandbox_node())
-    assert caps[SANDBOX_CAPABILITY_WRITE_FILES] is True
-
-
-def test_write_files_non_bool_is_unknown():
-    caps = derive_sandbox_capabilities(_sandbox_node(read_only="yes"))
     assert caps[SANDBOX_CAPABILITY_WRITE_FILES] is None
+
+
+def test_write_files_ignores_read_only_key():
+    # A smuggled ``read_only`` (true/false/non-bool) must NOT certify writes —
+    # the e2b sandbox is still writable, so the capability stays unknown.
+    for declared in (True, False, "yes"):
+        caps = derive_sandbox_capabilities(_sandbox_node(read_only=declared))
+        assert caps[SANDBOX_CAPABILITY_WRITE_FILES] is None
 
 
 # ---------------------------------------------------------------------------
 # sandbox.git_credentials
 # ---------------------------------------------------------------------------
 
+# NOTE (FAR-212 PR A review): ``sandbox.git_credentials`` always derives None
+# (unknown). The ``git_credentials`` key is NOT a PipelineGraphNode field and
+# node_runner / e2b never scope git credentials, so the derivation must never
+# certify "git credentials are scoped" from a declared value nothing enforces.
+# It resolves unknown (fail-closed block) until the PR B git-credential scope
+# surface lands together with the PipelineGraphNode / GraphValidator /
+# node_runner enforcement.
+
+
+def test_git_credentials_undeclared_is_unknown():
+    caps = derive_sandbox_capabilities(_sandbox_node())
+    assert caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] is None
+
 
 @pytest.mark.parametrize(
     "declared",
     ["scoped", "scoped_org", "limited", "true", "on", " SCOPEd "],
 )
-def test_git_credentials_scoped_is_true(declared: str):
+def test_git_credentials_scoped_declaration_is_unknown(declared: str):
+    # A scoped-git declaration must NOT certify the scoped guarantee — the
+    # sandbox still has full git access, so the capability stays unknown.
     caps = derive_sandbox_capabilities(_sandbox_node(git_credentials=declared))
-    assert caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] is True
+    assert caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] is None
 
 
 @pytest.mark.parametrize(
     "declared",
     ["unscoped", "none", "absent", "false", "off"],
 )
-def test_git_credentials_unscoped_is_false(declared: str):
+def test_git_credentials_unscoped_declaration_is_unknown(declared: str):
     caps = derive_sandbox_capabilities(_sandbox_node(git_credentials=declared))
-    assert caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] is False
-
-
-def test_git_credentials_bool_scoped_is_true():
-    caps = derive_sandbox_capabilities(_sandbox_node(git_credentials=True))
-    assert caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] is True
-
-
-def test_git_credentials_bool_unscoped_is_false():
-    caps = derive_sandbox_capabilities(_sandbox_node(git_credentials=False))
-    assert caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] is False
-
-
-def test_git_credentials_undeclared_is_unknown():
-    # An undeclared git-credential surface cannot be mechanically confirmed
-    # either way -> None (fail-closed for a block guardrail).
-    caps = derive_sandbox_capabilities(_sandbox_node())
     assert caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] is None
+
+
+def test_git_credentials_ignores_bool_declaration():
+    for declared in (True, False):
+        caps = derive_sandbox_capabilities(_sandbox_node(git_credentials=declared))
+        assert caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] is None
 
 
 def test_git_credentials_unrecognised_is_unknown():
@@ -151,7 +159,8 @@ def test_git_credentials_unrecognised_is_unknown():
 def test_deny_all_read_only_combined_profile():
     caps = derive_sandbox_capabilities(_sandbox_node(egress_policy="deny_all", read_only=True))
     assert caps[SANDBOX_CAPABILITY_EGRESS] is False
-    assert caps[SANDBOX_CAPABILITY_WRITE_FILES] is False
+    # read_only is unenforced -> write_files stays unknown, never certified.
+    assert caps[SANDBOX_CAPABILITY_WRITE_FILES] is None
 
 
 def test_non_sandbox_node_type_contributes_empty_profile():

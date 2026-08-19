@@ -110,14 +110,18 @@ def _capabilities_for_agent(row: Any) -> set[str]:
 # mechanical polarity (True = risk present) is INVERTED when stamped into the
 # manifest. ``sandbox.git_credentials`` is NOT here: its guarantee is positive
 # (certifies git credentials are scoped/limited), so its raw polarity already
-# matches the manifest (True = scoped = the certified state). Keyed on the
-# capability names from ``sandbox_mode.SANDBOX_CAPABILITY_*``.
-_SANDBOX_DENY_POLARITY_CAPS = frozenset(
-    {
-        "sandbox.write_files",
-        "sandbox.egress",
-    }
-)
+# matches the manifest (True = scoped = the certified state). Resolved lazily
+# from ``sandbox_mode.SANDBOX_CAPABILITY_*`` so this module never hard-codes
+# the capability-name literals (single source of truth is sandbox_mode) and
+# guardrail consumers that never build a sandbox manifest do not import
+# pipeline_engine's heavy package init.
+def _sandbox_deny_polarity_caps() -> frozenset[str]:
+    from modulo.core.pipeline_engine.sandbox_mode import (
+        SANDBOX_CAPABILITY_EGRESS,
+        SANDBOX_CAPABILITY_WRITE_FILES,
+    )
+
+    return frozenset({SANDBOX_CAPABILITY_WRITE_FILES, SANDBOX_CAPABILITY_EGRESS})
 
 
 def _add_sandbox_surface(registered: dict[str, bool | None], sandbox_caps: dict[str, bool | None]) -> None:
@@ -149,7 +153,7 @@ def _add_sandbox_surface(registered: dict[str, bool | None], sandbox_caps: dict[
     for capability, value in sandbox_caps.items():
         if value is None:
             registered[capability] = None
-        elif capability in _SANDBOX_DENY_POLARITY_CAPS:
+        elif capability in _sandbox_deny_polarity_caps():
             registered[capability] = not value
         else:
             registered[capability] = value
