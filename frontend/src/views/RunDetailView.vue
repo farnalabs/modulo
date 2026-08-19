@@ -1046,8 +1046,12 @@ function isGithubWorkItem(item: WorkItemRef): boolean {
 }
 
 function githubKindLabel(item: WorkItemRef): string {
-  const labels: Record<string, string> = { github: 'GitHub', github_pr: 'PR', github_issue: 'Issue' }
-  return labels[(item.kind || '').toLowerCase()] ?? 'GitHub'
+  const kind = (item.kind || '').toLowerCase()
+  const key =
+    kind === 'github' || kind === 'github_pr' || kind === 'github_issue'
+      ? `views.RunDetailView.work_item_kind_${kind}`
+      : 'views.RunDetailView.work_item_kind_github_default'
+  return t(key)
 }
 
 function githubRefId(item: WorkItemRef): string {
