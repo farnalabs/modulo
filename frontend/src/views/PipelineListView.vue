@@ -56,14 +56,14 @@
               <table class="w-full text-left text-sm">
                 <thead class="bg-muted/50 text-xs font-medium uppercase text-muted-foreground">
                   <tr>
-                    <th v-for="i in 6" :key="`th-${i}`" class="px-4 py-3">
+                    <th v-for="i in 7" :key="`th-${i}`" class="px-4 py-3">
                       <div class="h-4 w-16 bg-muted rounded" />
                     </th>
                   </tr>
                 </thead>
                 <tbody class="divide-y">
                   <tr v-for="i in 6" :key="`row-${i}`">
-                    <td v-for="j in 6" :key="`cell-${j}`" class="px-4 py-3">
+                    <td v-for="j in 7" :key="`cell-${j}`" class="px-4 py-3">
                       <div class="h-6 bg-muted rounded" :class="j === 1 ? 'w-3/4' : 'w-full'" />
                     </td>
                   </tr>
@@ -147,7 +147,7 @@
                       <button
                         class="flex w-full items-center gap-2 text-sm font-medium text-foreground text-left"
                         @click="toggleFolder((row.data as FolderItem).id)"
-                        :aria-expanded="expandedFolders.has((row.data as FolderItem).id)"
+                        :aria-expanded="isFolderExpanded((row.data as FolderItem).id)"
                         data-testid="pipeline-tree-folder-toggle"
                       >
                         <svg
@@ -160,7 +160,7 @@
                           stroke-width="2"
                           stroke-linecap="round"
                           stroke-linejoin="round"
-                          :class="{ 'rotate-90': expandedFolders.has((row.data as FolderItem).id) }"
+                          :class="{ 'rotate-90': isFolderExpanded((row.data as FolderItem).id) }"
                           class="transition-transform shrink-0"
                         >
                           <polyline points="9 18 15 12 9 6" />
@@ -229,104 +229,6 @@
 
       </main>
     </div>
-      <!-- Run dialog modal -->
-      <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
-        v-if="showRunDialog"
-        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-        @click.self="closeRunDialog"
-      >
-        <div class="bg-card border border-border rounded-xl shadow-xl w-full max-w-lg mx-4 p-6 space-y-4">
-          <div class="flex items-center justify-between">
-            <h2 class="text-base font-semibold text-foreground">{{ $t('views.PipelineListView.run_pipeline') }}</h2>
-            <button
-              class="text-muted-foreground hover:text-foreground transition-colors"
-              @click="closeRunDialog"
-              data-testid="pipeline-list-run-dialog-close"
-              aria-label="Close"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            </button>
-          </div>
-
-          <p class="text-sm text-muted-foreground">
-            Run <span class="font-medium text-foreground">{{ selectedPipeline?.name }}</span>
-          </p>
-
-          <div class="space-y-2">
-            <label for="pipelinelistview-field-3" class="block text-sm font-medium text-foreground">{{ $t('views.PipelineListView.prompt') }}</label>
-            <textarea id="pipelinelistview-field-3"
-              v-model="prompt"
-              placeholder="Enter a prompt (optional)"
-              rows="4"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary"
-              data-testid="pipeline-list-run-prompt"
-            />
-          </div>
-
-          <div>
-            <button
-              class="text-sm text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
-              @click="showAdvanced = !showAdvanced"
-              data-testid="pipeline-list-run-advanced-toggle"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                :class="{ 'rotate-180': showAdvanced }"
-                class="transition-transform"
-              ><polyline points="6 9 12 15 18 9"/></svg>
-              {{ $t('views.PipelineListView.advanced') }}
-            </button>
-          </div>
-
-          <div v-if="showAdvanced" class="space-y-2">
-            <label for="pipelinelistview-field-2" class="block text-sm font-medium text-foreground">{{ $t('views.PipelineListView.input_payload_json') }}</label>
-            <textarea id="pipelinelistview-field-2"
-              v-model="advancedPayload"
-              placeholder='{"prompt": "...", "temperature": 0.7}'
-              rows="4"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-primary"
-              data-testid="pipeline-list-run-advanced-payload"
-            />
-          </div>
-
-          <div v-if="runError" class="rounded-lg bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive" data-testid="pipeline-list-run-error">
-            {{ runError }}
-          </div>
-
-          <div v-if="emptyRunWarning" class="rounded-lg bg-warning/10 border border-warning/30 p-3 text-sm text-warning" data-testid="pipeline-list-run-empty-warning">
-            {{ emptyRunWarning }}
-          </div>
-
-          <div class="flex justify-end gap-2 pt-2">
-            <button
-              class="px-4 py-2 border border-input bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
-              @click="closeRunDialog"
-              data-testid="pipeline-list-run-cancel"
-            >
-              {{ $t('common.cancel') }}
-            </button>
-            <Button :disabled="running" class="border-primary/30" @click="triggerRun" data-testid="pipeline-list-run-submit">
-              <svg
-                v-if="running"
-                class="animate-spin h-4 w-4"
-                xmlns="http://www.w3.org/2000/svg"
-                fill="none"
-                viewBox="0 0 24 24"
-              >
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
-              {{ running ? $t('views.PipelineListView.running') : $t('views.PipelineListView.run_pipeline') }}
-            </Button>
-          </div>
-        </div>
-      </div>
 
       <!-- Move to Folder dialog -->
       <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
@@ -682,22 +584,6 @@ const renaming = ref(false)
 const showDeleteConfirm = ref(false)
 const deleteTarget = ref<PipelineItem | null>(null)
 const deleteError = ref<string | null>(null)
-const showRunDialog = ref(false)
-const selectedPipeline = ref<PipelineItem | null>(null)
-const prompt = ref('')
-const showAdvanced = ref(false)
-const advancedPayload = ref('')
-const running = ref(false)
-const runError = ref<string | null>(null)
-const confirmEmptyRun = ref(false)
-const emptyRunWarning = ref<string | null>(null)
-
-watch([prompt, advancedPayload, showAdvanced], () => {
-  if (confirmEmptyRun.value) {
-    confirmEmptyRun.value = false
-    emptyRunWarning.value = null
-  }
-})
 
 const search = ref('')
 
@@ -736,6 +622,10 @@ function toggleFolder(folderId: string) {
   persistExpandedFolders()
 }
 
+function isFolderExpanded(folderId: string): boolean {
+  return expandedFolders.value.has(folderId) || folderId === selectedFolderId.value
+}
+
 const pipelineFolderCount = computed(() => {
   const count = new Map<string, number>()
   for (const p of filteredPipelines.value) {
@@ -756,7 +646,7 @@ const treeRows = computed<TreeRow[]>(() => {
 
     rows.push({ type: 'folder', depth: 0, data: folder })
 
-    if (expandedFolders.value.has(folder.id) || folder.id === selectedFolderId.value) {
+    if (isFolderExpanded(folder.id)) {
       const folderPipelines = filteredPipelines.value
         .filter(p => p.folder_id === folder.id)
         .sort((a, b) => a.name.localeCompare(b.name))
@@ -916,61 +806,8 @@ async function handleDelete() {
   }
 }
 
-function closeRunDialog() {
-  showRunDialog.value = false
-  selectedPipeline.value = null
-  prompt.value = ''
-  runError.value = null
-  confirmEmptyRun.value = false
-  emptyRunWarning.value = null
-}
-
-async function triggerRun() {
-  if (!selectedPipeline.value) return
-  let inputPayload: Record<string, unknown>
-  if (showAdvanced.value && advancedPayload.value.trim()) {
-    try {
-      inputPayload = JSON.parse(advancedPayload.value)
-    } catch {
-      runError.value = t('views.PipelineListView.invalid_json_in_advanced_payload')
-      return
-    }
-  } else if (prompt.value.trim()) {
-    inputPayload = { prompt: prompt.value }
-  } else {
-    inputPayload = {}
-  }
-  if (Object.keys(inputPayload ?? {}).length === 0) {
-    if (!confirmEmptyRun.value) {
-      confirmEmptyRun.value = true
-      emptyRunWarning.value = 'No input provided \u2014 this pipeline will run with an empty input payload. Are you sure?'
-      return
-    }
-    emptyRunWarning.value = null
-  }
-  running.value = true
-  runError.value = null
-  try {
-    const { data } = await api.POST('/api/v1/runs', {
-      body: {
-        pipeline_id: selectedPipeline.value.id,
-        input_payload: inputPayload,
-      },
-    })
-    showRunDialog.value = false
-    if (data) router.push({ name: 'run-detail', params: { id: (data as any).id } })
-  } catch (e) {
-    runError.value = formatApiError(e)
-  } finally {
-    running.value = false
-  }
-}
-
 onMounted(async () => {
-  await loadPipelines()
   loadFolders()
   loadTotalCount()
-  loadTriggers()
-  loadLastRunDates()
 })
 </script>
