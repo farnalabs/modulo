@@ -12088,6 +12088,13 @@ export interface components {
             resource_limits?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Read Only
+             * @default false
+             */
+            read_only: boolean;
+            /** Git Credentials */
+            git_credentials?: ("scoped" | "unscoped" | "none") | null;
             /** Delivery Sentinel */
             delivery_sentinel?: string | null;
             /** Env Vars */
