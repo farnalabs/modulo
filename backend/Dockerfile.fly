@@ -7,6 +7,7 @@ ARG GIT_COMMIT_TIMESTAMP
 ARG GIT_COMMIT_MESSAGE
 ARG BUILD_TIMESTAMP
 ARG CI_JOB_URL
+ARG VITE_PRIMEUI_LICENSE
 
 # =============================================================================
 # Stage 1: Build frontend SPA
@@ -25,6 +26,8 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     fi
 
 COPY frontend/ ./
+ARG VITE_PRIMEUI_LICENSE
+ENV VITE_PRIMEUI_LICENSE=${VITE_PRIMEUI_LICENSE}
 RUN pnpm run build
 
 # =============================================================================

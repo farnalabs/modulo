@@ -337,6 +337,7 @@ jobs:
               --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" \
               --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" \
               --build-arg "GIT_COMMIT_MESSAGE=${{ steps.git.outputs.git-commit-message }}" \
+              --build-arg "VITE_PRIMEUI_LICENSE=${{ secrets.VITE_PRIMEUI_LICENSE }}" \
               --build-arg "BUILD_TIMESTAMP=${{ steps.git.outputs.build-timestamp }}"; then
               echo "Deploy succeeded on attempt $attempt"
               exit 0
@@ -719,6 +720,7 @@ jobs:
               --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" \
               --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" \
               --build-arg "GIT_COMMIT_MESSAGE=${{ steps.git.outputs.git-commit-message }}" \
+              --build-arg "VITE_PRIMEUI_LICENSE=${{ secrets.VITE_PRIMEUI_LICENSE }}" \
               --build-arg "BUILD_TIMESTAMP=${{ steps.git.outputs.build-timestamp }}"; then
               echo "Deploy succeeded on attempt $attempt"
               exit 0
