@@ -371,6 +371,16 @@ class RunNotFoundError(KeyError):
         self.run_id = run_id
 
 
+class SandboxCapacityExceededError(Exception):
+    """Raised when the org sandbox concurrency cap blocks a resume."""
+
+    def __init__(self, org_id: uuid.UUID) -> None:
+        self.org_id = org_id
+        super().__init__(
+            f"Sandbox concurrency limit reached for org {org_id}; gate left undecided. Retry when capacity frees up."
+        )
+
+
 async def _teardown_hub(hub: Any) -> None:
     """Await a hub's ``__aexit__`` shielded against cancellation.
 
@@ -1889,6 +1899,7 @@ class PipelineExecutor:
         org_id: uuid.UUID,
         resume_data: dict[str, Any],
         claim_token: str | None = None,
+        check_sandbox_capacity: bool = True,
     ) -> Run:
         """Resume a run that was interrupted for HITL review.
 
@@ -1904,6 +1915,33 @@ class PipelineExecutor:
             if run is None:
                 raise RunNotFoundError(run_id)
             await update_run_status(session, run_id, "running", claimed_by=_WORKER_ID)
+
+            # Atomic sandbox-capacity enforcement (FAR-1306 TOCTOU fix).
+            # The pre-check in the HITL route is a fast-fail optimisation;
+            # THIS is the real gate — serialised per-org via advisory lock so
+            # two concurrent approvals cannot both pass.
+            # Skipped for reject/terminate paths (check_sandbox_capacity=False)
+            # because those routes do not resume sandbox execution.
+            if check_sandbox_capacity and _graph_contains_sandbox_agent(
+                (
+                    await session.execute(
+                        select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == run.snapshot_id)
+                    )
+                ).scalar_one_or_none()
+            ):
+                cap = await get_sandbox_concurrency_limit(session, org_id)
+                if cap is not None:
+                    # pg_advisory_lock(key1, key2) — key1 = org hash, key2 = 0.
+                    # Blocks until the lock is free (serialises concurrent resumes
+                    # for the same org) and holds it until the transaction commits.
+                    lock_key = hash(str(org_id)) % (2**31)
+                    await session.execute(
+                        text("SELECT pg_advisory_lock(:lk)"),
+                        {"lk": lock_key},
+                    )
+                    active = await count_active_sandbox_runs_for_org(session, org_id, exclude_run_id=run_id)
+                    if active >= cap:
+                        raise SandboxCapacityExceededError(org_id)
 
             snapshot_result = await session.execute(
                 select(PipelineSnapshot).where(PipelineSnapshot.id == run.snapshot_id)
