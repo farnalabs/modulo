@@ -727,6 +727,30 @@ def _check_sandbox_policy_fields_only_on_sandbox_nodes(graph_json: dict[str, Any
             )
 
 
+def _check_sandbox_wallclock_budget(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
+    """Sandbox check 14: wallclock_budget_seconds must be a positive int (FAR-296 Phase 4a).
+
+    Routed through the SHARED ``_validate_sandbox_wallclock_budget_config`` helper
+    (the same one the Pydantic model and node runner use) so save-time and run-time
+    validation agree. A budget that cannot be compared to the wall clock is a hard
+    ERROR (fail-closed): a malformed budget would silently no-op the spend cap.
+    """
+    from modulo.core.pipeline_engine.sandbox_mode import _validate_sandbox_wallclock_budget_config
+
+    try:
+        _validate_sandbox_wallclock_budget_config(
+            node.get("wallclock_budget_seconds"),
+            node.get("timeout_seconds"),
+            nid,
+        )
+    except ValueError as exc:
+        result.error(
+            "SANDBOX_WALLCLOCK_BUDGET_INVALID",
+            f"Sandbox agent node '{nid}' wallclock_budget_seconds is invalid: {exc}",
+            node_id=nid,
+        )
+
+
 def _check_sandbox_loop_intercept(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
     """Sandbox check 8: loop_intercept config shape (FAR-211).
 
@@ -2176,6 +2200,7 @@ class GraphValidator:
             _check_sandbox_resource_limits(node, nid, result)
             _check_sandbox_read_only(node, nid, result)
             _check_sandbox_git_credentials(node, nid, result)
+            _check_sandbox_wallclock_budget(node, nid, result)
 
     # ------------------------------------------------------------------
     # Node idempotency
