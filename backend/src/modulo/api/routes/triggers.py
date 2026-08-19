@@ -202,7 +202,7 @@ def _encrypt_trigger_config_secrets(config: dict[str, Any] | None, fernet_key: s
     or masked placeholders). Existing encrypted values are left unchanged.
     """
     if not config:
-        return config
+        return {}
     result = dict(config)
     for key in _SECRET_CONFIG_KEYS:
         val = result.get(key)
@@ -833,7 +833,7 @@ async def create_trigger(
     req: TriggerCreate,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("trigger.create"),
-    settings: Settings = Depends(get_settings),  # type: ignore[assignment]
+    settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     """Create a new trigger for a pipeline."""
     try:
@@ -942,7 +942,7 @@ async def update_trigger(
     req: TriggerUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_TRIGGER_UPDATE),
-    settings: Settings = Depends(get_settings),  # type: ignore[assignment]
+    settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     """Update a trigger's general configuration."""
     try:
