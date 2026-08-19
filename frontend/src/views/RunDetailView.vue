@@ -68,16 +68,10 @@
         <div v-for="gate in pendingGates" :key="gate.gate_id" class="space-y-3">
           <div class="flex items-center gap-2 text-sm">
             <span class="font-medium">{{ $t('views.RunDetailView.gate_label') }}</span>
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger as-child>
-                  <code class="cursor-help select-all rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{{ gate.label || shortId(gate.gate_id) }}</code>
-                </TooltipTrigger>
-                <TooltipContent side="top" class="max-w-xs break-all">
-                  {{ gate.gate_id }}
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <code
+              v-tooltip.top="{ value: gate.gate_id, showDelay: 300 }"
+              class="cursor-help select-all rounded bg-muted px-1.5 py-0.5 font-mono text-xs"
+            >{{ gate.label || shortId(gate.gate_id) }}</code>
             <button
               data-testid="run-detail-copy-gate-id"
               :aria-label="$t('views.RunDetailView.copy_gate_id')"
