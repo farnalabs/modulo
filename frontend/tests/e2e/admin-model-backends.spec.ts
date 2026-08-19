@@ -47,8 +47,8 @@ test.describe('Admin Model Backends', { tag: "@regression" }, () => {
     await expect(page.locator('h1')).toContainText('Model Backends')
     if (env.name === 'local') {
       await expect(page.locator('text=GPT-4').first()).toBeVisible()
-      await expect(page.getByTestId('admin-model-backends-edit').first()).toBeVisible()
-      await expect(page.getByTestId('admin-model-backends-delete').first()).toBeVisible()
+      await expect(page.locator('table tbody').getByRole('button', { name: 'Edit' }).first()).toBeVisible()
+      await expect(page.locator('table tbody').getByRole('button', { name: 'Delete' }).first()).toBeVisible()
     }
   })
 })
