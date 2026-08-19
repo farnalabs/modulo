@@ -4,12 +4,17 @@ anomaly detection for script-mode sandbox_agent runs."""
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy.dialects import postgresql
 
+from modulo.core.pipeline_engine.error_codes import known_error_codes
 from modulo.core.rollback_thresholds import (
+    _SCRIPT_ANOMALY_ERROR_CODES,
+    _count_claim_without_marker,
     _graph_has_script_mode_node,
     _node_config_has_budget,
     evaluate_rollback_thresholds,
@@ -102,6 +107,21 @@ def _make_graph_with_timeout(*, mode: str = "script") -> dict[str, Any]:
 
 def _make_classification(*, value: str, work_intact: bool) -> dict[str, Any]:
     return {"value": value, "work_intact": work_intact}
+
+
+class _CapturingSession:
+    """Single-purpose session that records the statement it is given and
+    returns a count of 0, so the real claim_without_marker predicate can be
+    compiled back to SQL for round-trip verification."""
+
+    def __init__(self) -> None:
+        self.executed_statement: Any = None
+
+    async def execute(self, stmt: Any, *args: Any, **kwargs: Any) -> MagicMock:
+        self.executed_statement = stmt
+        result = MagicMock()
+        result.scalar_one.return_value = 0
+        return result
 
 
 class TestGraphNodeHelpers:
@@ -292,3 +312,37 @@ class TestEvaluateRollbackThresholds:
         result = await evaluate_rollback_thresholds(factory, min_runs=30)
         assert result["orgs_checked"] == 1
         assert result["anomalies_found"] == 0
+
+
+class TestClaimWithoutMarkerSQLPredicate:
+    @pytest.mark.asyncio
+    async def test_claim_without_marker_predicate_uses_script_budget_killed(self) -> None:
+        """Round-trips the real claim_without_marker SQL predicate.
+
+        Guards against review feedback (PR #1627) regressing the predicate into
+        a dead no-match trap: the compiled WHERE clause must reference the real
+        platform-side runtime-killer code ``script.budget_killed`` (not the
+        phantom ``timeout.kill`` that never matches any run).
+        """
+        session = _CapturingSession()
+        window_start = datetime.now(UTC) - timedelta(hours=24)
+
+        count = await _count_claim_without_marker(session, ORG, window_start)
+        assert count == 0
+
+        sql = str(
+            session.executed_statement.compile(
+                dialect=postgresql.dialect(),
+                compile_kwargs={"literal_binds": True},
+            )
+        )
+        assert "script.budget_killed" in sql
+        assert "script.side_effect_unknown" in sql
+        assert "timeout.kill" not in sql
+
+    def test_anomaly_codes_are_all_registered_error_codes(self) -> None:
+        """Every code in _SCRIPT_ANOMALY_ERROR_CODES resolves in the error-code
+        registry, so a phantom error code can never silently disable an
+        anomaly type again."""
+        known = known_error_codes()
+        assert known >= _SCRIPT_ANOMALY_ERROR_CODES

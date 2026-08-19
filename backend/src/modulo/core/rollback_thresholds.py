@@ -28,8 +28,12 @@ from modulo.db.models.run import TERMINAL_STATUSES, Run
 
 _log = logging.getLogger(__name__)
 
-# Script-mode error codes that indicate an anomalous outcome.
-_SCRIPT_ANOMALY_ERROR_CODES = frozenset({"script.side_effect_unknown", "timeout.kill"})
+# Script-mode error codes that indicate an anomalous outcome. Script-mode
+# sandboxes killed by the platform-side runtime killer surface as
+# ``script.budget_killed`` (see pipeline_engine/error_codes.py) — NOT a
+# phantom ``timeout.kill`` which would match nothing and silently disable the
+# claim_without_marker anomaly.
+_SCRIPT_ANOMALY_ERROR_CODES = frozenset({"script.side_effect_unknown", "script.budget_killed"})
 
 # Script-mode error code for unexpected side_effect_unknown.
 _SCRIPT_SIDE_EFFECT_UNKNOWN = "script.side_effect_unknown"
