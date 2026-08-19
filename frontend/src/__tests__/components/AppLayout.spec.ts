@@ -169,6 +169,79 @@ describe('AppLayout', () => {
     expect(bannerWrapper.classes()).not.toContain('absolute')
   })
 
+  describe('theme toggle — mutually-exclusive dark/light invariant (FAR-330)', () => {
+    beforeEach(() => {
+      // Boot state: <html> starts with class="dark" (dark by default, ADR 024).
+      document.documentElement.setAttribute('class', 'dark')
+    })
+
+    afterEach(() => {
+      document.documentElement.setAttribute('class', '')
+      document.documentElement.removeAttribute('style')
+    })
+
+    function findToggle(wrapper: ReturnType<typeof mount>) {
+      const toggle = wrapper.find('.toggle-switch input[type="checkbox"]')
+      expect(toggle.exists()).toBe(true)
+      return toggle
+    }
+
+    it('recovers from a corrupt both-classes-present state to a single valid mode', async () => {
+      // Simulate the state the old toggle()/toggle() implementation could
+      // produce (both `.dark` and `.light` present). The mutually-exclusive
+      // implementation must collapse this back to exactly one valid mode.
+      document.documentElement.setAttribute('class', 'dark light')
+
+      const wrapper = mount(AppLayout, {
+        global: {
+          plugins: [createPinia(), router],
+          stubs: { LogoMark: true },
+        },
+      })
+      await nextTick()
+      await nextTick()
+
+      // The checkbox reflects `isLight`; in the corrupt state both classes are
+      // present so it starts checked. Flip it to drive a real `change` that
+      // fires toggleTheme.
+      await findToggle(wrapper).setValue(false)
+      const classes = Array.from(document.documentElement.classList)
+      expect(classes).toContain('light')
+      expect(classes).not.toContain('dark')
+      expect(classes.filter(c => c === 'dark' || c === 'light')).toHaveLength(1)
+    })
+
+    it('toggles from dark to light, then back to dark, never holding both classes', async () => {
+      const wrapper = mount(AppLayout, {
+        global: {
+          plugins: [createPinia(), router],
+          stubs: { LogoMark: true },
+        },
+      })
+      await nextTick()
+      await nextTick()
+
+      expect(document.documentElement.classList.contains('dark')).toBe(true)
+      expect(document.documentElement.classList.contains('light')).toBe(false)
+
+      // First toggle: dark -> light (remove .dark, add .light).
+      await findToggle(wrapper).setValue(true)
+      expect(document.documentElement.classList.contains('light')).toBe(true)
+      expect(document.documentElement.classList.contains('dark')).toBe(false)
+
+      // Second toggle: light -> dark (remove .light, add .dark).
+      await findToggle(wrapper).setValue(false)
+      expect(document.documentElement.classList.contains('dark')).toBe(true)
+      expect(document.documentElement.classList.contains('light')).toBe(false)
+
+      // The both-classes-present invariant must never hold — the exact bug the
+      // old toggle()/toggle() implementation could produce.
+      const both = document.documentElement.classList.contains('light')
+        && document.documentElement.classList.contains('dark')
+      expect(both).toBe(false)
+    })
+  })
+
   it('does not render onboarding banner content when the store is inactive', async () => {
     const wrapper = mount(AppLayout, {
       global: {
