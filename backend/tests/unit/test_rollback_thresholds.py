@@ -150,7 +150,7 @@ class TestEvaluateRollbackThresholds:
         result = await evaluate_rollback_thresholds(factory, min_runs=30)
         assert result["orgs_checked"] == 0
         assert result["anomalies_found"] == 0
-        assert result["flagged_orgs"] == []
+        assert not result["flagged_orgs"]
 
     @pytest.mark.asyncio
     async def test_claim_without_marker_detected(self) -> None:
@@ -212,7 +212,7 @@ class TestEvaluateRollbackThresholds:
         result = await evaluate_rollback_thresholds(factory, min_runs=30)
         assert result["orgs_checked"] == 1
         assert result["anomalies_found"] == 0
-        assert result["flagged_orgs"] == []
+        assert not result["flagged_orgs"]
 
     @pytest.mark.asyncio
     async def test_never_raises_on_db_error(self) -> None:
@@ -226,7 +226,7 @@ class TestEvaluateRollbackThresholds:
         result = await evaluate_rollback_thresholds(factory, min_runs=30)
         assert result["orgs_checked"] == 0
         assert result["anomalies_found"] == 0
-        assert result["flagged_orgs"] == []
+        assert not result["flagged_orgs"]
 
     @pytest.mark.asyncio
     async def test_passes_org_ids_directly(self) -> None:
