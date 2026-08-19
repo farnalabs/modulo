@@ -31,8 +31,7 @@
           </span>
           <span
             v-else-if="deltaAbs != null && noBaselineLabel"
-            class="inline-flex items-center gap-0.5 text-xs font-medium"
-            :class="deltaAbsClass"
+            class="inline-flex items-center gap-0.5 text-xs font-medium text-muted-foreground"
             data-testid="stat-no-baseline"
             role="img"
             :aria-label="noBaselineLabel"
@@ -107,9 +106,9 @@ const deltaAbsText = computed(() => {
   return `${sign}${formatted}`;
 });
 
-function arrowFor(delta: number, inverted: boolean): string {
-  if (delta > 0) return inverted ? '▼' : '▲'
-  if (delta < 0) return inverted ? '▲' : '▼'
+function arrowFor(delta: number): string {
+  if (delta > 0) return '▲'
+  if (delta < 0) return '▼'
   return '→'
 }
 
@@ -122,23 +121,17 @@ function classFor(delta: number, inverted: boolean): string {
 const deltaArrow = computed(() => {
   const d = deltaPct.value;
   if (d == null) return "";
-  return arrowFor(d, props.inverted ?? false);
+  return arrowFor(d);
 });
 
 const deltaAbsArrow = computed(() => {
   const d = deltaAbs.value;
   if (d == null) return "";
-  return arrowFor(d, props.inverted ?? false);
+  return arrowFor(d);
 });
 
 const deltaClass = computed(() => {
   const d = deltaPct.value;
-  if (d == null) return "";
-  return classFor(d, props.inverted ?? false);
-});
-
-const deltaAbsClass = computed(() => {
-  const d = deltaAbs.value;
   if (d == null) return "";
   return classFor(d, props.inverted ?? false);
 });
