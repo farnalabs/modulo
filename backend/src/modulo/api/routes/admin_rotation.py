@@ -17,7 +17,7 @@ from modulo.api.dependencies import (
     get_db_session,
     get_or_create_engine,
     get_or_create_session_factory,
-    require_permission,
+    require_system_permission,
 )
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_logger import append_audit_event
@@ -75,7 +75,7 @@ def _validate_fernet_key(key: str, label: str) -> None:
 @handle_db_errors("admin.rotation.rotate_key")
 async def rotate_key(
     req: RotateKeyRequest,
-    current_user: TenantPrincipal = require_permission("admin.rotation.manage"),
+    current_user: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> RotateKeyResponse:
@@ -85,12 +85,6 @@ async def rotate_key(
     The old key stays valid for reads until rotation completes (no-downtime).
     """
     try:
-        if current_user.org_role != "admin":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only admin users can rotate keys",
-            )
-
         _validate_fernet_key(req.new_fernet_key, "new_fernet_key")
 
         old_key = req.old_fernet_key or settings.fernet_key
@@ -166,16 +160,10 @@ async def rotate_key(
 @router.get("/status", response_model=RotationStatusResponse)
 @handle_db_errors("admin.rotation.rotation_status")
 async def rotation_status(
-    current_user: TenantPrincipal = require_permission("admin.rotation.manage"),
+    current_user: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
 ) -> RotationStatusResponse:
     """Return the current rotation state."""
     try:
-        if current_user.org_role != "admin":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only admin users can view rotation status",
-            )
-
         return RotationStatusResponse(
             rotation_in_progress=_rotation_in_progress,
             last_rotation_result=_last_rotation_result,

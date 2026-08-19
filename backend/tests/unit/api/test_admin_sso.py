@@ -398,7 +398,10 @@ class TestOidcConnection:
         from modulo.api.routes.admin_sso import _test_oidc_connection
 
         provider = _make_mock_provider()
-        with patch("httpx.AsyncClient.get", new=AsyncMock(side_effect=Exception("Connection refused"))):
+        with (
+            patch("httpx.AsyncClient.get", new=AsyncMock(side_effect=Exception("Connection refused"))),
+            patch("modulo.api.routes.admin_sso.validate_outbound_url"),
+        ):
             result = await _test_oidc_connection(provider)
             assert result.success is False
 
@@ -415,7 +418,10 @@ class TestOidcConnection:
                 "token_endpoint": "https://example.com/token",
             }
         )
-        with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=mock_resp)):
+        with (
+            patch("httpx.AsyncClient.get", new=AsyncMock(return_value=mock_resp)),
+            patch("modulo.api.routes.admin_sso.validate_outbound_url"),
+        ):
             result = await _test_oidc_connection(provider)
             assert result.success is True
             assert result.provider_info is not None

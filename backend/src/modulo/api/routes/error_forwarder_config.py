@@ -26,6 +26,7 @@ from modulo.api.models.error_forwarder_config import (
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.error_tracking.forwarders import BaseForwarder, get_forwarder
+from modulo.core.ssrf import validate_outbound_url
 from modulo.db.models.error_event import ErrorEvent
 from modulo.db.models.error_forwarder_config import ErrorForwarderConfig
 from modulo.db.models.error_group import ErrorGroup
@@ -104,6 +105,29 @@ def validate_forwarder_config(forwarder_type: str, config: dict[str, Any] | None
             expected_name = getattr(expected_type, "__name__", str(expected_type))
             errors.append(f"config key '{key}' must be a {expected_name}")
     return errors
+
+
+def _validate_forwarder_urls(forwarder_type: str, config: dict[str, Any]) -> None:
+    """Validate outbound URLs in forwarder config to prevent SSRF."""
+    url_keys = {
+        "loki": ["push_url"],
+        "sentry": [],
+        "datadog": [],
+        "pagerduty": [],
+        "rollbar": [],
+        "opsgenie": [],
+    }
+    keys_to_check = url_keys.get(forwarder_type, [])
+    for key in keys_to_check:
+        url_value = config.get(key)
+        if isinstance(url_value, str) and url_value:
+            try:
+                validate_outbound_url(url_value)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=f"SSRF check failed for {key}: {exc}",
+                ) from exc
 
 
 def _is_configured(forwarder_type: str, config_json: dict[str, Any] | None) -> bool:
@@ -275,7 +299,7 @@ async def test_forwarder(
     forwarder_type: str,
     req: TestConnectionRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission(_CODE_ERROR_FORWARDER_MANAGE),
 ) -> ForwarderTestResult:
     org_id = principal.organisation_id
     if org_id is None:
@@ -325,6 +349,9 @@ async def test_forwarder(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
             ) from exc
+
+    # SSRF guard: validate outbound URL before forward()
+    _validate_forwarder_urls(forwarder_type, config)
 
     test_group = ErrorGroup(
         organisation_id=org_id,

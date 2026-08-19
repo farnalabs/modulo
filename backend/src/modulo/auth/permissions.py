@@ -159,6 +159,8 @@ PERMISSIONS: dict[str, str] = {
     # require_system_permission ignores the org hierarchy entirely)
     "system.config.manage": "admin",
     "system.org.manage": "admin",
+    "system.rotation.manage": "admin",
+    "system.license.manage": "admin",
     # admin / secondary routes
     "cost.manage": "admin",
     "sso.manage": "admin",

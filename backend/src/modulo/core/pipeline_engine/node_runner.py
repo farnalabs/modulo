@@ -2534,8 +2534,9 @@ def make_sandbox_agent_fn(
 
             The org vault (per-org encrypted secrets table) is consulted first
             so pipelines resolve against the tenant's stored secrets and honour
-            rotation on every run. Falls back to the process environment when
-            the key is not in the vault.
+            rotation on every run. Returns None if the key is not in the vault
+            (does NOT fall back to the process environment to prevent secret
+            exfiltration via pipeline references).
             """
             if session_factory is not None:
                 org_uuid: uuid.UUID | None = None
@@ -2556,11 +2557,10 @@ def make_sandbox_agent_fn(
                             backend = create_secrets_backend(fernet_key=get_settings().fernet_key, session=session)
                             return await backend.get_secret(secret_key)
                     except KeyError:
-                        pass  # not in vault -> fall back
+                        pass  # not in vault -> return None
                     except Exception:
                         _log.exception("env_var.secret_resolve_error", extra={"secret_key": secret_key})
-            # Fall back to process environment.
-            return os.environ.get(secret_key)
+            return None
 
         # FAR-296 mode split: llm mode renders the prompt + agent_command through
         # the SandboxedEnvironment; script mode runs script_command VERBATIM —
@@ -3824,8 +3824,8 @@ def make_sandbox_agent_fn(
             agent_stderr_raw: str = getattr(cmd_result, "stderr", "") or ""
             _stdout_len = len(agent_stdout_raw)
             _stderr_len = len(agent_stderr_raw)
-            agent_stdout = agent_stdout_raw[:_MAX_ARTIFACT_LOG]
-            agent_stderr = agent_stderr_raw[:_MAX_ARTIFACT_LOG]
+            agent_stdout = _redact_raw_output(agent_stdout_raw[:_MAX_ARTIFACT_LOG])
+            agent_stderr = _redact_raw_output(agent_stderr_raw[:_MAX_ARTIFACT_LOG])
 
             # A timed-out command leaves ``cmd_result`` as None: the run timed
             # out (1800s node timeout) with COMPLETELY EMPTY stdout/stderr and
