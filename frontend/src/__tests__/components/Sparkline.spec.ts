@@ -112,6 +112,73 @@ describe('Sparkline', () => {
     expect(wrapper.find('[data-testid="sparkline-tooltip"]').exists()).toBe(false)
   })
 
+  it('renders y-axis labels when showYAxis is enabled and omits them otherwise', () => {
+    const withAxis = mount(Sparkline, { props: { data: [1, 4, 2, 8], showYAxis: true } })
+    const labels = withAxis.findAll('.sparkline-y-label')
+    expect(labels).toHaveLength(3) // default tickCount
+    // Label text spans min..max from the tick value computation.
+    const texts = labels.map(l => l.text()).sort()
+    expect(texts).toEqual(['1', '4.5', '8'])
+    // Labels must sit inside the plot area (2..58 for a 60-tall viewBox).
+    const ys = labels.map(l => Number(l.attributes('y')))
+    ys.forEach(y => {
+      expect(y).toBeGreaterThanOrEqual(2)
+      expect(y).toBeLessThanOrEqual(58)
+    })
+
+    const withoutAxis = mount(Sparkline, { props: { data: [1, 4, 2, 8] } })
+    expect(withoutAxis.findAll('.sparkline-y-label')).toHaveLength(0)
+  })
+
+  it('honours the tickCount floor of 2 y-axis labels', () => {
+    const wrapper = mount(Sparkline, {
+      props: { data: [1, 4, 2, 8], showYAxis: true, tickCount: 0 },
+    })
+    expect(wrapper.findAll('.sparkline-y-label')).toHaveLength(2)
+  })
+
+  it('renders x-axis tick marks when showXTicks is enabled and omits them otherwise', () => {
+    const withTicks = mount(Sparkline, { props: { data: [1, 4, 2, 8], showXTicks: true } })
+    const ticks = withTicks.findAll('line.sparkline-x-tick')
+    expect(ticks).toHaveLength(4) // <= 8 points render a tick at every index
+    ticks.forEach(t => {
+      const y2 = Number(t.attributes('y2'))
+      const y1 = Number(t.attributes('y1'))
+      // Ticks must stay fully inside the viewBox (not clipped at the bottom edge).
+      expect(y1).toBeLessThanOrEqual(60)
+      expect(y2).toBeGreaterThanOrEqual(0)
+      expect(y2).toBeLessThanOrEqual(60)
+    })
+
+    const withoutTicks = mount(Sparkline, { props: { data: [1, 4, 2, 8] } })
+    expect(withoutTicks.findAll('line.sparkline-x-tick')).toHaveLength(0)
+  })
+
+  it('decimates x-axis ticks for more than 8 data points', () => {
+    const data = Array.from({ length: 30 }, (_, i) => i + 1)
+    const wrapper = mount(Sparkline, { props: { data, showXTicks: true, width: 200 } })
+    // everyN = ceil(30 / 8) = 4 -> indices 0,4,8,12,16,20,24,28 plus the final index 29.
+    expect(wrapper.findAll('line.sparkline-x-tick')).toHaveLength(9)
+  })
+
+  it('resolves the correct hovered data point when showYAxis is enabled', async () => {
+    const data = Array.from({ length: 30 }, (_, i) => i + 1)
+    const labels = data.map((_, i) => `day${i}`)
+    const wrapper = mount(Sparkline, {
+      props: { data, labels, width: 200, unit: 'runs', showYAxis: true },
+    })
+    // With showYAxis the plot starts at adjustedPadding (42) instead of padding (2)
+    // and spans adjustedWidth (240) instead of width (200). Hovering the exact
+    // viewBox x of the first point must resolve to index 0 (it resolves to ~6 in
+    // the pre-fix mapping, which used padding/width).
+    await movePointer(wrapper, 42, 10)
+    expect(wrapper.find('[data-testid="sparkline-tooltip"]').text()).toContain('day0')
+    // And the last point (clamped to adjustedWidth - padding = 238) must resolve
+    // to the final index.
+    await movePointer(wrapper, 238, 10)
+    expect(wrapper.find('[data-testid="sparkline-tooltip"]').text()).toContain('day29')
+  })
+
   it('does not show a tooltip when there is no data', async () => {
     const wrapper = mount(Sparkline, { props: { data: [] } })
     await movePointer(wrapper, 100, 10)

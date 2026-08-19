@@ -35,7 +35,7 @@
             v-for="(val, ti) in yTickValues"
             :key="'ytick-' + ti"
             x="0"
-            :y="yForAxis(val)"
+            :y="yFor(val)"
             font-size="9"
             :fill="color"
             fill-opacity="0.6"
@@ -48,10 +48,11 @@
           <line
             v-for="ti in xTickIndices"
             :key="'xtick-' + ti"
-            :x1="xForAxis(ti)"
+            class="sparkline-x-tick"
+            :x1="xFor(ti)"
             :y1="height - padding"
-            :x2="xForAxis(ti)"
-            :y2="height - padding + 2"
+            :x2="xFor(ti)"
+            :y2="height - padding - 2"
             :stroke="color"
             stroke-opacity="0.3"
             stroke-width="1"
@@ -218,20 +219,6 @@ const adjustedWidth = computed(() => props.width + yAxisLabelWidth.value);
 
 const adjustedPadding = computed(() => padding + yAxisLabelWidth.value);
 
-function xForAxis(i: number): number {
-  return clamp(adjustedPadding.value + i * stepX.value, adjustedPadding.value, adjustedWidth.value - padding);
-}
-
-function yForAxis(v: number): number {
-  const span = props.height - padding * 2;
-  const ratio = range.value > 0 ? (v - min.value) / range.value : 0.5;
-  return clamp(
-    props.height - padding - ratio * span,
-    padding,
-    props.height - padding,
-  );
-}
-
 const yTickValues = computed(() => {
   if (!props.showYAxis || !hasData.value) return [];
   const n = Math.max(2, props.tickCount);
@@ -261,11 +248,11 @@ function onPointerMove(e: PointerEvent): void {
   const rect = el.getBoundingClientRect();
   // jsdom reports 0-sized rects; fall back to the viewBox width so the nearest
   // index still resolves in unit tests.
-  const denom = rect.width || props.width;
+  const denom = rect.width || adjustedWidth.value;
   const x = clamp(e.clientX - rect.left, 0, denom);
-  const viewboxX = (x / denom) * props.width;
+  const viewboxX = (x / denom) * adjustedWidth.value;
   const idx = clamp(
-    Math.round((viewboxX - padding) / stepX.value),
+    Math.round((viewboxX - adjustedPadding.value) / stepX.value),
     0,
     chartData.value.length - 1,
   );
