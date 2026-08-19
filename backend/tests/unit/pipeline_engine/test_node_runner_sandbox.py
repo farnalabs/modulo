@@ -1663,20 +1663,22 @@ async def test_watch_log_growth_keeps_silent_strict_run_alive_end_to_end():
     cmd_result.stdout = ""
     cmd_result.stderr = ""
 
-    # The command stays "running" for 5 tick slices (each ~0.03s) before
-    # completing on the 6th. The stall window (0.5s) is kept an order of
+    # The command stays "running" for 20 tick slices (each ~0.03s) before
+    # completing on the 21st, so the run lasts ~0.6s in total. That EXCEEDS
+    # the 0.5s stall window: without the log-growth detector the idle watchdog
+    # fires mid-run and this test fails in every environment, not just a loaded
+    # one. With the detector the log-growth touch on every tick keeps the run
+    # alive to completion. The stall window (0.5s) is still kept an order of
     # magnitude wider than the tick interval so a loaded event loop can never
     # stretch a single tick past it and trip the idle watchdog spuriously (the
-    # original 0.1s window flaked under suite load); the log-growth touch on
-    # every tick is what keeps the run alive to completion. The no-detector
-    # stall case is proven separately by
-    # test_heartbeat_off_no_detector_stalls_end_to_end.
+    # original 0.1s window flaked under suite load). The no-detector stall case
+    # is proven separately by test_heartbeat_off_no_detector_stalls_end_to_end.
     wait_calls = {"n": 0}
 
     async def _wait():
         wait_calls["n"] += 1
         await asyncio.sleep(0.03)
-        if wait_calls["n"] < 6:
+        if wait_calls["n"] < 21:
             raise TimeoutError
         return cmd_result
 
