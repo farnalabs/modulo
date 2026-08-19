@@ -25,7 +25,9 @@ async function main() {
   const pinia = createPinia()
   app.use(pinia)
   app.use(i18n)
+  const primeuiLicense = import.meta.env.VITE_PRIMEUI_LICENSE as string | undefined
   app.use(PrimeVue, {
+    ...(primeuiLicense ? { license: primeuiLicense } : {}),
     theme: {
       preset: Aura,
       options: {
