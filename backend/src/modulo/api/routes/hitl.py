@@ -35,7 +35,11 @@ from modulo.core.hitl_manager import (
     NotTeamMemberError,
 )
 from modulo.core.notifier import Notifier
-from modulo.core.pipeline_engine.executor import PipelineExecutor, org_sandbox_capacity_free
+from modulo.core.pipeline_engine.executor import (
+    PipelineExecutor,
+    SandboxCapacityExceededError,
+    org_sandbox_capacity_free,
+)
 from modulo.db.crud.run import get_run, update_run_status
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline import Pipeline
@@ -308,6 +312,8 @@ async def approve_gate(
             org_id=principal.organisation_id,
             resume_data=resume_data,
         )
+    except SandboxCapacityExceededError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("hitl.approve_gate.resume_failed")
         raise HTTPException(
@@ -402,6 +408,8 @@ async def approve_gate_with_modification(
             org_id=principal.organisation_id,
             resume_data=resume_data,
         )
+    except SandboxCapacityExceededError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("hitl.approve_with_modification.resume_failed")
         raise HTTPException(
@@ -489,6 +497,7 @@ async def reject_gate(
             run_id=run_id,
             org_id=principal.organisation_id,
             resume_data=resume_data,
+            check_sandbox_capacity=False,
         )
     except Exception as exc:
         logger.exception("hitl.reject_gate.resume_failed")
@@ -585,6 +594,8 @@ async def deliver_manual_output(
             org_id=principal.organisation_id,
             resume_data=resume_data,
         )
+    except SandboxCapacityExceededError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("hitl.deliver_manual_output.resume_failed")
         raise HTTPException(
@@ -670,6 +681,8 @@ async def submit_manual_output(
             org_id=principal.organisation_id,
             resume_data=resume_data,
         )
+    except SandboxCapacityExceededError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("hitl.submit_manual_output.resume_failed")
         raise HTTPException(
