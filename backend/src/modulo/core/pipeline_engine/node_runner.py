@@ -4314,31 +4314,14 @@ async def _sandbox_agent_impl(
                     "delivery_done": True,
                 }
                 try:
-                    # Shield + uncancel: awaiting a DB write inside a caught
-                    # CancelledError must not be re-cancelled or mis-attributed
-                    # to the persist's own timeout bookkeeping. Bounded and
-                    # fail-open — the re-raise below must not be delayed.
-                    try:
-                        asyncio.get_running_loop()
-                    except RuntimeError:
-                        _persist_task = None
-                    else:
-                        _persist_task = asyncio.create_task(
-                            _persist_raw_output_marker(
-                                session_factory,
-                                run_id=run_id,
-                                org_id_raw=org_id,
-                                node_id=node_id,
-                                attempt_key=attempt_key,
-                                marker=_cancel_marker,
-                            )
-                        )
-                    if _persist_task is not None:
-                        await asyncio.wait_for(
-                            asyncio.shield(_persist_task),
-                            timeout=_IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT,
-                        )
-                        _uncancel_current_task()
+                    await _sandbox_cancel_retention_persist(
+                        session_factory=session_factory,
+                        run_id=run_id,
+                        org_id=org_id,
+                        node_id=node_id,
+                        attempt_key=attempt_key,
+                        marker=_cancel_marker,
+                    )
                 except asyncio.CancelledError:
                     _uncancel_current_task()
                 except Exception:
@@ -4470,6 +4453,43 @@ async def _sandbox_agent_impl(
                     "sandbox_agent.dispatch_marker_clear_failed",
                     extra={"node_id": node_id, "run_id": run_id},
                 )
+
+
+async def _sandbox_cancel_retention_persist(
+    *,
+    session_factory: Callable[..., Any] | None,
+    run_id: str,
+    org_id: str,
+    node_id: str,
+    attempt_key: str | None,
+    marker: dict[str, Any],
+) -> None:
+    """Best-effort persist of a cancellation-retention marker (FAR-228).
+
+    Runs inside a caught ``asyncio.CancelledError``. Shield + uncancel: awaiting
+    a DB write inside a caught CancelledError must not be re-cancelled or
+    mis-attributed to the persist's own timeout bookkeeping. Bounded and
+    fail-open — the caller's re-raise must not be delayed.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    _persist_task = asyncio.create_task(
+        _persist_raw_output_marker(
+            session_factory,
+            run_id=run_id,
+            org_id_raw=org_id,
+            node_id=node_id,
+            attempt_key=attempt_key,
+            marker=marker,
+        )
+    )
+    await asyncio.wait_for(
+        asyncio.shield(_persist_task),
+        timeout=_IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT,
+    )
+    _uncancel_current_task()
 
 
 def make_sandbox_agent_fn(
