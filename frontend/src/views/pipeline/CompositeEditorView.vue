@@ -15,6 +15,7 @@
         <h2 class="text-sm font-semibold">{{ compositeName }}</h2>
         <span class="mx-2 h-4 w-px bg-border" />
         <button
+          v-if="canManage"
           class="rounded-md bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-500"
           @click="showSaveAsComposite = true"
         >
@@ -24,6 +25,7 @@
           {{ showPortPanel ? 'Hide Ports' : 'Ports' }}
         </Button>
         <button
+          v-if="canManage"
           class="rounded-md bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-500"
           @click="showPublishFlow = true"
         >
@@ -147,12 +149,20 @@ import PortDefinitionPanel from '../../components/pipeline/composite/PortDefinit
 import PublishCompositeFlow from '../../components/pipeline/composite/PublishCompositeFlow.vue'
 import type { ParameterPort } from '../../types/pipeline'
 import { formatApiError } from '../../lib/api/formatError'
-import { api } from '../../lib/api/client'
+import { api, getAccessToken } from '../../lib/api/client'
+import { decodeJwtPayload } from '../../lib/jwt'
 import Button from 'primevue/button'
 
 const route = useRoute()
 const router = useRouter()
 const compositeId = route.params.id as string
+
+// composite-template create/update/publish require pipeline.create/update
+// (operator); hide the write controls from viewers/runners (SECURITY #1461).
+const canManage = computed(() => {
+  const role = (decodeJwtPayload(getAccessToken()) as Record<string, unknown> | null)?.org_role as string | undefined
+  return role === 'operator' || role === 'admin'
+})
 
 const compositeName = ref('')
 const flowNodes = ref<any[]>([])
