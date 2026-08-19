@@ -57,13 +57,16 @@ from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from contextlib import suppress
 from contextvars import ContextVar
 from functools import partial
-from typing import Any, TypeGuard
+from typing import TYPE_CHECKING, Any, TypeGuard
 
 import jinja2
 import jmespath
 from jinja2.sandbox import SandboxedEnvironment
 from langchain_core.messages import HumanMessage
 from langgraph.types import interrupt
+
+if TYPE_CHECKING:
+    from e2b import AsyncSandbox  # type: ignore[import-untyped]
 
 from modulo.core.cost_controller.breakdown.constants import (
     MAX_REPORTABLE_BAND_USD,
@@ -2648,6 +2651,381 @@ async def _sandbox_clear_dispatch_marker(
         )
 
 
+class _SandboxWatchdog:
+    """Per-run sandbox watchdog + live-streaming state (FAR-310 chunk 2b-2)."""
+
+    def __init__(
+        self,
+        *,
+        sandbox: "AsyncSandbox | None",
+        stall: _StallDetector,
+        node_id: str,
+        run_id: str,
+        watch_log_path: str | None,
+        watch_globs: list[str],
+        resource_limits: dict[str, Any] | None,
+        sandbox_mode: str,
+        stdout_percentage_delta: float | None,
+        stream_broker: RunEventBroker | None,
+        stream_enabled: bool,
+        drained_chunks: list[str],
+    ) -> None:
+        if sandbox is None:
+            raise RuntimeError("Sandbox was not created before use")
+        self._sandbox = sandbox
+        self._stall = stall
+        self._node_id = node_id
+        self._run_id = run_id
+        self._watch_log_path = watch_log_path
+        self._watch_globs = watch_globs
+        self._resource_limits = resource_limits
+        self._sandbox_mode = sandbox_mode
+        self._stdout_ratio = stdout_percentage_delta
+        self._stream_broker = stream_broker
+        self._stream_enabled = stream_enabled
+        self._drained_chunks = drained_chunks
+        self._activity: dict[str, Any] = {"last": time.monotonic()}
+        self._stdout_prev: str | None = None
+        self._drain_offset = 0
+        self._drained_len = 0
+        self._watch_log_prev_size: int | None = None
+        self._fs_state: dict[str, tuple[Any, int]] = {}
+        self._fs_last_stat = 0.0
+        self._fs_min_stat_interval = 2.0
+        self._budget_killed = False
+        self._budget_check_ticks = 0
+
+    @property
+    def budget_killed(self) -> bool:
+        return self._budget_killed
+
+    def stream_chunk(self, chunk: str, stream: str) -> None:
+        broker = self._stream_broker
+        if not self._stream_enabled or not isinstance(broker, RunEventBroker):
+            return
+        now = time.monotonic()
+        buf_key = f"{stream}_buf"
+        buf = self._activity.setdefault(buf_key, [])
+        if chunk:
+            buf.append(chunk)
+        if not buf:
+            return
+        if now - self._activity.get("last_stream_ts", 0.0) < _STREAM_FLUSH_INTERVAL:
+            return
+        payload: dict[str, Any] = {
+            "node_id": self._node_id,
+            "chunk": _redact_raw_output("".join(buf)),
+            "ts": int(now * 1000),
+        }
+        buf.clear()
+        self._activity["last_stream_ts"] = now
+        try:
+            event = broker.publish(
+                "node.stdout_chunk" if stream == "stdout" else "node.stderr_chunk",
+                payload,
+            )
+            payload["seq"] = event.seq
+        except RuntimeError:
+            # Broker already closed (run finalised) — stop streaming.
+            return
+        except Exception:
+            _log.exception(
+                "sandbox_agent.stream_publish_failed",
+                extra={"node_id": self._node_id, "run_id": self._run_id},
+            )
+
+    def touch_stdout(self, chunk: str) -> None:
+        if self._stdout_ratio is None:
+            return
+        prev = self._stdout_prev
+        self._stdout_prev = chunk
+        if prev is None or _delta_ratio(prev, chunk) > self._stdout_ratio:
+            self._stall.touch("stdout")
+
+    async def on_stdout(self, chunk: str) -> None:
+        self._stall.touch("heartbeat")
+        self.touch_stdout(chunk)
+        self.stream_chunk(chunk, "stdout")
+
+    async def on_stderr(self, chunk: str) -> None:
+        self._stall.touch("heartbeat")
+        self.stream_chunk(chunk, "stderr")
+
+    async def drain_sandbox_log(self) -> None:
+        # Probe failed (log file not created yet, sandbox connection
+        # unresponsive). Do NOT refresh liveness — the idle watchdog
+        # treats a prolonged probe failure as a genuine stall.
+        try:
+            info = await asyncio.wait_for(
+                self._sandbox.files.get_info(_SANDBOX_LOG_PATH),
+                timeout=_SANDBOX_TAIL_READ_TIMEOUT,
+            )
+            # Heartbeat channel: a successful get_info proves the
+            # sandbox connection is responsive. When enable_heartbeat
+            # is False (strict mode) this touch is a no-op because the
+            # channel is not enabled (FAR-306).
+            self._stall.touch("heartbeat")
+            size = int(getattr(info, "size", 0) or 0)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.info(
+                "sandbox_agent.log_drain_probe_failed",
+                extra={"node_id": self._node_id},
+            )
+            return
+        if size <= self._drain_offset:
+            return
+        try:
+            content = await asyncio.wait_for(
+                self._sandbox.files.read(_SANDBOX_LOG_PATH, format="text"),
+                timeout=_SANDBOX_TAIL_READ_TIMEOUT,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception(
+                "sandbox_agent.log_drain_failed",
+                extra={"node_id": self._node_id},
+            )
+            return
+        text = content if isinstance(content, str) else bytes(content).decode("utf-8", "replace")
+        # Capture the pre-truncation content length BEFORE the window
+        # bound below: ``full_len`` is the authoritative absolute end
+        # of the file as READ this tick. The probe ``size`` (get_info)
+        # is taken before the read and can lag it when the agent
+        # appends between probe and read.
+        full_len = len(text)
+        # D3 trailing-window bound: the E2B files API has no range
+        # read, so the full log was transferred again above. Only the
+        # last _MAX_DRAIN_WINDOW bytes are retained/processed —
+        # bounded per-tick memory and slicing on a multi-MB log.
+        # ``full_len`` (what the read actually returned) is the
+        # authoritative absolute file length; ``window_start`` is the
+        # absolute offset the retained slice begins at, and the
+        # new-bytes slice is computed against it, so truncation never
+        # loses or double-emits (the emitted chunk is always a
+        # suffix). Deriving ``window_start`` from the STALE probe
+        # ``size`` instead of ``full_len`` shifts the retained slice
+        # left and permanently drops the first (full_len - size)
+        # bytes of new in-window content.
+        if len(text) > _MAX_DRAIN_WINDOW:
+            text = text[-_MAX_DRAIN_WINDOW:]
+        window_start = max(full_len - len(text), 0)
+        emit_start = max(self._drain_offset, window_start)
+        new = text[emit_start - window_start :] if emit_start < full_len else ""
+        if new:
+            self._drained_chunks.append(new)
+            self._drained_len += len(new)
+            self.stream_chunk(new, "stdout")
+            # Actual agent-log growth is real progress: refresh the
+            # output channel (always active, the strict-mode signal),
+            # the heartbeat (when enabled), and feed the stdout-delta
+            # detector (FAR-306).
+            self._stall.touch("output")
+            self._stall.touch("heartbeat")
+            self.touch_stdout(new)
+            # Bound retained memory to the drain window: drop the
+            # oldest chunks once the accumulated log exceeds it.
+            while self._drained_len > _MAX_DRAIN_WINDOW and len(self._drained_chunks) > 1:
+                dropped = self._drained_chunks.pop(0)
+                self._drained_len -= len(dropped)
+            if self._drained_len > _MAX_DRAIN_WINDOW and self._drained_chunks:
+                self._drained_chunks[0] = self._drained_chunks[0][-_MAX_DRAIN_WINDOW:]
+                self._drained_len = len(self._drained_chunks[0])
+        # Self-correcting drain offset: ``full_len`` (what this tick's
+        # read returned) can exceed the STALE probe ``size`` when the
+        # agent appends between probe and read. Advancing to the max
+        # keeps the no-double-emit invariant — the next tick starts
+        # where THIS tick's emitted bytes actually ended, not where
+        # the probe saw the file.
+        self._drain_offset = max(self._drain_offset, full_len)
+
+    async def probe_log_growth(self) -> None:
+        try:
+            info = await asyncio.wait_for(
+                self._sandbox.files.get_info(self._watch_log_path),
+                timeout=_SANDBOX_TAIL_READ_TIMEOUT,
+            )
+            size = int(getattr(info, "size", 0) or 0)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.info(
+                "sandbox_agent.watch_log_probe_failed",
+                extra={"node_id": self._node_id, "path": self._watch_log_path},
+            )
+            return
+        if self._watch_log_prev_size is not None and size > self._watch_log_prev_size:
+            self._stall.touch("log_growth")
+        self._watch_log_prev_size = size
+
+    async def probe_filesystem(self) -> None:
+        now = time.monotonic()
+        if now - self._fs_last_stat < self._fs_min_stat_interval:
+            return
+        self._fs_last_stat = now
+        try:
+            matches = await asyncio.wait_for(
+                self._sandbox.files.list(path="/", request_timeout=_SANDBOX_TAIL_READ_TIMEOUT),
+                timeout=_SANDBOX_TAIL_READ_TIMEOUT,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.info(
+                "sandbox_agent.watch_fs_probe_failed",
+                extra={"node_id": self._node_id},
+            )
+            return
+        try:
+            entries = matches if isinstance(matches, list) else list(getattr(matches, "files", []) or [])
+        except Exception:
+            _log.info("sandbox_agent.watch_fs_list_invalid", extra={"node_id": self._node_id})
+            return
+        changed = False
+        seen: set[str] = set()
+        for entry in entries:
+            path = getattr(entry, "path", None) or getattr(entry, "name", None)
+            if not isinstance(path, str):
+                continue
+            if path == _SANDBOX_LOG_PATH or (self._watch_log_path and path == self._watch_log_path):
+                continue
+            if _path_matches_any_glob(path, self._watch_globs):
+                seen.add(path)
+                key = (getattr(entry, "mtime", None), int(getattr(entry, "size", 0) or 0))
+                if path in self._fs_state and self._fs_state[path] != key:
+                    changed = True
+                self._fs_state[path] = key
+        # A previously-seen path that no longer matches (deleted) is
+        # also activity.
+        for prev_path in list(self._fs_state):
+            if prev_path not in seen:
+                del self._fs_state[prev_path]
+                changed = True
+        if changed:
+            self._stall.touch("filesystem")
+
+    async def enforce_resource_limits(self) -> bool:
+        """Platform-side resource-cap killer (FAR-296 Phase 3b-3).
+
+        Polls self._sandbox.get_metrics() (bounded wait_for), compares the
+        observable caps, and kills the self._sandbox when a cap is exceeded.
+        Returns True when the self._sandbox was killed (the caller maps the
+        outcome to ``script.budget_killed``).
+
+        Observable caps:
+          - ``cpu_usage_pct`` (0-100 PERCENTAGE) vs ``cpu_used_pct``
+          - ``memory_mb`` vs ``mem_used`` bytes
+          - ``disk_mb`` vs ``disk_used`` bytes
+
+        ``cpu_count`` is a CORE COUNT, NOT a percentage — it is
+        informational/metadata-only and is NOT enforced here (same as
+        ``max_processes`` / ``max_fds`` / ``max_sockets``, which the
+        SDK exposes no observable metric for). Treating a core count
+        as a percentage threshold would kill a 2-core self._sandbox at >2%
+        CPU usage.
+        """
+        if not self._resource_limits or self._sandbox_mode != "script" or self._sandbox is None:
+            return False
+        try:
+            # get_metrics is a fresh coroutine per call, so wait_for is
+            # safe to cancel; shield for consistency with the SDK-task
+            # lesson (never cancel long-lived SDK internal tasks).
+            metrics_raw = await asyncio.wait_for(
+                asyncio.shield(self._sandbox.get_metrics()),
+                timeout=_SANDBOX_METRICS_POLL_TIMEOUT,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Fail-open: metrics unavailable (SDK too old / self._sandbox
+            # unreachable) — never kill on a measurement failure.
+            _log.warning(
+                "sandbox_agent.resource_metrics_unavailable",
+                extra={"node_id": self._node_id, "run_id": self._run_id},
+            )
+            return False
+        # get_metrics returns a LIST of SandboxMetrics samples —
+        # compare against the latest (most recent instantaneous sample).
+        metrics = metrics_raw[-1] if isinstance(metrics_raw, (list, tuple)) and metrics_raw else metrics_raw
+        if metrics is None:
+            return False
+        killed = False
+        try:
+            # Observable caps only. cpu_count / max_processes /
+            # max_fds / max_sockets are NOT enforceable via the SDK
+            # (no matching observable metric) — they stay
+            # metadata-only (template-side enforcement).
+            cpu_cap = self._resource_limits.get("cpu_usage_pct")
+            if cpu_cap is not None:
+                cpu_used_pct = getattr(metrics, "cpu_used_pct", None)
+                if _is_real_number(cpu_used_pct) and cpu_used_pct > float(cpu_cap):
+                    killed = True
+            mem_cap = self._resource_limits.get("memory_mb")
+            if mem_cap is not None and not killed:
+                mem_used = getattr(metrics, "mem_used", None)
+                if _is_real_number(mem_used) and mem_used > float(mem_cap) * 1024 * 1024:
+                    killed = True
+            disk_cap = self._resource_limits.get("disk_mb")
+            if disk_cap is not None and not killed:
+                # Disk is only enforced when the SDK reports disk
+                # fields (older envd/API versions may omit them).
+                disk_used = getattr(metrics, "disk_used", None)
+                if _is_real_number(disk_used) and disk_used > float(disk_cap) * 1024 * 1024:
+                    killed = True
+        except Exception:
+            _log.exception(
+                "sandbox_agent.resource_metrics_compare_failed",
+                extra={"node_id": self._node_id},
+            )
+            return False
+        if not killed:
+            return False
+        self._budget_killed = True
+        _log.warning(
+            "sandbox_agent.budget_killed",
+            extra={"node_id": self._node_id, "run_id": self._run_id},
+        )
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(self._sandbox.kill(request_timeout=10)),
+                timeout=_SANDBOX_KILL_TIMEOUT,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Best-effort kill. The failure is logged but the cap was
+            # genuinely exceeded — the self._sandbox MAY REMAIN ALIVE after
+            # this (the kill timed out / the SDK errored), so the
+            # budget flag still propagates as a terminal outcome and
+            # the self._sandbox teardown in the node's finally block is the
+            # second kill attempt.
+            _log.exception(
+                "sandbox_agent.resource_kill_failed",
+                extra={
+                    "node_id": self._node_id,
+                    "run_id": self._run_id,
+                    "budget_killed": True,
+                },
+            )
+            _log.warning(
+                "sandbox_agent.budget_killed_sandbox_may_remain_alive",
+                extra={"node_id": self._node_id, "run_id": self._run_id},
+            )
+        return True
+
+    async def tick(self) -> None:
+        await self.drain_sandbox_log()
+        if self._watch_log_path is not None:
+            await self.probe_log_growth()
+        if self._watch_globs:
+            await self.probe_filesystem()
+        self._budget_check_ticks += 1
+        if self._budget_check_ticks % _SANDBOX_BUDGET_POLL_INTERVAL_TICKS == 0:
+            await self.enforce_resource_limits()
+
+
 def make_sandbox_agent_fn(
     node_def: dict[str, Any],
     *,
@@ -2895,14 +3273,13 @@ def make_sandbox_agent_fn(
         # a fault with ``_script_lease_claimed`` True is POST-CLAIM (terminal,
         # never retryable); before it the fault is PRE-CLAIM (retryable).
         _script_lease_claimed = False
-        # FAR-296 Phase 3b-3: platform-side resource-cap killer state. Per-run
-        # closure vars (never LangGraph state): ``_budget_check_ticks`` counts
-        # _tick invocations to pace the get_metrics() poll; ``_budget_killed``
-        # flips True the instant the killer kills the sandbox so the post-watchdog
-        # classification raises ScriptBudgetKilledError (never a generic
-        # side-effect-unknown / failed misclassification).
-        _budget_check_ticks = 0
-        _budget_killed = False
+        # FAR-296 Phase 3b-3: platform-side resource-cap killer state lives on
+        # the per-run _SandboxWatchdog instance (never LangGraph state):
+        # ``_budget_check_ticks`` counts watchdog.tick invocations to pace the
+        # get_metrics() poll; ``_budget_killed`` flips True the instant the killer
+        # kills the sandbox so the post-watchdog classification raises
+        # ScriptBudgetKilledError (never a generic side-effect-unknown / failed
+        # misclassification).
         # Per-node, per-claim-attempt idempotency key (dist/cleanup-idempotency D5):
         # ``run:{run_id}:node:{node_id}:{claim_count}``. Derived from the run row's
         # claim_count inside the fenced acquire, carried by the dispatch marker, and
@@ -3171,7 +3548,6 @@ def make_sandbox_agent_fn(
                 # Track the last time the agent emitted output so the idle
                 # watchdog can fail fast on stalls (FAR-97). The callbacks run
                 # from the SDK's event task and may be async or sync.
-                _activity: dict[str, Any] = {"last": time.monotonic()}
                 stall_reason: str | None = None
 
                 # FAR-98: stall_timeout_seconds (node config) overrides the idle
@@ -3205,385 +3581,22 @@ def make_sandbox_agent_fn(
                         _stream_broker = None
                 _stream_enabled = isinstance(_stream_broker, RunEventBroker)
 
-                def _stream_chunk(chunk: str, stream: str) -> None:
-                    broker = _stream_broker
-                    if not _stream_enabled or not isinstance(broker, RunEventBroker):
-                        return
-                    now = time.monotonic()
-                    buf_key = f"{stream}_buf"
-                    buf = _activity.setdefault(buf_key, [])
-                    if chunk:
-                        buf.append(chunk)
-                    if not buf:
-                        return
-                    if now - _activity.get("last_stream_ts", 0.0) < _STREAM_FLUSH_INTERVAL:
-                        return
-                    payload: dict[str, Any] = {
-                        "node_id": node_id,
-                        "chunk": _redact_raw_output("".join(buf)),
-                        "ts": int(now * 1000),
-                    }
-                    buf.clear()
-                    _activity["last_stream_ts"] = now
-                    try:
-                        event = broker.publish(
-                            "node.stdout_chunk" if stream == "stdout" else "node.stderr_chunk",
-                            payload,
-                        )
-                        payload["seq"] = event.seq
-                    except RuntimeError:
-                        # Broker already closed (run finalised) — stop streaming.
-                        return
-                    except Exception:
-                        _log.exception(
-                            "sandbox_agent.stream_publish_failed",
-                            extra={"node_id": node_id, "run_id": run_id},
-                        )
+                watchdog = _SandboxWatchdog(
+                    sandbox=sandbox,
+                    stall=_stall,
+                    node_id=node_id,
+                    run_id=run_id,
+                    watch_log_path=watch_log_path,
+                    watch_globs=watch_globs,
+                    resource_limits=resource_limits,
+                    sandbox_mode=sandbox_mode,
+                    stdout_percentage_delta=stdout_percentage_delta,
+                    stream_broker=_stream_broker,
+                    stream_enabled=_stream_enabled,
+                    drained_chunks=_drained_chunks,
+                )
 
-                # stdout-delta detector (FAR-306): a chunk counts as meaningful
-                # activity when it differs from the previous chunk by more than
-                # stdout_percentage_delta (absolute-growth semantics — repeated
-                # spinner noise is near-zero delta and does NOT keep the run
-                # alive). The first chunk always counts as activity.
-                _stdout_prev: str | None = None
-                _stdout_ratio = stdout_percentage_delta
-
-                def _touch_stdout(chunk: str) -> None:
-                    nonlocal _stdout_prev
-                    if _stdout_ratio is None:
-                        return
-                    prev = _stdout_prev
-                    _stdout_prev = chunk
-                    if prev is None or _delta_ratio(prev, chunk) > _stdout_ratio:
-                        _stall.touch("stdout")
-
-                async def _on_stdout(chunk: str) -> None:
-                    _stall.touch("heartbeat")
-                    _touch_stdout(chunk)
-                    _stream_chunk(chunk, "stdout")
-
-                async def _on_stderr(chunk: str) -> None:
-                    _stall.touch("heartbeat")
-                    _stream_chunk(chunk, "stderr")
-
-                # FAR-97 pipe-buffer fix: the agent command's stdout/stderr are
-                # redirected to a log file inside the sandbox, so the process can
-                # never block on a full stdout pipe. The drain probe below runs on
-                # every watchdog tick: (1) it refreshes the idle watchdog's liveness
-                # signal from the sandbox connection (a successful get_info proves
-                # the sandbox is responsive even when the agent emits no output for
-                # a long LLM turn), (2) it streams newly-appended content to the run
-                # event broker (live output), and (3) it accumulates the content for
-                # the node artifact.
-                _drain_offset = 0
-                _drained_len = 0
-
-                # FAR-228: the drain closure is captured (assigned to _drain_fn
-                # below) so the CancelledError retention path can do a guarded
-                # final drain even though the normal post-command drain at ~1915
-                # is unreachable on cancellation. _drain_fn is pre-bound to None
-                # at function scope so the handler's guard short-circuits safely
-                # during provisioning, before the closure is ever defined.
-                async def _drain_sandbox_log() -> None:
-                    nonlocal _drain_offset, _drained_len
-                    # Probe failed (log file not created yet, sandbox connection
-                    # unresponsive). Do NOT refresh liveness — the idle watchdog
-                    # treats a prolonged probe failure as a genuine stall.
-                    try:
-                        info = await asyncio.wait_for(
-                            sandbox.files.get_info(_SANDBOX_LOG_PATH),
-                            timeout=_SANDBOX_TAIL_READ_TIMEOUT,
-                        )
-                        # Heartbeat channel: a successful get_info proves the
-                        # sandbox connection is responsive. When enable_heartbeat
-                        # is False (strict mode) this touch is a no-op because the
-                        # channel is not enabled (FAR-306).
-                        _stall.touch("heartbeat")
-                        size = int(getattr(info, "size", 0) or 0)
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception:
-                        _log.info(
-                            "sandbox_agent.log_drain_probe_failed",
-                            extra={"node_id": node_id},
-                        )
-                        return
-                    if size <= _drain_offset:
-                        return
-                    try:
-                        content = await asyncio.wait_for(
-                            sandbox.files.read(_SANDBOX_LOG_PATH, format="text"),
-                            timeout=_SANDBOX_TAIL_READ_TIMEOUT,
-                        )
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception:
-                        _log.exception(
-                            "sandbox_agent.log_drain_failed",
-                            extra={"node_id": node_id},
-                        )
-                        return
-                    text = content if isinstance(content, str) else bytes(content).decode("utf-8", "replace")
-                    # Capture the pre-truncation content length BEFORE the window
-                    # bound below: ``full_len`` is the authoritative absolute end
-                    # of the file as READ this tick. The probe ``size`` (get_info)
-                    # is taken before the read and can lag it when the agent
-                    # appends between probe and read.
-                    full_len = len(text)
-                    # D3 trailing-window bound: the E2B files API has no range
-                    # read, so the full log was transferred again above. Only the
-                    # last _MAX_DRAIN_WINDOW bytes are retained/processed —
-                    # bounded per-tick memory and slicing on a multi-MB log.
-                    # ``full_len`` (what the read actually returned) is the
-                    # authoritative absolute file length; ``window_start`` is the
-                    # absolute offset the retained slice begins at, and the
-                    # new-bytes slice is computed against it, so truncation never
-                    # loses or double-emits (the emitted chunk is always a
-                    # suffix). Deriving ``window_start`` from the STALE probe
-                    # ``size`` instead of ``full_len`` shifts the retained slice
-                    # left and permanently drops the first (full_len - size)
-                    # bytes of new in-window content.
-                    if len(text) > _MAX_DRAIN_WINDOW:
-                        text = text[-_MAX_DRAIN_WINDOW:]
-                    window_start = max(full_len - len(text), 0)
-                    emit_start = max(_drain_offset, window_start)
-                    new = text[emit_start - window_start :] if emit_start < full_len else ""
-                    if new:
-                        _drained_chunks.append(new)
-                        _drained_len += len(new)
-                        _stream_chunk(new, "stdout")
-                        # Actual agent-log growth is real progress: refresh the
-                        # output channel (always active, the strict-mode signal),
-                        # the heartbeat (when enabled), and feed the stdout-delta
-                        # detector (FAR-306).
-                        _stall.touch("output")
-                        _stall.touch("heartbeat")
-                        _touch_stdout(new)
-                        # Bound retained memory to the drain window: drop the
-                        # oldest chunks once the accumulated log exceeds it.
-                        while _drained_len > _MAX_DRAIN_WINDOW and len(_drained_chunks) > 1:
-                            dropped = _drained_chunks.pop(0)
-                            _drained_len -= len(dropped)
-                        if _drained_len > _MAX_DRAIN_WINDOW and _drained_chunks:
-                            _drained_chunks[0] = _drained_chunks[0][-_MAX_DRAIN_WINDOW:]
-                            _drained_len = len(_drained_chunks[0])
-                    # Self-correcting drain offset: ``full_len`` (what this tick's
-                    # read returned) can exceed the STALE probe ``size`` when the
-                    # agent appends between probe and read. Advancing to the max
-                    # keeps the no-double-emit invariant — the next tick starts
-                    # where THIS tick's emitted bytes actually ended, not where
-                    # the probe saw the file.
-                    _drain_offset = max(_drain_offset, full_len)
-
-                # FAR-306 opt-in detectors that run alongside the drain probe on
-                # every watchdog tick. Probe errors are logged and treated as "no
-                # activity" — they must never mask a genuine stall NOR fail the
-                # node (best-effort, fail-open-with-log).
-
-                # log-growth detector: the user-defined watch_log_path grows.
-                _watch_log_prev_size: int | None = None
-
-                async def _probe_log_growth() -> None:
-                    nonlocal _watch_log_prev_size
-                    try:
-                        info = await asyncio.wait_for(
-                            sandbox.files.get_info(watch_log_path),
-                            timeout=_SANDBOX_TAIL_READ_TIMEOUT,
-                        )
-                        size = int(getattr(info, "size", 0) or 0)
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception:
-                        _log.info(
-                            "sandbox_agent.watch_log_probe_failed",
-                            extra={"node_id": node_id, "path": watch_log_path},
-                        )
-                        return
-                    if _watch_log_prev_size is not None and size > _watch_log_prev_size:
-                        _stall.touch("log_growth")
-                    _watch_log_prev_size = size
-
-                # filesystem detector: any file matching a watch_glob changes
-                # (create/modify/delete). State is keyed by (path, mtime, size).
-                _fs_state: dict[str, tuple[Any, int]] = {}
-                _fs_last_stat = 0.0
-                _fs_min_stat_interval = 2.0
-
-                async def _probe_filesystem() -> None:
-                    nonlocal _fs_state, _fs_last_stat
-                    now = time.monotonic()
-                    if now - _fs_last_stat < _fs_min_stat_interval:
-                        return
-                    _fs_last_stat = now
-                    try:
-                        matches = await asyncio.wait_for(
-                            sandbox.files.list(path="/", request_timeout=_SANDBOX_TAIL_READ_TIMEOUT),
-                            timeout=_SANDBOX_TAIL_READ_TIMEOUT,
-                        )
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception:
-                        _log.info(
-                            "sandbox_agent.watch_fs_probe_failed",
-                            extra={"node_id": node_id},
-                        )
-                        return
-                    try:
-                        entries = matches if isinstance(matches, list) else list(getattr(matches, "files", []) or [])
-                    except Exception:
-                        _log.info("sandbox_agent.watch_fs_list_invalid", extra={"node_id": node_id})
-                        return
-                    changed = False
-                    seen: set[str] = set()
-                    for entry in entries:
-                        path = getattr(entry, "path", None) or getattr(entry, "name", None)
-                        if not isinstance(path, str):
-                            continue
-                        if path == _SANDBOX_LOG_PATH or (watch_log_path and path == watch_log_path):
-                            continue
-                        if _path_matches_any_glob(path, watch_globs):
-                            seen.add(path)
-                            key = (getattr(entry, "mtime", None), int(getattr(entry, "size", 0) or 0))
-                            if path in _fs_state and _fs_state[path] != key:
-                                changed = True
-                            _fs_state[path] = key
-                    # A previously-seen path that no longer matches (deleted) is
-                    # also activity.
-                    for prev_path in list(_fs_state):
-                        if prev_path not in seen:
-                            del _fs_state[prev_path]
-                            changed = True
-                    if changed:
-                        _stall.touch("filesystem")
-
-                # FAR-296 Phase 3b-3: platform-side resource-cap killer. Polls
-                # sandbox.get_metrics() on a bounded cadence (every
-                # _SANDBOX_BUDGET_POLL_INTERVAL_TICKS ticks = 30s) and kills the
-                # sandbox when an observable cap is exceeded. Fail-open in every
-                # direction: a metrics failure logs a warning and returns False —
-                # the sandbox timeout remains the backstop.
-                async def _enforce_resource_limits() -> bool:
-                    """Platform-side resource-cap killer (FAR-296 Phase 3b-3).
-
-                    Polls sandbox.get_metrics() (bounded wait_for), compares the
-                    observable caps, and kills the sandbox when a cap is exceeded.
-                    Returns True when the sandbox was killed (the caller maps the
-                    outcome to ``script.budget_killed``).
-
-                    Observable caps:
-                      - ``cpu_usage_pct`` (0-100 PERCENTAGE) vs ``cpu_used_pct``
-                      - ``memory_mb`` vs ``mem_used`` bytes
-                      - ``disk_mb`` vs ``disk_used`` bytes
-
-                    ``cpu_count`` is a CORE COUNT, NOT a percentage — it is
-                    informational/metadata-only and is NOT enforced here (same as
-                    ``max_processes`` / ``max_fds`` / ``max_sockets``, which the
-                    SDK exposes no observable metric for). Treating a core count
-                    as a percentage threshold would kill a 2-core sandbox at >2%
-                    CPU usage.
-                    """
-                    nonlocal _budget_killed
-                    if not resource_limits or sandbox_mode != "script" or sandbox is None:
-                        return False
-                    try:
-                        # get_metrics is a fresh coroutine per call, so wait_for is
-                        # safe to cancel; shield for consistency with the SDK-task
-                        # lesson (never cancel long-lived SDK internal tasks).
-                        metrics_raw = await asyncio.wait_for(
-                            asyncio.shield(sandbox.get_metrics()),
-                            timeout=_SANDBOX_METRICS_POLL_TIMEOUT,
-                        )
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception:
-                        # Fail-open: metrics unavailable (SDK too old / sandbox
-                        # unreachable) — never kill on a measurement failure.
-                        _log.warning(
-                            "sandbox_agent.resource_metrics_unavailable",
-                            extra={"node_id": node_id, "run_id": run_id},
-                        )
-                        return False
-                    # get_metrics returns a LIST of SandboxMetrics samples —
-                    # compare against the latest (most recent instantaneous sample).
-                    metrics = metrics_raw[-1] if isinstance(metrics_raw, (list, tuple)) and metrics_raw else metrics_raw
-                    if metrics is None:
-                        return False
-                    killed = False
-                    try:
-                        # Observable caps only. cpu_count / max_processes /
-                        # max_fds / max_sockets are NOT enforceable via the SDK
-                        # (no matching observable metric) — they stay
-                        # metadata-only (template-side enforcement).
-                        cpu_cap = resource_limits.get("cpu_usage_pct")
-                        if cpu_cap is not None:
-                            cpu_used_pct = getattr(metrics, "cpu_used_pct", None)
-                            if _is_real_number(cpu_used_pct) and cpu_used_pct > float(cpu_cap):
-                                killed = True
-                        mem_cap = resource_limits.get("memory_mb")
-                        if mem_cap is not None and not killed:
-                            mem_used = getattr(metrics, "mem_used", None)
-                            if _is_real_number(mem_used) and mem_used > float(mem_cap) * 1024 * 1024:
-                                killed = True
-                        disk_cap = resource_limits.get("disk_mb")
-                        if disk_cap is not None and not killed:
-                            # Disk is only enforced when the SDK reports disk
-                            # fields (older envd/API versions may omit them).
-                            disk_used = getattr(metrics, "disk_used", None)
-                            if _is_real_number(disk_used) and disk_used > float(disk_cap) * 1024 * 1024:
-                                killed = True
-                    except Exception:
-                        _log.exception(
-                            "sandbox_agent.resource_metrics_compare_failed",
-                            extra={"node_id": node_id},
-                        )
-                        return False
-                    if not killed:
-                        return False
-                    _budget_killed = True
-                    _log.warning(
-                        "sandbox_agent.budget_killed",
-                        extra={"node_id": node_id, "run_id": run_id},
-                    )
-                    try:
-                        await asyncio.wait_for(
-                            asyncio.shield(sandbox.kill(request_timeout=10)),
-                            timeout=_SANDBOX_KILL_TIMEOUT,
-                        )
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception:
-                        # Best-effort kill. The failure is logged but the cap was
-                        # genuinely exceeded — the sandbox MAY REMAIN ALIVE after
-                        # this (the kill timed out / the SDK errored), so the
-                        # budget flag still propagates as a terminal outcome and
-                        # the sandbox teardown in the node's finally block is the
-                        # second kill attempt.
-                        _log.exception(
-                            "sandbox_agent.resource_kill_failed",
-                            extra={
-                                "node_id": node_id,
-                                "run_id": run_id,
-                                "budget_killed": True,
-                            },
-                        )
-                        _log.warning(
-                            "sandbox_agent.budget_killed_sandbox_may_remain_alive",
-                            extra={"node_id": node_id, "run_id": run_id},
-                        )
-                    return True
-
-                async def _tick() -> None:
-                    nonlocal _budget_check_ticks
-                    await _drain_sandbox_log()
-                    if watch_log_path is not None:
-                        await _probe_log_growth()
-                    if watch_globs:
-                        await _probe_filesystem()
-                    _budget_check_ticks += 1
-                    if _budget_check_ticks % _SANDBOX_BUDGET_POLL_INTERVAL_TICKS == 0:
-                        await _enforce_resource_limits()
-
-                _drain_fn = _drain_sandbox_log
+                _drain_fn = watchdog.drain_sandbox_log
 
                 # Redirect the agent's stdout/stderr into a sandbox log file so
                 # the process writes to a regular file — never a pipe that can
@@ -3692,8 +3705,8 @@ def make_sandbox_agent_fn(
                     sandbox.commands.run(
                         wrapped_command,
                         background=True,
-                        on_stdout=_on_stdout,
-                        on_stderr=_on_stderr,
+                        on_stdout=watchdog.on_stdout,
+                        on_stderr=watchdog.on_stderr,
                         timeout=sandbox_timeout,
                         envs=sandbox_envs,
                     ),
@@ -3706,7 +3719,7 @@ def make_sandbox_agent_fn(
                     # FAR-306: last_activity is the max across all ENABLED
                     # channels (heartbeat + any opt-in detectors).
                     last_activity=_stall.last_activity,
-                    on_tick=_tick,
+                    on_tick=watchdog.tick,
                     tick_interval=_SANDBOX_TAIL_INTERVAL,
                 )
             except asyncio.CancelledError:
@@ -3740,7 +3753,7 @@ def make_sandbox_agent_fn(
             # One final drain so the last growth (between the last tick and the
             # process exit) is captured before we read output.json. The probe is
             # fully guarded — on a dead sandbox it returns immediately.
-            await _drain_sandbox_log()
+            await watchdog.drain_sandbox_log()
 
             elapsed = time.monotonic() - start_time
             exit_code: int = getattr(cmd_result, "exit_code", -1)
@@ -3819,7 +3832,7 @@ def make_sandbox_agent_fn(
                     stderr_length=_stderr_len,
                     delivery_sentinel=delivery_sentinel,
                 )
-                if _budget_killed:
+                if watchdog.budget_killed:
                     # FAR-296 Phase 3b-3: the platform-side resource-cap killer
                     # fired — the sandbox was killed for exceeding its limits.
                     # TERMINAL (never retryable, exactly-once) and distinct from
@@ -3911,7 +3924,7 @@ def make_sandbox_agent_fn(
                     # kill, while the sandbox is still alive — the logs endpoint
                     # only serves live sandboxes.
                     _no_output_log_tail = await _fetch_sandbox_log_tail(_sandbox_id)
-                    if _budget_killed:
+                    if watchdog.budget_killed:
                         # FAR-296 Phase 3b-3: the platform-side resource-cap killer
                         # fired. On the REAL kill path the command handle raises an
                         # e2b SandboxException (not TimeoutError), which lands here
@@ -4057,7 +4070,7 @@ def make_sandbox_agent_fn(
                 # POST-CLAIM fault — TERMINAL, never retryable (exactly-once).
                 # Re-dispatching could double-execute the side-effecting script.
                 if exit_code != 0:
-                    if _budget_killed:
+                    if watchdog.budget_killed:
                         # The command died BECAUSE the platform-side resource-cap
                         # killer killed the sandbox — never misclassify the kill
                         # as a generic script.failed.
