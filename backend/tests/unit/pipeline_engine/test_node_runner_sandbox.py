@@ -132,6 +132,38 @@ def test_with_agent_commands_returns_callable():
 
 
 # ---------------------------------------------------------------------------
+# FAR-212 PR A: the sandbox_agent builder forwards its node_def to the
+# conformance gate so the mechanically-derived sandbox capability surface
+# (write/egress/git-credential scope) reaches the live manifest.
+# ---------------------------------------------------------------------------
+
+
+async def test_sandbox_agent_passes_node_def_to_conformance_gate(monkeypatch):
+    """The builder's node function calls the conformance gate with the node's
+    full definition dict — the live-manifest reader needs the ACTUAL config
+    (egress_policy, read_only, git_credentials) to certify write/egress
+    impossibility. Without the forwarding the sandbox surface would stay
+    unknown and every block guardrail would fail closed for the wrong reason."""
+    import modulo.core.pipeline_engine.node_runner as nr
+
+    node_def = _base_node_def(egress_policy="deny_all", read_only=True)
+    fn = make_sandbox_agent_fn(node_def)
+
+    gate = AsyncMock(return_value=False)
+    monkeypatch.setattr(nr, "_run_conformance_gate", gate)
+    sandbox = _make_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    gate.assert_awaited_once()
+    kwargs = gate.await_args.kwargs
+    assert kwargs["node_def"] is node_def
+    assert kwargs["node_id"] == "n1"
+
+
+# ---------------------------------------------------------------------------
 # Per-run agent runtime cost
 # ---------------------------------------------------------------------------
 
