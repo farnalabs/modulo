@@ -31,7 +31,8 @@
           </span>
           <span
             v-else-if="deltaAbs != null && noBaselineLabel"
-            class="inline-flex items-center gap-0.5 text-xs font-medium text-muted-foreground"
+            class="inline-flex items-center gap-0.5 text-xs font-medium"
+            :class="deltaAbsClass"
             data-testid="stat-no-baseline"
             role="img"
             :aria-label="noBaselineLabel"
@@ -132,6 +133,12 @@ const deltaAbsArrow = computed(() => {
 
 const deltaClass = computed(() => {
   const d = deltaPct.value;
+  if (d == null) return "";
+  return classFor(d, props.inverted ?? false);
+});
+
+const deltaAbsClass = computed(() => {
+  const d = deltaAbs.value;
   if (d == null) return "";
   return classFor(d, props.inverted ?? false);
 });
