@@ -404,8 +404,8 @@ async def run_a_cross_pipeline(
     return await _seed_run(db_engine, org_a, pipeline_b, run_number=2)
 
 
-@pytest_asyncio.fixture(scope="module")
-async def coverage_node_id() -> uuid.UUID:
+@pytest.fixture(scope="module")
+def coverage_node_id() -> uuid.UUID:
     return uuid.uuid4()
 
 
