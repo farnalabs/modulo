@@ -706,7 +706,7 @@ class TestRetentionCleanup:
         factory, session = _make_retention_factory()
 
         with (
-            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch.object(sw, "_make_system_session_factory", return_value=factory),
             patch(
                 "modulo.db.crud.run.batch_delete_old_terminal_runs",
                 new_callable=AsyncMock,
@@ -732,7 +732,7 @@ class TestRetentionCleanup:
         factory, session = _make_retention_factory()
 
         with (
-            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch.object(sw, "_make_system_session_factory", return_value=factory),
             patch(
                 "modulo.db.crud.run.batch_delete_old_terminal_runs",
                 new_callable=AsyncMock,
@@ -768,7 +768,7 @@ class TestRetentionCleanup:
         factory, session = _make_retention_factory()
 
         with (
-            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch.object(sw, "_make_system_session_factory", return_value=factory),
             patch(
                 "modulo.db.crud.run.batch_delete_old_terminal_runs",
                 new_callable=AsyncMock,
@@ -1185,7 +1185,7 @@ class TestSystemJobDelegates:
     async def test_analytics_facts_maintenance_delegates(self) -> None:
         factory = MagicMock()
         with (
-            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch.object(sw, "_make_system_session_factory", return_value=factory),
             patch(
                 "modulo.core.analytics.maintenance.run_maintenance",
                 new_callable=AsyncMock,
@@ -1202,7 +1202,7 @@ class TestSystemJobDelegates:
         """journey_reconcile opens a system session and runs the sweep."""
         factory, session = _make_retention_factory()
         with (
-            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch.object(sw, "_make_system_session_factory", return_value=factory),
             patch(
                 "modulo.core.lifecycle_map.reconcile.reconcile_journeys",
                 new_callable=AsyncMock,
@@ -1466,3 +1466,76 @@ class TestMakeSessionFactory:
 
         assert result is sessionmaker.return_value
         sessionmaker.assert_called_once_with(engine, expire_on_commit=False, autobegin=False)
+
+
+class TestMakeSystemSessionFactory:
+    def test_uses_system_engine_when_url_set(self) -> None:
+        system_engine = MagicMock()
+        with (
+            patch.object(sw, "_get_system_async_engine", return_value=system_engine),
+            patch("sqlalchemy.ext.asyncio.async_sessionmaker") as sessionmaker,
+        ):
+            result = sw._make_system_session_factory()
+
+        assert result is sessionmaker.return_value
+        sessionmaker.assert_called_once_with(system_engine, expire_on_commit=False, autobegin=False)
+
+    def test_system_factory_uses_system_engine_not_regular(self) -> None:
+        regular_engine = MagicMock()
+        system_engine = MagicMock()
+        with (
+            patch.object(sw, "_get_async_engine", return_value=regular_engine),
+            patch.object(sw, "_get_system_async_engine", return_value=system_engine),
+            patch("sqlalchemy.ext.asyncio.async_sessionmaker") as sessionmaker,
+        ):
+            sw._make_system_session_factory()
+
+        sessionmaker.assert_called_once_with(system_engine, expire_on_commit=False, autobegin=False)
+
+
+class TestGetSystemAsyncEngine:
+    def test_creates_engine_from_system_url(self) -> None:
+        mock_settings = _settings(modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo")
+        sw._SYSTEM_ASYNC_ENGINE = None  # reset singleton
+        try:
+            with (
+                patch.object(sw, "get_settings", return_value=mock_settings),
+                patch("sqlalchemy.ext.asyncio.create_async_engine") as create_engine,
+            ):
+                result = sw._get_system_async_engine()
+
+            assert result is create_engine.return_value
+            create_engine.assert_called_once()
+        finally:
+            sw._SYSTEM_ASYNC_ENGINE = None
+
+    def test_falls_back_to_regular_engine_when_url_empty(self) -> None:
+        regular_engine = MagicMock()
+        mock_settings = _settings(modulo_system_database_url="")
+        sw._SYSTEM_ASYNC_ENGINE = None  # reset singleton
+        try:
+            with (
+                patch.object(sw, "get_settings", return_value=mock_settings),
+                patch.object(sw, "_get_async_engine", return_value=regular_engine),
+            ):
+                result = sw._get_system_async_engine()
+
+            assert result is regular_engine
+        finally:
+            sw._SYSTEM_ASYNC_ENGINE = None
+
+    def test_caches_engine_singleton(self) -> None:
+        regular_engine = MagicMock()
+        mock_settings = _settings(modulo_system_database_url="")
+        sw._SYSTEM_ASYNC_ENGINE = None  # reset singleton
+        try:
+            with (
+                patch.object(sw, "get_settings", return_value=mock_settings),
+                patch.object(sw, "_get_async_engine", return_value=regular_engine),
+            ):
+                first = sw._get_system_async_engine()
+                second = sw._get_system_async_engine()
+
+            assert first is second
+        finally:
+            sw._SYSTEM_ASYNC_ENGINE = None

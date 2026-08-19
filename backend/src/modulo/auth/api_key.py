@@ -193,10 +193,9 @@ async def revoke_run_api_key_sweep(
     finalization; this sweep is the compensating backstop so keys don't leak.
 
     Bounded: ``batch_size`` keys per org, ``budget_seconds`` wall-clock budget,
-    never raises. Runs system-scoped (no ``set_rls_org`` at the top level — the
-    BYPASSRLS worker precedent, matching the other system crons); the sweep
-    processes each org under its own RLS context when ``org_ids`` is None
-    (self-selects all orgs).
+    never raises. Runs system-scoped (modulo_system role, LOGIN, BYPASSRLS — the
+    dedicated cross-org system cron role); the sweep processes each org under its
+    own RLS context when ``org_ids`` is None (self-selects all orgs).
 
     Returns ``{"scanned", "revoked", "errors"}``.
     """
