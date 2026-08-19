@@ -162,7 +162,6 @@ async def create_notification_rule(
     except HTTPException:
         raise
     except IntegrityError as exc:
-        await session.rollback()
         _log.warning("error_notification_rules.create_notification_rule_integrity")
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
