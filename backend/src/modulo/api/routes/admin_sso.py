@@ -402,7 +402,7 @@ async def _test_oidc_connection(provider: Any) -> SsoProviderTestResult:
             resp = await client.get(provider.discovery_url, timeout=httpx.Timeout(10.0, connect=5.0))
             resp.raise_for_status()
             disc = resp.json()
-    except Exception:
+    except (httpx.HTTPError, ValueError):
         _log.warning("admin_sso._test_oidc_connection", exc_info=True)
         return SsoProviderTestResult(
             success=False,
