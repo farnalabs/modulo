@@ -37,8 +37,10 @@ def test_validate_outbound_url_blocks_private_literal_ips(url: str) -> None:
     ],
 )
 def test_validate_outbound_url_accepts_public_literal_ips_without_dns(url: str) -> None:
-    # Public literal IPs must be accepted without any DNS lookup.
-    ssrf.validate_outbound_url(url)
+    # Public literal IPs must be accepted without any DNS lookup: the
+    # validator returns None (no exception) and must not attempt DNS, which
+    # would raise for a bare literal IP if the resolver were consulted.
+    assert ssrf.validate_outbound_url(url) is None
 
 
 def test_validate_outbound_url_blocks_hostname_resolving_to_internal() -> None:
