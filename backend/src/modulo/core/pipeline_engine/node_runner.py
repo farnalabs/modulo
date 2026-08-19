@@ -1506,6 +1506,36 @@ def _build_llm_judge_callable(
     return _judge
 
 
+def _resolve_gate_eval_envelope(
+    state: dict[str, Any],
+    node_id: str,
+) -> dict[str, Any]:
+    """Build the gate-eval envelope from the source node's artifact (FAR-311)."""
+    artifacts = state.get("artifacts")
+    matching = (
+        [a for a in artifacts if isinstance(a, dict) and a.get("node_id") == node_id]
+        if isinstance(artifacts, list)
+        else []
+    )
+    envelope: dict[str, Any] = {}
+    if matching:
+        # The source node's most recent artifact (a reject/correction re-run
+        # appends another entry under the same node_id). Its ``output`` is the
+        # source's OWN output — for an ``agent`` source the contract return is
+        # ``envelope["output"]``, so it must come from the matched artifact
+        # (``state["output"]`` is last-write-wins across a fan-out and can
+        # belong to a sibling).
+        matched = matching[-1]
+        envelope["artifacts"] = [matched]
+        if "output" in matched:
+            envelope["output"] = matched["output"]
+        elif "output" in state:
+            envelope["output"] = state["output"]
+    elif "output" in state:
+        envelope["output"] = state["output"]
+    return envelope
+
+
 def _resolve_gate_eval_target(
     state: dict[str, Any],
     node_id: str | None,
@@ -1543,22 +1573,7 @@ def _resolve_gate_eval_target(
     )
     if not matching and "output" not in state:
         return state
-    envelope: dict[str, Any] = {}
-    if matching:
-        # The source node's most recent artifact (a reject/correction re-run
-        # appends another entry under the same node_id). Its ``output`` is the
-        # source's OWN output — for an ``agent`` source the contract return is
-        # ``envelope["output"]``, so it must come from the matched artifact
-        # (``state["output"]`` is last-write-wins across a fan-out and can
-        # belong to a sibling).
-        matched = matching[-1]
-        envelope["artifacts"] = [matched]
-        if "output" in matched:
-            envelope["output"] = matched["output"]
-        elif "output" in state:
-            envelope["output"] = state["output"]
-    elif "output" in state:
-        envelope["output"] = state["output"]
+    envelope = _resolve_gate_eval_envelope(state, node_id)
     found, contract_output = resolve_node_contract_output(envelope, node_type)
     if found:
         return contract_output
@@ -1633,6 +1648,54 @@ async def _dispatch_reject_correction_best_effort(
             )
 
 
+def _hitl_gate_deliver_manual_result(
+    gate_id: str,
+    decision: Any,
+) -> tuple[bool, dict[str, Any]]:
+    """Build the gate result for a manual-delivery resume decision."""
+    manual_output = decision.get("output", {})
+    return (
+        True,
+        {
+            "artifacts": [
+                {
+                    "node_id": gate_id,
+                    "status": "interrupted",
+                    "result": "delivered_manual",
+                    "human_data": decision,
+                    "manual_output": manual_output,
+                }
+            ],
+            "output": manual_output,
+        },
+    )
+
+
+def _hitl_gate_approve_reject_result(
+    gate_id: str,
+    decision: Any,
+    is_rejected: bool,
+) -> dict[str, Any]:
+    """Build the gate result for an approve/reject resume decision."""
+    result_status = "rejected" if is_rejected else "approved"
+    gate_result: dict[str, Any] = {
+        "artifacts": [
+            {
+                "node_id": gate_id,
+                "status": "interrupted",
+                "result": result_status,
+                "human_data": decision,
+            }
+        ],
+    }
+    # If the human provided modified output, write it into state so
+    # downstream nodes receive the human's version instead of the
+    # original agent output.
+    if isinstance(decision, dict) and "modified_output" in decision:
+        gate_result["output"] = decision["modified_output"]
+    return gate_result
+
+
 async def _hitl_gate_resume_result(
     decision: Any,
     gate_id: str,
@@ -1651,41 +1714,10 @@ async def _hitl_gate_resume_result(
         return (False, None)
     action = decision.get("action") if isinstance(decision, dict) else None
     if action == "deliver_manual":
-        manual_output = decision.get("output", {})
-        return (
-            True,
-            {
-                "artifacts": [
-                    {
-                        "node_id": gate_id,
-                        "status": "interrupted",
-                        "result": "delivered_manual",
-                        "human_data": decision,
-                        "manual_output": manual_output,
-                    }
-                ],
-                "output": manual_output,
-            },
-        )
+        return _hitl_gate_deliver_manual_result(gate_id, decision)
     is_rejected = action == "rejected"
-    result_status = "rejected" if is_rejected else "approved"
     await _dispatch_reject_correction_best_effort(state, decision, gate_id, hitl_gate_config, session_factory, org_id)
-    gate_result: dict[str, Any] = {
-        "artifacts": [
-            {
-                "node_id": gate_id,
-                "status": "interrupted",
-                "result": result_status,
-                "human_data": decision,
-            }
-        ],
-    }
-    # If the human provided modified output, write it into state so
-    # downstream nodes receive the human's version instead of the
-    # original agent output.
-    if isinstance(decision, dict) and "modified_output" in decision:
-        gate_result["output"] = decision["modified_output"]
-    return (True, gate_result)
+    return (True, _hitl_gate_approve_reject_result(gate_id, decision, is_rejected))
 
 
 def _hitl_gate_condition_skip(gate_id: str, condition_expr: str | None, state: dict[str, Any]) -> dict[str, Any] | None:
