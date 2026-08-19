@@ -346,3 +346,31 @@ def _validate_sandbox_resource_limits_config(node_def: dict[str, Any]) -> None:
             raise ValueError(
                 f"sandbox_agent node '{node_id}' resource_limits['{key}'] must be a positive number, got {value!r}"
             )
+
+
+def _validate_sandbox_wallclock_budget_config(
+    wallclock_budget_seconds: Any, sandbox_timeout_seconds: Any, node_id: str
+) -> None:
+    """Validate the wall-clock spend budget (FAR-296 Phase 4a).
+
+    Fail-closed: the budget must be a positive int (or None). A budget that
+    cannot be compared to the wall clock is rejected at save-time.
+    """
+    if wallclock_budget_seconds is None:
+        return
+    if isinstance(wallclock_budget_seconds, bool) or not isinstance(wallclock_budget_seconds, int):
+        raise ValueError(
+            f"sandbox_agent node '{node_id}' wallclock_budget_seconds must be a positive int (seconds), "
+            f"got {wallclock_budget_seconds!r}"
+        )
+    if wallclock_budget_seconds < 1:
+        raise ValueError(
+            f"sandbox_agent node '{node_id}' wallclock_budget_seconds must be a positive int (>= 1), "
+            f"got {wallclock_budget_seconds!r}"
+        )
+    # Cross-check (informational): a budget that is tighter than the node timeout
+    # is the intended use — the budget is the spend cap, the timeout the backstop.
+    # No error here; a budget >= the timeout is equally valid (the timeout fires
+    # first). The comparison is only validated for TYPE: ``sandbox_timeout_seconds``
+    # is a positive int when present, so an incomparable budget was already rejected
+    # above. Kept as a named parameter so the signature documents the relationship.
