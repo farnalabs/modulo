@@ -432,3 +432,45 @@ def test_sandbox_rate_limited_is_known_retryable_and_expands():
     assert "sandbox.rate_limited" in expand_code_variants("SandboxRateLimitedError")
     assert "SandboxRateLimitedError" in expand_code_variants("sandbox.rate_limited")
     assert "RateLimitException" in expand_code_variants("sandbox.rate_limited")
+
+
+# ---------------------------------------------------------------------------
+# FAR-296 Phase 4b — queue-timeout and dispatch-time capacity codes
+# ---------------------------------------------------------------------------
+
+
+def test_sandbox_queue_timeout_is_known_retryable_and_expands():
+    """sandbox.queue_timeout is a known, RETRYABLE code (FAR-296 Phase 4b).
+    Both the retry-exhaustion wrapper ``SandboxQueueTimeoutError`` and the
+    legacy ``SandboxRateLimitExhaustedError`` class name resolve to it."""
+    known = known_error_codes()
+    assert "sandbox.queue_timeout" in known
+    assert "SandboxQueueTimeoutError" in known
+    assert "SandboxRateLimitExhaustedError" in known
+    spec = ERROR_CODE_REGISTRY["sandbox.queue_timeout"]
+    assert spec.error_class == "sandbox"
+    assert spec.retryable is True
+    assert spec.alert_severity == "warning"
+    assert is_retryable("SandboxQueueTimeoutError") is True
+    assert is_retryable("SandboxRateLimitExhaustedError") is True
+    assert is_retryable("sandbox.queue_timeout") is True
+    assert map_legacy_code("SandboxQueueTimeoutError") == "sandbox.queue_timeout"
+    assert map_legacy_code("SandboxRateLimitExhaustedError") == "sandbox.queue_timeout"
+    assert class_for("SandboxQueueTimeoutError") == "sandbox"
+    assert class_for("SandboxRateLimitExhaustedError") == "sandbox"
+    assert "sandbox.queue_timeout" in expand_code_variants("SandboxQueueTimeoutError")
+    assert "SandboxQueueTimeoutError" in expand_code_variants("sandbox.queue_timeout")
+    assert "SandboxRateLimitExhaustedError" in expand_code_variants("sandbox.queue_timeout")
+
+
+def test_sandbox_capacity_exceeded_maps_to_capacity_org():
+    """SandboxCapacityExceededError maps to capacity.org (FAR-296 Phase 4b
+    dispatch-time capacity gate)."""
+    known = known_error_codes()
+    assert "SandboxCapacityExceededError" in known
+    assert map_legacy_code("SandboxCapacityExceededError") == "capacity.org"
+    assert class_for("SandboxCapacityExceededError") == "capacity"
+    assert is_retryable("SandboxCapacityExceededError") is True
+    assert is_retryable("capacity.org") is True
+    assert "capacity.org" in expand_code_variants("SandboxCapacityExceededError")
+    assert "SandboxCapacityExceededError" in expand_code_variants("capacity.org")
