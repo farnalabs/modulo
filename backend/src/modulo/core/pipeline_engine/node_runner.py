@@ -50,6 +50,7 @@ import logging
 import math
 import os
 import re as _re
+import socket
 import time
 import urllib.request
 import uuid
@@ -270,6 +271,55 @@ _SANDBOX_BUDGET_POLL_INTERVAL_TICKS = 6
 # tick forever; the shield keeps SDK internal tasks alive).
 _SANDBOX_METRICS_POLL_TIMEOUT = 10.0
 _SANDBOX_KILL_TIMEOUT = 15.0
+# FAR-212 PR B: per-host DNS resolution bound for the selected-mode egress
+# allowlist (the iptables rules bind concrete IPs, never DNS names).
+_SANDBOX_EGRESS_RESOLVE_TIMEOUT = 5.0
+
+
+async def _resolve_egress_allowlist(
+    egress_allowlist: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
+    """Pre-resolve selected-mode egress allowlist hostnames to IPv4 addresses.
+
+    iptables rules can only match numeric addresses, not DNS names, so node_runner
+    resolves each allowlisted host before the policy step builds the rules. The
+    resolution is BEST-EFFORT and FAIL-CLOSED: a host that cannot be resolved is
+    simply left without a ``_resolved_ip`` key, and the resulting iptables rule
+    for it falls through to the raw hostname (which iptables cannot match, so the
+    host stays denied). Combined with the ``allow_internet_access=False`` sandbox
+    flag, an unresolved host is unreachable — never accidentally opened. Hosts
+    that are already numeric are passed through untouched. Entries carry the
+    resolved address under ``_resolved_ip`` (never a secret — just a public IP).
+    """
+    if not egress_allowlist:
+        return egress_allowlist
+
+    async def _resolve_one(entry: dict[str, Any]) -> dict[str, Any]:
+        host = entry.get("host")
+        if not isinstance(host, str) or not host:
+            return entry
+        if _re.match(r"^[0-9.]+$", host) or ":" in host:
+            return entry
+        try:
+            infos = await asyncio.wait_for(
+                asyncio.to_thread(
+                    socket.getaddrinfo,
+                    host,
+                    None,
+                    socket.AF_INET,
+                    socket.SOCK_STREAM,
+                ),
+                timeout=_SANDBOX_EGRESS_RESOLVE_TIMEOUT,
+            )
+        except Exception:
+            # Unresolvable host -> no rule -> host stays denied (fail-closed).
+            return entry
+        if infos:
+            ip = infos[0][4][0]
+            return {**entry, "_resolved_ip": ip}
+        return entry
+
+    return [await _resolve_one(e) for e in egress_allowlist]
 
 
 # The raw returned value is a non-metric Python number (int/float, not bool).
@@ -2376,24 +2426,42 @@ def make_sandbox_agent_fn(
     egress_policy: str | None = node_def.get("egress_policy")
     egress_allowlist: list[dict[str, Any]] | None = node_def.get("egress_allowlist")
     resource_limits: dict[str, Any] | None = node_def.get("resource_limits")
-    # FAR-296 Phase 3: script mode that REQUIRES enforcement (egress denial or
-    # resource limits) requires a REMOTE E2B provider (the E2B API key) because
-    # local providers have no egress/resource enforcement point — deny_all /
-    # selected (allowlist) / resource_limits would silently no-op. Fail closed
-    # ONLY when enforcement is actually requested; a plain script-mode node with
-    # no egress/resource config runs fine on any provider (there is nothing to
-    # enforce). This keeps the refusal scoped to exactly the security concern it
-    # guards.
+    # FAR-212 PR B: read-only-workspace + git-credential scope surface. The
+    # shared validators (sandbox_mode) have already rejected any invalid
+    # read_only / git_credentials keys at save-time (Pydantic, GraphValidator,
+    # MCP) AND here at run-time; the values are read defensively so a smuggled
+    # raw-import value can never trigger a policy step that does not match what
+    # the capability derivation certified (read_only is only enforced when it is
+    # the genuine boolean True; git_credentials only when it is a recognised
+    # scope).
+    read_only: bool = node_def.get("read_only") is True
+    git_credentials: str | None = node_def.get("git_credentials")
+    git_credentials = git_credentials if git_credentials in ("scoped", "unscoped", "none") else None
+    # FAR-296 Phase 3: script mode that REQUIRES enforcement (egress denial,
+    # resource limits, read-only workspace, or git-credential scope) requires a
+    # REMOTE E2B provider (the E2B API key) because local providers have no
+    # egress/resource/enforcement point — deny_all / selected (allowlist) /
+    # resource_limits / read_only / git-credential scoping would silently no-op.
+    # Fail closed ONLY when enforcement is actually requested; a plain script-mode
+    # node with no enforcement config runs fine on any provider (there is nothing
+    # to enforce). This keeps the refusal scoped to exactly the security concern
+    # it guards.
     if (
         sandbox_mode == "script"
-        and (egress_policy in ("deny_all", "selected") or resource_limits)
+        and (
+            egress_policy in ("deny_all", "selected")
+            or resource_limits
+            or read_only
+            or git_credentials in ("scoped", "none")
+        )
         and not (os.environ.get("MODULO_E2B_API_KEY") or os.environ.get("E2B_API_KEY"))
     ):
         raise ValueError(
-            f"sandbox_agent node '{node_id}' mode='script' requests egress/resource "
-            "enforcement (egress_policy='deny_all'/'selected' or resource_limits) which requires a "
+            f"sandbox_agent node '{node_id}' mode='script' requests egress/resource/"
+            "sandbox-policy enforcement (egress_policy='deny_all'/'selected', resource_limits, "
+            "read_only, or git_credentials scoped/none) which requires a "
             "remote E2B provider (set MODULO_E2B_API_KEY or E2B_API_KEY) — local "
-            "providers have no egress or resource-limit enforcement point for script mode"
+            "providers have no egress, resource-limit, or sandbox-policy enforcement point for script mode"
         )
     output_schema_json: dict[str, Any] | None = node_def.get("output_schema_json")
     sandbox_timeout: int = node_def.get("timeout_seconds", 1200)
@@ -2996,6 +3064,26 @@ def make_sandbox_agent_fn(
                 node_def.get("env_vars") or {},
                 _resolve_secret_ref,
             )
+
+            # FAR-212 PR B: apply the enforced sandbox policy AFTER the Modulo-owned
+            # context files / prompt / input are written but BEFORE the agent/script
+            # command executes. Any policy field set on the node invokes the policy
+            # step (read-only workspace chmod, git-credential scope helper, or
+            # selected-mode egress allowlist). Selected-mode allowlist hostnames are
+            # pre-resolved to concrete IPs so the iptables rules bind real addresses
+            # (an unresolvable host stays denied — fail-closed). The policy is
+            # best-effort at the command level (each step is itself fail-closed) and
+            # never wedges the dispatch.
+            if read_only or git_credentials in ("scoped", "none") or (egress_policy == "selected" and egress_allowlist):
+                from modulo.core.pipeline_engine.sandbox_policy import apply_sandbox_policy
+
+                await apply_sandbox_policy(
+                    sandbox,
+                    read_only=read_only,
+                    git_credentials=git_credentials,
+                    egress_policy=egress_policy,
+                    egress_allowlist=await _resolve_egress_allowlist(egress_allowlist),
+                )
 
             try:
                 # FAR-306: per-channel stall detector. The heartbeat channel

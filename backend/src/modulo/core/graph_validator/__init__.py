@@ -660,6 +660,73 @@ def _check_sandbox_resource_limits(node: dict[str, Any], nid: str, result: Valid
         )
 
 
+def _check_sandbox_read_only(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
+    """Sandbox check 11: read_only must be a genuine boolean (FAR-212 PR B).
+
+    ``read_only`` is a validated + enforced ``PipelineGraphNode`` field — when
+    True the workspace is chmodded read-only at runtime and ``sandbox.write_files``
+    derives False. A non-boolean value (e.g. a smuggled string ``"yes"`` from a
+    raw workflow import) would otherwise reach the fail-closed derivation as an
+    unvalidated key and resolve unknown (block) — acceptable — but the operator
+    intent was a real read-only seal. Fail closed at save time with a clear
+    error instead.
+    """
+    from modulo.core.pipeline_engine.sandbox_mode import _validate_sandbox_read_only_config
+
+    try:
+        _validate_sandbox_read_only_config(node)
+    except ValueError as exc:
+        result.error("SANDBOX_READ_ONLY_INVALID", str(exc), node_id=nid)
+
+
+def _check_sandbox_git_credentials(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
+    """Sandbox check 12: git_credentials scope must be recognised (FAR-212 PR B).
+
+    ``git_credentials`` is a validated + enforced ``PipelineGraphNode`` field —
+    ``scoped`` provisions a helper that limits the token to the allowlisted
+    github.com host, ``none`` provisions no git credentials, ``unscoped``/absent
+    leave the default full-access credential. An unrecognised value (e.g. a
+    smuggled scope from a raw workflow import) would otherwise reach the
+    fail-closed derivation as an unvalidated key and resolve unknown (block) —
+    acceptable — but the operator intent was a specific scope. Fail closed at
+    save time with a clear error instead.
+    """
+    from modulo.core.pipeline_engine.sandbox_mode import _validate_sandbox_git_credentials_config
+
+    try:
+        _validate_sandbox_git_credentials_config(node)
+    except ValueError as exc:
+        result.error("SANDBOX_GIT_CREDENTIALS_INVALID", str(exc), node_id=nid)
+
+
+def _check_sandbox_policy_fields_only_on_sandbox_nodes(graph_json: dict[str, Any], result: ValidationResult) -> None:
+    """Sandbox check 13: read_only / git_credentials only exist on sandbox_agent nodes.
+
+    The enforcement surface (read-only workspace, git-credential scope) only
+    exists for sandbox agents. A raw workflow import could smuggle these fields
+    onto an agent/manual/composite node, where they would be a silent no-op —
+    a declared control nothing enforces. Fail closed at save time.
+    """
+    for node in graph_json.get("nodes", []):
+        if not isinstance(node, dict) or node.get("node_type") == "sandbox_agent":
+            continue
+        nid = _string_or_default(node.get("id"))
+        if node.get("read_only") is not None and node.get("read_only") is not False:
+            result.error(
+                "SANDBOX_POLICY_FIELD_ON_NON_SANDBOX",
+                f"Node '{nid}' (node_type={node.get('node_type')!r}) sets read_only — "
+                "only sandbox_agent nodes can set read_only / git_credentials",
+                node_id=nid,
+            )
+        if node.get("git_credentials") is not None:
+            result.error(
+                "SANDBOX_POLICY_FIELD_ON_NON_SANDBOX",
+                f"Node '{nid}' (node_type={node.get('node_type')!r}) sets git_credentials "
+                "— only sandbox_agent nodes can set read_only / git_credentials",
+                node_id=nid,
+            )
+
+
 def _check_sandbox_loop_intercept(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
     """Sandbox check 8: loop_intercept config shape (FAR-211).
 
@@ -2085,9 +2152,12 @@ class GraphValidator:
         8. FAR-306 opt-in stall-detector fields (stdout_percentage_delta,
            watch_globs, watch_log_path, enable_heartbeat) are well-formed.
         9. agent_command is Jinja-renderable (FAR-226).
+        10. read_only / git_credentials are validated sandbox-only fields
+            (FAR-212 PR B), and no non-sandbox node carries them.
         """
         _reserved_env_prefixes = ("MODULO_", "OPENCODE_API_KEY")
 
+        _check_sandbox_policy_fields_only_on_sandbox_nodes(graph_json, result)
         for node in graph_json.get("nodes", []):
             if node.get("node_type") != "sandbox_agent":
                 continue
@@ -2104,6 +2174,8 @@ class GraphValidator:
             _check_sandbox_stall_detectors(node, nid, result)
             _check_sandbox_egress(node, nid, result)
             _check_sandbox_resource_limits(node, nid, result)
+            _check_sandbox_read_only(node, nid, result)
+            _check_sandbox_git_credentials(node, nid, result)
 
     # ------------------------------------------------------------------
     # Node idempotency
