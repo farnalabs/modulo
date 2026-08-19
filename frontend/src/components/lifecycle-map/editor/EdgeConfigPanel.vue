@@ -2,16 +2,19 @@
   <div class="space-y-4">
     <div>
       <label for="edgeconfigpanel-field-5" class="mb-1 block text-sm font-medium">{{ $t('components.lifecycle-map.editor.EdgeConfigPanel.trigger_type') }}</label>
-      <Select aria-label="Trigger Type" v-model="form.trigger_type">
-        <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Trigger Type">
-          <SelectValue :placeholder="$t('components.lifecycle-map.editor.EdgeConfigPanel.select_trigger_type')" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem v-for="opt in triggerOptions" :key="opt.value" :value="opt.value">
-            {{ opt.label }}
-          </SelectItem>
-        </SelectContent>
-      </Select>
+      <Select
+  aria-label="Trigger Type"
+  v-model="form.trigger_type"
+  :placeholder="$t('components.lifecycle-map.editor.EdgeConfigPanel.select_trigger_type')"
+  class="w-full"
+  :options="triggerOptions.map(opt => ({ value: opt.value, label: opt.label }))"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
     </div>
 
     <div>
@@ -35,17 +38,19 @@
 
     <div>
       <label for="edgeconfigpanel-field-2" class="mb-1 block text-sm font-medium">{{ $t('components.lifecycle-map.editor.EdgeConfigPanel.estimated_frequency') }}</label>
-      <Select aria-label="Estimated Frequency" v-model="form.estimated_frequency">
-        <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Estimated Frequency">
-          <SelectValue :placeholder="$t('components.lifecycle-map.editor.EdgeConfigPanel.not_specified')" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="daily">{{ $t('components.lifecycle-map.editor.EdgeConfigPanel.daily') }}</SelectItem>
-          <SelectItem value="per-pr">{{ $t('components.lifecycle-map.editor.EdgeConfigPanel.per_pr') }}</SelectItem>
-          <SelectItem value="hourly">{{ $t('components.lifecycle-map.editor.EdgeConfigPanel.hourly') }}</SelectItem>
-          <SelectItem value="custom">{{ $t('components.lifecycle-map.editor.EdgeConfigPanel.custom') }}</SelectItem>
-        </SelectContent>
-      </Select>
+      <Select
+  aria-label="Estimated Frequency"
+  v-model="form.estimated_frequency"
+  :placeholder="$t('components.lifecycle-map.editor.EdgeConfigPanel.not_specified')"
+  class="w-full"
+  :options="[{ value: 'daily', label: $t('components.lifecycle-map.editor.EdgeConfigPanel.daily') }, { value: 'per-pr', label: $t('components.lifecycle-map.editor.EdgeConfigPanel.per_pr') }, { value: 'hourly', label: $t('components.lifecycle-map.editor.EdgeConfigPanel.hourly') }, { value: 'custom', label: $t('components.lifecycle-map.editor.EdgeConfigPanel.custom') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
     </div>
 
     <div>
@@ -61,7 +66,7 @@
 
 <script setup lang="ts">
 import { reactive, watch } from 'vue'
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import Select from 'primevue/select'
 import type { TriggerType, EstimatedFrequency } from '../../../types/lifecycleMap'
 
 interface FormModel {

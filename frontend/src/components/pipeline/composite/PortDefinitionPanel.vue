@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import { Button } from "@/components/ui/button";
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from "@/components/ui/select";
+import Button from 'primevue/button'
+import Select from 'primevue/select'
 import { useApi } from "../../../composables/useApi";
 import type { ParameterPort, ParameterPortType } from "../../../types/pipeline";
 
@@ -288,19 +288,19 @@ async function detectPlaceholders() {
           <label for="portdefinitionpanel-field-3" class="mb-1 block text-xs font-medium text-muted-foreground"
             >{{ $t('components.pipeline.composite.PortDefinitionPanel.type') }}</label
           >
-          <Select aria-label="Port type" v-model="form.type">
-            <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Port type">
-              <SelectValue placeholder="Select type" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="string">{{ $t('components.pipeline.composite.PortDefinitionPanel.string') }}</SelectItem>
-              <SelectItem value="number">{{ $t('components.pipeline.composite.PortDefinitionPanel.number') }}</SelectItem>
-              <SelectItem value="boolean">{{ $t('components.pipeline.composite.PortDefinitionPanel.boolean') }}</SelectItem>
-              <SelectItem value="select">{{ $t('components.pipeline.composite.PortDefinitionPanel.select') }}</SelectItem>
-              <SelectItem value="model_backend_ref">{{ $t('components.pipeline.composite.PortDefinitionPanel.model_backend_ref') }}</SelectItem>
-              <SelectItem value="schema_ref">{{ $t('components.pipeline.composite.PortDefinitionPanel.schema_ref') }}</SelectItem>
-            </SelectContent>
-          </Select>
+          <Select
+  aria-label="Port type"
+  v-model="form.type"
+  placeholder="Select type"
+  class="w-full"
+  :options="[{ value: 'string', label: $t('components.pipeline.composite.PortDefinitionPanel.string') }, { value: 'number', label: $t('components.pipeline.composite.PortDefinitionPanel.number') }, { value: 'boolean', label: $t('components.pipeline.composite.PortDefinitionPanel.boolean') }, { value: 'select', label: $t('components.pipeline.composite.PortDefinitionPanel.select') }, { value: 'model_backend_ref', label: $t('components.pipeline.composite.PortDefinitionPanel.model_backend_ref') }, { value: 'schema_ref', label: $t('components.pipeline.composite.PortDefinitionPanel.schema_ref') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
         </div>
         <div class="flex items-center gap-2">
           <input aria-label="checkbox"
@@ -344,11 +344,7 @@ async function detectPlaceholders() {
           >
             Cancel
           </button>
-          <Button
-            variant="default"
-            size="sm"
-            @click="savePort"
-          >
+          <Button size="small" @click="savePort">
             {{ editingIndex !== null ? "Update" : "Add" }}
           </Button>
         </div>

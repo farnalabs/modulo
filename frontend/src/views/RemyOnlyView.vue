@@ -16,12 +16,7 @@
           <span class="text-xs text-muted-foreground">{{ $t('components.remy.RemyOnlyView.remy_only_mode') }}</span>
         </div>
       </div>
-      <Button
-        variant="outline"
-        size="sm"
-        data-testid="remy-only-return-home"
-        @click="returnHome"
-      >
+      <Button severity="secondary" outlined size="small" data-testid="remy-only-return-home" @click="returnHome">
         <ArrowLeft class="mr-1 h-3.5 w-3.5" aria-hidden="true" />
         {{ $t('components.remy.RemyOnlyView.return_home') }}
       </Button>
@@ -39,7 +34,7 @@
         <div class="max-w-md space-y-2 text-center">
           <h2 class="text-lg font-semibold">{{ $t('components.remy.RemyOnlyView.remy_unavailable') }}</h2>
           <p class="text-sm text-muted-foreground">{{ $t('components.remy.RemyOnlyView.remy_unavailable_desc') }}</p>
-          <Button variant="outline" size="sm" data-testid="remy-only-return-home" @click="returnHome">
+          <Button severity="secondary" outlined size="small" data-testid="remy-only-return-home" @click="returnHome">
             {{ $t('components.remy.RemyOnlyView.return_home') }}
           </Button>
         </div>
@@ -146,7 +141,7 @@
         <div class="space-y-3 text-center">
           <h2 class="text-lg font-semibold">{{ $t('components.remy.RemyOnlyView.no_tabs_yet') }}</h2>
           <p class="text-sm text-muted-foreground">{{ $t('components.remy.RemyOnlyView.start_new') }}</p>
-          <Button size="sm" @click="startNew">{{ $t('components.remy.RemyOnlyView.start_new') }}</Button>
+          <Button size="small" @click="startNew">{{ $t('components.remy.RemyOnlyView.start_new') }}</Button>
         </div>
       </div>
 
@@ -157,7 +152,7 @@
       >
         <div class="space-y-3 text-center">
           <p class="text-sm text-muted-foreground">{{ $t('components.remy.RemyOnlyView.select_tab_or_new') }}</p>
-          <Button size="sm" @click="startNew">{{ $t('components.remy.RemyOnlyView.start_new') }}</Button>
+          <Button size="small" @click="startNew">{{ $t('components.remy.RemyOnlyView.start_new') }}</Button>
         </div>
       </div>
 
@@ -209,7 +204,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import type { ComponentPublicInstance } from 'vue'
 import { useRouter } from 'vue-router'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 import { ArrowLeft, Plus, X } from '@lucide/vue'
 import { shortId } from '@/utils/format'
 import { useRemyStore } from '@/composables/useRemyStore'

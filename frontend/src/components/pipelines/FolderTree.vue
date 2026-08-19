@@ -102,79 +102,84 @@
     </div>
 
     <!-- Create Folder Dialog -->
-    <Dialog v-model:open="showCreateDialog">
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{{ labels.newFolder }}</DialogTitle>
-        </DialogHeader>
-        <div class="space-y-4">
-          <div>
-            <label for="folder-tree-new-name" class="mb-1 block text-sm font-medium">{{ labels.folderName }}</label>
-            <Input id="folder-tree-new-name" v-model="newFolderName" placeholder="Folder name" @keyup.enter="handleCreate" />
-          </div>
-
-          <!-- Parent folder selector -->
-          <div>
-            <label for="folder-tree-parent" class="mb-1 block text-sm font-medium">{{ $t('components.pipelines.FolderTree.parent_folder') }}</label>
-            <Select :aria-label="$t('components.pipelines.FolderTree.parent_folder')" v-model="newFolderParentId">
-              <SelectTrigger id="folder-tree-parent">
-                <SelectValue :placeholder="$t('components.pipelines.FolderTree.no_parent_root_level')" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem :value="'null'">{{ $t('components.pipelines.FolderTree.no_parent_root_level') }}</SelectItem>
-                <SelectItem v-for="f in allFolders" :key="f.id" :value="f.id">{{ f.name }}</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div v-if="createError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-            {{ createError }}
-          </div>
+    <Dialog v-model:visible="showCreateDialog" :modal="true" :dismissable-mask="true" :style="{ width: '28rem' }">
+      <template #header>
+        <div class="text-lg font-semibold">{{ labels.newFolder }}</div>
+      </template>
+      <div class="space-y-4">
+        <div>
+          <label for="folder-tree-new-name" class="mb-1 block text-sm font-medium">{{ labels.folderName }}</label>
+          <InputText id="folder-tree-new-name" v-model="newFolderName" placeholder="Folder name" class="w-full" @keyup.enter="handleCreate" />
         </div>
-        <DialogFooter>
-          <Button variant="outline" @click="showCreateDialog = false">{{ $t('common.cancel') }}</Button>
+
+        <!-- Parent folder selector -->
+        <div>
+          <label for="folder-tree-parent" class="mb-1 block text-sm font-medium">{{ $t('components.pipelines.FolderTree.parent_folder') }}</label>
+          <Select
+  :aria-label="$t('components.pipelines.FolderTree.parent_folder')"
+  v-model="newFolderParentId"
+  :placeholder="$t('components.pipelines.FolderTree.no_parent_root_level')"
+  id="folder-tree-parent"
+  class="w-full"
+  :options="[{ value: 'null', label: $t('components.pipelines.FolderTree.no_parent_root_level') }, ...allFolders.map(f => ({ value: f.id, label: f.name }))]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
+        </div>
+
+        <div v-if="createError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+          {{ createError }}
+        </div>
+      </div>
+      <template #footer>
+        <div class="flex gap-2 justify-end">
+          <Button severity="secondary" outlined @click="showCreateDialog = false">{{ $t('common.cancel') }}</Button>
           <Button :disabled="!newFolderName.trim() || creating" :loading="creating" @click="handleCreate">{{ $t('common.save') }}</Button>
-        </DialogFooter>
-      </DialogContent>
+        </div>
+      </template>
     </Dialog>
 
     <!-- Rename Folder Dialog -->
-    <Dialog v-model:open="showRenameDialog">
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{{ labels.renameFolder }}</DialogTitle>
-        </DialogHeader>
-        <div class="space-y-4">
-          <div>
-            <label for="folder-tree-rename-name" class="mb-1 block text-sm font-medium">{{ labels.folderName }}</label>
-            <Input id="folder-tree-rename-name" v-model="renameFolderName" placeholder="Folder name" @keyup.enter="handleRename" />
-          </div>
-          <div v-if="renameError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-            {{ renameError }}
-          </div>
+    <Dialog v-model:visible="showRenameDialog" :modal="true" :dismissable-mask="true" :style="{ width: '28rem' }">
+      <template #header>
+        <div class="text-lg font-semibold">{{ labels.renameFolder }}</div>
+      </template>
+      <div class="space-y-4">
+        <div>
+          <label for="folder-tree-rename-name" class="mb-1 block text-sm font-medium">{{ labels.folderName }}</label>
+          <InputText id="folder-tree-rename-name" v-model="renameFolderName" placeholder="Folder name" class="w-full" @keyup.enter="handleRename" />
         </div>
-        <DialogFooter>
-          <Button variant="outline" @click="showRenameDialog = false">{{ $t('common.cancel') }}</Button>
+        <div v-if="renameError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+          {{ renameError }}
+        </div>
+      </div>
+      <template #footer>
+        <div class="flex gap-2 justify-end">
+          <Button severity="secondary" outlined @click="showRenameDialog = false">{{ $t('common.cancel') }}</Button>
           <Button :disabled="!renameFolderName.trim() || renaming" :loading="renaming" @click="handleRename">{{ $t('common.save') }}</Button>
-        </DialogFooter>
-      </DialogContent>
+        </div>
+      </template>
     </Dialog>
 
     <!-- Delete Confirmation Dialog -->
-    <Dialog v-model:open="showDeleteConfirm">
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle class="text-destructive">{{ labels.deleteFolder }}</DialogTitle>
-          <DialogDescription>{{ deleteConfirmMessage }}</DialogDescription>
-        </DialogHeader>
-        <div v-if="deleteError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-          {{ deleteError }}
+    <Dialog v-model:visible="showDeleteConfirm" :modal="true" :dismissable-mask="true" :style="{ width: '28rem' }">
+      <template #header>
+        <div class="text-lg font-semibold text-destructive">{{ labels.deleteFolder }}</div>
+      </template>
+      <p class="text-sm text-muted-foreground">{{ deleteConfirmMessage }}</p>
+      <div v-if="deleteError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+        {{ deleteError }}
+      </div>
+      <template #footer>
+        <div class="flex gap-2 justify-end">
+          <Button severity="secondary" outlined @click="showDeleteConfirm = false">{{ $t('common.cancel') }}</Button>
+          <Button severity="danger" :disabled="deleting" :loading="deleting" @click="handleDelete">{{ $t('common.delete') }}</Button>
         </div>
-        <DialogFooter>
-          <Button variant="outline" @click="showDeleteConfirm = false">{{ $t('common.cancel') }}</Button>
-          <Button variant="destructive" :disabled="deleting" :loading="deleting" @click="handleDelete">{{ $t('common.delete') }}</Button>
-        </DialogFooter>
-      </DialogContent>
+      </template>
     </Dialog>
   </div>
 </template>
@@ -185,10 +190,10 @@ import { useI18n } from 'vue-i18n'
 import draggable from 'vuedraggable'
 import { useApi } from '@/composables/useApi'
 import { formatApiError } from '../../lib/api/formatError'
-import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Input } from '@/components/ui/input'
+import Button from 'primevue/button'
+import Dialog from 'primevue/dialog'
+import InputText from 'primevue/inputtext'
+import Select from 'primevue/select'
 
 interface FolderItem {
   id: string

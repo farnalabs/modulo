@@ -24,11 +24,7 @@
       >
         {{ $t('common.cancel') }}
       </button>
-      <Button
-        type="button"
-        variant="default"
-        @click="$emit('confirm', selectedScope)"
-      >
+      <Button type="button" @click="$emit('confirm', selectedScope)">
         {{ $t('components.DismissDialog.dismiss') }}
       </Button>
     </div>
@@ -38,7 +34,7 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
 import { useI18n } from "vue-i18n";
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 
 const { t } = useI18n();
 

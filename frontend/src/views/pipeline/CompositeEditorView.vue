@@ -20,11 +20,7 @@
         >
           Save as composite
         </button>
-        <Button
-          variant="default"
-          size="xs"
-          @click="showPortPanel = !showPortPanel"
-        >
+        <Button size="small" class="text-xs" @click="showPortPanel = !showPortPanel">
           {{ showPortPanel ? 'Hide Ports' : 'Ports' }}
         </Button>
         <button
@@ -117,11 +113,7 @@
             >
               Cancel
             </button>
-            <Button
-              :disabled="!saveAsName || saving"
-              variant="default"
-              @click="handleSaveAs"
-            >
+            <Button :disabled="!saveAsName || saving" @click="handleSaveAs">
               {{ saving ? 'Saving...' : 'Save' }}
             </button>
           </div>
@@ -156,7 +148,7 @@ import PublishCompositeFlow from '../../components/pipeline/composite/PublishCom
 import type { ParameterPort } from '../../types/pipeline'
 import { formatApiError } from '../../lib/api/formatError'
 import { api } from '../../lib/api/client'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 
 const route = useRoute()
 const router = useRouter()

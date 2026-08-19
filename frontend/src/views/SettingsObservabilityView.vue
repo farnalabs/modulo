@@ -37,13 +37,7 @@
         <div class="rounded-lg border bg-card p-6 shadow-sm">
           <div class="mb-4 flex items-center justify-between">
             <h2 class="text-base font-semibold">{{ $t('views.SettingsObservabilityView.otlp_headers') }}</h2>
-            <Button
-              variant="default"
-              size="sm"
-              type="button"
-              data-testid="settings-observability-add-header"
-              @click="addHeader"
-            >
+            <Button size="small" type="button" data-testid="settings-observability-add-header" @click="addHeader">
               {{ $t('views.SettingsObservabilityView.add_header') }}
             </Button>
           </div>
@@ -181,12 +175,7 @@
           >
             {{ $t('views.SettingsObservabilityView.reset') }}
           </button>
-          <Button
-            type="submit"
-            variant="default"
-            :disabled="saving"
-            data-testid="settings-observability-save"
-          >
+          <Button type="submit" :disabled="saving" data-testid="settings-observability-save">
             {{ saving ? $t('views.SettingsObservabilityView.saving') : $t('views.SettingsObservabilityView.save') }}
           </Button>
         </div>
@@ -207,7 +196,7 @@ import { formatApiError } from '../lib/api/formatError'
 import FeatureGate from '../components/FeatureGate.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 
 type OtelSettingsResponse = components['schemas']['OtelSettingsResponse']
 type TestSpanResult = components['schemas']['TestSpanResult']

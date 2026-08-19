@@ -41,18 +41,21 @@
           </div>
           <div>
             <label :for="`schema-editor-field-${field._key}-type`" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_type') }}</label>
-            <Select :aria-label="$t('views.SchemaEditorView.field_type_aria')" :model-value="field.type" @update:model-value="update({ type: String($event) })">
-              <SelectTrigger :id="`schema-editor-field-${field._key}-type`" class="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" :aria-label="$t('views.SchemaEditorView.field_type_aria')" data-testid="schema-editor-field-type">
-                <SelectValue :placeholder="$t('views.SchemaEditorView.select_type')" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="string">string</SelectItem>
-                <SelectItem value="number">number</SelectItem>
-                <SelectItem value="boolean">boolean</SelectItem>
-                <SelectItem value="array">array</SelectItem>
-                <SelectItem value="object">object</SelectItem>
-              </SelectContent>
-            </Select>
+            <Select
+  :aria-label="$t('views.SchemaEditorView.field_type_aria')"
+  :model-value="field.type"
+  @update:model-value="update({ type: String($event) })"
+  :placeholder="$t('views.SchemaEditorView.select_type')"
+  data-testid="schema-editor-field-type"
+  class="w-full"
+  :options="[{ value: 'string', label: 'string' }, { value: 'number', label: 'number' }, { value: 'boolean', label: 'boolean' }, { value: 'array', label: 'array' }, { value: 'object', label: 'object' }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
           </div>
         </div>
 
@@ -109,13 +112,7 @@
 
 <script setup lang="ts">
 import type { SchemaField } from '../../utils/schema-definition'
-import {
-  Select,
-  SelectTrigger,
-  SelectContent,
-  SelectItem,
-  SelectValue,
-} from '@/components/ui/select'
+import Select from 'primevue/select'
 
 const field = defineModel<SchemaField>('field', { required: true })
 

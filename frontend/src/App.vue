@@ -1,8 +1,6 @@
 <template>
   <LoginView v-if="!isAuthenticated" />
-  <TooltipProvider v-else-if="isBareRoute" :delay-duration="300">
-    <RemyOnlyView />
-  </TooltipProvider>
+  <RemyOnlyView v-else-if="isBareRoute" />
   <AppLayout v-else />
 </template>
 
@@ -15,7 +13,6 @@ import { getAutoLoginConfig } from './config/runtime'
 import LoginView from './views/LoginView.vue'
 import AppLayout from './components/AppLayout.vue'
 import RemyOnlyView from './views/RemyOnlyView.vue'
-import { TooltipProvider } from './components/ui/tooltip'
 import { useWebVitals } from './composables/useWebVitals'
 
 const router = useRouter()

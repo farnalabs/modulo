@@ -4,12 +4,7 @@
     <div data-theme="agent" class="page-wide">
     <header class="flex items-center justify-between">
       <PageHeader :title="$t('views.SettingsTriggersView.title')" :subtitle="$t('views.SettingsTriggersView.subtitle')" />
-      <Button
-        data-testid="settings-triggers-create"
-        variant="default"
-           class="border-primary/30 hover:border-primary/60"
-        @click="openCreateDialog"
-      >
+      <Button data-testid="settings-triggers-create" class="border-primary/30 hover:border-primary/60" @click="openCreateDialog">
         {{ $t('views.SettingsTriggersView.create_trigger') }}
       </Button>
     </header>
@@ -34,13 +29,7 @@
           <p class="text-sm font-medium">{{ $t('views.SettingsTriggersView.pause_all_triggers') }}</p>
           <p class="mt-0.5 text-xs text-muted-foreground">{{ $t('views.SettingsTriggersView.pause_all_triggers_description') }}</p>
         </div>
-        <Button
-          data-testid="settings-triggers-pause-all"
-          :variant="orgTriggersPaused ? 'outline' : 'default'"
-          :disabled="pauseToggling"
-          :aria-pressed="orgTriggersPaused"
-          @click="togglePauseAll"
-        >
+        <Button data-testid="settings-triggers-pause-all" :severity="orgTriggersPaused ? 'secondary' : 'primary'" :outlined="orgTriggersPaused" :disabled="pauseToggling" :aria-pressed="orgTriggersPaused" @click="togglePauseAll">
           {{ orgTriggersPaused ? $t('views.SettingsTriggersView.resume_triggers') : $t('views.SettingsTriggersView.pause_all_triggers_action') }}
         </Button>
       </div>
@@ -122,14 +111,7 @@
                       />
                       {{ triggerToggling[t.id] ? '...' : (t.active ? $t('views.SettingsTriggersView.active') : $t('views.SettingsTriggersView.inactive')) }}
                     </button>
-                    <Button
-                      v-if="isDeactivatedOngoing(t) && isOrgOperator"
-                      data-testid="settings-triggers-reenable"
-                      size="sm"
-                      variant="outline"
-                      :disabled="triggerToggling[t.id]"
-                      @click="toggleActive(t)"
-                    >
+                    <Button v-if="isDeactivatedOngoing(t) && isOrgOperator" data-testid="settings-triggers-reenable" size="small" severity="secondary" outlined :disabled="triggerToggling[t.id]" @click="toggleActive(t)">
                       {{ $t('views.SettingsTriggersView.re_enable') }}
                     </Button>
                   </div>
@@ -203,30 +185,40 @@
       <form @submit.prevent="saveTrigger" class="space-y-4">
         <div>
           <label for="settingstriggersview-pipeline" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.pipeline') }}</label>
-          <Select :aria-label="$t('views.SettingsTriggersView.pipeline')" v-model="form.pipeline_id">
-            <SelectTrigger id="settingstriggersview-pipeline" class="input-base" :aria-label="$t('views.SettingsTriggersView.pipeline')" data-testid="settings-triggers-form-pipeline">
-              <SelectValue :placeholder="$t('views.SettingsTriggersView.select_pipeline')" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</SelectItem>
-            </SelectContent>
-          </Select>
+          <Select
+  :aria-label="$t('views.SettingsTriggersView.pipeline')"
+  v-model="form.pipeline_id"
+  :placeholder="$t('views.SettingsTriggersView.select_pipeline')"
+  data-testid="settings-triggers-form-pipeline"
+  id="settingstriggersview-pipeline"
+  class="input-base"
+  :options="pipelines.map(p => ({ value: p.id, label: p.name }))"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
         </div>
 
         <div v-if="!editingId">
           <label for="settingstriggersview-trigger-type" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.trigger_type_label') }}</label>
-          <Select :aria-label="$t('views.SettingsTriggersView.trigger_type_label')" v-model="form.trigger_type">
-            <SelectTrigger id="settingstriggersview-trigger-type" class="input-base" :aria-label="$t('views.SettingsTriggersView.trigger_type_label')" data-testid="settings-triggers-form-type">
-              <SelectValue :placeholder="$t('views.SettingsTriggersView.select_type')" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="webhook">{{ $t('views.SettingsTriggersView.webhook') }}</SelectItem>
-              <SelectItem value="cron">{{ $t('views.SettingsTriggersView.cron') }}</SelectItem>
-              <SelectItem value="polling">{{ $t('views.SettingsTriggersView.polling') }}</SelectItem>
-              <SelectItem value="agent_signal">{{ $t('views.SettingsTriggersView.agent_signal') }}</SelectItem>
-              <SelectItem value="ongoing">{{ $t('views.SettingsTriggersView.ongoing') }}</SelectItem>
-            </SelectContent>
-          </Select>
+          <Select
+  :aria-label="$t('views.SettingsTriggersView.trigger_type_label')"
+  v-model="form.trigger_type"
+  :placeholder="$t('views.SettingsTriggersView.select_type')"
+  data-testid="settings-triggers-form-type"
+  id="settingstriggersview-trigger-type"
+  class="input-base"
+  :options="[{ value: 'webhook', label: $t('views.SettingsTriggersView.webhook') }, { value: 'cron', label: $t('views.SettingsTriggersView.cron') }, { value: 'polling', label: $t('views.SettingsTriggersView.polling') }, { value: 'agent_signal', label: $t('views.SettingsTriggersView.agent_signal') }, { value: 'ongoing', label: $t('views.SettingsTriggersView.ongoing') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
         </div>
         <div v-else class="text-sm text-muted-foreground">
           {{ $t('views.SettingsTriggersView.type_label') }}: <span class="font-medium">{{ typeLabel(editingType) }}</span>
@@ -246,16 +238,21 @@
           </div>
           <div>
             <label for="settingstriggersview-http-method" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.http_method') }}</label>
-            <Select :aria-label="$t('views.SettingsTriggersView.http_method')" v-model="form.webhook_method">
-              <SelectTrigger id="settingstriggersview-http-method" class="input-base" :aria-label="$t('views.SettingsTriggersView.http_method')" data-testid="settings-triggers-form-webhook-method">
-                <SelectValue :placeholder="$t('views.SettingsTriggersView.select_method')" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="POST">POST</SelectItem>
-                <SelectItem value="GET">GET</SelectItem>
-                <SelectItem value="PUT">PUT</SelectItem>
-              </SelectContent>
-            </Select>
+            <Select
+  :aria-label="$t('views.SettingsTriggersView.http_method')"
+  v-model="form.webhook_method"
+  :placeholder="$t('views.SettingsTriggersView.select_method')"
+  data-testid="settings-triggers-form-webhook-method"
+  id="settingstriggersview-http-method"
+  class="input-base"
+  :options="[{ value: 'POST', label: 'POST' }, { value: 'GET', label: 'GET' }, { value: 'PUT', label: 'PUT' }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
           </div>
           <div>
             <label for="settingstriggersview-field-11" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.headers_json') }}</label>
@@ -353,14 +350,21 @@
         <template v-if="form.trigger_type === 'agent_signal'">
           <div>
             <label for="settingstriggersview-source-pipeline" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.source_pipeline') }}</label>
-            <Select :aria-label="$t('views.SettingsTriggersView.source_pipeline')" v-model="form.signal_source_pipeline">
-              <SelectTrigger id="settingstriggersview-source-pipeline" class="input-base" :aria-label="$t('views.SettingsTriggersView.source_pipeline')" data-testid="settings-triggers-form-signal-pipeline">
-                <SelectValue :placeholder="$t('views.SettingsTriggersView.select_source_pipeline')" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</SelectItem>
-              </SelectContent>
-            </Select>
+            <Select
+  :aria-label="$t('views.SettingsTriggersView.source_pipeline')"
+  v-model="form.signal_source_pipeline"
+  :placeholder="$t('views.SettingsTriggersView.select_source_pipeline')"
+  data-testid="settings-triggers-form-signal-pipeline"
+  id="settingstriggersview-source-pipeline"
+  class="input-base"
+  :options="pipelines.map(p => ({ value: p.id, label: p.name }))"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
           </div>
           <div>
             <label for="settingstriggersview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.source_node_id') }}</label>
@@ -478,7 +482,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
 import { useApi } from '../composables/useApi'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 import { api, getAccessToken } from '../lib/api/client'
 import { decodeJwtPayload } from '../lib/jwt'
 import { formatApiError } from '../lib/api/formatError'
@@ -491,13 +495,7 @@ import TableActions from '../components/shared/TableActions.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import { shortId } from '../utils/format'
-import {
-  Select,
-  SelectTrigger,
-  SelectContent,
-  SelectItem,
-  SelectValue,
-} from '@/components/ui/select'
+import Select from 'primevue/select'
 
 const planStore = usePlanStore()
 const { t } = useI18n()

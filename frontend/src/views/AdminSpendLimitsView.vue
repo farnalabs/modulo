@@ -16,15 +16,14 @@
 
       <template v-else>
         <Card>
-          <CardHeader>
-            <CardTitle>{{ $t('views.AdminSpendLimitsView.org_level_daily_spend_limit') }}</CardTitle>
-            <CardDescription>{{ $t('views.AdminSpendLimitsView.maximum_daily_spend_across_all_teams_in_usd') }}</CardDescription>
-          </CardHeader>
-          <CardContent>
+          <template #title>{{ $t('views.AdminSpendLimitsView.org_level_daily_spend_limit') }}</template>
+<template #subtitle>{{ $t('views.AdminSpendLimitsView.maximum_daily_spend_across_all_teams_in_usd') }}</template>
+
+          <template #content>
             <div class="flex items-end gap-3">
               <div class="flex-1">
                 <span class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminSpendLimitsView.daily_limit_usd') }}</span>
-                <Input aria-label="Form control" :model-value="orgLimit ?? undefined" @update:model-value="(v: any) => orgLimit = v === '' ? null : Number(v)" type="number" min="0" step="0.01" placeholder="No limit" data-testid="admin-spend-limits-org-limit" />
+                <InputText aria-label="Form control" :model-value="orgLimit == null ? '' : String(orgLimit)" @update:model-value="(v: any) => orgLimit = v === '' ? null : Number(v)" type="number" min="0" step="0.01" placeholder="No limit" data-testid="admin-spend-limits-org-limit" />
               </div>
               <Button :disabled="savingOrg" data-testid="admin-spend-limits-org-save" @click="saveOrgLimit">
                 {{ savingOrg ? 'Saving...' : 'Save' }}
@@ -32,15 +31,14 @@
             </div>
             <p v-if="orgSaveError" class="mt-2 text-xs text-destructive">{{ orgSaveError }}</p>
             <p v-if="orgSaveSuccess" class="mt-2 text-xs text-success">{{ $t('views.AdminSpendLimitsView.org_limit_updated') }}</p>
-          </CardContent>
+          </template>
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle>{{ $t('views.AdminSpendLimitsView.per_team_spend_limits') }}</CardTitle>
-            <CardDescription>{{ $t('views.AdminSpendLimitsView.override_the_org_level_limit_for_specific_teams') }}</CardDescription>
-          </CardHeader>
-          <CardContent>
+          <template #title>{{ $t('views.AdminSpendLimitsView.per_team_spend_limits') }}</template>
+<template #subtitle>{{ $t('views.AdminSpendLimitsView.override_the_org_level_limit_for_specific_teams') }}</template>
+
+          <template #content>
             <div v-if="teams.length === 0" class="py-4 text-center text-sm text-muted-foreground">
               No teams found.
             </div>
@@ -56,8 +54,8 @@
                 <tr v-for="team in teams" :key="team.id" class="border-b last:border-b-0">
                   <td class="table-cell font-medium">{{ team.name }}</td>
                   <td class="table-cell">
-                    <Input aria-label="Form control"
-                      :model-value="team.editingLimit ?? undefined" @update:model-value="(v: any) => team.editingLimit = v === '' ? null : Number(v)"
+                    <InputText aria-label="Form control"
+                      :model-value="team.editingLimit == null ? '' : String(team.editingLimit)" @update:model-value="(v: any) => team.editingLimit = v === '' ? null : Number(v)"
                       type="number"
                       min="0"
                       step="0.01"
@@ -68,22 +66,21 @@
                     <p v-if="team.saveError" class="mt-1 text-xs text-destructive">{{ team.saveError }}</p>
                   </td>
                   <td class="table-cell-numeric">
-                    <Button size="sm" :disabled="team.saving" :data-testid="'admin-spend-limits-team-save-' + team.id" @click="saveTeamLimit(team)">
+                    <Button size="small" :disabled="team.saving" :data-testid="'admin-spend-limits-team-save-' + team.id" @click="saveTeamLimit(team)">
                       {{ team.saving ? 'Saving...' : 'Save' }}
                     </Button>
                   </td>
                 </tr>
               </tbody>
             </table>
-          </CardContent>
+          </template>
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle>{{ $t('views.AdminSpendLimitsView.current_spend') }}</CardTitle>
-            <CardDescription>{{ $t('views.AdminSpendLimitsView.todays_accrued_costs_across_all_teams') }}</CardDescription>
-          </CardHeader>
-          <CardContent>
+          <template #title>{{ $t('views.AdminSpendLimitsView.current_spend') }}</template>
+<template #subtitle>{{ $t('views.AdminSpendLimitsView.todays_accrued_costs_across_all_teams') }}</template>
+
+          <template #content>
             <LoadingSpinner v-if="costsLoading" />
             <div v-else-if="costsError" class="text-sm text-destructive">{{ costsError }}</div>
             <div v-else class="space-y-4">
@@ -107,7 +104,7 @@
               </div>
               <p v-else class="text-sm text-muted-foreground">{{ $t('views.AdminSpendLimitsView.no_team_cost_data_available') }}</p>
             </div>
-          </CardContent>
+          </template>
         </Card>
       </template>
       </div>
@@ -125,9 +122,9 @@ import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card'
-import { Input } from '../components/ui/input'
-import { Button } from '../components/ui/button'
+import Card from 'primevue/card'
+import InputText from 'primevue/inputtext'
+import Button from 'primevue/button'
 import PageTabs from "../components/PageTabs.vue"
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'

@@ -3,24 +3,22 @@
     <span v-if="label" class="text-sm font-medium leading-none">
       {{ label }}
     </span>
-    <PopoverRoot v-model:open="open">
-      <PopoverTrigger
-        as="button"
-        type="button"
-        class="flex w-full items-center justify-between rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50 [&>svg]:shrink-0 transition-colors"
-      >
-        <span v-if="selectedLabel">{{ selectedLabel }}</span>
-        <span v-else class="text-muted-foreground">{{ $t('components.OwnershipPicker.select_ownership') }}</span>
-        <ChevronDown
-          class="h-4 w-4 text-muted-foreground transition-transform duration-200"
-          :class="open && 'rotate-180'"
-        />
-      </PopoverTrigger>
-      <PopoverContent
-        class="z-50 w-[--radix-popover-trigger-width] min-w-[200px] overflow-hidden rounded-lg border bg-popover p-1 text-popover-foreground shadow-md"
-        :side-offset="4"
-        align="start"
-      >
+    <button
+      type="button"
+      class="flex w-full items-center justify-between rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50 [&>svg]:shrink-0 transition-colors"
+      aria-haspopup="dialog"
+      :aria-expanded="open"
+      @click="togglePopover"
+    >
+      <span v-if="selectedLabel">{{ selectedLabel }}</span>
+      <span v-else class="text-muted-foreground">{{ $t('components.OwnershipPicker.select_ownership') }}</span>
+      <ChevronDown
+        class="h-4 w-4 text-muted-foreground transition-transform duration-200"
+        :class="open && 'rotate-180'"
+      />
+    </button>
+    <Popover ref="popoverRef" :dismissable="true" @show="open = true" @hide="open = false">
+      <div class="min-w-[200px] p-1">
         <button
           type="button"
           class="relative flex w-full cursor-default select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground"
@@ -72,14 +70,14 @@
             >
           </button>
         </template>
-      </PopoverContent>
-    </PopoverRoot>
+      </div>
+    </Popover>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
-import { PopoverRoot, PopoverTrigger, PopoverContent } from "radix-vue";
+import Popover from "primevue/popover";
 import { useI18n } from "vue-i18n";
 import { ChevronDown, Globe, Users } from "@lucide/vue";
 import { api } from "../lib/api/client";
@@ -104,9 +102,15 @@ const emit = defineEmits<{
 const { t } = useI18n();
 
 const open = ref(false);
+const popoverRef = ref<InstanceType<typeof Popover> | null>(null);
 const teams = ref<TeamItem[]>([]);
 const loading = ref(true);
 const fetchError = ref<string | null>(null);
+
+function togglePopover(event: Event) {
+  open.value = !open.value;
+  popoverRef.value?.toggle(event);
+}
 
 const selectedLabel = computed(() => {
   if (!props.modelValue) return null;
@@ -120,11 +124,13 @@ const selectedLabel = computed(() => {
 function selectOrg() {
   emit("update:modelValue", { owner_team_id: null, visibility: "org" });
   open.value = false;
+  popoverRef.value?.hide();
 }
 
 function selectTeam(team: TeamItem) {
   emit("update:modelValue", { owner_team_id: team.id, visibility: "team" });
   open.value = false;
+  popoverRef.value?.hide();
 }
 
 async function loadTeams() {

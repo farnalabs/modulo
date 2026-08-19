@@ -137,13 +137,7 @@
         </div>
 
         <div class="flex items-center gap-3">
-          <Button
-            :disabled="creating"
-            variant="default"
-            class="px-6 py-2.5"
-            @click="createPipeline"
-            data-testid="library-wizard-create"
-          >
+          <Button :disabled="creating" class="px-6 py-2.5" @click="createPipeline" data-testid="library-wizard-create">
             {{ creating ? $t('views.LibraryPipelineWizard.creating') : $t('views.LibraryPipelineWizard.create_pipeline') }}
           </Button>
           <button
@@ -182,7 +176,7 @@ import { ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import PageHeader from '../components/shared/PageHeader.vue'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'

@@ -6,12 +6,7 @@
         subtitle="Scan for cleanup candidates across your organisation"
       >
         <template #actions>
-          <Button
-            variant="outline"
-            data-testid="hk-refresh"
-            :disabled="loading"
-            @click="scan"
-          >
+          <Button severity="secondary" outlined data-testid="hk-refresh" :disabled="loading" @click="scan">
             {{ loading ? 'Scanning…' : 'Refresh Scan' }}
           </Button>
         </template>
@@ -27,7 +22,7 @@
         data-testid="hk-error"
       >
         <p class="text-sm text-destructive">{{ error }}</p>
-        <Button variant="outline" size="sm" class="mt-2" @click="scan" data-testid="hk-retry">
+        <Button severity="secondary" outlined size="small" class="mt-2" @click="scan" data-testid="hk-retry">
           Retry
         </Button>
       </div>
@@ -58,12 +53,7 @@
             {{ totalCount }} total candidate{{ totalCount === 1 ? '' : 's' }}
           </span>
           <div class="ml-auto">
-            <Button
-              v-if="selectedCount > 0"
-              variant="destructive"
-              data-testid="hk-delete-selected"
-              @click="confirmDelete"
-            >
+            <Button v-if="selectedCount > 0" severity="danger" data-testid="hk-delete-selected" @click="confirmDelete">
               Delete {{ selectedCount }} Selected
             </Button>
           </div>
@@ -124,33 +114,30 @@
         </div>
       </div>
 
-      <Dialog v-if="showConfirm" :open="showConfirm" @update:open="showConfirm = false">
-        <DialogContent data-testid="hk-confirm-dialog">
-          <DialogHeader>
-            <DialogTitle>{{ $t('views.AdminHousekeepingView.confirm_cleanup') }}</DialogTitle>
-            <DialogDescription>
+      <Dialog v-if="showConfirm" :visible="showConfirm" :modal="true" :dismissable-mask="true" data-testid="hk-confirm-dialog" @update:visible="showConfirm = false">
+        <template #header>
+          <div>
+            <div class="text-lg font-semibold">{{ $t('views.AdminHousekeepingView.confirm_cleanup') }}</div>
+            <div class="mt-0.5 text-sm text-muted-foreground">
               This will delete the following items. This action cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <div class="max-h-48 space-y-2 overflow-y-auto">
-            <div v-for="(ids, et) in groupedConfirmItems" :key="et">
-              <p class="text-sm font-medium">{{ et }} ({{ ids.length }})</p>
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" @click="showConfirm = false" data-testid="hk-cancel-cleanup">
+        </template>
+        <div class="max-h-48 space-y-2 overflow-y-auto">
+          <div v-for="(ids, et) in groupedConfirmItems" :key="et">
+            <p class="text-sm font-medium">{{ et }} ({{ ids.length }})</p>
+          </div>
+        </div>
+        <template #footer>
+          <div class="flex gap-2 justify-end">
+            <Button severity="secondary" outlined @click="showConfirm = false" data-testid="hk-cancel-cleanup">
               Cancel
             </Button>
-            <Button
-              variant="destructive"
-              :disabled="cleaningUp"
-              data-testid="hk-confirm-cleanup"
-              @click="doCleanup"
-            >
+            <Button severity="danger" :disabled="cleaningUp" data-testid="hk-confirm-cleanup" @click="doCleanup">
               {{ cleaningUp ? 'Cleaning up…' : `Delete ${selectedCount} items` }}
             </Button>
-          </DialogFooter>
-        </DialogContent>
+          </div>
+        </template>
       </Dialog>
     </div>
   </FeatureGate>
@@ -159,18 +146,11 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useApi } from '../composables/useApi'
-import { Button } from '../components/ui/button'
+import Button from 'primevue/button'
+import Dialog from 'primevue/dialog'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '../components/ui/dialog'
 import FeatureGate from '../components/FeatureGate.vue'
 
 interface CandidateItem {

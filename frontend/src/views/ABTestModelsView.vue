@@ -14,31 +14,38 @@
       <div class="flex flex-wrap items-center gap-4">
         <label class="flex items-center gap-2 text-sm">
           <span class="text-muted-foreground">{{ $t('views.ABTestModelsView.pipeline') }}</span>
-          <Select v-model="selectedPipelineId">
-            <SelectTrigger class="min-w-[280px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Pipeline" data-testid="ab-test-models-pipeline-select">
-              <SelectValue :placeholder="$t('views.ABTestModelsView.select_a_pipeline')" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">
-                {{ p.name }}
-              </SelectItem>
-            </SelectContent>
-          </Select>
+          <Select
+  v-model="selectedPipelineId"
+  :placeholder="$t('views.ABTestModelsView.select_a_pipeline')"
+  data-testid="ab-test-models-pipeline-select"
+  aria-label="Pipeline"
+  class="min-w-[280px]"
+  :options="pipelines.map(p => ({ value: p.id, label: p.name }))"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
         </label>
 
         <label class="flex items-center gap-2 text-sm">
           <span class="text-muted-foreground">{{ $t('views.ABTestModelsView.existing_group') }}</span>
-          <Select v-model="selectedGroupId">
-            <SelectTrigger class="min-w-[200px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Existing group" data-testid="ab-test-models-group-select">
-              <SelectValue :placeholder="$t('views.ABTestModelsView.new_group')" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__all__">{{ $t('views.ABTestModelsView.new_variant_group') }}</SelectItem>
-              <SelectItem v-for="g in filteredGroups" :key="g.id" :value="g.id">
-                {{ g.name }}
-              </SelectItem>
-            </SelectContent>
-          </Select>
+          <Select
+  v-model="selectedGroupId"
+  :placeholder="$t('views.ABTestModelsView.new_group')"
+  data-testid="ab-test-models-group-select"
+  aria-label="Existing group"
+  class="min-w-[200px]"
+  :options="[{ value: '__all__', label: $t('views.ABTestModelsView.new_variant_group') }, ...filteredGroups.map(g => ({ value: g.id, label: g.name }))]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
         </label>
       </div>
 
@@ -78,14 +85,7 @@
           <div class="space-y-3">
             <div class="flex items-center justify-between">
               <h3 class="text-sm font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.variants_title') }}</h3>
-              <Button
-                :disabled="modelBackends.length === 0"
-                data-testid="ab-test-models-add-variant"
-                variant="default"
-                size="sm"
-                class="px-3 py-1.5"
-                @click="addVariant"
-              >
+              <Button :disabled="modelBackends.length === 0" data-testid="ab-test-models-add-variant" size="small" class="px-3 py-1.5" @click="addVariant">
                 + Add Variant
               </Button>
             </div>
@@ -122,20 +122,21 @@
                 </div>
                 <div>
                   <label for="abtestmodelsview-field-4" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.model_backend') }}</label>
-                  <Select aria-label="Model backend" v-model="v.modelBackendId">
-                    <SelectTrigger id="abtestmodelsview-field-4" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Model backend" :data-testid="`ab-test-models-model-backend-${i}`">
-                      <SelectValue :placeholder="$t('views.ABTestModelsView.select_model')" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem
-                        v-for="mb in modelBackends"
-                        :key="mb.id"
-                        :value="mb.id"
-                      >
-                        {{ mb.display_name }} ({{ mb.provider }})
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Select
+  aria-label="Model backend"
+  v-model="v.modelBackendId"
+  :placeholder="$t('views.ABTestModelsView.select_model')"
+  :data-testid="`ab-test-models-model-backend-${i}`"
+  id="abtestmodelsview-field-4"
+  class="w-full"
+  :options="modelBackends.map(mb => ({ value: mb.id, label: mb.display_name + '(' + mb.provider + ')' }))"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
                 </div>
                 <div>
                   <label for="abtestmodelsview-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">
@@ -157,13 +158,7 @@
           </div>
 
           <div class="flex flex-wrap gap-3 pt-2">
-            <Button
-              :disabled="!canRun"
-              data-testid="ab-test-models-run-ab-test"
-              variant="default"
-              class="px-5 py-2"
-              @click="saveAndRun"
-            >
+            <Button :disabled="!canRun" data-testid="ab-test-models-run-ab-test" class="px-5 py-2" @click="saveAndRun">
               <span v-if="running" class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
               {{ running ? $t('views.ABTestModelsView.running') : $t('views.ABTestModelsView.run_ab_test') }}
             </Button>
@@ -286,17 +281,11 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageTabs from "../components/PageTabs.vue"
 import PageHeader from '../components/shared/PageHeader.vue'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 import EmptyState from '../components/shared/EmptyState.vue'
 import { shortId } from '../utils/format'
 import { formatApiError } from '../lib/api/formatError'
-import {
-  Select,
-  SelectTrigger,
-  SelectContent,
-  SelectItem,
-  SelectValue,
-} from '@/components/ui/select'
+import Select from 'primevue/select'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
 import { TERMINAL_STATUSES } from '../constants/runStatuses'

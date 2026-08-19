@@ -2,7 +2,6 @@
   <FeatureGate feature-name="remy" required-tier="team" show-disabled>
   <div data-theme="agent" class="page-wide">
     <PageHeader :title="$t('views.AdminRemyView.remy_configuration')" :subtitle="$t('views.AdminRemyView.configure_remy_ai_assistant_behaviour_access_and_skills')" />
-
     <template v-if="loading">
       <div class="rounded-xl border border-border bg-card p-6 space-y-4">
         <div class="h-5 w-48 animate-pulse rounded bg-muted" />
@@ -15,13 +14,11 @@
           </div>
         </div>
       </div>
-
       <div class="rounded-xl border border-border bg-card p-6 space-y-4 mt-6">
         <div class="h-5 w-40 animate-pulse rounded bg-muted" />
         <div class="h-3 w-80 animate-pulse rounded bg-muted" />
         <div class="h-24 w-full animate-pulse rounded bg-muted mt-4" />
       </div>
-
       <div class="rounded-xl border border-border bg-card p-6 space-y-4 mt-6">
         <div class="h-5 w-36 animate-pulse rounded bg-muted" />
         <div class="h-3 w-72 animate-pulse rounded bg-muted" />
@@ -29,13 +26,11 @@
           <div v-for="n in 3" :key="n" class="h-12 w-full animate-pulse rounded bg-muted" />
         </div>
       </div>
-
       <div class="rounded-xl border border-border bg-card p-6 space-y-4 mt-6">
         <div class="h-5 w-36 animate-pulse rounded bg-muted" />
         <div class="h-3 w-64 animate-pulse rounded bg-muted" />
         <div class="h-32 w-full animate-pulse rounded bg-muted mt-4" />
       </div>
-
       <div class="rounded-xl border border-border bg-card p-6 space-y-4 mt-6">
         <div class="h-5 w-28 animate-pulse rounded bg-muted" />
         <div class="h-3 w-56 animate-pulse rounded bg-muted" />
@@ -45,28 +40,22 @@
       </div>
     </template>
     <template v-else>
-      <TooltipProvider>
       <!-- Configured Providers -->
       <SectionCard
         :title="$t('views.AdminRemyView.configured_providers')"
         :description="$t('views.AdminRemyView.api_keys_configured_for_each_llm_provider_remy_will_use_thes')"
         data-testid="remy-providers"
       >
-
         <div v-if="providersLoading" class="py-4 text-center text-sm text-muted-foreground">
           Loading provider status...
         </div>
         <div v-else class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5">
-          <Tooltip
-            v-for="p in providerStatus"
-            :key="p.id"
-            :delay-duration="300"
-          >
-            <TooltipTrigger as-child>
-              <span
+          <span
+                v-for="p in providerStatus"
+                :key="p.id"
                 class="flex flex-col items-center gap-2 rounded-lg border p-4 text-center transition-all cursor-help"
                 :class="p.configured ? 'border-success/40 bg-success/5' : 'border-muted bg-muted/20 opacity-60'"
-              >
+                v-tooltip.top="providerTooltip(p)">
                 <span
                   class="flex h-10 w-10 items-center justify-center rounded-full text-lg font-bold"
                   :class="p.configured ? 'bg-success/20 text-success' : 'bg-muted text-muted-foreground'"
@@ -79,32 +68,17 @@
                   {{ p.configured ? 'Configured' : 'Not set' }}
                 </span>
               </span>
-            </TooltipTrigger>
-            <TooltipContent side="top" class="max-w-xs text-left">
-              <p class="font-semibold">{{ p.configured ? 'Remy can route to ' + p.label : 'No API key for ' + p.label }}</p>
-              <p v-if="!p.configured" class="text-muted-foreground text-[10px]">{{ tooltipAddOneInModelBackends }}</p>
-            </TooltipContent>
-          </Tooltip>
         </div>
         <div class="mt-3 text-xs text-muted-foreground">
-          <Tooltip :delay-duration="300">
-            <TooltipTrigger as-child>
-              <router-link :to="{ name: 'admin-model-backends' }" class="underline hover:text-foreground">{{ $t('views.AdminRemyView.manage_model_backends') }}</router-link>
-            </TooltipTrigger>
-            <TooltipContent side="top">
-              <p>{{ tooltipAddEditRemoveApiKeys }}</p>
-            </TooltipContent>
-          </Tooltip>
+          <router-link :to="{ name: 'admin-model-backends' }" class="underline hover:text-foreground" v-tooltip.top="tooltipAddEditRemoveApiKeys">{{ $t('views.AdminRemyView.manage_model_backends') }}</router-link>
         </div>
       </SectionCard>
-
       <!-- Custom Backends -->
       <SectionCard
         :title="$t('views.AdminRemyView.custom_backends')"
         :description="$t('views.AdminRemyView.custom_backends_description')"
         data-testid="remy-custom-backends"
       >
-
         <div v-if="providersLoading" class="py-4 text-center text-sm text-muted-foreground">
           Loading...
         </div>
@@ -139,13 +113,11 @@
           </div>
         </div>
       </SectionCard>
-
       <!-- Access List -->
       <SectionCard
         :title="$t('views.AdminRemyView.access_list')"
         :description="$t('views.AdminRemyView.control_who_can_use_remy_within_the_organisation')"
       >
-
         <div class="space-y-6">
           <!-- Users -->
           <div>
@@ -161,7 +133,6 @@
               test-id="remy-access-users"
             />
           </div>
-
           <!-- Teams -->
           <div>
             <span class="mb-2 block text-sm font-medium">{{ $t('views.AdminRemyView.teams') }}</span>
@@ -176,21 +147,17 @@
               test-id="remy-access-teams"
             />
           </div>
-
           <!-- Org roles -->
           <div>
-            <Tooltip :delay-duration="300">
-              <TooltipTrigger as-child>
-                <span class="mb-1 block text-sm font-medium cursor-help">{{ $t('views.AdminRemyView.org_roles') }}</span>
-              </TooltipTrigger>
-              <TooltipContent side="right" class="max-w-xs">
-                <p>{{ tooltipUsersWithSelectedRoles }}</p>
-              </TooltipContent>
-            </Tooltip>
+            <span class="mb-1 block text-sm font-medium cursor-help" v-tooltip.right="tooltipUsersWithSelectedRoles">{{ $t('views.AdminRemyView.org_roles') }}</span>
             <div class="flex flex-wrap gap-4">
-              <Tooltip v-for="role in orgRoles" :key="role" :delay-duration="300">
-                <TooltipTrigger as-child>
-                  <label for="adminremyview-field-13" class="flex items-center gap-2 text-sm cursor-pointer">
+              <label
+                  v-for="role in orgRoles"
+                  :key="role"
+                  for="adminremyview-field-13"
+                  class="flex items-center gap-2 text-sm cursor-pointer"
+                  v-tooltip.top="role === 'admin' ? 'Full access to all settings and Remy configuration.' : role === 'operator' ? 'Can create and manage pipelines, use Remy.' : role === 'runner' ? 'Can execute pipeline runs, use Remy.' : 'Read-only access - can view but not edit, use Remy.'"
+                >
                     <input id="adminremyview-field-13"
                       type="checkbox"
                       :value="role"
@@ -200,33 +167,18 @@
                     />
                     {{ role }}
                   </label>
-                </TooltipTrigger>
-                <TooltipContent side="top" class="max-w-xs">
-                  <p>{{ role === 'admin' ? 'Full access to all settings and Remy configuration.' : role === 'operator' ? 'Can create and manage pipelines, use Remy.' : role === 'runner' ? 'Can execute pipeline runs, use Remy.' : 'Read-only access - can view but not edit, use Remy.' }}</p>
-                </TooltipContent>
-              </Tooltip>
             </div>
           </div>
-
           <div v-if="accessError" class="text-sm text-destructive">{{ accessError }}</div>
-          <Tooltip :delay-duration="300">
-            <TooltipTrigger as-child>
-                <Button
+          <Button
                   :disabled="accessSaving"
-                  variant="default"
                   data-testid="remy-access-save"
                   @click="saveAccessList"
-                >
+                 v-tooltip.top="tooltipSaveCurrentAccessList">
                   {{ accessSaving ? 'Saving...' : 'Save Access List' }}
                 </Button>
-            </TooltipTrigger>
-            <TooltipContent side="top">
-              <p>{{ tooltipSaveCurrentAccessList }}</p>
-            </TooltipContent>
-          </Tooltip>
         </div>
       </SectionCard>
-
       <!-- Default Model Configuration -->
       <SectionCard
         :title="$t('views.AdminRemyView.default_model_configuration')"
@@ -235,14 +187,16 @@
         <div class="space-y-4">
           <div>
             <label for="adminremyview-field-12" class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.default_provider') }}</label>
-            <Select aria-label="Default Provider" v-model="modelConfig.defaultProvider">
-              <SelectTrigger id="adminremyview-field-12" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Default Provider" data-testid="remy-model-provider">
-                <SelectValue placeholder="Select provider" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem v-for="p in availableProviders.native" :key="p.id" :value="p.id">{{ p.label }}</SelectItem>
-              </SelectContent>
-            </Select>
+            <Select
+                aria-label="Default Provider"
+                v-model="modelConfig.defaultProvider"
+                data-testid="remy-model-provider"
+                class="w-full"
+                :options="availableProviders.native.map((p) => ({ value: p.id, label: p.label }))"
+                option-label="label"
+                option-value="value"
+                placeholder="Select provider"
+              />
           </div>
           <div>
             <label for="adminremyview-field-11" class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.default_model') }}</label>
@@ -292,24 +246,15 @@
             />
           </div>
             <div v-if="modelError" class="text-sm text-destructive">{{ modelError }}</div>
-            <Tooltip :delay-duration="300">
-              <TooltipTrigger as-child>
-                <Button
+            <Button
                   :disabled="modelSaving"
-                  variant="default"
                   data-testid="remy-model-save"
                   @click="saveModelConfig"
-                >
+                 v-tooltip.top="tooltipSaveDefaultModelProvider">
                   {{ modelSaving ? 'Saving...' : 'Save Model Config' }}
                 </Button>
-              </TooltipTrigger>
-              <TooltipContent side="top">
-                <p>{{ tooltipSaveDefaultModelProvider }}</p>
-              </TooltipContent>
-            </Tooltip>
         </div>
       </SectionCard>
-
       <!-- System Prompt -->
       <SectionCard
         :title="$t('views.AdminRemyView.system_prompt')"
@@ -327,30 +272,20 @@
             />
           </div>
             <div v-if="promptError" class="text-sm text-destructive">{{ promptError }}</div>
-            <Tooltip :delay-duration="300">
-              <TooltipTrigger as-child>
-                <Button
+            <Button
                   :disabled="promptSaving"
-                  variant="default"
                   data-testid="remy-prompt-save"
                   @click="saveSystemPrompt"
-                >
+                  v-tooltip.top="tooltipSaveBaseSystemPrompt">
                   {{ promptSaving ? 'Saving...' : 'Save System Prompt' }}
                 </Button>
-              </TooltipTrigger>
-              <TooltipContent side="top">
-                <p>Save the base system prompt that guides Remy's behaviour.</p>
-              </TooltipContent>
-            </Tooltip>
         </div>
       </SectionCard>
-
       <!-- Additional Guidance -->
       <SectionCard
         :title="$t('views.AdminRemyView.additional_guidance')"
         :description="$t('views.AdminRemyView.extra_instructions_to_append_to_the_system_prompt')"
       >
-
         <div class="space-y-4">
           <div>
             <textarea
@@ -363,41 +298,35 @@
             />
           </div>
             <div v-if="guidanceError" class="text-sm text-destructive">{{ guidanceError }}</div>
-            <Tooltip :delay-duration="300">
-              <TooltipTrigger as-child>
-                <Button
+            <Button
                   :disabled="guidanceSaving"
-                  variant="default"
                   data-testid="remy-guidance-save"
                   @click="saveGuidance"
-                >
+                 v-tooltip.top="tooltipSaveExtraInstructions">
                   {{ guidanceSaving ? 'Saving...' : 'Save Guidance' }}
                 </Button>
-              </TooltipTrigger>
-              <TooltipContent side="top">
-                <p>{{ tooltipSaveExtraInstructions }}</p>
-              </TooltipContent>
-            </Tooltip>
         </div>
       </SectionCard>
-
       <!-- Tool Permissions -->
       <SectionCard title="Tool Permissions" description="Control which UI actions Remy can perform and whether approval is required.">
         <div class="mb-6">
           <label for="adminremyview-field-13" class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.permission_mode') }}</label>
-          <Select aria-label="Permission Mode" v-model="toolPermMode" @update:model-value="applyModePreset">
-            <SelectTrigger id="adminremyview-field-13" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Permission Mode">
-              <SelectValue placeholder="Select mode" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="safe">Safe – read ops auto-allowed, destructive actions require approval (recommended)</SelectItem>
-              <SelectItem value="full_auto">Full Auto – all actions auto-allowed (with destructive override)</SelectItem>
-              <SelectItem value="locked_down">Locked Down – all write actions require approval</SelectItem>
-              <SelectItem value="custom">Custom – manual per-tool configuration</SelectItem>
-            </SelectContent>
-          </Select>
+          <Select
+            aria-label="Permission Mode"
+            v-model="toolPermMode"
+            class="w-full"
+            :options="[
+              { value: 'safe', label: 'Safe – read ops auto-allowed, destructive actions require approval (recommended)' },
+              { value: 'full_auto', label: 'Full Auto – all actions auto-allowed (with destructive override)' },
+              { value: 'locked_down', label: 'Locked Down – all write actions require approval' },
+              { value: 'custom', label: 'Custom – manual per-tool configuration' },
+            ]"
+            option-label="label"
+            option-value="value"
+            placeholder="Select mode"
+            @update:model-value="applyModePreset"
+          />
         </div>
-
         <div class="table-wrapper">
           <table class="w-full text-left text-sm">
             <thead>
@@ -412,28 +341,30 @@
                 <td class="table-cell font-mono text-xs">{{ toolName }}</td>
                 <td class="table-cell text-muted-foreground text-xs">{{ info.description }}</td>
                 <td class="table-cell">
-                  <Select aria-label="Tool permission" v-model="toolPerms[toolName]" :disabled="toolPermMode !== 'custom'">
-                    <SelectTrigger class="rounded border border-input bg-background px-2 py-1 text-xs" aria-label="Tool permission">
-                      <SelectValue placeholder="Select" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="always_allowed">{{ $t('views.AdminRemyView.auto_allow') }}</SelectItem>
-                      <SelectItem value="requires_approval">{{ $t('views.AdminRemyView.requires_approval') }}</SelectItem>
-                      <SelectItem value="disabled">{{ $t('views.AdminRemyView.disabled') }}</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Select
+                    aria-label="Tool permission"
+                    v-model="toolPerms[toolName]"
+                    :disabled="toolPermMode !== 'custom'"
+                    class="rounded border border-input bg-background px-2 py-1 text-xs"
+                    :options="[
+                      { value: 'always_allowed', label: $t('views.AdminRemyView.auto_allow') },
+                      { value: 'requires_approval', label: $t('views.AdminRemyView.requires_approval') },
+                      { value: 'disabled', label: $t('views.AdminRemyView.disabled') },
+                    ]"
+                    option-label="label"
+                    option-value="value"
+                    placeholder="Select"
+                  />
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
-
         <div v-if="toolPermError" class="mt-2 text-sm text-destructive">{{ toolPermError }}</div>
-        <Button :disabled="toolPermSaving" variant="default" class="mt-4" @click="saveToolPerms">
+        <Button :disabled="toolPermSaving" class="mt-4" @click="saveToolPerms">
           {{ toolPermSaving ? 'Saving...' : 'Save Tool Permissions' }}
         </Button>
       </SectionCard>
-
       <!-- Safety & Limits -->
       <SectionCard title="Safety &amp; Limits" description="Configure rate limits, auto-execution thresholds, and no-go patterns for Remy's browser automation.">
         <div class="space-y-4">
@@ -525,29 +456,19 @@
             />
           </div>
           <div v-if="safetyError" class="text-sm text-destructive">{{ safetyError }}</div>
-          <Tooltip :delay-duration="300">
-            <TooltipTrigger as-child>
-              <Button
+          <Button
                 :disabled="safetySaving"
-                variant="default"
                 data-testid="remy-safety-save"
                 @click="saveSafetyConfig"
-              >
+               v-tooltip.top="tooltipSaveRateLimits">
                 {{ safetySaving ? 'Saving...' : 'Save Safety Config' }}
               </Button>
-            </TooltipTrigger>
-            <TooltipContent side="top">
-              <p>{{ tooltipSaveRateLimits }}</p>
-            </TooltipContent>
-          </Tooltip>
         </div>
       </SectionCard>
-
       <!-- Skills Manager -->
       <SectionCard title="Skills" :description="$t('views.AdminRemyView.organisationlevel_skills_that_remy_can_use')">
         <template #header>
           <Button
-            variant="default"
             class="border border-primary/30"
             data-testid="remy-skills-add"
             @click="skillDialogRef?.openCreate()"
@@ -555,7 +476,6 @@
             Add Skill
           </Button>
         </template>
-
         <div v-if="skills.length === 0" class="py-8 text-center">
           <p class="text-sm text-muted-foreground">{{ $t('views.AdminRemyView.no_skills_configured_yet') }}</p>
         </div>
@@ -578,14 +498,7 @@
               >
                 <td class="table-cell font-medium">{{ skill.name }}</td>
                 <td class="table-cell text-muted-foreground max-w-xs truncate">
-                  <Tooltip :delay-duration="300">
-                    <TooltipTrigger as-child>
-                      <span>{{ skill.description || '-' }}</span>
-                    </TooltipTrigger>
-                    <TooltipContent side="top" class="max-w-xs">
-                      <p>{{ skill.description || '-' }}</p>
-                    </TooltipContent>
-                  </Tooltip>
+                  <span v-tooltip.top="skill.description || '-'">{{ skill.description || '-' }}</span>
                 </td>
                 <td class="table-cell">
                   <div class="flex flex-wrap gap-1">
@@ -643,20 +556,17 @@
         </div>
         <div v-if="skillError" class="px-3 pt-2 text-sm text-destructive">{{ skillError }}</div>
       </SectionCard>
-
       <RemySkillDialog
         ref="skillDialogRef"
         create-description="Create a new organisation-level skill for Remy."
         edit-description="Update the skill configuration."
         @saved="loadSkills"
       />
-
       <!-- Knowledge Sources -->
       <SectionCard
         :title="$t('views.AdminRemyView.knowledge_sources')"
         :description="$t('views.AdminRemyView.control_what_remy_knows')"
       >
-
         <div v-if="contextLoading" class="py-4 text-center text-sm text-muted-foreground">{{ $t('views.AdminRemyView.loading_sources') }}</div>
         <div v-else class="table-wrapper">
           <table class="w-full text-left text-sm">
@@ -670,26 +580,24 @@
             <tbody class="divide-y">
               <tr v-for="src in contextSourceDefs" :key="src.key" class="hover:bg-muted/30 transition-colors">
                 <td class="table-cell">
-                  <Tooltip :delay-duration="300">
-                    <TooltipTrigger as-child>
-                      <span class="font-medium cursor-help">{{ src.label }}</span>
-                    </TooltipTrigger>
-                    <TooltipContent side="top" class="max-w-xs">
-                      <p>{{ src.label }}</p>
-                    </TooltipContent>
-                  </Tooltip>
+                  <span class="font-medium cursor-help" v-tooltip.top="src.label">{{ src.label }}</span>
                 </td>
                 <td class="table-cell">
-                  <Select aria-label="Context source mode" v-model="contextSources[src.key]" :disabled="contextSaving" @update:model-value="saveContextSource(src.key)">
-                    <SelectTrigger class="rounded border border-input bg-background px-2 py-1 text-xs" aria-label="Context source mode">
-                      <SelectValue placeholder="Select" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="always_on">{{ $t('views.AdminRemyView.always_on') }}</SelectItem>
-                      <SelectItem value="tool">{{ $t('views.AdminRemyView.tool') }}</SelectItem>
-                      <SelectItem value="off">{{ $t('views.AdminRemyView.off') }}</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Select
+                    aria-label="Context source mode"
+                    v-model="contextSources[src.key]"
+                    :disabled="contextSaving"
+                    class="rounded border border-input bg-background px-2 py-1 text-xs"
+                    :options="[
+                      { value: 'always_on', label: $t('views.AdminRemyView.always_on') },
+                      { value: 'tool', label: $t('views.AdminRemyView.tool') },
+                      { value: 'off', label: $t('views.AdminRemyView.off') },
+                    ]"
+                    option-label="label"
+                    option-value="value"
+                    placeholder="Select"
+                    @update:model-value="saveContextSource(src.key)"
+                  />
                 </td>
                 <td class="table-cell table-cell-numeric text-xs text-muted-foreground">
                   <span v-if="src.tokens">{{ src.tokens }}</span>
@@ -701,7 +609,6 @@
         </div>
         <div v-if="contextError" class="mt-2 text-sm text-destructive">{{ contextError }}</div>
       </SectionCard>
-
       <!-- Skills as Knowledge Sources -->
       <SectionCard
         v-if="skills.length > 0"
@@ -720,23 +627,27 @@
               <tr v-for="skill in skills" :key="skill.id" class="hover:bg-muted/30 transition-colors">
                 <td class="table-cell font-medium">{{ skill.name }}</td>
                 <td class="table-cell">
-                  <Select aria-label="Skill knowledge mode" v-model="skillModes[skill.id]" :disabled="skillModeSaving[skill.id]" @update:model-value="saveSkillSourceMode(skill)">
-                    <SelectTrigger class="rounded border border-input bg-background px-2 py-1 text-xs" aria-label="Skill knowledge mode">
-                      <SelectValue placeholder="Select" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="always_on">{{ $t('views.AdminRemyView.always_on') }}</SelectItem>
-                      <SelectItem value="tool">{{ $t('views.AdminRemyView.tool') }}</SelectItem>
-                      <SelectItem value="off">{{ $t('views.AdminRemyView.off') }}</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Select
+                    aria-label="Skill knowledge mode"
+                    v-model="skillModes[skill.id]"
+                    :disabled="skillModeSaving[skill.id]"
+                    class="rounded border border-input bg-background px-2 py-1 text-xs"
+                    :options="[
+                      { value: 'always_on', label: $t('views.AdminRemyView.always_on') },
+                      { value: 'tool', label: $t('views.AdminRemyView.tool') },
+                      { value: 'off', label: $t('views.AdminRemyView.off') },
+                    ]"
+                    option-label="label"
+                    option-value="value"
+                    placeholder="Select"
+                    @update:model-value="saveSkillSourceMode(skill)"
+                  />
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
       </SectionCard>
-
       <!-- Product Primer -->
       <SectionCard
         :title="$t('views.AdminRemyView.product_primer')"
@@ -745,7 +656,6 @@
         <div class="flex items-center gap-3">
           <Button
             :disabled="primerSaving"
-            variant="default"
             @click="regeneratePrimer"
           >
             {{ primerSaving ? 'Regenerating...' : $t('views.AdminRemyView.regenerate_primer') }}
@@ -753,13 +663,10 @@
           <span v-if="primerMessage" class="text-sm text-success">{{ primerMessage }}</span>
         </div>
       </SectionCard>
-
-      </TooltipProvider>
     </template>
   </div>
   </FeatureGate>
 </template>
-
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
 import SectionCard from '../components/shared/SectionCard.vue'
@@ -770,20 +677,8 @@ import { formatApiError } from '../lib/api/formatError'
 import FeatureGate from '../components/FeatureGate.vue'
 import RemySkillDialog from '../components/remy/RemySkillDialog.vue'
 import AccessEntitySelector from '../components/remy/AccessEntitySelector.vue'
-import {
-  TooltipProvider,
-  Tooltip,
-  TooltipTrigger,
-  TooltipContent,
-} from '../components/ui/tooltip'
-import { Button } from '@/components/ui/button'
-import {
-  Select,
-  SelectTrigger,
-  SelectContent,
-  SelectItem,
-  SelectValue,
-} from '@/components/ui/select'
+import Button from 'primevue/button'
+import Select from 'primevue/select'
 import type { SkillItem } from '../types/remy'
 import { useI18n } from 'vue-i18n'
 
@@ -799,6 +694,13 @@ const tooltipAddOneInModelBackends = computed(() => t('views.AdminRemyView.add_o
 const tooltipAddEditRemoveApiKeys = computed(() => t('views.AdminRemyView.add_edit_or_remove_api_keys_for_llm_providers'))
 const tooltipUsersWithSelectedRoles = computed(() => t('views.AdminRemyView.users_with_the_selected_organisation_roles_will_have_access'))
 const tooltipSaveCurrentAccessList = computed(() => t('views.AdminRemyView.save_the_current_access_list_configuration'))
+
+function providerTooltip(p: ProviderStatus): string {
+  const base = p.configured ? `Remy can route to ${p.label}` : `No API key for ${p.label}`
+  return p.configured ? base : `${base}. ${tooltipAddOneInModelBackends.value}`
+}
+
+const tooltipSaveBaseSystemPrompt = computed(() => 'Save the base system prompt that guides Remy\'s behaviour.')
 const tooltipSaveDefaultModelProvider = computed(() => t('views.AdminRemyView.save_the_default_model_provider_and_allowed_model_configuration'))
 const tooltipSaveExtraInstructions = computed(() => t('views.AdminRemyView.save_extra_instructions_appended_to_the_system_prompt'))
 const tooltipSaveRateLimits = computed(() => t('views.AdminRemyView.save_rate_limits_threshold_no_go_patterns_and_allowlist'))

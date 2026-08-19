@@ -10,11 +10,10 @@
     <template v-else>
       <!-- MCP Server Status -->
       <Card>
-        <CardHeader>
-          <CardTitle>{{ $t('views.SettingsMcpView.mcp_server_status') }}</CardTitle>
-          <CardDescription>{{ $t('views.SettingsMcpView.the_url_clients_use_to_connect_to_the_mcp_server') }}</CardDescription>
-        </CardHeader>
-        <CardContent class="space-y-4">
+        <template #title>{{ $t('views.SettingsMcpView.mcp_server_status') }}</template>
+        <template #subtitle>{{ $t('views.SettingsMcpView.the_url_clients_use_to_connect_to_the_mcp_server') }}</template>
+        <template #content>
+        <div class="space-y-4">
           <div
             v-if="!mcpUrl"
             class="rounded-lg border border-warning/50 bg-warning/10 p-4 text-sm text-warning"
@@ -32,34 +31,33 @@
               <p class="mt-0.5 select-all cursor-text font-mono text-sm text-muted-foreground">{{ mcpUrl || 'http://localhost:8000' }}</p>
             </div>
             <div class="flex shrink-0 items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                data-testid="settings-mcp-copy-url"
-                @click="copyServerUrl"
-              >
+              <Button severity="secondary" outlined size="small" data-testid="settings-mcp-copy-url" @click="copyServerUrl">
                 {{ copiedField === 'server-url' ? 'Copied!' : 'Copy' }}
               </Button>
-              <Badge :variant="mcpUrl ? 'default' : 'outline'">
+              <Badge :severity="mcpUrl ? 'info' : 'secondary'">
                 {{ mcpUrl ? 'Active' : 'Local Only' }}
               </Badge>
             </div>
           </div>
-        </CardContent>
+          </div>
+        </template>
       </Card>
 
       <!-- API Key Management -->
       <Card>
-        <CardHeader class="flex flex-row items-center justify-between">
-          <div>
-            <CardTitle>{{ $t('views.SettingsMcpView.api_keys') }}</CardTitle>
-            <CardDescription>{{ $t('views.SettingsMcpView.create_and_manage_api_keys_for_mcp_client_authentication') }}</CardDescription>
+        <template #header>
+          <div class="flex flex-row items-center justify-between">
+            <div>
+              <div class="text-lg font-semibold">{{ $t('views.SettingsMcpView.api_keys') }}</div>
+              <div class="text-sm text-muted-foreground">{{ $t('views.SettingsMcpView.create_and_manage_api_keys_for_mcp_client_authentication') }}</div>
+            </div>
+            <Button data-testid="settings-mcp-create-key" @click="openCreateKeyDialog">
+              Create MCP API Key
+            </Button>
           </div>
-          <Button data-testid="settings-mcp-create-key" @click="openCreateKeyDialog">
-            Create MCP API Key
-          </Button>
-        </CardHeader>
-        <CardContent>
+        </template>
+        <template #content>
+        <div>
           <div v-if="apiKeys.length === 0" class="py-8 text-center text-sm text-muted-foreground">
             No API keys created yet.
           </div>
@@ -90,13 +88,7 @@
                   {{ key.last_used_at ? formatDate(key.last_used_at) : 'Never' }}
                 </td>
                 <td class="py-2.5 text-right">
-                  <Button
-                    v-if="key.is_active"
-                    variant="destructive"
-                    size="sm"
-                    data-testid="settings-mcp-revoke-key"
-                    @click="confirmRevokeKey(key)"
-                  >
+                  <Button v-if="key.is_active" severity="danger" size="small" data-testid="settings-mcp-revoke-key" @click="confirmRevokeKey(key)">
                     Revoke
                   </Button>
                 </td>
@@ -104,48 +96,51 @@
             </tbody>
           </table>
           </div>
-        </CardContent>
+          </div>
+        </template>
       </Card>
 
       <!-- Config Snippets -->
       <Card>
-        <CardHeader>
-          <CardTitle>{{ $t('views.SettingsMcpView.configuration_snippets') }}</CardTitle>
-          <CardDescription>{{ $t('views.SettingsMcpView.copy_these_snippets_to_configure_mcp_clients') }}</CardDescription>
-        </CardHeader>
-        <CardContent class="space-y-4">
+        <template #title>{{ $t('views.SettingsMcpView.configuration_snippets') }}</template>
+        <template #subtitle>{{ $t('views.SettingsMcpView.copy_these_snippets_to_configure_mcp_clients') }}</template>
+        <template #content>
+        <div class="space-y-4">
           <div class="flex items-center gap-2">
             <label for="settingsmcpview-client" class="text-sm font-medium whitespace-nowrap">{{ $t('views.SettingsMcpView.client') }}:</label>
-            <Select aria-label="Client" v-model="selectedMcpClient">
-              <SelectTrigger id="settingsmcpview-client" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Client">
-                <SelectValue placeholder="Select client" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="opencode">opencode / Claude Code</SelectItem>
-                <SelectItem value="claude">{{ $t('views.SettingsMcpView.claude_desktop') }}</SelectItem>
-                <SelectItem value="cursor">{{ $t('views.SettingsMcpView.cursor') }}</SelectItem>
-                <SelectItem value="continue">{{ $t('views.SettingsMcpView.continue_dev') }}</SelectItem>
-                <SelectItem value="custom">{{ $t('views.SettingsMcpView.custom') }}</SelectItem>
-              </SelectContent>
-            </Select>
+            <Select
+  aria-label="Client"
+  v-model="selectedMcpClient"
+  placeholder="Select client"
+  id="settingsmcpview-client"
+  class="w-full"
+  :options="[{ value: 'opencode', label: 'opencode / Claude Code' }, { value: 'claude', label: $t('views.SettingsMcpView.claude_desktop') }, { value: 'cursor', label: $t('views.SettingsMcpView.cursor') }, { value: 'continue', label: $t('views.SettingsMcpView.continue_dev') }, { value: 'custom', label: $t('views.SettingsMcpView.custom') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
           </div>
           <div class="rounded-lg bg-muted/30 p-4">
             <pre class="text-xs font-mono whitespace-pre-wrap break-all">{{ mcpConfigSnippet }}</pre>
-            <Button variant="outline" size="sm" class="mt-2" @click="copySnippet">{{ $t('views.SettingsMcpView.copy') }}</Button>
+            <Button severity="secondary" outlined size="small" class="mt-2" @click="copySnippet">{{ $t('views.SettingsMcpView.copy') }}</Button>
           </div>
-        </CardContent>
+          </div>
+        </template>
       </Card>
 
       <!-- Registered OAuth Clients -->
       <Card>
-        <CardHeader>
-          <CardTitle>{{ $t('views.SettingsMcpView.registered_oauth_clients') }}</CardTitle>
-          <CardDescription>{{ $t('views.SettingsMcpView.mcp_oauth_client_applications_registered_for_token_based_auth') }}</CardDescription>
-        </CardHeader>
-        <CardContent class="space-y-4">
+        <template #title>{{ $t('views.SettingsMcpView.registered_oauth_clients') }}</template>
+        <template #subtitle>{{ $t('views.SettingsMcpView.mcp_oauth_client_applications_registered_for_token_based_auth') }}</template>
+        <template #content>
+        <div class="space-y-4">
           <p class="text-sm text-muted-foreground">{{ $t('views.SettingsMcpView.configure_oauth_client_applications_for_mcp_token_based_auth') }}</p>
-          <Button variant="outline" size="sm" disabled>{{ $t('views.SettingsMcpView.register_oauth_client_coming_in_v04') }}</Button>
-        </CardContent>
+          <Button severity="secondary" outlined size="small" disabled>{{ $t('views.SettingsMcpView.register_oauth_client_coming_in_v04') }}</Button>
+          </div>
+        </template>
       </Card>
     </template>
 
@@ -176,29 +171,35 @@
         </div>
         <div>
           <label for="settingsmcpview-role" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsMcpView.role') }}</label>
-          <Select aria-label="Role" v-model="createKeyRole">
-            <SelectTrigger id="settingsmcpview-role" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Role" data-testid="settings-mcp-create-key-role">
-              <SelectValue placeholder="Select role" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="operator">{{ $t('views.SettingsMcpView.operator') }}</SelectItem>
-              <SelectItem value="runner">{{ $t('views.SettingsMcpView.runner') }}</SelectItem>
-            </SelectContent>
-          </Select>
+          <Select
+  aria-label="Role"
+  v-model="createKeyRole"
+  placeholder="Select role"
+  data-testid="settings-mcp-create-key-role"
+  id="settingsmcpview-role"
+  class="w-full"
+  :options="[{ value: 'operator', label: $t('views.SettingsMcpView.operator') }, { value: 'runner', label: $t('views.SettingsMcpView.runner') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
         </div>
         <div v-if="createKeyError" class="text-sm text-destructive">{{ createKeyError }}</div>
       </div>
     </FormDialog>
 
-    <Dialog v-model:open="keyCreatedDialogOpen" @update:open="onKeyCreatedDialogClose">
-      <DialogContent class="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>API Key Created</DialogTitle>
-          <DialogDescription>
-            Copy this key now. You will not be able to see it again.
-          </DialogDescription>
-        </DialogHeader>
-        <div class="space-y-4 py-2">
+    <Dialog v-model:visible="keyCreatedDialogOpen" :modal="true" :dismissable-mask="true" class="sm:max-w-lg" @update:visible="onKeyCreatedDialogClose">
+      <template #header>
+        <div class="text-lg font-semibold">API Key Created</div>
+      </template>
+      <div class="space-y-4 py-2">
+        <p class="text-sm text-muted-foreground">
+          Copy this key now. You will not be able to see it again.
+        </p>
+        <div class="space-y-4">
           <div>
             <p class="mb-1 text-sm font-medium">{{ $t('views.SettingsMcpView.key_name') }}</p>
             <p class="text-sm text-muted-foreground">{{ createdKeyName }}</p>
@@ -212,13 +213,7 @@
                 readonly
                 class="w-full rounded-lg border border-input bg-muted px-3 py-2 font-mono text-sm"
               />
-              <Button
-                variant="outline"
-                size="sm"
-                class="absolute right-1 top-1"
-                data-testid="settings-mcp-copy-key-value"
-                @click="copyToClipboard(createdKeyValue, 'key-value')"
-              >
+              <Button severity="secondary" outlined size="small" class="absolute right-1 top-1" data-testid="settings-mcp-copy-key-value" @click="copyToClipboard(createdKeyValue, 'key-value')">
                 {{ copiedField === 'key-value' ? 'Copied!' : 'Copy' }}
               </Button>
             </div>
@@ -227,10 +222,10 @@
             </p>
           </div>
         </div>
-        <DialogFooter class="gap-2 sm:justify-end">
-          <Button @click="keyCreatedDialogOpen = false">{{ $t('views.SettingsMcpView.done') }}</Button>
-        </DialogFooter>
-      </DialogContent>
+      </div>
+      <template #footer>
+        <Button @click="keyCreatedDialogOpen = false">{{ $t('views.SettingsMcpView.done') }}</Button>
+      </template>
     </Dialog>
 
     <FormDialog
@@ -260,21 +255,15 @@ import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import { Badge } from '../components/ui/badge'
-import { Button } from '../components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
+import Badge from 'primevue/badge'
+import Button from 'primevue/button'
+import Card from 'primevue/card'
+import Dialog from 'primevue/dialog'
 import FormDialog from '../components/shared/FormDialog.vue'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import { formatDateShort } from '../lib/formatDate'
-import {
-  Select,
-  SelectTrigger,
-  SelectContent,
-  SelectItem,
-  SelectValue,
-} from '@/components/ui/select'
+import Select from 'primevue/select'
 
 const planStore = usePlanStore()
 

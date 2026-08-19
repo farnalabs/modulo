@@ -40,26 +40,19 @@
 
     <div>
       <label for="nodecategoryeditor-field-2" class="mb-1 block text-sm font-medium">{{ $t('components.NodeCategoryEditor.icon') }}</label>
-      <Select aria-label="Icon" v-model="form.icon">
-        <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Icon">
-          <SelectValue :placeholder="$t('components.NodeCategoryEditor.select_icon')" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="__all__">{{ $t('components.NodeCategoryEditor.none') }}</SelectItem>
-          <SelectItem value="bot">{{ $t('components.NodeCategoryEditor.bot') }}</SelectItem>
-          <SelectItem value="database">{{ $t('components.NodeCategoryEditor.database') }}</SelectItem>
-          <SelectItem value="globe">{{ $t('components.NodeCategoryEditor.globe') }}</SelectItem>
-          <SelectItem value="mail">{{ $t('components.NodeCategoryEditor.mail') }}</SelectItem>
-          <SelectItem value="message-circle">{{ $t('components.NodeCategoryEditor.message_circle') }}</SelectItem>
-          <SelectItem value="refresh-cw">{{ $t('components.NodeCategoryEditor.refresh') }}</SelectItem>
-          <SelectItem value="search">{{ $t('common.search') }}</SelectItem>
-          <SelectItem value="settings">{{ $t('components.NodeCategoryEditor.settings') }}</SelectItem>
-          <SelectItem value="sliders">{{ $t('components.NodeCategoryEditor.sliders') }}</SelectItem>
-          <SelectItem value="terminal">{{ $t('components.NodeCategoryEditor.terminal') }}</SelectItem>
-          <SelectItem value="upload">{{ $t('components.NodeCategoryEditor.upload') }}</SelectItem>
-          <SelectItem value="zap">{{ $t('components.NodeCategoryEditor.zap') }}</SelectItem>
-        </SelectContent>
-      </Select>
+      <Select
+  aria-label="Icon"
+  v-model="form.icon"
+  :placeholder="$t('components.NodeCategoryEditor.select_icon')"
+  class="w-full"
+  :options="[{ value: '__all__', label: $t('components.NodeCategoryEditor.none') }, { value: 'bot', label: $t('components.NodeCategoryEditor.bot') }, { value: 'database', label: $t('components.NodeCategoryEditor.database') }, { value: 'globe', label: $t('components.NodeCategoryEditor.globe') }, { value: 'mail', label: $t('components.NodeCategoryEditor.mail') }, { value: 'message-circle', label: $t('components.NodeCategoryEditor.message_circle') }, { value: 'refresh-cw', label: $t('components.NodeCategoryEditor.refresh') }, { value: 'search', label: $t('common.search') }, { value: 'settings', label: $t('components.NodeCategoryEditor.settings') }, { value: 'sliders', label: $t('components.NodeCategoryEditor.sliders') }, { value: 'terminal', label: $t('components.NodeCategoryEditor.terminal') }, { value: 'upload', label: $t('components.NodeCategoryEditor.upload') }, { value: 'zap', label: $t('components.NodeCategoryEditor.zap') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
     </div>
 
     <div>
@@ -75,11 +68,7 @@
     <div v-if="error" class="text-sm text-destructive">{{ error }}</div>
 
     <div class="flex items-center gap-2">
-      <Button
-        :disabled="!form.name.trim() || saving"
-        variant="default"
-        @click="save"
-      >
+      <Button :disabled="!form.name.trim() || saving" @click="save">
         {{
           saving
             ? "Saving..."
@@ -102,8 +91,8 @@
 import { ref, reactive, computed, watch } from "vue";
 import { api } from "../lib/api/client";
 import { formatApiError } from "../lib/api/formatError";
-import { Button } from '@/components/ui/button';
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select';
+import Button from 'primevue/button'
+import Select from 'primevue/select'
 
 export interface NodeCategoryForm {
   name: string;

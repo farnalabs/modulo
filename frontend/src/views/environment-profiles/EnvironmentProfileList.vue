@@ -16,12 +16,7 @@
               data-testid="envprofile-list-search"
             />
           </div>
-          <Button
-            variant="default"
-            class="border-primary/30 hover:border-primary/60"
-            data-testid="envprofile-list-new"
-            @click="$router.push('/environment-profiles/new')"
-          >
+          <Button class="border-primary/30 hover:border-primary/60" data-testid="envprofile-list-new" @click="$router.push('/environment-profiles/new')">
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mr-1"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             New Profile
           </Button>
@@ -41,12 +36,7 @@
             <p class="mt-1 text-sm text-muted-foreground">
               Create one to define a sandbox template for pipeline nodes that need shell access.
             </p>
-            <Button
-              variant="default"
-              class="mt-4"
-              data-testid="envprofile-list-empty-create"
-              @click="$router.push('/environment-profiles/new')"
-            >
+            <Button class="mt-4" data-testid="envprofile-list-empty-create" @click="$router.push('/environment-profiles/new')">
               Create Profile
             </Button>
           </div>
@@ -88,12 +78,7 @@
             </div>
 
             <div class="flex items-center gap-2 mt-auto">
-              <Button
-                variant="outline"
-                size="sm"
-                data-testid="envprofile-list-edit"
-                @click="$router.push(`/environment-profiles/${profile.id}/edit`)"
-              >
+              <Button severity="secondary" outlined size="small" data-testid="envprofile-list-edit" @click="$router.push(`/environment-profiles/${profile.id}/edit`)">
                 Edit
               </Button>
               <button
@@ -114,13 +99,7 @@
           <p class="text-sm font-medium text-destructive">Delete "{{ deleteConfirmName }}"?</p>
           <p class="mt-1 text-sm text-destructive/80">{{ $t('views.EnvironmentProfileList.soft_delete_warning') }}</p>
           <div class="mt-3 flex items-center gap-2">
-            <Button
-              :disabled="deleting"
-              variant="destructive"
-              size="sm"
-              data-testid="envprofile-list-delete-confirm"
-              @click="doDelete"
-            >
+            <Button :disabled="deleting" severity="danger" size="small" data-testid="envprofile-list-delete-confirm" @click="doDelete">
               {{ deleting ? 'Deleting...' : 'Delete' }}
             </Button>
             <button
@@ -148,7 +127,7 @@ import type { EnvironmentProfileSummary } from '../../stores/environmentProfiles
 import LoadingSpinner from '../../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../../components/shared/ErrorAlert.vue'
 import FeatureGate from '../../components/FeatureGate.vue'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 
 const store = useEnvironmentProfilesStore()
 

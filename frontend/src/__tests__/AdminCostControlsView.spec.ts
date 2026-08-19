@@ -52,7 +52,7 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import AdminCostControlsView from '../views/AdminCostControlsView.vue'
-import { Select } from '../components/ui/select'
+import Select from 'primevue/select'
 
 describe('AdminCostControlsView', () => {
   let pinia: ReturnType<typeof createPinia>

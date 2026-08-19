@@ -32,19 +32,13 @@
       >
         <div class="flex items-start justify-between">
           <div class="min-w-0 flex-1">
-            <Tooltip :delay-duration="300">
-              <TooltipTrigger as-child>
-                <p
-                  class="truncate font-mono text-sm"
-                  :data-testid="'team-notif-url-' + ep.id"
-                >
-                  {{ ep.url }}
-                </p>
-              </TooltipTrigger>
-              <TooltipContent side="top" class="max-w-xs">
-                <p class="break-all">{{ ep.url }}</p>
-              </TooltipContent>
-            </Tooltip>
+            <p
+              class="truncate font-mono text-sm"
+              :data-testid="'team-notif-url-' + ep.id"
+              v-tooltip.top="{ value: ep.url, showDelay: 300 }"
+            >
+              {{ ep.url }}
+            </p>
             <p
               v-if="ep.description"
               class="mt-0.5 text-xs text-muted-foreground"
@@ -213,12 +207,7 @@
             {{ editError }}
           </div>
           <div class="flex items-center gap-2">
-            <Button
-              :disabled="!editForm.url.trim() || saving"
-              variant="default"
-              data-testid="team-notif-edit-save"
-              @click="saveEdit"
-            >
+            <Button :disabled="!editForm.url.trim() || saving" data-testid="team-notif-edit-save" @click="saveEdit">
               {{ saving ? "Saving..." : "Save" }}
             </Button>
             <button
@@ -289,12 +278,7 @@
           {{ addError }}
         </div>
         <div class="flex items-center gap-2">
-          <Button
-            :disabled="!addForm.url.trim() || adding"
-            variant="default"
-            data-testid="team-notif-add-save"
-            @click="addEndpoint"
-          >
+          <Button :disabled="!addForm.url.trim() || adding" data-testid="team-notif-add-save" @click="addEndpoint">
             {{ adding ? "Adding..." : "Add" }}
           </Button>
           <button
@@ -323,14 +307,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
 import { api } from "../lib/api/client";
-import { Button } from "@/components/ui/button";
+import Button from 'primevue/button'
 import { formatApiError } from "../lib/api/formatError";
 import type { components } from "../lib/api/client";
-import {
-  Tooltip,
-  TooltipTrigger,
-  TooltipContent,
-} from "../components/ui/tooltip";
 import { Pencil, Play, Trash2, Plus } from "@lucide/vue";
 
 type NotificationEndpointResponse =

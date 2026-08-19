@@ -13,11 +13,10 @@
       <LoadingSpinner v-if="loading" />
       <template v-else>
         <Card>
-          <CardHeader>
-            <CardTitle>{{ $t('views.AdminCostControlsView.budget_overview') }}</CardTitle>
-            <CardDescription>{{ $t('views.AdminCostControlsView.current_billing_period_spend_vs_budget') }}</CardDescription>
-          </CardHeader>
-          <CardContent>
+          <template #title>{{ $t('views.AdminCostControlsView.budget_overview') }}</template>
+<template #subtitle>{{ $t('views.AdminCostControlsView.current_billing_period_spend_vs_budget') }}</template>
+
+          <template #content>
             <LoadingSpinner v-if="costsLoading" />
             <div v-else-if="costsError" class="text-sm text-destructive">{{ costsError }}</div>
             <div v-else class="space-y-4">
@@ -50,15 +49,14 @@
                 </div>
               </div>
             </div>
-          </CardContent>
+          </template>
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle>{{ $t('views.AdminCostControlsView.team_budgets') }}</CardTitle>
-            <CardDescription>{{ $t('views.AdminCostControlsView.set_per_team_budget_caps') }}</CardDescription>
-          </CardHeader>
-          <CardContent>
+          <template #title>{{ $t('views.AdminCostControlsView.team_budgets') }}</template>
+<template #subtitle>{{ $t('views.AdminCostControlsView.set_per_team_budget_caps') }}</template>
+
+          <template #content>
             <EmptyState v-if="teams.length === 0" :title="$t('views.AdminCostControlsView.no_teams_found')" />
             <DataTable
               v-else
@@ -71,8 +69,8 @@
               :rows="tableRows"
             >
               <template #cell-budget="{ row }">
-                <Input :aria-label="$t('views.AdminCostControlsView.budget')"
-                  :model-value="(row as any).editingBudget ?? undefined" @update:model-value="(v: any) => (row as any).editingBudget = v === '' ? null : Number(v)"
+                <InputText :aria-label="$t('views.AdminCostControlsView.budget')"
+                  :model-value="(row as any).editingBudget == null ? '' : String((row as any).editingBudget)" @update:model-value="(v: any) => (row as any).editingBudget = v === '' ? null : Number(v)"
                   type="number"
                   min="0"
                   step="0.01"
@@ -87,21 +85,20 @@
               </template>
               <template #cell-actions="{ row }">
                 <div class="text-right">
-                  <Button size="sm" :disabled="(row as any).saving" :data-testid="'cc-team-save-' + (row as any).id" @click="saveTeamBudget(row as any)">
+                  <Button size="small" :disabled="(row as any).saving" :data-testid="'cc-team-save-' + (row as any).id" @click="saveTeamBudget(row as any)">
                     {{ (row as any).saving ? $t('views.AdminCostControlsView.saving') : $t('views.AdminCostControlsView.save') }}
                   </Button>
                 </div>
               </template>
             </DataTable>
-          </CardContent>
+          </template>
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle>{{ $t('views.AdminCostControlsView.alert_thresholds') }}</CardTitle>
-            <CardDescription>{{ $t('views.AdminCostControlsView.receive_notifications_when_spend_reaches_thresholds') }}</CardDescription>
-          </CardHeader>
-          <CardContent>
+          <template #title>{{ $t('views.AdminCostControlsView.alert_thresholds') }}</template>
+<template #subtitle>{{ $t('views.AdminCostControlsView.receive_notifications_when_spend_reaches_thresholds') }}</template>
+
+          <template #content>
             <div class="space-y-3">
               <label for="admincostcontrolsview-field-7" class="flex items-center gap-3 rounded-lg border p-3" data-testid="cc-threshold-50">
                 <input id="admincostcontrolsview-field-7" type="checkbox" :checked="settings.alertThresholds.includes(50)" @change="toggleThreshold(50)" class="h-4 w-4 rounded border-muted-foreground" />
@@ -133,15 +130,14 @@
               </label>
               <p v-if="thresholdSaveError" class="text-xs text-destructive">{{ thresholdSaveError }}</p>
             </div>
-          </CardContent>
+          </template>
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle>{{ $t('views.AdminCostControlsView.circuit_breaker') }}</CardTitle>
-            <CardDescription>{{ $t('views.AdminCostControlsView.automatically_stop_agent_runs_when_budget_exceeded') }}</CardDescription>
-          </CardHeader>
-          <CardContent>
+          <template #title>{{ $t('views.AdminCostControlsView.circuit_breaker') }}</template>
+<template #subtitle>{{ $t('views.AdminCostControlsView.automatically_stop_agent_runs_when_budget_exceeded') }}</template>
+
+          <template #content>
             <div class="flex items-center justify-between rounded-lg border p-4">
               <div>
                 <p class="text-sm font-medium">{{ $t('views.AdminCostControlsView.auto_stop_on_budget_exceeded') }}</p>
@@ -155,42 +151,51 @@
               </label>
             </div>
             <p v-if="circuitBreakerSaveError" class="mt-2 text-xs text-destructive">{{ circuitBreakerSaveError }}</p>
-          </CardContent>
+          </template>
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle>{{ $t('views.AdminCostControlsView.billing_settings') }}</CardTitle>
-            <CardDescription>{{ $t('views.AdminCostControlsView.configure_currency_and_billing_period') }}</CardDescription>
-          </CardHeader>
-          <CardContent>
+          <template #title>{{ $t('views.AdminCostControlsView.billing_settings') }}</template>
+<template #subtitle>{{ $t('views.AdminCostControlsView.configure_currency_and_billing_period') }}</template>
+
+          <template #content>
             <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
               <div>
                 <label for="admincostcontrolsview-field-2" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.currency') }}</label>
-                <Select :aria-label="$t('views.AdminCostControlsView.currency')" :model-value="settings.currency" @update:model-value="onCurrencyChange">
-                  <SelectTrigger data-testid="cc-currency" :aria-label="$t('views.AdminCostControlsView.currency')" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
-                    <SelectValue :placeholder="$t('views.AdminCostControlsView.currency_usd')" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="USD">{{ $t('views.AdminCostControlsView.currency_usd') }}</SelectItem>
-                    <SelectItem value="EUR">{{ $t('views.AdminCostControlsView.currency_eur') }}</SelectItem>
-                    <SelectItem value="GBP">{{ $t('views.AdminCostControlsView.currency_gbp') }}</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Select
+  :aria-label="$t('views.AdminCostControlsView.currency')"
+  :model-value="settings.currency"
+  @update:model-value="onCurrencyChange"
+  :placeholder="$t('views.AdminCostControlsView.currency_usd')"
+  data-testid="cc-currency"
+  class="w-full"
+  :options="[{ value: 'USD', label: $t('views.AdminCostControlsView.currency_usd') }, { value: 'EUR', label: $t('views.AdminCostControlsView.currency_eur') }, { value: 'GBP', label: $t('views.AdminCostControlsView.currency_gbp') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
                 <p v-if="currencySaveError" class="mt-1 text-xs text-destructive">{{ currencySaveError }}</p>
               </div>
               <div>
                 <label for="admincostcontrolsview-field-1" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.billing_period') }}</label>
-                <Select :aria-label="$t('views.AdminCostControlsView.billing_period')" :model-value="settings.billingPeriod" @update:model-value="onBillingPeriodChange">
-                  <SelectTrigger data-testid="cc-billing-period" :aria-label="$t('views.AdminCostControlsView.billing_period')" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
-                    <SelectValue :placeholder="$t('views.AdminCostControlsView.monthly')" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="monthly">{{ $t('views.AdminCostControlsView.monthly') }}</SelectItem>
-                    <SelectItem value="quarterly">{{ $t('views.AdminCostControlsView.quarterly') }}</SelectItem>
-                    <SelectItem value="annual">{{ $t('views.AdminCostControlsView.annual') }}</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Select
+  :aria-label="$t('views.AdminCostControlsView.billing_period')"
+  :model-value="settings.billingPeriod"
+  @update:model-value="onBillingPeriodChange"
+  :placeholder="$t('views.AdminCostControlsView.monthly')"
+  data-testid="cc-billing-period"
+  class="w-full"
+  :options="[{ value: 'monthly', label: $t('views.AdminCostControlsView.monthly') }, { value: 'quarterly', label: $t('views.AdminCostControlsView.quarterly') }, { value: 'annual', label: $t('views.AdminCostControlsView.annual') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
                 <p v-if="periodSaveError" class="mt-1 text-xs text-destructive">{{ periodSaveError }}</p>
               </div>
             </div>
@@ -198,8 +203,8 @@
               <span class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.monthly_budget', { currency: settings.currency }) }}</span>
               <div class="flex items-end gap-3">
                 <div class="flex-1">
-                  <Input :aria-label="$t('views.AdminCostControlsView.monthly_budget', { currency: settings.currency })"
-                    :model-value="settings.budget"
+                  <InputText :aria-label="$t('views.AdminCostControlsView.monthly_budget', { currency: settings.currency })"
+                    :model-value="settings.budget == null ? '' : String(settings.budget)"
                     @update:model-value="(v: any) => settings.budget = v === '' ? 0 : Number(v)"
                     type="number"
                     min="0"
@@ -215,7 +220,7 @@
               <p v-if="budgetSaveError" class="mt-2 text-xs text-destructive">{{ budgetSaveError }}</p>
               <p v-if="budgetSaveSuccess" class="mt-2 text-xs text-success">{{ $t('views.AdminCostControlsView.budget_updated') }}</p>
             </div>
-          </CardContent>
+          </template>
         </Card>
       </template>
       </div>
@@ -234,11 +239,11 @@ import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card'
-import { Input } from '../components/ui/input'
-import { Button } from '../components/ui/button'
+import Card from 'primevue/card'
+import InputText from 'primevue/inputtext'
+import Button from 'primevue/button'
 import { DataTable } from '../components/ui/data-table'
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import Select from 'primevue/select'
 import PageTabs from "../components/PageTabs.vue"
 import { formatMoney } from '../lib/money'
 

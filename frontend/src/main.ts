@@ -4,6 +4,7 @@ import App from './App.vue'
 import router from './router'
 import i18n from './i18n'
 import PrimeVue from 'primevue/config'
+import Tooltip from 'primevue/tooltip'
 import Aura from '@primeuix/themes/aura'
 import { applyPrimeVueTokenBridge } from './lib/primevue-theme'
 import { useLocaleStore } from './stores/localeStore'
@@ -36,6 +37,7 @@ async function main() {
       },
     },
   })
+  app.directive('tooltip', Tooltip)
 
   const monitorConfig = loadMonitorConfig()
   const backends = await loadBackends(monitorConfig)

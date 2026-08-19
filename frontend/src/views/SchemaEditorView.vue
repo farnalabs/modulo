@@ -25,12 +25,7 @@
           <header class="flex items-center justify-between">
             <PageHeader :title="isNew ? $t('views.SchemaEditorView.new_schema_title') : $t('views.SchemaEditorView.edit_schema_title')" :subtitle="isNew ? $t('views.SchemaEditorView.define_new_schema') : schemaName" />
             <div class="flex items-center gap-2">
-              <Button
-                variant="default"
-                data-testid="schema-editor-save"
-                :disabled="saving || !isValid"
-                @click="saveSchema"
-              >
+              <Button data-testid="schema-editor-save" :disabled="saving || !isValid" @click="saveSchema">
                 {{ saving ? $t('views.SchemaEditorView.saving') : $t('views.SchemaEditorView.save') }}
               </Button>
               <button
@@ -94,7 +89,7 @@ import { buildJsonSchema, parseDefinitionToFields, type SchemaField } from '../u
 import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import PageTabs from "../components/PageTabs.vue"
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 import SchemaEditorSidebar, { type SchemaItem } from '../components/schema/SchemaEditorSidebar.vue'
 import SchemaEditorForm from '../components/schema/SchemaEditorForm.vue'
 import SchemaVersionHistory, { type SchemaVersion } from '../components/schema/SchemaVersionHistory.vue'

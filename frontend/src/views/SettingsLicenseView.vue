@@ -12,7 +12,7 @@
           <div>
             <div class="flex items-center gap-2">
               <h2 class="text-base font-semibold">{{ $t('views.SettingsLicenseView.team') }}</h2>
-              <Badge variant="default">{{ $t('common.active') }}</Badge>
+              <Badge severity="info">{{ $t('common.active') }}</Badge>
             </div>
             <p v-if="licenseInfo.org_id" class="mt-2 text-sm text-muted-foreground">
               Licensed to <span class="font-medium text-foreground" :title="licenseInfo.org_id"><span class="select-all font-mono">{{ shortId(licenseInfo.org_id) }}</span></span>
@@ -25,19 +25,12 @@
         <div v-else>
           <div class="flex items-center gap-2">
             <h2 class="text-base font-semibold">{{ $t('views.SettingsLicenseView.community') }}</h2>
-            <Badge variant="outline">{{ $t('views.SettingsLicenseView.community') }}</Badge>
+            <Badge severity="secondary" class="border border-border">{{ $t('views.SettingsLicenseView.community') }}</Badge>
           </div>
           <p class="mt-2 text-sm text-muted-foreground">
             You are currently on the {{ planStore.getTierLabel(licenseInfo.tier) }} tier. Upgrade to {{ planStore.getTierLabel('team') }} to unlock all features.
           </p>
-          <Button
-            variant="default"
-            as="a"
-            href="https://modulo.run/pricing"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="mt-4 border-primary/30 hover:border-primary/60"
-          >
+          <Button as="a" href="https://modulo.run/pricing" target="_blank" rel="noopener noreferrer" class="mt-4 border-primary/30 hover:border-primary/60">
             Get a Team License
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
           </Button>
@@ -67,13 +60,13 @@
           </p>
 
           <div class="flex flex-wrap items-center gap-3">
-            <Button data-testid="license-verify-btn" variant="outline" :disabled="!newLicenseKey.trim() || verifying" @click="verifyKey">
+            <Button data-testid="license-verify-btn" severity="secondary" outlined :disabled="!newLicenseKey.trim() || verifying" @click="verifyKey">
               {{ verifying ? 'Verifying...' : 'Verify Key' }}
             </Button>
             <Button data-testid="license-apply-btn" :disabled="!newLicenseKey.trim() || applying" @click="openApplyDialog">
               {{ applying ? 'Applying...' : 'Apply Key' }}
             </Button>
-            <Button v-if="licenseInfo.has_license" variant="destructive" :disabled="removing" @click="openRemoveDialog">
+            <Button v-if="licenseInfo.has_license" severity="danger" :disabled="removing" @click="openRemoveDialog">
               {{ removing ? 'Removing...' : 'Remove License' }}
             </Button>
           </div>
@@ -107,14 +100,14 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useDataFetch } from '../composables/useDataFetch'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import { Badge } from '../components/ui/badge'
+import Badge from 'primevue/badge'
 import FormDialog from '../components/shared/FormDialog.vue'
 import { format } from 'date-fns'
 import { shortId } from '../utils/format'

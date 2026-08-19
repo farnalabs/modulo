@@ -102,18 +102,20 @@
               </div>
               <div>
                 <label for="settingserrorforwardersview-datadog-site" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsErrorForwardersView.site') }}</label>
-                <Select v-model="configs.datadog.site" :aria-label="$t('views.SettingsErrorForwardersView.site')">
-                  <SelectTrigger id="settingserrorforwardersview-datadog-site" class="input-base" :aria-label="$t('views.SettingsErrorForwardersView.site')">
-                    <SelectValue :placeholder="$t('views.SettingsErrorForwardersView.select_site')" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="datadoghq.com">US (datadoghq.com)</SelectItem>
-                    <SelectItem value="datadoghq.eu">EU (datadoghq.eu)</SelectItem>
-                    <SelectItem value="us3.datadoghq.com">US3 (us3.datadoghq.com)</SelectItem>
-                    <SelectItem value="us5.datadoghq.com">US5 (us5.datadoghq.com)</SelectItem>
-                    <SelectItem value="ddog-gov.com">{{ $t('views.SettingsErrorForwardersView.gov_ddog_gov_com') }}</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Select
+  v-model="configs.datadog.site"
+  :aria-label="$t('views.SettingsErrorForwardersView.site')"
+  :placeholder="$t('views.SettingsErrorForwardersView.select_site')"
+  id="settingserrorforwardersview-datadog-site"
+  class="input-base"
+  :options="[{ value: 'datadoghq.com', label: 'US (datadoghq.com)' }, { value: 'datadoghq.eu', label: 'EU (datadoghq.eu)' }, { value: 'us3.datadoghq.com', label: 'US3 (us3.datadoghq.com)' }, { value: 'us5.datadoghq.com', label: 'US5 (us5.datadoghq.com)' }, { value: 'ddog-gov.com', label: $t('views.SettingsErrorForwardersView.gov_ddog_gov_com') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
               </div>
             </template>
 
@@ -215,12 +217,7 @@
               >
                 {{ testing[fwd.forwarder_type] ? $t('views.SettingsErrorForwardersView.testing') : $t('views.SettingsErrorForwardersView.test_connection') }}
               </button>
-              <Button
-                type="button"
-                variant="default"
-                :disabled="saving[fwd.forwarder_type]"
-                @click="saveConfig(fwd)"
-              >
+              <Button type="button" :disabled="saving[fwd.forwarder_type]" @click="saveConfig(fwd)">
                 {{ saving[fwd.forwarder_type] ? $t('views.SettingsErrorForwardersView.saving') : $t('views.SettingsErrorForwardersView.save') }}
               </Button>
             </div>
@@ -264,14 +261,8 @@ import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import { Button } from '@/components/ui/button'
-import {
-  Select,
-  SelectTrigger,
-  SelectContent,
-  SelectItem,
-  SelectValue,
-} from '@/components/ui/select'
+import Button from 'primevue/button'
+import Select from 'primevue/select'
 
 interface ForwarderItem {
   forwarder_type: string

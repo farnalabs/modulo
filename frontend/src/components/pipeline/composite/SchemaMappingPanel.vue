@@ -2,7 +2,11 @@
 import { ref, computed, watch } from 'vue'
 import { useCompositeStore } from '../../../stores/compositeStore'
 import { useApi } from '../../../composables/useApi'
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '../../ui/tabs'
+import Tabs from 'primevue/tabs'
+import TabList from 'primevue/tablist'
+import Tab from 'primevue/tab'
+import TabPanels from 'primevue/tabpanels'
+import TabPanel from 'primevue/tabpanel'
 import FieldMappingPair from './FieldMappingPair.vue'
 import type { SchemaField } from '../../../types/pipeline'
 
@@ -114,71 +118,73 @@ watch(
         </span>
       </div>
 
-      <Tabs v-model:default-value="activeTab" class="w-full">
-        <TabsList class="w-full">
-          <TabsTrigger value="input">
+      <Tabs v-model:value="activeTab" class="w-full">
+        <TabList class="w-full">
+          <Tab value="input">
             Input Mapping
-          </TabsTrigger>
-          <TabsTrigger value="output">
+          </Tab>
+          <Tab value="output">
             Output Mapping
-          </TabsTrigger>
-        </TabsList>
+          </Tab>
+        </TabList>
 
-        <TabsContent value="input" class="mt-3">
-          <div v-if="loading" class="py-4 text-center text-xs text-muted-foreground">
-            Loading schemas...
-          </div>
-          <div v-else-if="sourceFields.length === 0 && targetFields.length === 0" class="py-4 text-center text-sm text-muted-foreground">
-            No schemas available for input mapping.
-          </div>
-          <div v-else>
-            <div class="mb-2 flex items-center gap-3 text-xs text-muted-foreground">
-              <span v-if="sourceFields.length > 0">
-                Source: {{ sourceFields.length }} field{{ sourceFields.length !== 1 ? 's' : '' }}
-              </span>
-              <span v-else class="text-amber-400">{{ $t('components.pipeline.composite.SchemaMappingPanel.no_preceding_node_schema') }}</span>
-              <span v-if="targetFields.length > 0">
-                Target: {{ targetFields.length }} field{{ targetFields.length !== 1 ? 's' : '' }}
-              </span>
-              <span v-else class="text-amber-400">{{ $t('components.pipeline.composite.SchemaMappingPanel.no_composite_input_schema') }}</span>
+        <TabPanels>
+          <TabPanel value="input">
+            <div v-if="loading" class="py-4 text-center text-xs text-muted-foreground">
+              Loading schemas...
             </div>
-            <FieldMappingPair
-              :source-fields="sourceFields"
-              :target-fields="targetFields"
-              :mappings="props.inputMapping"
-              direction="input"
-              @update:mappings="emit('update:inputMapping', $event)"
-            />
-          </div>
-        </TabsContent>
+            <div v-else-if="sourceFields.length === 0 && targetFields.length === 0" class="py-4 text-center text-sm text-muted-foreground">
+              No schemas available for input mapping.
+            </div>
+            <div v-else>
+              <div class="mb-2 flex items-center gap-3 text-xs text-muted-foreground">
+                <span v-if="sourceFields.length > 0">
+                  Source: {{ sourceFields.length }} field{{ sourceFields.length !== 1 ? 's' : '' }}
+                </span>
+                <span v-else class="text-amber-400">{{ $t('components.pipeline.composite.SchemaMappingPanel.no_preceding_node_schema') }}</span>
+                <span v-if="targetFields.length > 0">
+                  Target: {{ targetFields.length }} field{{ targetFields.length !== 1 ? 's' : '' }}
+                </span>
+                <span v-else class="text-amber-400">{{ $t('components.pipeline.composite.SchemaMappingPanel.no_composite_input_schema') }}</span>
+              </div>
+              <FieldMappingPair
+                :source-fields="sourceFields"
+                :target-fields="targetFields"
+                :mappings="props.inputMapping"
+                direction="input"
+                @update:mappings="emit('update:inputMapping', $event)"
+              />
+            </div>
+          </TabPanel>
 
-        <TabsContent value="output" class="mt-3">
-          <div v-if="loading" class="py-4 text-center text-xs text-muted-foreground">
-            Loading schemas...
-          </div>
-          <div v-else-if="outputSourceFields.length === 0 && outputTargetFields.length === 0" class="py-4 text-center text-sm text-muted-foreground">
-            No schemas available for output mapping.
-          </div>
-          <div v-else>
-            <div class="mb-2 flex items-center gap-3 text-xs text-muted-foreground">
-              <span v-if="outputSourceFields.length > 0">
-                Source: {{ outputSourceFields.length }} field{{ outputSourceFields.length !== 1 ? 's' : '' }}
-              </span>
-              <span v-else class="text-amber-400">{{ $t('components.pipeline.composite.SchemaMappingPanel.no_composite_output_schema') }}</span>
-              <span v-if="outputTargetFields.length > 0">
-                Target: {{ outputTargetFields.length }} field{{ outputTargetFields.length !== 1 ? 's' : '' }}
-              </span>
-              <span v-else class="text-amber-400">{{ $t('components.pipeline.composite.SchemaMappingPanel.no_downstream_schema') }}</span>
+          <TabPanel value="output">
+            <div v-if="loading" class="py-4 text-center text-xs text-muted-foreground">
+              Loading schemas...
             </div>
-            <FieldMappingPair
-              :source-fields="outputSourceFields"
-              :target-fields="outputTargetFields"
-              :mappings="props.outputMapping"
-              direction="output"
-              @update:mappings="emit('update:outputMapping', $event)"
-            />
-          </div>
-        </TabsContent>
+            <div v-else-if="outputSourceFields.length === 0 && outputTargetFields.length === 0" class="py-4 text-center text-sm text-muted-foreground">
+              No schemas available for output mapping.
+            </div>
+            <div v-else>
+              <div class="mb-2 flex items-center gap-3 text-xs text-muted-foreground">
+                <span v-if="outputSourceFields.length > 0">
+                  Source: {{ outputSourceFields.length }} field{{ outputSourceFields.length !== 1 ? 's' : '' }}
+                </span>
+                <span v-else class="text-amber-400">{{ $t('components.pipeline.composite.SchemaMappingPanel.no_composite_output_schema') }}</span>
+                <span v-if="outputTargetFields.length > 0">
+                  Target: {{ outputTargetFields.length }} field{{ outputTargetFields.length !== 1 ? 's' : '' }}
+                </span>
+                <span v-else class="text-amber-400">{{ $t('components.pipeline.composite.SchemaMappingPanel.no_downstream_schema') }}</span>
+              </div>
+              <FieldMappingPair
+                :source-fields="outputSourceFields"
+                :target-fields="outputTargetFields"
+                :mappings="props.outputMapping"
+                direction="output"
+                @update:mappings="emit('update:outputMapping', $event)"
+              />
+            </div>
+          </TabPanel>
+        </TabPanels>
       </Tabs>
 
       <div class="mt-3">

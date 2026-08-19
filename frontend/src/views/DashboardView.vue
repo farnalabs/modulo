@@ -2,7 +2,6 @@
   <div class="page-wide">
     <DashboardNotificationsPanel class="-mt-3 mb-4" />
     <PageHeader :title="$t('views.DashboardView.dashboard')" :subtitle="$t('views.DashboardView.overview_of_your_organisations_pipelines_and_runs')" data-testid="dashboard-title" />
-
     <!-- Loading skeleton grid -->
     <div v-if="loading" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
       <div v-for="n in 6" :key="n" class="card p-4">
@@ -15,12 +14,9 @@
         </div>
       </div>
     </div>
-
     <!-- Full-page error -->
     <ErrorAlert v-else-if="error && !summary" :message="error" :on-retry="dashboardStore.fetchSummary" />
-
     <template v-else-if="summary">
-
       <!-- Rolling-window toggle (FAR-92/FAR-115): period-scopes the stat cards below -->
       <div class="flex justify-end mb-4">
         <div class="flex flex-wrap justify-end gap-1">
@@ -39,7 +35,6 @@
           </button>
         </div>
       </div>
-
       <!-- Row 1: Summary stat cards -->
       <div :class="['grid gap-4 sm:grid-cols-2 lg:grid-cols-4 transition-opacity duration-200', periodRefreshing ? 'opacity-60' : 'opacity-100']">
         <StatCard :label="$t('views.DashboardView.pipelines')" :value="cardValue(summary.period?.metrics?.active_pipelines?.current, summary.active_pipelines)" color="primary" to="/pipelines" :delta="periodMetrics?.active_pipelines ?? null" :no-baseline-label="selectedWindow != null ? $t('views.DashboardView.no_prior_data') : undefined">
@@ -55,7 +50,6 @@
           <template #icon><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></template>
         </StatCard>
       </div>
-
       <div class="grid gap-4 sm:grid-cols-2">
         <StatCard :label="$t('views.DashboardView.failed')" :value="cardValue(summary.period?.metrics?.run_counts_by_status?.failed?.current, summary.run_counts_by_status?.failed ?? 0)" color="destructive" :to="`/runs?status=${RUN_STATUS.FAILED}`" :delta="periodMetrics?.run_counts_by_status?.failed ?? null" :no-baseline-label="selectedWindow != null ? $t('views.DashboardView.no_prior_data') : undefined">
           <template #icon><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></template>
@@ -64,7 +58,6 @@
           <template #icon><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></template>
         </StatCard>
       </div>
-
       <!-- Eval pass rate + Token spend -->
       <div class="grid gap-4 sm:grid-cols-2">
         <!-- Eval pass rate card -->
@@ -87,7 +80,6 @@
           </div>
           <div v-else class="flex items-center justify-center py-6 text-sm text-muted-foreground">{{ $t('views.DashboardView.no_eval_data_yet') }}</div>
         </router-link>
-
         <!-- Token spend card -->
         <router-link to="/admin/costs" class="card card-hover p-4 block" data-testid="dashboard-token-spend">
           <p class="text-sm font-medium text-muted-foreground mb-2">{{ $t('views.DashboardView.token_spend_7d') }}</p>
@@ -101,7 +93,6 @@
           <Sparkline class="mt-2 h-10 w-full" :data="spendSparklineData" :labels="summaryTrendLabels" unit="$" color="var(--color-warning)" />
         </router-link>
       </div>
-
       <!-- Run a Pipeline shortcut -->
       <router-link
         to="/pipelines"
@@ -117,7 +108,6 @@
         </div>
         <ChevronRight class="ml-auto h-4 w-4 text-muted-foreground" aria-hidden="true" />
       </router-link>
-
       <!-- Team breakdown (Team only) -->
       <div v-if="isTeam && summary.teams && summary.teams.length > 0" class="card p-4">
         <div class="flex items-center justify-between mb-4">
@@ -169,13 +159,11 @@
           </tbody>
         </table>
       </div>
-
       <!-- Trend chart section -->
       <div class="card p-4">
         <div class="flex items-center justify-between mb-4">
           <h2 class="text-base font-semibold">{{ $t('views.DashboardView.run_activity') }}</h2>
         </div>
-
         <div v-if="trendData.length > 1" class="space-y-4">
           <div>
             <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.run_count') }}</p>
@@ -194,21 +182,13 @@
           <p class="text-sm italic text-muted-foreground">{{ $t('views.DashboardView.no_data_trends') }}</p>
         </div>
       </div>
-
       <!-- Recent runs list -->
       <div class="card p-4">
         <h2 class="text-base font-semibold mb-4">{{ $t('views.DashboardView.recent_runs') }}</h2>
         <div v-if="summary.recent_runs && summary.recent_runs.length > 0" class="divide-y">
           <router-link v-for="run in summary.recent_runs" :key="run.id" :to="'/runs/' + run.id" class="flex items-center justify-between py-2.5 first:pt-0 last:pb-0" :data-testid="'dashboard-recent-run-' + run.id">
             <div class="min-w-0 flex-1">
-              <Tooltip :delay-duration="300">
-                <TooltipTrigger as-child>
-                  <p class="text-sm font-medium truncate">{{ run.pipeline_name }}</p>
-                </TooltipTrigger>
-                <TooltipContent side="top">
-                  <p>{{ run.pipeline_name }}</p>
-                </TooltipContent>
-              </Tooltip>
+              <p class="text-sm font-medium truncate" v-tooltip.top="run.pipeline_name">{{ run.pipeline_name }}</p>
               <p class="text-xs text-muted-foreground">{{ formatRunDate(run.created_at) }}</p>
             </div>
             <div class="flex items-center gap-2 ml-3">
@@ -223,13 +203,9 @@
           {{ $t('views.DashboardView.no_runs_yet') }}
         </div>
       </div>
-
-
-
     </template>
   </div>
 </template>
-
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -241,14 +217,9 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import Sparkline from '../components/shared/Sparkline.vue'
 import StatCard from '../components/StatCard.vue'
 import { ChevronUp, ChevronDown, ChevronRight, Play } from '@lucide/vue'
-import {
-  Tooltip,
-  TooltipTrigger,
-  TooltipContent,
-} from '../components/ui/tooltip'
-import { runStatusBadgeClass, formatRunDate } from '../utils/runUtils'
 import { RUN_STATUS } from '../constants/filters'
 import { formatMoney } from '../lib/money'
+import { runStatusBadgeClass, formatRunDate } from '../utils/runUtils'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
 
 const { t } = useI18n()

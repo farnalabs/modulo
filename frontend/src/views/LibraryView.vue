@@ -4,13 +4,7 @@
       <div class="mx-auto flex items-center justify-between gap-3 max-w-6xl">
         <PageHeader :title="$t('views.LibraryView.title')" />
         <div class="flex items-center gap-3">
-          <Button
-            variant="default"
-            as="router-link"
-            to="/library?type=pipeline_template"
-            class="px-4 py-1.5"
-            data-testid="library-create-pipeline-header"
-          >
+          <Button as="router-link" to="/library?type=pipeline_template" class="px-4 py-1.5" data-testid="library-create-pipeline-header">
             {{ $t('views.LibraryView.create_pipeline') }}
           </Button>
           <FilterBar
@@ -206,7 +200,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { watchDebounced } from '@vueuse/core'
 import { useRouter, useRoute } from 'vue-router'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import EmptyState from '../components/shared/EmptyState.vue'

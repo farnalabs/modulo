@@ -20,7 +20,7 @@
         "test:contrast": "playwright test wcag-contrast",
         "lint:fix": "npm run lint -- --fix",
         "type-check": "vue-tsc --noEmit",
-        "postinstall": "node scripts/reka-ui-patch.cjs && node scripts/internationalized-date-patch.cjs"
+        "postinstall": "node scripts/internationalized-date-patch.cjs"
     },
     "optionalDependencies": {
         "@datadog/browser-logs": "^7.5.0",
@@ -45,8 +45,6 @@
         "overlayscrollbars-vue": "^0.5.10",
         "pinia": "^2.1.7",
         "primevue": "^5.0.1",
-        "radix-vue": "^1.9.0",
-        "reka-ui": "^2.10.1",
         "tailwind-merge": "^2.6.1",
         "vue": "^3.4.0",
         "vue-echarts": "^8.0.1",
@@ -82,7 +80,6 @@
         "openapi-typescript": "^7.13.0",
         "postcss": "^8.5.15",
         "rollup": "^4.62.2",
-        "shadcn-vue": "^2.7.4",
         "tailwindcss": "^3.4.17",
         "typescript": "~5.4.0",
         "v8-to-istanbul": "^9.3.0",

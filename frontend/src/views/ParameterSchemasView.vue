@@ -6,11 +6,7 @@
           :title="$t('views.ParameterSchemasView.title')"
           :subtitle="$t('views.ParameterSchemasView.subtitle')"
         />
-        <Button
-          variant="default"
-          data-testid="paramschema-new"
-          @click="startNewSchema"
-        >
+        <Button data-testid="paramschema-new" @click="startNewSchema">
           {{ $t('views.ParameterSchemasView.new_schema') }}
         </Button>
       </header>
@@ -68,11 +64,7 @@
           </p>
           <p v-if="deleteRefError" class="mt-1 text-sm text-destructive/80">{{ deleteRefError }}</p>
           <div class="mt-3 flex items-center gap-2">
-            <Button
-              :disabled="deleting"
-              variant="destructive"
-              @click="doDelete"
-            >
+            <Button :disabled="deleting" severity="danger" @click="doDelete">
               {{ deleting ? $t('views.ParameterSchemasView.deleting') : $t('views.ParameterSchemasView.delete') }}
             </Button>
             <button
@@ -100,27 +92,25 @@
       </div>
 
       <!-- Schema details tabs -->
-      <Tabs v-model="activeEditorTab" class="w-full">
-        <TabsList>
-          <TabsTrigger value="schema">{{ $t('views.ParameterSchemasView.tab_schema') }}</TabsTrigger>
-          <TabsTrigger value="sets">{{ $t('views.ParameterSchemasView.tab_sets') }}</TabsTrigger>
-          <TabsTrigger value="references">{{ $t('views.ParameterSchemasView.tab_references') }}</TabsTrigger>
-          <TabsTrigger value="validate">{{ $t('views.ParameterSchemasView.tab_validate') }}</TabsTrigger>
-        </TabsList>
+      <Tabs v-model:value="activeEditorTab" class="w-full">
+        <TabList>
+          <Tab value="schema">{{ $t('views.ParameterSchemasView.tab_schema') }}</Tab>
+          <Tab value="sets">{{ $t('views.ParameterSchemasView.tab_sets') }}</Tab>
+          <Tab value="references">{{ $t('views.ParameterSchemasView.tab_references') }}</Tab>
+          <Tab value="validate">{{ $t('views.ParameterSchemasView.tab_validate') }}</Tab>
+        </TabList>
+
+<TabPanels>
 
         <!-- Schema Tab -->
-        <TabsContent value="schema" class="space-y-6 pt-4">
+        <TabPanel value="schema" class="space-y-6 pt-4">
           <header class="flex items-center justify-between">
             <div>
               <h2 class="text-xl font-semibold">{{ isNew ? $t('views.ParameterSchemasView.new_schema_title') : schemaForm.name || $t('views.ParameterSchemasView.edit_schema_title') }}</h2>
               <p v-if="!isNew" class="text-sm text-muted-foreground">v{{ editingSchema?.version ?? 1 }}</p>
             </div>
             <div class="flex items-center gap-2">
-              <Button
-                variant="default"
-                :disabled="saving || !schemaForm.name.trim()"
-                @click="saveSchema"
-              >
+              <Button :disabled="saving || !schemaForm.name.trim()" @click="saveSchema">
                 {{ saving ? $t('views.ParameterSchemasView.saving') : (isNew ? $t('views.ParameterSchemasView.create') : $t('views.ParameterSchemasView.save_as_new_version')) }}
               </Button>
               <button
@@ -166,7 +156,7 @@
           <div>
             <div class="flex items-center justify-between mb-3">
               <h3 class="text-sm font-semibold">{{ $t('views.ParameterSchemasView.parameters') }}</h3>
-              <Button variant="outline" size="sm" @click="addParameter">
+              <Button severity="secondary" outlined size="small" @click="addParameter">
                 {{ $t('views.ParameterSchemasView.add_parameter') }}
               </Button>
             </div>
@@ -342,13 +332,13 @@
               </div>
             </div>
           </div>
-        </TabsContent>
+        </TabPanel>
 
         <!-- Parameter Sets Tab -->
-        <TabsContent value="sets" class="space-y-4 pt-4">
+        <TabPanel value="sets" class="space-y-4 pt-4">
           <header class="flex items-center justify-between">
             <h3 class="text-base font-semibold">{{ $t('views.ParameterSchemasView.parameter_sets') }}</h3>
-            <Button variant="default" size="sm" @click="startNewSet" data-testid="paramschema-new-set">
+            <Button size="small" @click="startNewSet" data-testid="paramschema-new-set">
               {{ $t('views.ParameterSchemasView.new_set') }}
             </Button>
           </header>
@@ -504,12 +494,7 @@
 
             <div v-if="setSaveError" class="text-sm text-destructive">{{ setSaveError }}</div>
             <div class="flex items-center gap-2">
-              <Button
-                variant="default"
-                :disabled="setSaving || !setForm.name.trim()"
-                @click="saveSet"
-                data-testid="paramschema-set-save"
-              >
+              <Button :disabled="setSaving || !setForm.name.trim()" @click="saveSet" data-testid="paramschema-set-save">
                 {{ setSaving ? $t('views.ParameterSchemasView.saving') : $t('views.ParameterSchemasView.save') }}
               </Button>
               <button
@@ -526,11 +511,7 @@
               {{ $t('views.ParameterSchemasView.delete_set_confirm', { name: deleteSetConfirmName }) }}
             </p>
             <div class="mt-3 flex items-center gap-2">
-              <Button
-                :disabled="deletingSet"
-                variant="destructive"
-                @click="doDeleteSet"
-              >
+              <Button :disabled="deletingSet" severity="danger" @click="doDeleteSet">
                 {{ deletingSet ? $t('views.ParameterSchemasView.deleting') : $t('views.ParameterSchemasView.delete') }}
               </Button>
               <button
@@ -541,10 +522,10 @@
               </button>
             </div>
           </div>
-        </TabsContent>
+        </TabPanel>
 
         <!-- References Tab -->
-        <TabsContent value="references" class="space-y-4 pt-4">
+        <TabPanel value="references" class="space-y-4 pt-4">
           <LoadingSpinner v-if="refsLoading" />
           <ErrorAlert v-else-if="refsError" :message="refsError" :on-retry="loadReferences" />
 
@@ -573,10 +554,10 @@
               </ul>
             </div>
           </template>
-        </TabsContent>
+        </TabPanel>
 
         <!-- Validate Tab -->
-        <TabsContent value="validate" class="space-y-4 pt-4">
+        <TabPanel value="validate" class="space-y-4 pt-4">
           <p class="text-sm text-muted-foreground">{{ $t('views.ParameterSchemasView.validate_desc') }}</p>
 
           <div class="space-y-2">
@@ -631,7 +612,7 @@
           </div>
 
           <div class="flex items-center gap-2">
-            <Button variant="default" :disabled="validating" @click="doValidate">
+            <Button :disabled="validating" @click="doValidate">
               {{ validating ? $t('views.ParameterSchemasView.validating') : $t('views.ParameterSchemasView.validate') }}
             </Button>
           </div>
@@ -647,8 +628,9 @@
               </ul>
             </div>
           </div>
-        </TabsContent>
-      </Tabs>
+        </TabPanel>
+      </TabPanels>
+</Tabs>
     </template>
   </div>
 </template>
@@ -664,8 +646,12 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
-import { Button } from '@/components/ui/button'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import Button from 'primevue/button'
+import Tabs from 'primevue/tabs'
+import TabList from 'primevue/tablist'
+import Tab from 'primevue/tab'
+import TabPanels from 'primevue/tabpanels'
+import TabPanel from 'primevue/tabpanel'
 import { Trash2, ChevronLeft, X } from '@lucide/vue'
 
 interface ParameterDef {

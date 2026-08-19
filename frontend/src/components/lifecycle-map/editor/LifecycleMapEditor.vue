@@ -39,12 +39,7 @@
 
           <div class="ml-auto flex items-center gap-2">
             <span v-if="saveError" class="text-xs text-destructive">{{ saveError }}</span>
-            <Button
-              :disabled="saving"
-              variant="default"
-              size="xs"
-              @click="handleSave"
-            >
+            <Button :disabled="saving" size="small" class="text-xs" @click="handleSave">
               {{ saving ? 'Saving...' : 'Save' }}
             </Button>
           </div>
@@ -161,7 +156,7 @@ import VersionHistoryDropdown from './VersionHistoryDropdown.vue'
 import { useApi } from '../../../composables/useApi'
 import { formatApiError } from '../../../lib/api/formatError'
 import type { StageType, TriggerType, LifecycleStage, LifecycleEdge, LifecycleMapVersion, PipelineSummary } from '../../../types/lifecycleMap'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 
 function genId(): string {
   return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2, 10)

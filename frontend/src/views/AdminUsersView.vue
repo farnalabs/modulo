@@ -3,12 +3,7 @@
   <div class="page-wide">
     <div class="flex items-center justify-between">
       <PageHeader title="Users" :subtitle="$t('views.AdminUsersView.manage_user_accounts_and_permissions')" />
-      <Button
-        variant="default"
-        class="border-primary/30"
-        data-testid="admin-users-add-user"
-        @click="showCreate = true"
-      >
+      <Button class="border-primary/30" data-testid="admin-users-add-user" @click="showCreate = true">
         + Add User
       </Button>
     </div>
@@ -53,17 +48,20 @@
               </div>
             </td>
             <td class="table-cell">
-              <Select aria-label="User role" :model-value="u.org_role" @update:model-value="updateRole(u, $event)">
-                <SelectTrigger class="text-xs border border-input bg-background rounded-md px-2 py-1" aria-label="User role" :data-testid="`admin-users-role-${u.id}`">
-                  <SelectValue placeholder="Select role" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="admin">{{ $t('views.AdminUsersView.admin') }}</SelectItem>
-                  <SelectItem value="operator">{{ $t('views.AdminUsersView.operator') }}</SelectItem>
-                  <SelectItem value="runner">{{ $t('views.AdminUsersView.runner') }}</SelectItem>
-                  <SelectItem value="viewer">{{ $t('views.AdminUsersView.viewer') }}</SelectItem>
-                </SelectContent>
-              </Select>
+              <Select
+  aria-label="User role"
+  :model-value="u.org_role"
+  @update:model-value="updateRole(u, $event)"
+  placeholder="Select role"
+  :data-testid="`admin-users-role-${u.id}`"
+  :options="[{ value: 'admin', label: $t('views.AdminUsersView.admin') }, { value: 'operator', label: $t('views.AdminUsersView.operator') }, { value: 'runner', label: $t('views.AdminUsersView.runner') }, { value: 'viewer', label: $t('views.AdminUsersView.viewer') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
             </td>
             <td class="table-cell">
               <span v-if="u.is_active" class="inline-flex items-center gap-1.5 rounded-full bg-success/10 px-2.5 py-0.5 text-xs font-medium text-success">
@@ -137,53 +135,47 @@
         </div>
         <div>
           <label for="adminusersview-field-1" class="block text-sm font-medium mb-1">{{ $t('views.AdminUsersView.role') }}</label>
-          <Select aria-label="Role" v-model="newUser.org_role">
-            <SelectTrigger class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" aria-label="Role" data-testid="admin-users-create-role">
-              <SelectValue placeholder="Select role" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="runner">{{ $t('views.AdminUsersView.runner') }}</SelectItem>
-              <SelectItem value="operator">{{ $t('views.AdminUsersView.operator') }}</SelectItem>
-              <SelectItem value="admin">{{ $t('views.AdminUsersView.admin') }}</SelectItem>
-              <SelectItem value="viewer">{{ $t('views.AdminUsersView.viewer') }}</SelectItem>
-            </SelectContent>
-          </Select>
+          <Select
+  aria-label="Role"
+  v-model="newUser.org_role"
+  placeholder="Select role"
+  data-testid="admin-users-create-role"
+  class="w-full"
+  :options="[{ value: 'runner', label: $t('views.AdminUsersView.runner') }, { value: 'operator', label: $t('views.AdminUsersView.operator') }, { value: 'admin', label: $t('views.AdminUsersView.admin') }, { value: 'viewer', label: $t('views.AdminUsersView.viewer') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
         </div>
         <p v-if="createError" class="text-sm text-destructive">{{ createError }}</p>
         <button type="submit" hidden>{{ $t('common.create') }}</button>
       </form>
     </FormDialog>
 
-    <Dialog :open="showResetDialog" @update:open="showResetDialog = false">
-      <DialogContent class="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>{{ $t('views.AdminUsersView.password_reset') }}</DialogTitle>
-      </DialogHeader>
-        <p class="text-sm text-muted-foreground">
-          A temporary password has been generated for <strong>{{ resetUserEmail }}</strong>.
-          Share this password with the user - they will be prompted to change it on next login.
-        </p>
-        <div class="flex items-center gap-2 bg-muted rounded-lg px-4 py-3">
-          <code class="flex-1 text-sm font-mono break-all">{{ tempPassword }}</code>
-          <Button
-            variant="default"
-            class="shrink-0"
-            data-testid="admin-users-copy-password"
-            @click="copyPassword"
-          >
-            {{ copied ? 'Copied!' : 'Copy' }}
-          </Button>
-        </div>
-        <DialogFooter class="gap-2 sm:justify-end">
-          <Button
-            variant="default"
-            data-testid="admin-users-reset-done"
-            @click="showResetDialog = false"
-          >
+    <Dialog :visible="showResetDialog" :modal="true" :dismissable-mask="true" :style="{ width: '28rem' }" @update:visible="showResetDialog = false">
+      <template #header>
+        <div class="text-lg font-semibold">{{ $t('views.AdminUsersView.password_reset') }}</div>
+      </template>
+      <p class="text-sm text-muted-foreground">
+        A temporary password has been generated for <strong>{{ resetUserEmail }}</strong>.
+        Share this password with the user - they will be prompted to change it on next login.
+      </p>
+      <div class="flex items-center gap-2 bg-muted rounded-lg px-4 py-3">
+        <code class="flex-1 text-sm font-mono break-all">{{ tempPassword }}</code>
+        <Button class="shrink-0" data-testid="admin-users-copy-password" @click="copyPassword">
+          {{ copied ? 'Copied!' : 'Copy' }}
+        </Button>
+      </div>
+      <template #footer>
+        <div class="flex justify-end">
+          <Button data-testid="admin-users-reset-done" @click="showResetDialog = false">
             Done
           </Button>
-        </DialogFooter>
-      </DialogContent>
+        </div>
+      </template>
     </Dialog>
   </div>
   </FeatureGate>
@@ -195,20 +187,14 @@ import { ref, computed, onBeforeUnmount } from 'vue'
 import { useApi } from '../composables/useApi'
 import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 import EmptyState from '../components/shared/EmptyState.vue'
 import FormDialog from '../components/shared/FormDialog.vue'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog'
+import Dialog from 'primevue/dialog'
 import TableActions from '../components/shared/TableActions.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import { formatDateShort } from '../lib/formatDate'
-import {
-  Select,
-  SelectTrigger,
-  SelectContent,
-  SelectItem,
-  SelectValue,
-} from '@/components/ui/select'
+import Select from 'primevue/select'
 
 interface UserItem {
   id: string

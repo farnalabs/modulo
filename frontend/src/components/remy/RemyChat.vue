@@ -215,24 +215,9 @@
           </div>
         </div>
         <div class="remy-permission-actions">
-          <Button
-            variant="outline"
-            size="sm"
-            :disabled="nogoCountdown > 0"
-            class="relative"
-            @click="store.approvePermission(store.pendingPermission.request_id, 'reject')"
-          >Deny{{ nogoCountdown > 0 ? ` (${nogoCountdown}s)` : '' }}</Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            :disabled="nogoCountdown > 0"
-            @click="store.approvePermission(store.pendingPermission.request_id, 'approve')"
-          >Allow Once{{ nogoCountdown > 0 ? ` (${nogoCountdown}s)` : '' }}</Button>
-          <Button
-            size="sm"
-            :disabled="nogoCountdown > 0"
-            @click="store.approvePermission(store.pendingPermission.request_id, 'approve_for_session')"
-          >Allow for Session{{ nogoCountdown > 0 ? ` (${nogoCountdown}s)` : '' }}</Button>
+          <Button severity="secondary" outlined size="small" :disabled="nogoCountdown > 0" class="relative" @click="store.approvePermission(store.pendingPermission.request_id, 'reject')">Deny{{ nogoCountdown > 0 ? ` (${nogoCountdown}s)` : '' }}</Button>
+          <Button severity="secondary" size="small" :disabled="nogoCountdown > 0" @click="store.approvePermission(store.pendingPermission.request_id, 'approve')">Allow Once{{ nogoCountdown > 0 ? ` (${nogoCountdown}s)` : '' }}</Button>
+          <Button size="small" :disabled="nogoCountdown > 0" @click="store.approvePermission(store.pendingPermission.request_id, 'approve_for_session')">Allow for Session{{ nogoCountdown > 0 ? ` (${nogoCountdown}s)` : '' }}</Button>
         </div>
       </div>
 
@@ -240,9 +225,9 @@
         <LoaderIcon class="h-3 w-3 animate-spin" />
         <span>{{ store.isPaused ? 'Remy is paused. Resume or stop?' : 'Remy is performing actions in the browser...' }}</span>
         <div class="flex gap-2">
-          <Button v-if="!store.isPaused" variant="secondary" size="sm" @click="pauseRemy">? Pause</Button>
-          <Button v-if="store.isPaused" variant="secondary" size="sm" @click="resumeRemy">? Resume</Button>
-          <Button variant="destructive" size="sm" @click="abortUiCommands">{{ store.isPaused ? '? Stop' : 'Stop' }}</Button>
+          <Button v-if="!store.isPaused" severity="secondary" size="small" @click="pauseRemy">? Pause</Button>
+          <Button v-if="store.isPaused" severity="secondary" size="small" @click="resumeRemy">? Resume</Button>
+          <Button severity="danger" size="small" @click="abortUiCommands">{{ store.isPaused ? '? Stop' : 'Stop' }}</Button>
         </div>
       </div>
     </div>
@@ -287,11 +272,7 @@
             :disabled="store.isStreaming || store.isExecutingUi"
           />
         </div>
-        <Button
-          :disabled="!inputText.trim() || store.isStreaming || store.isExecutingUi"
-          @click="handleSend"
-          :aria-label="$t('components.remy.send_message')"
-        >
+        <Button :disabled="!inputText.trim() || store.isStreaming || store.isExecutingUi" @click="handleSend" :aria-label="$t('components.remy.send_message')">
           <svg
             xmlns="http://www.w3.org/2000/svg"
             width="16"
@@ -312,10 +293,10 @@
       >
         <p class="text-sm font-medium">{{ $t('components.remy.RemyChat.delete_confirm') }}</p>
         <div class="flex gap-2 mt-2">
-          <Button variant="destructive" size="sm" @click="deleteCurrentSession">
+          <Button severity="danger" size="small" @click="deleteCurrentSession">
             {{ $t('common.delete') }}
           </Button>
-          <Button variant="outline" size="sm" @click="showDeleteConfirm = false">
+          <Button severity="secondary" outlined size="small" @click="showDeleteConfirm = false">
             {{ $t('common.cancel') }}
           </Button>
         </div>
@@ -331,7 +312,7 @@ import { useRemyStore } from "@/composables/useRemyStore";
 import { usePlanStore } from "@/stores/planStore";
 import { useRemyStream } from "@/composables/useRemyStream";
 import { abortUiCommands } from "@/composables/useUiCommandExecutor";
-import { Button } from "@/components/ui/button";
+import Button from 'primevue/button'
 import { getAccessToken } from "@/lib/api/client";
 import { ShieldAlertIcon, LoaderIcon } from "@lucide/vue";
 import AnalyticsChart from "../analytics/AnalyticsChart.vue";

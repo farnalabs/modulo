@@ -3,12 +3,7 @@
     <div class="page-wide">
     <header class="flex items-center justify-between">
       <PageHeader title="Teams" subtitle="Manage teams and team membership" />
-      <Button
-        variant="default"
-           class="border-primary/30 hover:border-primary/60"
-        data-testid="settings-teams-create-team"
-        @click="showCreateForm = true"
-      >
+      <Button class="border-primary/30 hover:border-primary/60" data-testid="settings-teams-create-team" @click="showCreateForm = true">
         Create Team
       </Button>
     </header>
@@ -132,16 +127,20 @@
                     <td class="py-2">{{ userDisplayName(member.user_id) }}</td>
                     <td class="py-2 text-muted-foreground">{{ userEmail(member.user_id) }}</td>
                     <td class="py-2">
-                      <Select aria-label="Member role" v-model="member.role" @update:model-value="changeMemberRole(team.id, member)">
-                        <SelectTrigger data-testid="settings-teams-member-role" aria-label="Member role" class="rounded border border-input bg-background px-2 py-1 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                          <SelectValue placeholder="Select role" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="viewer">{{ $t('views.SettingsTeamsView.viewer') }}</SelectItem>
-                          <SelectItem value="runner">{{ $t('views.SettingsTeamsView.runner') }}</SelectItem>
-                          <SelectItem value="operator">{{ $t('views.SettingsTeamsView.operator') }}</SelectItem>
-                        </SelectContent>
-                      </Select>
+                      <Select
+  aria-label="Member role"
+  v-model="member.role"
+  @update:model-value="changeMemberRole(team.id, member)"
+  placeholder="Select role"
+  data-testid="settings-teams-member-role"
+  :options="[{ value: 'viewer', label: $t('views.SettingsTeamsView.viewer') }, { value: 'runner', label: $t('views.SettingsTeamsView.runner') }, { value: 'operator', label: $t('views.SettingsTeamsView.operator') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
                     </td>
                     <td class="py-2 text-right">
                       <TableActions :actions="memberActions(team.id, member)" />
@@ -153,26 +152,33 @@
             </div>
 
             <div v-if="addMemberTeamId === team.id" class="mt-4 flex items-center gap-2 rounded-lg border bg-muted/30 p-3">
-              <Select aria-label="Select user" v-model="addMemberUserId">
-                <SelectTrigger data-testid="settings-teams-add-member-user" aria-label="Select user" class="flex-1 rounded border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                  <SelectValue placeholder="Select a user..." />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem v-for="user in availableUsers(team.id)" :key="user.id" :value="user.id">
-                    {{ user.display_name }} ({{ user.email }})
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-              <Select aria-label="Select role" v-model="addMemberRole">
-                <SelectTrigger data-testid="settings-teams-add-member-role" aria-label="Select role" class="rounded border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                  <SelectValue placeholder="Select role" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="viewer">{{ $t('views.SettingsTeamsView.viewer') }}</SelectItem>
-                  <SelectItem value="runner">{{ $t('views.SettingsTeamsView.runner') }}</SelectItem>
-                  <SelectItem value="operator">{{ $t('views.SettingsTeamsView.operator') }}</SelectItem>
-                </SelectContent>
-              </Select>
+              <Select
+  aria-label="Select user"
+  v-model="addMemberUserId"
+  placeholder="Select a user..."
+  data-testid="settings-teams-add-member-user"
+  class="flex-1"
+  :options="availableUsers(team.id).map(user => ({ value: user.id, label: user.display_name + '(' + user.email + ')' }))"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
+              <Select
+  aria-label="Select role"
+  v-model="addMemberRole"
+  placeholder="Select role"
+  data-testid="settings-teams-add-member-role"
+  :options="[{ value: 'viewer', label: $t('views.SettingsTeamsView.viewer') }, { value: 'runner', label: $t('views.SettingsTeamsView.runner') }, { value: 'operator', label: $t('views.SettingsTeamsView.operator') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
               <Button :disabled="!addMemberUserId || addingMember" data-testid="settings-teams-add-member-submit" @click="addMember(team.id)">
                 {{ addingMember ? 'Adding...' : 'Add' }}
               </Button>
@@ -205,7 +211,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useDataFetch } from '../composables/useDataFetch'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 import TableActions from '../components/shared/TableActions.vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
@@ -217,7 +223,7 @@ import FeatureGate from '../components/FeatureGate.vue'
 import { usePlanStore } from '../stores/planStore'
 import { formatApiError } from '../lib/api/formatError'
 import { shortId } from '../utils/format'
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import Select from 'primevue/select'
 
 const planStore = usePlanStore()
 

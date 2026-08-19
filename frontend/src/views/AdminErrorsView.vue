@@ -33,7 +33,7 @@
       @update:filter="handleFilterUpdate"
     >
       <template #after>
-        <Button variant="default" @click="applyFilters">{{ $t('views.AdminErrorsView.apply_filters') }}</Button>
+        <Button @click="applyFilters">{{ $t('views.AdminErrorsView.apply_filters') }}</Button>
         <button class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" @click="resetFilters">{{ $t('common.reset') }}</button>
       </template>
     </FilterBar>
@@ -131,7 +131,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageTabs from "../components/PageTabs.vue"
 import { shortId } from '../utils/format'
 import { formatApiError } from "../lib/api/formatError"
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 import { DataTable } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
 

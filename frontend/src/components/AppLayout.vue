@@ -1,5 +1,4 @@
 <template>
-  <TooltipProvider :delay-duration="300">
   <div class="flex items-start min-h-screen overflow-x-clip">
     <AppSidebar
       :is-system-admin="isSystemAdmin"
@@ -40,7 +39,6 @@
     <CommandPalette ref="commandPaletteRef" />
     <RemyPanel v-if="planStore.devMode" />
   </div>
-  </TooltipProvider>
 </template>
 
 <script setup lang="ts">
@@ -51,7 +49,6 @@ import { usePlanStore } from "../stores/planStore";
 import Breadcrumb from "./Breadcrumb.vue";
 import RemyPanel from "./remy/RemyPanel.vue";
 import AppSidebar from "./AppSidebar.vue";
-import { TooltipProvider } from "./ui/tooltip";
 import { useRemyStore } from "../composables/useRemyStore";
 import { useSidebarMode } from "../composables/useSidebarMode";
 import { useOnboardingStore } from "../composables/useOnboarding";

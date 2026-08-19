@@ -32,12 +32,7 @@
 
       <div v-if="!hasToken" class="rounded-xl border bg-card p-6 space-y-4 shadow-sm">
         <p class="text-sm text-muted-foreground">{{ $t('views.OAuthConsentView.login_required') }}</p>
-        <Button
-          class="w-full"
-          variant="default"
-          data-testid="oauth-consent-login"
-          @click="goToLogin"
-        >
+        <Button class="w-full" data-testid="oauth-consent-login" @click="goToLogin">
           {{ $t('common.sign_in') }}
         </Button>
       </div>
@@ -62,13 +57,7 @@
           </ul>
         </div>
 
-        <Button
-          :disabled="approving"
-          class="w-full border-primary/30 hover:border-primary/60 px-4 py-2.5"
-          variant="default"
-          data-testid="oauth-consent-approve"
-          @click="approve"
-        >
+        <Button :disabled="approving" class="w-full border-primary/30 hover:border-primary/60 px-4 py-2.5" data-testid="oauth-consent-approve" @click="approve">
           {{ approving ? $t('views.OAuthConsentView.approving') : $t('views.OAuthConsentView.approve') }}
         </Button>
       </div>
@@ -79,7 +68,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 import { getAccessToken } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 
