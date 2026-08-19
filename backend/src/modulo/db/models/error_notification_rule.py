@@ -1,14 +1,18 @@
 import uuid
+from datetime import datetime
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
     Uuid,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -21,6 +25,12 @@ class ErrorNotificationRule(OrgScoped):
     __table_args__ = (
         CheckConstraint("condition_level IN ('error', 'warning', 'critical')", name="ck_enr_condition_level"),
         CheckConstraint("action_type IN ('in_app', 'email', 'webhook')", name="ck_enr_action_type"),
+        Index(
+            "uq_enr_org_active",
+            "organisation_id",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
     )
 
     name: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -40,6 +50,7 @@ class ErrorNotificationRule(OrgScoped):
     # force-updates ONLY rows still ``is_default=true`` (never edited); editing a
     # seeded rule flips this (route surface — out of scope for the service seed).
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
 
 
 class DeletedDefault(Base, TimestampMixin):

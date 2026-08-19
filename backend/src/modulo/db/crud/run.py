@@ -16,11 +16,11 @@ from operator import attrgetter
 from typing import Any
 
 from sqlalchemy import Date, bindparam, case, cast, delete, func, select, text, update
-from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from modulo.core.exceptions import OrgDeletedError
+from modulo.core.exceptions import OrgDeletedError, RateLimitConflictError
 from modulo.db.crud.base import PageResult
 from modulo.db.crud.organisation import get_organisation
 from modulo.db.crud.pagination import CursorPaginator
@@ -771,7 +771,15 @@ async def create_run(
         run.error_detail = guardrail_block_message[:5000]
         run.completed_at = datetime.now(UTC)
     session.add(run)
-    await session.flush()
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        if rate_limit_key is not None and "uq_runs_pipeline_rate_limit_key" in str(exc.orig):
+            raise RateLimitConflictError(
+                pipeline_id=pipeline_id,
+                rate_limit_key=rate_limit_key,
+            ) from exc
+        raise
 
     # Persist guardrail eval results (evidence deltas vs the pre-act base).
     # detail is count-only / pattern-descriptive — never raw payload (item 7
