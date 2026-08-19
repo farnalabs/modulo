@@ -419,6 +419,51 @@ async def test_gate_forwards_claims_load_failed_marker(monkeypatch: pytest.Monke
     interrupt.assert_called_once()
 
 
+async def test_gate_forwards_node_def_to_check_node_start(monkeypatch: pytest.MonkeyPatch):
+    """The gate forwards the node's definition dict to ``check_node_start`` so a
+    ``sandbox_agent`` node's mechanically-derived sandbox surface (egress
+    certification; write/git-credential unknown — FAR-212 PR A) lands in the
+    live manifest. Without this forwarding the sandbox surface would be absent
+    and even the egress guarantee could not be certified."""
+    _set_ctx(monkeypatch)
+    check = _patch_check_node_start(
+        monkeypatch,
+        ConformanceRecheckResult(blocked=False, gate_id=None, detail="", state="present", warned=False, claimed=False),
+    )
+    audit = _patch_audit(monkeypatch)
+    interrupt = _patch_interrupt(monkeypatch)
+
+    node_def = {"id": _NODE_ID, "node_type": "sandbox_agent", "read_only": True, "egress_policy": "deny_all"}
+    blocked = await nr._run_conformance_gate({"_run_id": _RUN_ID}, node_id=_NODE_ID, node_def=node_def)
+
+    assert blocked is False
+    check.assert_awaited_once()
+    assert check.await_args.kwargs["node_def"] is node_def
+    audit.assert_not_awaited()
+    interrupt.assert_not_called()
+
+
+async def test_gate_absent_node_def_forwards_none(monkeypatch: pytest.MonkeyPatch):
+    """When the caller provides no node_def (non-sandbox node builders) the gate
+    forwards ``None`` — the live manifest contributes no sandbox surface, so no
+    sandbox capability can be falsely certified for a node that has none."""
+    _set_ctx(monkeypatch)
+    check = _patch_check_node_start(
+        monkeypatch,
+        ConformanceRecheckResult(blocked=False, gate_id=None, detail="", state="present", warned=False, claimed=False),
+    )
+    audit = _patch_audit(monkeypatch)
+    interrupt = _patch_interrupt(monkeypatch)
+
+    blocked = await nr._run_conformance_gate({"_run_id": _RUN_ID}, node_id=_NODE_ID)
+
+    assert blocked is False
+    check.assert_awaited_once()
+    assert check.await_args.kwargs["node_def"] is None
+    audit.assert_not_awaited()
+    interrupt.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # _append_conformance_audit: summary-only payload, failure-isolated
 # ---------------------------------------------------------------------------

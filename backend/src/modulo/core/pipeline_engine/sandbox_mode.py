@@ -39,6 +39,99 @@ _SANDBOX_RESOURCE_LIMIT_KEYS = frozenset(
     }
 )
 
+# ---------------------------------------------------------------------------
+# Sandbox capability vocabulary (FAR-212 PR A)
+# ---------------------------------------------------------------------------
+
+# Capability names for the sandbox write/egress surface. These are the names
+# the conformance hard-block certifies against: a block-action guardrail whose
+# ``required_capabilities`` carries one of these certifies the corresponding
+# risk is IMPOSSIBLE (see ``conformance._add_sandbox_surface`` for the
+# polarity inversion between the raw derivation and the conformance manifest).
+SANDBOX_CAPABILITY_WRITE_FILES = "sandbox.write_files"
+SANDBOX_CAPABILITY_EGRESS = "sandbox.egress"
+SANDBOX_CAPABILITY_GIT_CREDENTIALS = "sandbox.git_credentials"
+
+# NOTE (FAR-212 PR A review): ``sandbox.write_files`` and
+# ``sandbox.git_credentials`` derive UNKNOWN (None) until the PR B enforcement
+# surface lands. The ``read_only`` / ``git_credentials`` dict keys do NOT exist
+# on ``PipelineGraphNode`` (Pydantic ``extra="ignore"`` silently drops them on
+# the REST/MCP paths) and node_runner/e2b never enforce read-only mounts or
+# git-credential scope, so deriving anything from those keys would CERTIFY a
+# deny-guarantee nothing enforces. They must never certify from unvalidated /
+# unenforced keys; ``derive_sandbox_capabilities`` always returns None for both
+# (fail-closed block) until read-only mounts + git-credential scope land in PR B
+# together with the PipelineGraphNode / GraphValidator / node_runner surface.
+
+
+def derive_sandbox_capabilities(node_def: dict[str, Any]) -> dict[str, bool | None]:
+    """Mechanically derive a sandbox_agent node's capability profile.
+
+    Reads the node's ACTUAL configuration — currently only the FAR-296 Phase 3
+    egress surface (``egress_policy``), which is a real validated field on
+    ``PipelineGraphNode`` and is enforced at runtime (node_runner maps it to
+    ``allow_internet_access``). Returns ``{capability: bool | None}`` with the
+    RAW mechanical polarity:
+
+      ``sandbox.egress``
+          False when ``egress_policy`` is ``"deny_all"`` or ``"selected"`` —
+          node_runner maps both to ``allow_internet_access=False`` (FAR-296
+          Phase 3); True when the policy is absent (default) or ``"default"``;
+          None when the declared value is unrecognised.
+      ``sandbox.write_files``
+          ALWAYS None (unknown). The read-only-workspace surface is NOT a real
+          product configuration yet: ``PipelineGraphNode`` declares no
+          ``read_only`` field (Pydantic ``extra="ignore"`` silently drops it on
+          the REST/MCP paths) and node_runner / e2b have no enforcement point
+          for it. Deriving a value here would certify a deny-guarantee nothing
+          enforces — a smuggled key in a raw workflow import would reach this
+          derivation at run time and FAIL OPEN. Until read-only mounts land
+          (FAR-212 PR B), this capability must stay unknown so a block
+          guardrail fails CLOSED. Never read unvalidated/unenforced keys.
+      ``sandbox.git_credentials``
+          ALWAYS None (unknown). Same reason as ``sandbox.write_files``: no
+          ``git_credentials`` field exists on ``PipelineGraphNode`` and no
+          git-credential scoping is enforced by node_runner / e2b. Deriving a
+          value would certify scoped credentials that nothing limits (fail
+          open through the raw import path). Unknown (fail-closed) until the
+          git-credential scope surface lands (FAR-212 PR B).
+
+    The derivation is MECHANICAL — it reads the node's actual configuration,
+    never a declared claim — so a conformance hard-block can CERTIFY what is
+    genuinely enforced (egress) and fails CLOSED (unknown) for anything not yet
+    a real, validated, enforced surface. The polarity here is raw (True =
+    present / risked); the conformance manifest reader inverts it
+    (``conformance._add_sandbox_surface``) because a block guardrail's
+    ``required_capabilities`` on the sandbox surface is a deny/negative
+    guarantee. Non-sandbox nodes contribute an empty profile.
+    """
+    node_type = node_def.get("node_type")
+    if node_type is not None and node_type != "sandbox_agent":
+        return {}
+
+    caps: dict[str, bool | None] = {}
+
+    egress_policy = node_def.get("egress_policy")
+    if egress_policy is None:
+        caps[SANDBOX_CAPABILITY_EGRESS] = True
+    elif isinstance(egress_policy, str) and egress_policy in _SANDBOX_EGRESS_POLICIES:
+        caps[SANDBOX_CAPABILITY_EGRESS] = egress_policy not in ("deny_all", "selected")
+    else:
+        caps[SANDBOX_CAPABILITY_EGRESS] = None
+
+    # sandbox.write_files and sandbox.git_credentials are NOT derivable until
+    # their enforcement surfaces exist (read-only mounts, git-credential scope
+    # — FAR-212 PR B). The config keys a derivation would read
+    # (``read_only`` / ``git_credentials``) exist NOWHERE in the product:
+    # PipelineGraphNode declares no such fields and node_runner/e2b never read
+    # or enforce them, so any value would certify an unenforced deny-guarantee
+    # (fail-open through the raw import path). Always derive None (unknown) so
+    # a block guardrail fails CLOSED.
+    caps[SANDBOX_CAPABILITY_WRITE_FILES] = None
+    caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] = None
+
+    return caps
+
 
 def _validate_sandbox_mode_config(node_def: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
     """Validate a sandbox_agent node's mode-scoped command configuration.

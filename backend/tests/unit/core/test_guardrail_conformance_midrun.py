@@ -16,6 +16,7 @@ import pytest
 
 from modulo.core.eval_engine import EvalDefinition, EvalType
 from modulo.core.guardrails.conformance import (
+    ConformanceRecheckResult,
     build_live_manifest,
     check_node_start,
     decide_conformance,
@@ -757,3 +758,312 @@ async def test_build_live_manifest_unreadable_surface_fails_closed(monkeypatch: 
     result = evaluate_conformance([_gr("g_block", "block", ["github.write"])], registered)
     assert result.blocked is True
     assert result.state == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Sandbox capability surface (FAR-212 PR A): mechanically derived from the
+# node's actual enforced config, stamped into the manifest with conformance
+# polarity (a block guardrail's required_capabilities on the sandbox surface is
+# a deny/negative guarantee — confirmed-absent write/egress is the
+# certification). Only ``sandbox.egress`` is genuinely mechanical today:
+# ``sandbox.write_files`` and ``sandbox.git_credentials`` have no validated,
+# enforced product surface yet (PipelineGraphNode has no such field; node_runner
+# never reads them), so they always resolve unknown (fail-closed) — a derivative
+# value would certify an unenforced deny-guarantee and fail open via the raw
+# workflow-import path.
+# ---------------------------------------------------------------------------
+
+
+def _sandbox_node(**overrides: Any) -> dict[str, Any]:
+    node: dict[str, Any] = {"id": "node-1", "node_type": "sandbox_agent", "agent_prompt": "p", "agent_command": "c"}
+    node.update(overrides)
+    return node
+
+
+async def test_build_live_manifest_sandbox_egress_denied_is_certified():
+    """egress_policy='deny_all' -> mechanical egress False -> the manifest's
+    sandbox.egress is True (the 'no egress' guarantee is confirmed)."""
+    registered = await build_live_manifest(
+        AsyncMock(),
+        org_id=_ORG_ID,
+        connector_instance_ids=[],
+        environment_profile_id=None,
+        agent_id=None,
+        node_def=_sandbox_node(egress_policy="deny_all"),
+    )
+    assert registered.get("sandbox.egress") is True
+
+
+async def test_build_live_manifest_sandbox_write_surface_always_unknown():
+    """The write-files surface is NEVER certified: even a smuggled read_only key
+    derives to unknown (None) — the manifest's sandbox.write_files is None and a
+    block guardrail fails CLOSED. There is no read-only-workspace enforcement
+    surface to mechanically confirm against (FAR-212 PR B)."""
+    registered = await build_live_manifest(
+        AsyncMock(),
+        org_id=_ORG_ID,
+        connector_instance_ids=[],
+        environment_profile_id=None,
+        agent_id=None,
+        node_def=_sandbox_node(read_only=True),
+    )
+    assert registered.get("sandbox.write_files") is None
+    derivation = decide_conformance(["sandbox.write_files"], registered)
+    assert derivation.state == "unknown"
+
+
+async def test_build_live_manifest_sandbox_git_credentials_always_unknown():
+    """The git-credential surface is NEVER certified: even a smuggled
+    git_credentials key derives to unknown (None) — no scoped-git enforcement
+    surface exists, so a block guardrail fails CLOSED (FAR-212 PR B)."""
+    registered = await build_live_manifest(
+        AsyncMock(),
+        org_id=_ORG_ID,
+        connector_instance_ids=[],
+        environment_profile_id=None,
+        agent_id=None,
+        node_def=_sandbox_node(git_credentials="scoped"),
+    )
+    assert registered.get("sandbox.git_credentials") is None
+
+
+async def test_build_live_manifest_non_sandbox_node_no_surface():
+    """A non-sandbox node contributes no sandbox capability surface."""
+    registered = await build_live_manifest(
+        AsyncMock(),
+        org_id=_ORG_ID,
+        connector_instance_ids=[],
+        environment_profile_id=None,
+        agent_id=None,
+        node_def={"id": "node-1", "node_type": "agent"},
+    )
+    assert "sandbox.write_files" not in registered
+    assert "sandbox.egress" not in registered
+
+
+async def test_build_live_manifest_sandbox_egress_default_is_violated():
+    """A default-egress sandbox (internet allowed) -> mechanical egress True ->
+    sandbox.egress is False (the no-egress claim is violated)."""
+    registered = await build_live_manifest(
+        AsyncMock(),
+        org_id=_ORG_ID,
+        connector_instance_ids=[],
+        environment_profile_id=None,
+        agent_id=None,
+        node_def=_sandbox_node(egress_policy="default"),
+    )
+    assert registered.get("sandbox.egress") is False
+
+
+async def test_build_live_manifest_sandbox_unknown_surface_fail_closed():
+    """An unrecognised egress policy (no mechanical fact) -> the capability is
+    absent from the manifest (unknown) -> a block guardrail fails CLOSED."""
+    registered = await build_live_manifest(
+        AsyncMock(),
+        org_id=_ORG_ID,
+        connector_instance_ids=[],
+        environment_profile_id=None,
+        agent_id=None,
+        node_def=_sandbox_node(egress_policy="allow_all"),
+    )
+    assert registered.get("sandbox.egress") is None
+    derivation = decide_conformance(["sandbox.egress"], registered)
+    assert derivation.state == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Full gate: sandbox capability claims reach check_node_start (FAR-212 PR A)
+# ---------------------------------------------------------------------------
+
+
+async def _run_hoisted_check(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    guardrails: list[Any],
+    node_def: dict[str, Any] | None,
+) -> ConformanceRecheckResult:
+    import modulo.core.guardrails.conformance as mod
+
+    async def _noop_rls(session: Any, org_id: uuid.UUID) -> None:
+        return None
+
+    monkeypatch.setattr(mod, "_set_rls", _noop_rls)
+    session = _manifest_session()
+    session.begin = MagicMock(return_value=session)
+    factory = MagicMock()
+    factory.return_value = session
+    factory.return_value.__aenter__ = AsyncMock(return_value=session)
+    factory.return_value.__aexit__ = AsyncMock(return_value=None)
+    return await check_node_start(
+        factory,
+        org_id=_ORG_ID,
+        pipeline_id=uuid.uuid4(),
+        node_id="node-1",
+        connector_instance_ids=[],
+        environment_profile_id=None,
+        agent_id=None,
+        node_def=node_def,
+        claimed_guardrails=guardrails,
+    )
+
+
+async def test_check_node_start_sandbox_write_claim_blocks_unknown(monkeypatch: pytest.MonkeyPatch):
+    """A block guardrail requiring sandbox.write_files BLOCKS with state
+    unknown: the write surface is not mechanically confirmable yet (no enforced
+    read-only mount exists — FAR-212 PR B), so the claim fails CLOSED even when
+    a read_only key is smuggled into the node def."""
+    result = await _run_hoisted_check(
+        monkeypatch,
+        guardrails=[_gr("g_nowrite", "block", ["sandbox.write_files"])],
+        node_def=_sandbox_node(read_only=True),
+    )
+    assert result.blocked is True
+    assert result.state == "unknown"
+    assert result.claimed is True
+
+
+async def test_check_node_start_sandbox_deny_all_certifies_egress_guardrail(monkeypatch: pytest.MonkeyPatch):
+    """A block guardrail requiring sandbox.egress on a deny_all sandbox is
+    CERTIFIED (present) — confirmed no egress."""
+    result = await _run_hoisted_check(
+        monkeypatch,
+        guardrails=[_gr("g_noegress", "block", ["sandbox.egress"])],
+        node_def=_sandbox_node(egress_policy="deny_all"),
+    )
+    assert result.blocked is False
+    assert result.state == "present"
+    assert result.claimed is True
+
+
+async def test_check_node_start_sandbox_unknown_fails_closed(monkeypatch: pytest.MonkeyPatch):
+    """No sandbox surface (no node_def) -> the capability is unknown -> the
+    block guardrail fails CLOSED (never fail-open on an unreadable surface)."""
+    result = await _run_hoisted_check(
+        monkeypatch,
+        guardrails=[_gr("g_nowrite", "block", ["sandbox.write_files"])],
+        node_def=None,
+    )
+    assert result.blocked is True
+    assert result.state == "unknown"
+
+
+async def test_check_node_start_sandbox_git_credentials_claim_blocks_unknown(monkeypatch: pytest.MonkeyPatch):
+    """A block guardrail requiring sandbox.git_credentials BLOCKS with state
+    unknown: no scoped-git enforcement surface exists, so the claim fails
+    CLOSED even when a git_credentials key is smuggled into the node def
+    (FAR-212 PR B)."""
+    result = await _run_hoisted_check(
+        monkeypatch,
+        guardrails=[_gr("g_scopedgit", "block", ["sandbox.git_credentials"])],
+        node_def=_sandbox_node(git_credentials="scoped"),
+    )
+    assert result.blocked is True
+    assert result.state == "unknown"
+    assert result.claimed is True
+
+
+# ---------------------------------------------------------------------------
+# Round-trip (FAR-212 PR A review): a REAL API-validated node through
+# ``PipelineGraphNode`` can never certify ``sandbox.write_files`` /
+# ``sandbox.git_credentials``. ``PipelineGraphNode`` does not declare the
+# ``read_only`` / ``git_credentials`` fields (Pydantic ``extra="ignore"``
+# silently drops them on the REST/MCP paths) and node_runner/e2b enforce
+# neither, so the derivation must resolve both capabilities unknown — a
+# smuggled ``read_only: true`` / ``git_credentials: "scoped"`` in an imported
+# workflow must not certify a deny-guarantee nothing enforces.
+# ---------------------------------------------------------------------------
+
+
+def _api_validated_sandbox_node() -> dict[str, Any]:
+    """Build a node the way the REST/MCP API would: through PipelineGraphNode.
+
+    Returns the ``model_dump()`` the runtime node_def is built from. Asserts
+    the smuggled ``read_only`` / ``git_credentials`` keys are silently dropped
+    by the model (they are not fields), proving the derivation can never see
+    them on the API-validated path.
+    """
+    from modulo.api.routes.pipelines import PipelineGraphNode
+
+    node = PipelineGraphNode.model_validate(
+        {
+            "id": str(uuid.uuid4()),
+            "node_type": "sandbox_agent",
+            "agent_id": None,
+            "position": {"x": 10, "y": 20},
+            "connector_binding": None,
+            "agent_prompt": "Do the thing",
+            "agent_command": "opencode run --auto < /home/user/prompt.md",
+            "template_id": "opencode",
+            "egress_policy": "deny_all",
+            # Smuggled keys — NOT PipelineGraphNode fields; extra="ignore" drops them.
+            "read_only": True,
+            "git_credentials": "scoped",
+        }
+    )
+    dumped = node.model_dump()
+    assert "read_only" not in dumped
+    assert "git_credentials" not in dumped
+    assert dumped["egress_policy"] == "deny_all"
+    return dumped
+
+
+async def test_round_trip_api_validated_node_write_and_git_unknown():
+    """A real API-validated node resolves write_files/git_credentials UNKNOWN
+    (fail-closed block), never certified, while egress stays mechanical."""
+    from modulo.core.pipeline_engine.sandbox_mode import (
+        SANDBOX_CAPABILITY_EGRESS,
+        SANDBOX_CAPABILITY_GIT_CREDENTIALS,
+        SANDBOX_CAPABILITY_WRITE_FILES,
+        derive_sandbox_capabilities,
+    )
+
+    node_def = _api_validated_sandbox_node()
+    caps = derive_sandbox_capabilities(node_def)
+    assert caps[SANDBOX_CAPABILITY_EGRESS] is False
+    assert caps[SANDBOX_CAPABILITY_WRITE_FILES] is None
+    assert caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] is None
+
+    registered = await build_live_manifest(
+        AsyncMock(),
+        org_id=_ORG_ID,
+        connector_instance_ids=[],
+        environment_profile_id=None,
+        agent_id=None,
+        node_def=node_def,
+    )
+    # deny_all egress IS certified (validated + enforced); write/git stay unknown.
+    assert registered.get("sandbox.egress") is True
+    assert registered.get("sandbox.write_files") is None
+    assert registered.get("sandbox.git_credentials") is None
+
+
+async def test_check_node_start_round_trip_api_validated_node_fails_closed(monkeypatch: pytest.MonkeyPatch):
+    """Even a fully API-validated node can never certify a write/git block
+    claim — both resolve unknown and the node is blocked into HITL until the
+    PR B enforcement surface lands. An egress claim on the same node IS
+    certified (deny_all)."""
+    node_def = _api_validated_sandbox_node()
+
+    write_blocked = await _run_hoisted_check(
+        monkeypatch,
+        guardrails=[_gr("g_nowrite", "block", ["sandbox.write_files"])],
+        node_def=node_def,
+    )
+    assert write_blocked.blocked is True
+    assert write_blocked.state == "unknown"
+
+    git_blocked = await _run_hoisted_check(
+        monkeypatch,
+        guardrails=[_gr("g_scopedgit", "block", ["sandbox.git_credentials"])],
+        node_def=node_def,
+    )
+    assert git_blocked.blocked is True
+    assert git_blocked.state == "unknown"
+
+    egress_ok = await _run_hoisted_check(
+        monkeypatch,
+        guardrails=[_gr("g_noegress", "block", ["sandbox.egress"])],
+        node_def=node_def,
+    )
+    assert egress_ok.blocked is False
+    assert egress_ok.state == "present"

@@ -19,9 +19,11 @@ Behaviour on change (fail-closed for block-action guardrails, per
 
 The live manifest is built from CURRENT capability sources for the node's bound
 surfaces (connector scopes/allowed-operations, EnvironmentProfile capabilities,
-and the bound agent's required environment capabilities). A source that is
-absent or unreadable contributes ``None`` (unknown) for its capabilities, so a
-``block`` guardrail fails CLOSED (unknown blocks), never fail-open.
+the bound agent's required environment capabilities, and — for a
+``sandbox_agent`` node — the mechanically-derived sandbox write/egress
+capability surface). A source that is absent or unreadable contributes ``None``
+(unknown) for its capabilities, so a ``block`` guardrail fails CLOSED (unknown
+blocks), never fail-open.
 
 All DB access is org-scoped (RLS via ``set_rls_org``). No credentials, no raw
 payloads, and no decrypted state ever enter the returned decision or audit
@@ -102,6 +104,64 @@ def _capabilities_for_agent(row: Any) -> set[str]:
     return set()
 
 
+# Sandbox capabilities whose block-guarantee is a DENY/negative guarantee —
+# ``required_capabilities=["sandbox.write_files"]`` certifies writes are
+# IMPOSSIBLE and ``["sandbox.egress"]`` certifies no egress, so the RAW
+# mechanical polarity (True = risk present) would be INVERTED when stamped into
+# the manifest. ``sandbox.git_credentials`` is a POSITIVE guarantee (certifies
+# git credentials are scoped/limited) whose raw polarity already matches the
+# manifest, so it is never inverted. The set is resolved LAZILY from the
+# ``sandbox_mode`` vocabulary constants (never re-hard-coded literals) so a
+# renamed/removed capability can never drift silently from the polarity set.
+# NOTE (FAR-212 PR A): ``sandbox.write_files`` / ``sandbox.git_credentials``
+# today always derive None (no enforced read-only-mount / git-credential-surface
+# exists yet), so they fail CLOSED as unknown — only ``sandbox.egress`` is a
+# live certifyable surface.
+def _sandbox_deny_polarity_caps() -> frozenset[str]:
+    from modulo.core.pipeline_engine.sandbox_mode import (
+        SANDBOX_CAPABILITY_EGRESS,
+        SANDBOX_CAPABILITY_WRITE_FILES,
+    )
+
+    return frozenset({SANDBOX_CAPABILITY_WRITE_FILES, SANDBOX_CAPABILITY_EGRESS})
+
+
+def _add_sandbox_surface(registered: dict[str, bool | None], sandbox_caps: dict[str, bool | None]) -> None:
+    """Stamp the mechanically-derived sandbox surface with CONFORMANCE polarity.
+
+    A block-action conformance claim on the sandbox surface is, for the
+    write/egress pair, a DENY/negative guarantee: ``["sandbox.write_files"]``
+    certifies that writes are IMPOSSIBLE, ``["sandbox.egress"]`` certifies no
+    egress. The mechanical derivation (:func:`derive_sandbox_capabilities`)
+    returns the RAW polarity (True = writable / egress allowed), so the
+    manifest INVERTS those two and the existing three-state derivation reads
+    them correctly:
+
+      mechanical False (confirmed absent) -> registered True  (guarantee holds)
+      mechanical True  (present)           -> registered False (claim violated)
+      None (unknown)                       -> registered None (fail-closed)
+
+    ``sandbox.git_credentials`` is a POSITIVE guarantee — ``["sandbox.git_credentials"]``
+    certifies the node's git credentials are SCOPED (limited) — so its raw
+    polarity already matches the manifest (scoped=True -> registered True) and
+    is stamped AS-IS, never inverted. Inverting it would certify the risky
+    state (unscoped/full-access) and block the safe state (scoped).
+
+    The sandbox surface is stamped LAST (overriding any earlier surface) — the
+    node's actual sandbox configuration is authoritative for the sandbox
+    surface. Never contains credentials — only capability names and their
+    confirmed state.
+    """
+    deny_polarity = _sandbox_deny_polarity_caps()
+    for capability, value in sandbox_caps.items():
+        if value is None:
+            registered[capability] = None
+        elif capability in deny_polarity:
+            registered[capability] = not value
+        else:
+            registered[capability] = value
+
+
 async def build_live_manifest(
     session: AsyncSession,
     *,
@@ -109,6 +169,7 @@ async def build_live_manifest(
     connector_instance_ids: list[uuid.UUID],
     environment_profile_id: uuid.UUID | None,
     agent_id: uuid.UUID | None,
+    node_def: dict[str, Any] | None = None,
 ) -> dict[str, bool | None]:
     """Read CURRENT capability state for the node's bound surfaces.
 
@@ -122,6 +183,12 @@ async def build_live_manifest(
     ``None`` (unknown) is recorded for a surface that could not be read (a
     missing connector instance, profile, or agent, or a read failure) — a
     block-action guardrail then fails CLOSED (unknown blocks).
+
+    For a ``sandbox_agent`` node, *node_def* additionally contributes the
+    sandbox capability surface (``sandbox.egress`` — mechanically certified
+    from the enforced egress policy; ``sandbox.write_files`` and
+    ``sandbox.git_credentials`` stay unknown until their enforcement surfaces
+    land in PR B), stamped with conformance polarity (FAR-212 PR A).
 
     IMPORTANT: a capability that is absent from ``registered`` entirely also
     resolves to ``None`` (unknown) in ``derive_conformance_state`` — a surface
@@ -196,6 +263,18 @@ async def build_live_manifest(
                 _add(_capabilities_for_agent(agent))
         except Exception:
             _log.exception("guardrail.conformance.agent_surface_unreadable", extra={"org_id": str(org_id)})
+
+    # FAR-212 PR A: the sandbox capability surface for a sandbox_agent node —
+    # mechanically derived from the node's ACTUAL config (egress_policy, the
+    # read-only workspace flag, git-credential scope), not a declared claim.
+    # Lazy import keeps this module's import surface light: sandbox_mode itself
+    # is dependency-free, but the pipeline_engine package init (LangGraph,
+    # executor, DB) is heavy and must not be pulled in by guardrail consumers
+    # that never build a sandbox manifest.
+    if node_def is not None:
+        from modulo.core.pipeline_engine.sandbox_mode import derive_sandbox_capabilities
+
+        _add_sandbox_surface(registered, derive_sandbox_capabilities(node_def))
 
     return registered
 
@@ -401,6 +480,7 @@ async def check_node_start(
     connector_instance_ids: list[uuid.UUID],
     environment_profile_id: uuid.UUID | None,
     agent_id: uuid.UUID | None,
+    node_def: dict[str, Any] | None = None,
     claimed_guardrails: list[Any] | None = None,
     claims_load_failed: bool = False,
 ) -> ConformanceRecheckResult:
@@ -415,6 +495,10 @@ async def check_node_start(
     blocked with state ``unknown`` (deny on error) rather than silently
     continuing. The reader never raises — the node decision is what matters,
     and a broken reader must not crash the node into a terminal error.
+
+    *node_def* is the node's definition dict. For a ``sandbox_agent`` node it
+    contributes the mechanically-derived sandbox capability surface to the
+    manifest (FAR-212 PR A); for every other node type it is inert.
 
     *claimed_guardrails* is the hoisted list of claimed guardrail DTOs the
     executor precomputed ONCE at run start (one query per run). When provided,
@@ -476,6 +560,7 @@ async def check_node_start(
             connector_instance_ids=connector_instance_ids,
             environment_profile_id=environment_profile_id,
             agent_id=agent_id,
+            node_def=node_def,
         )
     return evaluate_conformance(claimed, registered)
 

@@ -1827,6 +1827,20 @@ Compliance bundles as guardrail-as-code (`modulo.core.guardrails.policy_pack`). 
 
 **T1 go/no-go gate:** a NAMED enterprise use case (a real customer/org adopting a specific pack) must be committed before block-mode promotion of any pack. SOC 2 pack content is shipped (FAR-216 PR B, above); GDPR pack content remains a separate future delivery.
 
+#### Sandbox write/egress mediation (T3 — FAR-212)
+
+The "never write a file" / "no egress" promise for a `sandbox_agent` node must be mechanically enforceable at the sandbox boundary, not merely declared. The capability-profile derivation (PR A) makes the sandbox's egress surface a first-class, mechanically-certifiable conformance surface today; the write/git-credential surfaces are wired into the conformance manifest but resolve unknown (fail-closed) until their enforcement points land.
+
+**Capability vocabulary (mechanically derived, `modulo.core.pipeline_engine.sandbox_mode.derive_sandbox_capabilities`):**
+
+- `sandbox.write_files` — ALWAYS unknown for now: the read-only-workspace surface is not yet a validated, enforced product config (`PipelineGraphNode` has no such field; node_runner/e2b never enforce it), so deriving a value would certify an unenforced deny-guarantee and fail open via the unvalidated workflow-import path. A block guardrail requiring it fails CLOSED until the enforcement surface lands (PR B).
+- `sandbox.egress` — False when `egress_policy` is `deny_all` or `selected` (the dispatch maps both to `allow_internet_access=False`, FAR-296 Phase 3), True when `default`/absent, None when the declared value is unrecognised.
+- `sandbox.git_credentials` — ALWAYS unknown for now: no git-credential scoping surface exists as validated, enforced product config (`PipelineGraphNode` has no such field; node_runner/e2b never enforce it). A block guardrail requiring it fails CLOSED until the enforcement surface lands (PR B).
+
+The derivation is MECHANICAL — it reads the node's actual enforced configuration, never a declared claim — so the conformance hard-block CERTIFIES what is genuinely enforced (egress) and fails CLOSED (unknown) for any surface that is not yet a real, validated, enforced config. It never certifies from unvalidated/unenforced dict keys (a smuggled key in an imported workflow must not certify a deny-guarantee nothing enforces).
+
+**Conformance wiring (PR A):** the live-manifest reader (`conformance.build_live_manifest`) derives the sandbox surface from the `sandbox_agent` node's config at node start and stamps it into the capability manifest. A block-action guardrail's `required_capabilities` on the sandbox egress surface is a DENY/negative guarantee: `["sandbox.egress"]` certifies no egress. The manifest inverts the raw mechanical polarity for egress (confirmed-absent egress is the certified guarantee), so the existing three-state derivation reads it correctly — confirmed-absent → `present` (certified), present → `absent` (claim violated → fail-closed block), unknown → `unknown` (fail-closed block). `sandbox.write_files` / `sandbox.git_credentials` stay `unknown` (fail-closed block) until their enforcement surfaces land (PR B). Enforcement of the policy surface itself (read-only mounts, network-egress allowlist, git-credential scope) is PR B.
+
 #### Alpha Note
 The Eval Engine component appears in the §6.1 architecture diagram. Eval System is a **v1 feature** — no eval definitions, no eval UI, and no conditional HITL in alpha. Alpha runs do not execute evals.
 
