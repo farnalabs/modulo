@@ -169,23 +169,6 @@ async def _sample_connector(connector_id: uuid.UUID, connector: ConnectorBase) -
                 error,
             )
 
-        case ConnectorType.LINEAR:
-            result, error = await _sample_query(
-                connector,
-                connector_id,
-                "issues",
-                ConnectorQuery(resource="search", filters={"query": ""}),
-            )
-            _add(
-                samples,
-                connector_id,
-                ct,
-                "issues",
-                result.records[:_SAMPLE_LIMIT] if result is not None else [],
-                min(len(result.records), _SAMPLE_LIMIT) if result is not None else 0,
-                error,
-            )
-
     return samples
 
 

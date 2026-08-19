@@ -50,7 +50,7 @@ Existing SDLC onboarding: teams can map their current process (even manual steps
 - [x] Returns 422 for invalid step_id
 - [x] Returns 401/403 for unauthenticated requests
 - [x] GET /api/v1/onboarding/step/{step_id} returns step metadata and data
-- [x] connect_tools step returns connector definitions (GitHub, Jira, Linear)
+- [x] connect_tools step returns connector definitions (GitHub, Jira)
 - [ ] select_template step loads templates from LibraryPrimitive
 - [ ] configure_agent step returns static guidance
 - [ ] run_demo step returns static guidance
@@ -134,7 +134,7 @@ Existing SDLC onboarding: teams can map their current process (even manual steps
 
 ## Known Gaps
 - **PRD 8.16 5-step path not fully integrated:** The onboarding wizard implements a simplified version. Steps 4 (library browse filtered by abstract_name) and step 5 (wire agents) are generic rather than specifically guided by inferred schema shape. No schema-inferred abstract_name is used to filter library recommendations.
-- **Backend step data simplified:** PRD 8.16 mentions Notion/Confluence as document-store connectors in addition to Jira/Linear/GitHub; `connect_tools` step data only lists GitHub, Jira, Linear.
+- **Backend step data simplified:** PRD 8.16 mentions Notion/Confluence as document-store connectors in addition to Jira/GitHub; `connect_tools` step data only lists GitHub, Jira.
 - **No persona feature file:** Alice persona scenarios (`@goal-alice-onboard-sdlc`, `@goal-alice-replace-step`) exist in the persona doc but have no corresponding Gherkin scenarios or step definitions.
 - **Demo pipeline + first-run walkthrough (Phase 5, item 25):** removed/descoped (FAR-308). The pre-loaded `prd-to-requirements` demo and the demo mode env var are no longer built or delivered.
 - **No E2E test** covering the full connect→infer→review→library→wire→run flow.

@@ -79,7 +79,6 @@ _CONNECTOR_CATEGORY_GUIDANCE: dict[str, str] = {
 # the route-level admission allowlist below).
 _CONNECTOR_TYPE_CATEGORY: dict[ConnectorType, str] = {
     ConnectorType.JIRA: "issue-tracker",
-    ConnectorType.LINEAR: "issue-tracker",
     ConnectorType.TRELLO: "issue-tracker",
     ConnectorType.ASANA: "issue-tracker",
     ConnectorType.MONDAY: "issue-tracker",

@@ -39,7 +39,7 @@ Discovered from 1 completed delivery tasks. Also specified in PRD 8.5 (Trigger S
 
 - [x] Connector instance loaded from DB by `connector_instance_id` stored in `config_json`
 - [x] Credentials decrypted via Fernet-backed secrets backend
-- [x] One-shot connector built via `_build_polling_connector()` (supports: filesystem, github, gitlab, linear, jira, slack)
+- [x] One-shot connector built via `_build_polling_connector()` (supports: filesystem, github, gitlab, jira, slack)
 - [x] Poll query executed via `connector.query(ConnectorQuery(resource=poll_query))`
 - [x] Connector instance not found -> `poll_error` logged
 - [x] Connector init fails (bad creds, unsupported type) -> `poll_error` logged

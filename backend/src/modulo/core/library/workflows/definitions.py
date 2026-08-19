@@ -103,7 +103,7 @@ FEATURE_PROPOSAL: dict[str, Any] = {
         "require_human_approval": True,
         "auto_create_tickets": True,
         "ticket_type": "feature",
-        "target_tracking_system": "linear",
+        "target_tracking_system": "jira",
     },
 }
 

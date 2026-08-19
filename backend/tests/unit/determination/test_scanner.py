@@ -61,7 +61,6 @@ async def _hub(ci: object) -> AsyncGenerator[ConnectorHub, None]:
 _GITHUB_API = "https://api.github.com"
 _GITLAB_API = "https://gitlab.com/api/v4"
 _JIRA_BASE = "https://test-domain.atlassian.net/rest/api/3"
-_LINEAR_API = "https://api.linear.app"
 
 
 @respx.mock
@@ -123,45 +122,6 @@ async def test_jira_scan() -> None:
                 json={"issues": [{"id": "1", "key": "PROJ-1"}], "total": 1},
             )
         )
-
-        samples = await run_scan(hub)
-    resources = {s.resource for s in samples}
-    assert "issues" in resources
-
-
-@respx.mock
-async def test_linear_scan() -> None:
-    ci = _fake_ci("linear", creds={"api_key": "lin_key"})
-    async with _hub(ci) as hub:
-        await hub.initialise([ci])
-
-        respx.post(f"{_LINEAR_API}/graphql").side_effect = [
-            httpx.Response(
-                200,
-                json={
-                    "data": {
-                        "viewer": {"id": "u1", "name": "User", "email": "u@test.com"},
-                    }
-                },
-            ),
-            httpx.Response(
-                200,
-                json={
-                    "data": {
-                        "searchIssues": {
-                            "nodes": [
-                                {
-                                    "id": "i1",
-                                    "identifier": "PROJ-1",
-                                    "title": "Bug",
-                                    "state": {"name": "Todo"},
-                                }
-                            ]
-                        }
-                    }
-                },
-            ),
-        ]
 
         samples = await run_scan(hub)
     resources = {s.resource for s in samples}
@@ -515,32 +475,3 @@ async def test_connector_query_timeout_produces_error_sample() -> None:
     assert not samples[0].records
     assert samples[0].error is not None
     assert "timed out" in samples[0].error
-
-
-@respx.mock
-async def test_linear_results_truncated_to_sample_limit() -> None:
-    """Linear results must be capped at _SAMPLE_LIMIT records and sample_count."""
-    ci = _fake_ci("linear", creds={"api_key": "lin_key"})
-    async with _hub(ci) as hub:
-        await hub.initialise([ci])
-
-        many = [
-            {"id": f"i{i}", "identifier": f"T-{i}", "title": f"task {i}", "state": {"name": "Todo"}} for i in range(40)
-        ]
-        respx.post(f"{_LINEAR_API}/graphql").side_effect = [
-            httpx.Response(
-                200,
-                json={
-                    "data": {
-                        "viewer": {"id": "u1", "name": "User", "email": "u@test.com"},
-                    }
-                },
-            ),
-            httpx.Response(200, json={"data": {"searchIssues": {"nodes": many}}}),
-        ]
-
-        samples = await run_scan(hub)
-    issues = next((s for s in samples if s.resource == "issues"), None)
-    assert issues is not None
-    assert len(issues.records) == 25
-    assert issues.sample_count == 25

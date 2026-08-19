@@ -55,7 +55,6 @@ from modulo.connectors.gitlab import GitLabConnector
 from modulo.connectors.grafana import GrafanaConnector
 from modulo.connectors.jenkins import JenkinsConnector
 from modulo.connectors.jira import JiraConnector
-from modulo.connectors.linear import LinearConnector
 from modulo.connectors.microsoft_teams import MicrosoftTeamsConnector
 from modulo.connectors.monday import MondayConnector
 from modulo.connectors.n8n import N8NConnector
@@ -494,8 +493,6 @@ def _build_connector(
                 environment_profile_id=env_profile_id,
                 allowed_commands=allowed,
             )
-        case "linear":
-            return LinearConnector(api_key=_get_cred(creds, "api_key", type_id))
         case "jira":
             instance = config.get("instance", "")
             base_url = config.get("base_url")
