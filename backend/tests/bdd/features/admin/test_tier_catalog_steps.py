@@ -31,6 +31,27 @@ _TIERS_PATCH_TARGET = "modulo.api.routes.admin_tiers.list_tiers"
 _TIERS_MOCK_ATTR = "_tiers_catalog_mock"
 
 
+class _NoCacheRedis:
+    """Redis double that always misses so the endpoint hits the CRUD mock.
+
+    The tier endpoint reads through a Redis cache keyed by org before
+    querying the DB. In CI the live Redis is reachable, so an earlier
+    scenario's cached standard tiers short-circuit the patched CRUD call
+    (returning real cached tiers / 200 instead of the empty list or the
+    501/503 fault). A cache that always misses keeps the scenarios
+    deterministic.
+    """
+
+    async def get(self, key: str) -> None:
+        return None
+
+    async def setex(self, key: str, ttl: int, value: str) -> None:
+        return None
+
+    async def aclose(self) -> None:
+        return None
+
+
 @given(parsers.parse("the tier catalog contains the standard Community and Team tiers"))
 def _given_tiers_present(request) -> None:
     _configure_tiers(request, _STANDARD_TIERS)
@@ -62,7 +83,10 @@ def _configure_tiers_failure(request, exc) -> None:
 @when("I request GET /api/v1/admin/tiers")
 def _bdd_get_tiers(request) -> None:
     tiers_mock = getattr(request.node, _TIERS_MOCK_ATTR, AsyncMock(return_value=_STANDARD_TIERS))
-    with patch(_TIERS_PATCH_TARGET, tiers_mock):
+    with (
+        patch(_TIERS_PATCH_TARGET, tiers_mock),
+        patch("modulo.api.routes.admin_tiers.Redis.from_url", return_value=_NoCacheRedis()),
+    ):
         request.node._resp = _active_client(request).get("/api/v1/admin/tiers")
 
 
