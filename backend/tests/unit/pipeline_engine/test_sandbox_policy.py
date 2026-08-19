@@ -9,6 +9,9 @@ derivable from validated + enforced config).
 
 from __future__ import annotations
 
+import os
+import subprocess
+
 import pytest
 
 from modulo.core.pipeline_engine.sandbox_mode import (
@@ -176,3 +179,187 @@ def test_derive_egress_selected_scoped() -> None:
     )
     # selected denies all egress at the boolean level (allow_internet_access=False).
     assert caps["sandbox.egress"] is False
+
+
+# ---------------------------------------------------------------------------
+# Execution-style tests — actually run the scripts under bash (MAJOR 2 fix)
+# ---------------------------------------------------------------------------
+
+# The scripts hardcode ``/home/user`` as the workspace.  In the test environment
+# that path does not exist, so each test creates a temp directory that mimics
+# the sandbox layout and rewrites ``/home/user`` in the script to the temp path.
+
+
+def _find_bash() -> str | None:
+    r"""Locate a usable bash binary (Git Bash on Windows, system bash on Linux).
+
+    WSL's ``bash.exe`` (``C:\WINDOWS\system32\bash.EXE``) is NOT usable for
+    running scripts -- it requires a WSL distribution and is unreliable in CI.
+    Git Bash (``C:\Program Files\Git\bin\bash.exe``) works on Windows without WSL.
+    """
+    import shutil
+
+    # Prefer Git Bash on Windows — it ships with Git for Windows and is a
+    # real MSYS2 bash, not a WSL shim.
+    git_bash = r"C:\Program Files\Git\bin\bash.exe"
+    if os.path.isfile(git_bash):
+        return git_bash
+    # On Linux, ``bash`` in PATH is fine.
+    system_bash = shutil.which("bash")
+    if system_bash is not None:
+        return system_bash
+    return None
+
+
+_BASH = _find_bash()
+_skip_no_bash = pytest.mark.skipif(_BASH is None, reason="bash not available on this system")
+
+
+def _make_sandbox_env(tmp_path: object) -> dict[str, str]:
+    """Create a fake HOME/WORKSPACE environment for script execution."""
+    workspace = tmp_path / "home" / "user"  # type: ignore[union-attr]
+    workspace.mkdir(parents=True)
+    home = tmp_path / "home"  # type: ignore[union-attr]
+    return {
+        "HOME": _to_posix(home),
+        "GITHUB_TOKEN": "ghp_test_token_abc123",
+        "_WORKSPACE": _to_posix(workspace),
+    }
+
+
+def _to_posix(path: object) -> str:
+    r"""Convert a Windows path to POSIX format for Git Bash.
+
+    Git Bash (MSYS2) uses ``/c/Users/...`` instead of ``C:\Users\...``.
+    On Linux this is a no-op (``pathlib`` already returns POSIX paths).
+    """
+    s = str(path)
+    # ``pathlib`` on Windows returns backslash-separated paths.
+    # Git Bash wants forward slashes with the drive letter lowercased.
+    if len(s) >= 2 and s[1] == ":":
+        drive = s[0].lower()
+        rest = s[2:].replace("\\", "/")
+        return f"/{drive}{rest}"
+    return s.replace("\\", "/")
+
+
+def _rewrite_workspace(script: str, tmp_path: object) -> str:
+    """Replace ``/home/user`` with the test's temp workspace path."""
+    workspace = tmp_path / "home" / "user"  # type: ignore[union-attr]
+    return script.replace("/home/user", _to_posix(workspace))
+
+
+def _run_script(script: str, env: dict[str, str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+    """Run a shell script with the fake environment and return the result."""
+    merged_env = {**os.environ, **env}
+    return subprocess.run(  # noqa: S603
+        [_BASH, "-c", script],  # type: ignore[list-item]
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=merged_env,
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
+@_skip_no_bash
+def test_read_only_script_execution(tmp_path: object) -> None:
+    """build_read_only_script must exit 0 under bash."""
+    env = _make_sandbox_env(tmp_path)
+    script = _rewrite_workspace(build_read_only_script(), tmp_path)
+    result = _run_script(script, env)
+    assert result.returncode == 0, f"Script failed: {result.stderr}"
+
+
+@_skip_no_bash
+def test_git_scoped_script_execution(tmp_path: object) -> None:
+    """build_git_scoped_script must exit 0 under bash and install the helper."""
+    env = _make_sandbox_env(tmp_path)
+    script = _rewrite_workspace(build_git_scoped_script(), tmp_path)
+    result = _run_script(script, env)
+    assert result.returncode == 0, f"Script failed: {result.stderr}"
+    # The credential helper must exist on disk after the script runs.
+    # Use tmp_path (native OS path) for the Python file existence check.
+    workspace = tmp_path / "home" / "user"  # type: ignore[union-attr]
+    cred_helper = workspace / ".git-policy" / "cred-helper.sh"
+    assert cred_helper.is_file(), f"Credential helper not found at {cred_helper}"
+
+
+@_skip_no_bash
+def test_git_none_script_execution(tmp_path: object) -> None:
+    """build_git_none_script must exit 0 under bash and install the refuse helper."""
+    env = _make_sandbox_env(tmp_path)
+    # Git Bash (MSYS2) maps /tmp to $TEMP; on Linux /tmp is the real /tmp.
+    # The script writes to /tmp/modulo-git-refuse-helper.sh, so we check both.
+    script = _rewrite_workspace(build_git_none_script(), tmp_path)
+    result = _run_script(script, env)
+    assert result.returncode == 0, f"Script failed: {result.stderr}"
+    # Check the POSIX path (works on Linux; on Windows Git Bash /tmp maps to $TEMP).
+    found = os.path.isfile("/tmp/modulo-git-refuse-helper.sh")
+    # Fallback: check the Windows temp dir (Git Bash's /tmp is $TEMP on Windows).
+    if not found:
+        win_temp = os.environ.get("TEMP", os.environ.get("TMP", ""))
+        if win_temp:
+            found = os.path.isfile(os.path.join(win_temp, "modulo-git-refuse-helper.sh"))
+    assert found, "Refuse helper not found at /tmp/modulo-git-refuse-helper.sh"
+
+
+@_skip_no_bash
+def test_egress_selected_script_execution(tmp_path: object) -> None:
+    """build_egress_selected_script must parse cleanly under bash.
+
+    iptables may not be available in the test environment, so we only verify
+    the script parses and runs without a shell syntax error — iptables failures
+    are expected (the script uses ``|| true`` for graceful fallback).
+    """
+    env = _make_sandbox_env(tmp_path)
+    script = _rewrite_workspace(build_egress_selected_script([{"host": "api.example.com", "port": 443}]), tmp_path)
+    result = _run_script(script, env)
+    # The script uses ``|| true`` for every iptables command, so it should
+    # always exit 0 even when iptables is absent.
+    assert result.returncode == 0, f"Script failed: {result.stderr}"
+
+
+# ---------------------------------------------------------------------------
+# Targeted git config --file test (MAJOR 1 regression guard)
+# ---------------------------------------------------------------------------
+
+
+def test_git_config_file_only_no_global_conflict(tmp_path: object) -> None:
+    """``git config --file <path>`` must work without ``--global``.
+
+    This is the core of MAJOR 1: ``git config --global --file <path>`` fails
+    with "only one config file at a time" (exit 129).  This test verifies the
+    generated scripts use ``--file`` alone, by executing ``git config --file``
+    directly via ``git.exe`` (available on both Windows and Linux).
+    """
+    git_cfg = tmp_path / "test-gitconfig"  # type: ignore[union-attr]
+    script_scoped = build_git_scoped_script()
+    script_none = build_git_none_script()
+    # Both scripts must use ``git config --file`` (not ``--global --file``).
+    assert "git config --file" in script_scoped
+    assert "git config --global" not in script_scoped
+    assert "git config --file" in script_none
+    assert "git config --global" not in script_none
+    # Execute ``git config --file`` directly to prove it works without error.
+    # Find git.exe on this system.
+    import shutil
+
+    git_exe = shutil.which("git")
+    if git_exe is None:
+        pytest.skip("git not available")
+    result = subprocess.run(  # noqa: S603
+        [git_exe, "config", "--file", str(git_cfg), "credential.helper", "/some/helper"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, f"git config --file failed: {result.stderr}"
+    # Verify the value was written.
+    result_read = subprocess.run(  # noqa: S603
+        [git_exe, "config", "--file", str(git_cfg), "credential.helper"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result_read.stdout.strip() == "/some/helper"

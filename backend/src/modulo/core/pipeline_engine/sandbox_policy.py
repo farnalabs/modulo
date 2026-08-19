@@ -46,17 +46,16 @@ import asyncio
 import logging
 from typing import Any
 
+from modulo.core.pipeline_engine.sandbox_mode import (
+    _SANDBOX_GIT_CREDENTIAL_ALLOWED_HOST,
+)
+
 _log = logging.getLogger(__name__)
 
 # The E2B sandbox runs the agent as the default non-root user (root has write
 # access regardless of file mode bits, so chmodding the workspace read-only
 # only binds the agent's unprivileged user — which is exactly what we enforce).
 _WORKSPACE = "/home/user"
-
-# The allowlisted host for a SCOPED git credential (FAR-212 PR B). Scoping to
-# github.com is the product's git surface (the agent clones/pushes to GitHub).
-# Kept in sync with ``sandbox_mode._SANDBOX_GIT_CREDENTIAL_ALLOWED_HOST``.
-_GIT_ALLOWED_HOST = "github.com"
 
 
 def build_read_only_script() -> str:
@@ -111,7 +110,7 @@ while read -r l; do
     host=*) host="${{l#host=}}" ;;
   esac
 done
-if [ "$host" = "{_GIT_ALLOWED_HOST}" ] && [ -n "$GITHUB_TOKEN" ]; then
+if [ "$host" = "{_SANDBOX_GIT_CREDENTIAL_ALLOWED_HOST}" ] && [ -n "$GITHUB_TOKEN" ]; then
   printf 'username=x-access-token\\npassword=%s\\n' "$GITHUB_TOKEN"
 fi
 """
@@ -133,9 +132,10 @@ def build_git_scoped_script() -> str:
         f"chmod +x {_WORKSPACE}/.git-policy/cred-helper.sh\n"
         # The helper is registered for the whole workspace (both the agent's
         # repo clones and the Modulo-owned context) via the per-repo git config
-        # when a repo exists, and via the global git config otherwise. We set
-        # the global config so ANY git operation in the sandbox honours it.
-        "git config --global credential.helper "
+        # when a repo exists, and via the agent-level git config otherwise. We
+        # set ``--file`` (agent-level) so ANY git operation in the sandbox
+        # honours it without conflicting with ``--global``.
+        "git config --file ~/.gitconfig credential.helper "
         f'"{_WORKSPACE}/.git-policy/cred-helper.sh"\n'
     )
 
@@ -152,7 +152,7 @@ def build_git_none_script() -> str:
         "set -e\n"
         "printf '#!/bin/sh\\nexit 1\\n' > /tmp/modulo-git-refuse-helper.sh\n"
         "chmod +x /tmp/modulo-git-refuse-helper.sh\n"
-        "git config --global credential.helper /tmp/modulo-git-refuse-helper.sh\n"
+        "git config --file ~/.gitconfig credential.helper /tmp/modulo-git-refuse-helper.sh\n"
     )
 
 
