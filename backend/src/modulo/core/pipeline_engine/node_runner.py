@@ -1565,6 +1565,280 @@ def _resolve_gate_eval_target(
     return state
 
 
+def _build_hitl_gate_artifact(gate_id: str, status: str, **extra: Any) -> dict[str, Any]:
+    """Build the standard HITL gate artifact envelope."""
+    return {"artifacts": [{"node_id": gate_id, "status": status, **extra}]}
+
+
+async def _dispatch_reject_correction_inner(
+    session_factory: Any,
+    org_id: Any,
+    run_id_for_correction: Any,
+    correction_target: Any,
+    node_output: dict[str, Any],
+    decision: Any,
+    gate_id: str,
+) -> None:
+    """Dispatch a single-node correction for a rejected HITL gate (best-effort)."""
+    from modulo.core.feedback_manager import dispatch_reject_correction
+
+    try:
+        await dispatch_reject_correction(
+            session_factory=session_factory,
+            org_id=org_id,
+            run_id=run_id_for_correction,
+            node_id=str(correction_target),
+            node_input=node_output,
+            rejection_reason=(
+                (decision.get("reason") if isinstance(decision, dict) else None) or "rejected via HITL gate"
+            ),
+            gate_id=gate_id,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "hitl_gate.reject_correction_dispatch_failed",
+            extra={"gate_id": gate_id, "node_id": str(correction_target)},
+        )
+
+
+async def _dispatch_reject_correction_best_effort(
+    state: dict[str, Any],
+    decision: Any,
+    gate_id: str,
+    hitl_gate_config: dict[str, Any],
+    session_factory: Any,
+    org_id: Any,
+) -> None:
+    # FAR-210 follow-up: the reject→correction edge. When this gate declares
+    # a ``correction_target`` and the human REJECTED it, dispatch the
+    # single-node correction for the blocked node (the AUTOMATED path) instead
+    # of only kicking back to the plain ``reject_target``. Best-effort and
+    # fully failure-isolated — a correction dispatch failure must never crash
+    # the reject path.
+    action = decision.get("action") if isinstance(decision, dict) else None
+    is_rejected = action == "rejected"
+    if is_rejected and session_factory is not None and org_id is not None:
+        correction_target = hitl_gate_config.get("correction_target")
+        run_id_for_correction = state.get("_run_id")
+        node_output = state.get("output")
+        if correction_target and run_id_for_correction and isinstance(node_output, dict):
+            await _dispatch_reject_correction_inner(
+                session_factory, org_id, run_id_for_correction, correction_target, node_output, decision, gate_id
+            )
+
+
+async def _hitl_gate_resume_result(
+    decision: Any,
+    gate_id: str,
+    state: dict[str, Any],
+    hitl_gate_config: dict[str, Any],
+    session_factory: Any,
+    org_id: Any,
+) -> tuple[bool, dict[str, Any] | None]:
+    """Handle a resume where ``state`` carries ``_hitl_decision``.
+
+    Returns ``(True, gate_result)`` when the human's decision resolves the
+    gate, or ``(False, None)`` on first invocation so the caller proceeds to
+    the condition/eval/autonomy checks.
+    """
+    if decision is None:
+        return (False, None)
+    action = decision.get("action") if isinstance(decision, dict) else None
+    if action == "deliver_manual":
+        manual_output = decision.get("output", {})
+        return (
+            True,
+            {
+                "artifacts": [
+                    {
+                        "node_id": gate_id,
+                        "status": "interrupted",
+                        "result": "delivered_manual",
+                        "human_data": decision,
+                        "manual_output": manual_output,
+                    }
+                ],
+                "output": manual_output,
+            },
+        )
+    is_rejected = action == "rejected"
+    result_status = "rejected" if is_rejected else "approved"
+    await _dispatch_reject_correction_best_effort(state, decision, gate_id, hitl_gate_config, session_factory, org_id)
+    gate_result: dict[str, Any] = {
+        "artifacts": [
+            {
+                "node_id": gate_id,
+                "status": "interrupted",
+                "result": result_status,
+                "human_data": decision,
+            }
+        ],
+    }
+    # If the human provided modified output, write it into state so
+    # downstream nodes receive the human's version instead of the
+    # original agent output.
+    if isinstance(decision, dict) and "modified_output" in decision:
+        gate_result["output"] = decision["modified_output"]
+    return (True, gate_result)
+
+
+def _hitl_gate_condition_skip(gate_id: str, condition_expr: str | None, state: dict[str, Any]) -> dict[str, Any] | None:
+    """Evaluate the conditional-gate JMESPath expression; skip artifact when falsy."""
+    if condition_expr:
+        try:
+            compiled = jmespath.compile(condition_expr)
+        except jmespath.exceptions.JMESPathError:
+            _log.exception("hitl_gate.invalid_condition", extra={"condition": condition_expr})
+            raise ValueError(f"Invalid HITL gate condition expression: {condition_expr}") from None
+        result = compiled.search(state)
+        if not _is_truthy(result):
+            # Condition falsy — skip the gate entirely.
+            return _build_hitl_gate_artifact(
+                gate_id, "condition_skipped", condition=condition_expr, condition_result=result
+            )
+    return None
+
+
+def _resolve_llm_judge_callable(eval_def: Any) -> Any:
+    """Resolve the LLM judge callable for an eval definition, if configured."""
+    if eval_def.eval_type == EvalType.LLM_JUDGE and eval_def.config.get("model_backend_id"):
+        from modulo.core.pipeline_engine.decorator import get_model_backend_hub
+
+        hub = get_model_backend_hub()
+        if hub is not None:
+            return _build_llm_judge_callable(hub, str(eval_def.config["model_backend_id"]))
+    return None
+
+
+async def _persist_gate_eval_results(
+    state: dict[str, Any],
+    eval_definitions: Sequence[EvalDefinition],
+    eval_results_by_name: dict[str, EvalResult],
+    session_factory: Any,
+    org_id: Any,
+) -> None:
+    """Persist gate eval results to the eval_results table (best-effort)."""
+    if session_factory is not None and org_id is not None:
+        try:
+            _run_id: uuid.UUID | None = state.get("_run_id")
+            if _run_id is not None:
+                async with session_factory() as session, session.begin():
+                    await set_rls_org(session, org_id)
+                    for eval_def in eval_definitions:
+                        eval_result = eval_results_by_name[eval_def.name]
+                        node_uuid: uuid.UUID | None = uuid.UUID(eval_def.node_id) if eval_def.node_id else None
+                        db_result = EvalResultModel(
+                            organisation_id=org_id,
+                            run_id=_run_id,
+                            node_id=node_uuid,
+                            eval_id=eval_def.id,
+                            passed=eval_result.passed,
+                            score=eval_result.score,
+                            detail=eval_result.detail,
+                        )
+                        session.add(db_result)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("hitl_gate.persist_eval_failed")
+
+
+async def _run_gate_evals(
+    state: dict[str, Any],
+    eval_definitions: Sequence[EvalDefinition] | None,
+    node_type_map: dict[str, str] | None,
+    gate_id: str,
+    session_factory: Any,
+    org_id: Any,
+) -> dict[str, EvalResult]:
+    """Run the gate's node-scoped evals (eval-before-interrupt) and persist results."""
+    eval_results_by_name: dict[str, EvalResult] = {}
+    if eval_definitions:
+        engine = EvalEngine()
+        for eval_def in eval_definitions:
+            llm_judge_callable = _resolve_llm_judge_callable(eval_def)
+            eval_result = engine.evaluate(
+                _resolve_gate_eval_target(state, eval_def.node_id, node_type_map),
+                eval_def,
+                llm_judge_callable=llm_judge_callable,
+            )
+            eval_results_by_name[eval_def.name] = eval_result
+            _log.info(
+                "hitl_gate.eval_result",
+                extra={
+                    "gate_id": gate_id,
+                    "eval_name": eval_def.name,
+                    "eval_id": str(eval_def.id),
+                    "passed": eval_result.passed,
+                    "score": eval_result.score,
+                    "detail": eval_result.detail,
+                },
+            )
+        # If any block eval failed, EvalBlockedError was raised above.
+        await _persist_gate_eval_results(state, eval_definitions, eval_results_by_name, session_factory, org_id)
+    return eval_results_by_name
+
+
+def _hitl_gate_eval_condition_skip(
+    gate_id: str,
+    eval_condition_raw: Any,
+    eval_results_by_name: dict[str, EvalResult],
+) -> dict[str, Any] | None:
+    """Evaluate the eval-reference condition against captured eval results."""
+    if eval_condition_raw is not None and eval_results_by_name:
+        eval_name: str = eval_condition_raw.get("eval_name", "")
+        threshold: float = eval_condition_raw.get("threshold", 0.0)
+        operator: str = eval_condition_raw.get("operator", "lt")
+        matched_result = eval_results_by_name.get(eval_name)
+        if matched_result is not None:
+            score: float = matched_result.score or 0.0
+            condition_true: bool = _evaluate_eval_condition(score, threshold, operator)
+            _log.info(
+                "hitl_gate.eval_condition",
+                extra={
+                    "gate_id": gate_id,
+                    "eval_name": eval_name,
+                    "score": score,
+                    "threshold": threshold,
+                    "operator": operator,
+                    "condition_true": condition_true,
+                },
+            )
+            if not condition_true:
+                return _build_hitl_gate_artifact(
+                    gate_id,
+                    "condition_skipped",
+                    condition=eval_condition_raw,
+                    condition_result=False,
+                )
+    return None
+
+
+def _hitl_gate_autonomy_result(
+    gate_id: str, state: dict[str, Any], human_only: bool
+) -> tuple[Any, dict[str, Any] | None]:
+    """Determine effective autonomy level; return skip/auto-approve artifact, if any."""
+    # Determine effective autonomy level from run_context.
+    run_context: dict[str, Any] = state.get("run_context") or {}
+    pipeline_default: str | None = run_context.get("_pipeline_default_autonomy")
+    autonomy = effective_autonomy_level(pipeline_default, run_context)
+    human_only_effective: bool = human_only
+
+    # human_only overrides everything — always interrupt.
+    if not human_only_effective and should_skip_hitl_gate(autonomy):
+        # fully_autonomous: silently skip the gate.
+        return (autonomy, _build_hitl_gate_artifact(gate_id, "skipped", autonomy=autonomy.value))
+    if not human_only_effective and should_notify_on_complete(autonomy):
+        # notify_on_complete: auto-approve, record notification artifact.
+        return (
+            autonomy,
+            _build_hitl_gate_artifact(gate_id, "auto_approved", autonomy=autonomy.value),
+        )
+    return (autonomy, None)
+
+
 def make_hitl_gate_fn(
     hitl_gate_config: dict[str, Any],
     *,
@@ -1613,225 +1887,44 @@ def make_hitl_gate_fn(
     required_team_id: str | None = _normalize_required_team_id(gate_id, hitl_gate_config.get("required_team_id"))
 
     async def _hitl_gate(state: dict[str, Any]) -> dict[str, Any]:
-        # --- Resume check —  always first so condition/evals aren't re-evaluated. ---
-        decision = state.get("_hitl_decision")
-        if decision is not None:
-            action = decision.get("action") if isinstance(decision, dict) else None
-            if action == "deliver_manual":
-                manual_output = decision.get("output", {})
-                return {
-                    "artifacts": [
-                        {
-                            "node_id": gate_id,
-                            "status": "interrupted",
-                            "result": "delivered_manual",
-                            "human_data": decision,
-                            "manual_output": manual_output,
-                        }
-                    ],
-                    "output": manual_output,
-                }
-            is_rejected = action == "rejected"
-            result_status = "rejected" if is_rejected else "approved"
-            # FAR-210 follow-up: the reject→correction edge. When this gate
-            # declares a ``correction_target`` and the human REJECTED it, dispatch
-            # the single-node correction for the blocked node (the AUTOMATED path)
-            # instead of only kicking back to the plain ``reject_target``. This is
-            # best-effort and fully failure-isolated — a correction dispatch
-            # failure must never crash the reject path.
-            if is_rejected and session_factory is not None and org_id is not None:
-                correction_target = hitl_gate_config.get("correction_target")
-                run_id_for_correction = state.get("_run_id")
-                node_output = state.get("output")
-                if correction_target and run_id_for_correction and isinstance(node_output, dict):
-                    from modulo.core.feedback_manager import dispatch_reject_correction
+        # --- Resume check — always first so condition/evals aren't re-evaluated. ---
+        resumed, resume_result = await _hitl_gate_resume_result(
+            state.get("_hitl_decision"),
+            gate_id,
+            state,
+            hitl_gate_config,
+            session_factory,
+            org_id,
+        )
+        if resumed:
+            return resume_result  # type: ignore[return-value]
 
-                    try:
-                        await dispatch_reject_correction(
-                            session_factory=session_factory,
-                            org_id=org_id,
-                            run_id=run_id_for_correction,
-                            node_id=str(correction_target),
-                            node_input=node_output,
-                            rejection_reason=(
-                                (decision.get("reason") if isinstance(decision, dict) else None)
-                                or "rejected via HITL gate"
-                            ),
-                            gate_id=gate_id,
-                        )
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception:
-                        # Best-effort: the correction dispatch must never crash the
-                        # reject path — log and fall through to normal reject routing.
-                        _log.exception(
-                            "hitl_gate.reject_correction_dispatch_failed",
-                            extra={"gate_id": gate_id, "node_id": str(correction_target)},
-                        )
-            gate_result: dict[str, Any] = {
-                "artifacts": [
-                    {
-                        "node_id": gate_id,
-                        "status": "interrupted",
-                        "result": result_status,
-                        "human_data": decision,
-                    }
-                ],
-            }
-            # If the human provided modified output, write it into state so
-            # downstream nodes receive the human's version instead of the
-            # original agent output.
-            if isinstance(decision, dict) and "modified_output" in decision:
-                gate_result["output"] = decision["modified_output"]
-            return gate_result
+        # --- Conditional gate (Section 8.17) — evaluate condition against state. ---
+        condition_skip = _hitl_gate_condition_skip(gate_id, condition_expr, state)
+        if condition_skip is not None:
+            return condition_skip
 
-        # --- Conditional gate ((Section 8.17) —  evaluate condition against state. ---
-        if condition_expr:
-            try:
-                compiled = jmespath.compile(condition_expr)
-            except jmespath.exceptions.JMESPathError:
-                _log.exception("hitl_gate.invalid_condition", extra={"condition": condition_expr})
-                raise ValueError(f"Invalid HITL gate condition expression: {condition_expr}") from None
-            result = compiled.search(state)
-            if not _is_truthy(result):
-                # Condition falsy —  skip the gate entirely.
-                return {
-                    "artifacts": [
-                        {
-                            "node_id": gate_id,
-                            "status": "condition_skipped",
-                            "condition": condition_expr,
-                            "condition_result": result,
-                        }
-                    ],
-                }
+        # --- Eval-before-interrupt (Section 8.17) — run node-scoped evals. ---
+        eval_results_by_name = await _run_gate_evals(
+            state,
+            eval_definitions,
+            node_type_map,
+            gate_id,
+            session_factory,
+            org_id,
+        )
 
-        # --- Eval-before-interrupt ((Section 8.17) —  run node-scoped evals. ---
-        eval_results_by_name: dict[str, EvalResult] = {}
-        if eval_definitions:
-            engine = EvalEngine()
-            for eval_def in eval_definitions:
-                llm_judge_callable: Any = None
-                if eval_def.eval_type == EvalType.LLM_JUDGE and eval_def.config.get("model_backend_id"):
-                    from modulo.core.pipeline_engine.decorator import (
-                        get_model_backend_hub,
-                    )
+        # --- Eval-reference condition check (Section 8.17 v1). ---
+        eval_condition_skip = _hitl_gate_eval_condition_skip(gate_id, eval_condition_raw, eval_results_by_name)
+        if eval_condition_skip is not None:
+            return eval_condition_skip
 
-                    hub = get_model_backend_hub()
-                    if hub is not None:
-                        llm_judge_callable = _build_llm_judge_callable(
-                            hub,
-                            str(eval_def.config["model_backend_id"]),
-                        )
-                eval_result = engine.evaluate(
-                    _resolve_gate_eval_target(state, eval_def.node_id, node_type_map),
-                    eval_def,
-                    llm_judge_callable=llm_judge_callable,
-                )
-                eval_results_by_name[eval_def.name] = eval_result
-                _log.info(
-                    "hitl_gate.eval_result",
-                    extra={
-                        "gate_id": gate_id,
-                        "eval_name": eval_def.name,
-                        "eval_id": str(eval_def.id),
-                        "passed": eval_result.passed,
-                        "score": eval_result.score,
-                        "detail": eval_result.detail,
-                    },
-                )
-            # If any block eval failed, EvalBlockedError was raised above.
+        # --- Autonomy skip/approve. ---
+        autonomy, autonomy_result = _hitl_gate_autonomy_result(gate_id, state, human_only)
+        if autonomy_result is not None:
+            return autonomy_result
 
-            # Persist eval results to the eval_results table so post-run
-            # suite-level threshold checks can read them.
-            if session_factory is not None and org_id is not None:
-                try:
-                    _run_id: uuid.UUID | None = state.get("_run_id")
-                    if _run_id is not None:
-                        async with session_factory() as session, session.begin():
-                            await set_rls_org(session, org_id)
-                            for eval_def in eval_definitions:
-                                eval_result = eval_results_by_name[eval_def.name]
-                                node_uuid: uuid.UUID | None = uuid.UUID(eval_def.node_id) if eval_def.node_id else None
-                                db_result = EvalResultModel(
-                                    organisation_id=org_id,
-                                    run_id=_run_id,
-                                    node_id=node_uuid,
-                                    eval_id=eval_def.id,
-                                    passed=eval_result.passed,
-                                    score=eval_result.score,
-                                    detail=eval_result.detail,
-                                )
-                                session.add(db_result)
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.exception("hitl_gate.persist_eval_failed")
-
-        # --- Eval-reference condition check ((Section 8.17 v1) —  evaluate condition
-        # against captured eval results. ---
-        if eval_condition_raw is not None and eval_results_by_name:
-            eval_name: str = eval_condition_raw.get("eval_name", "")
-            threshold: float = eval_condition_raw.get("threshold", 0.0)
-            operator: str = eval_condition_raw.get("operator", "lt")
-            matched_result = eval_results_by_name.get(eval_name)
-            if matched_result is not None:
-                score: float = matched_result.score or 0.0
-                condition_true: bool = _evaluate_eval_condition(score, threshold, operator)
-                _log.info(
-                    "hitl_gate.eval_condition",
-                    extra={
-                        "gate_id": gate_id,
-                        "eval_name": eval_name,
-                        "score": score,
-                        "threshold": threshold,
-                        "operator": operator,
-                        "condition_true": condition_true,
-                    },
-                )
-                if not condition_true:
-                    return {
-                        "artifacts": [
-                            {
-                                "node_id": gate_id,
-                                "status": "condition_skipped",
-                                "condition": eval_condition_raw,
-                                "condition_result": False,
-                            }
-                        ],
-                    }
-
-        # Determine effective autonomy level from run_context.
-        run_context: dict[str, Any] = state.get("run_context") or {}
-        pipeline_default: str | None = run_context.get("_pipeline_default_autonomy")
-        autonomy = effective_autonomy_level(pipeline_default, run_context)
-        human_only_effective: bool = human_only
-
-        # human_only overrides everything — always interrupt.
-        if not human_only_effective and should_skip_hitl_gate(autonomy):
-            # fully_autonomous: silently skip the gate.
-            return {
-                "artifacts": [
-                    {
-                        "node_id": gate_id,
-                        "status": "skipped",
-                        "autonomy": autonomy.value,
-                    }
-                ],
-            }
-        if not human_only_effective and should_notify_on_complete(autonomy):
-            # notify_on_complete: auto-approve, record notification artifact.
-            return {
-                "artifacts": [
-                    {
-                        "node_id": gate_id,
-                        "status": "auto_approved",
-                        "autonomy": autonomy.value,
-                    }
-                ],
-            }
-
-        # First invocation —  store config and interrupt.
+        # --- First invocation — store config and interrupt. ---
         hitl_gates: list[dict[str, Any]] = list(state.get("_hitl_gates") or [])
         hitl_gates.append(hitl_gate_config)
         state["_hitl_gates"] = hitl_gates
@@ -1841,7 +1934,7 @@ def make_hitl_gate_fn(
             {
                 "gate_id": gate_id,
                 "autonomy_level": autonomy.value,
-                "human_only": human_only_effective,
+                "human_only": human_only,
                 "overdue_threshold_minutes": hitl_gate_config.get("overdue_threshold_minutes"),
                 "required_team_id": required_team_id,
             }

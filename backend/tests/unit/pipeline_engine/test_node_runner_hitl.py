@@ -9,7 +9,14 @@ import pytest
 from langgraph.errors import GraphInterrupt
 
 from modulo.core.eval_engine import EvalBlockedError, EvalDefinition, EvalType
-from modulo.core.pipeline_engine.node_runner import _evaluate_eval_condition, make_hitl_gate_fn, make_manual_node_fn
+from modulo.core.pipeline_engine.node_runner import (
+    _build_hitl_gate_artifact,
+    _evaluate_eval_condition,
+    _hitl_gate_autonomy_result,
+    _hitl_gate_condition_skip,
+    make_hitl_gate_fn,
+    make_manual_node_fn,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -1307,3 +1314,82 @@ async def test_gate_eval_ignores_sibling_artifact_in_parallel_fanout():
 
     with pytest.raises(GraphInterrupt):
         await node_fn(state)
+
+
+# ---------------------------------------------------------------------------
+# S3776 decomposition helpers (FAR-310) — direct coverage for extracted helpers
+# ---------------------------------------------------------------------------
+
+
+class TestBuildHitlGateArtifact:
+    def test_builds_standard_envelope(self) -> None:
+        artifact = _build_hitl_gate_artifact("review-step", "condition_skipped")
+        assert artifact == {"artifacts": [{"node_id": "review-step", "status": "condition_skipped"}]}
+
+    def test_merges_extra_keys_into_artifact_entry(self) -> None:
+        artifact = _build_hitl_gate_artifact("g1", "skipped", autonomy="fully_autonomous", condition_result=False)
+        assert artifact["artifacts"] == [
+            {"node_id": "g1", "status": "skipped", "autonomy": "fully_autonomous", "condition_result": False}
+        ]
+
+
+class TestHitlGateConditionSkip:
+    def test_returns_none_when_no_condition_configured(self) -> None:
+        assert _hitl_gate_condition_skip("g1", None, {}) is None
+
+    def test_returns_none_when_condition_is_truthy(self) -> None:
+        state = {"config": {"flag": True, "score": 5}}
+        assert _hitl_gate_condition_skip("g1", "config.flag", state) is None
+        assert _hitl_gate_condition_skip("g1", "config.score > `3`", state) is None
+
+    def test_returns_skip_artifact_when_condition_is_falsy(self) -> None:
+        state = {"config": {"flag": False, "score": 0}}
+        skip = _hitl_gate_condition_skip("g1", "config.flag", state)
+        assert skip == {
+            "artifacts": [
+                {
+                    "node_id": "g1",
+                    "status": "condition_skipped",
+                    "condition": "config.flag",
+                    "condition_result": False,
+                }
+            ]
+        }
+
+    def test_returns_skip_artifact_for_null_result(self) -> None:
+        """A JMESPath that matches nothing resolves to None — treated as falsy."""
+        skip = _hitl_gate_condition_skip("g1", "config.missing", {"config": {}})
+        assert skip is not None
+        assert skip["artifacts"][0]["status"] == "condition_skipped"
+        assert skip["artifacts"][0]["condition_result"] is None
+
+    def test_invalid_jmespath_raises_value_error(self) -> None:
+        with pytest.raises(ValueError, match=r"Invalid HITL gate condition expression: foo\["):
+            _hitl_gate_condition_skip("g1", "foo[", {})
+
+
+class TestHitlGateAutonomyResult:
+    def test_fully_autonomous_returns_skipped_artifact(self) -> None:
+        state = {"run_context": {"_pipeline_default_autonomy": "fully_autonomous"}}
+        autonomy, result = _hitl_gate_autonomy_result("g1", state, human_only=False)
+        assert autonomy.value == "fully_autonomous"
+        assert result == {"artifacts": [{"node_id": "g1", "status": "skipped", "autonomy": "fully_autonomous"}]}
+
+    def test_notify_on_complete_returns_auto_approved_artifact(self) -> None:
+        state = {"run_context": {"_pipeline_default_autonomy": "notify_on_complete"}}
+        autonomy, result = _hitl_gate_autonomy_result("g1", state, human_only=False)
+        assert autonomy.value == "notify_on_complete"
+        assert result == {"artifacts": [{"node_id": "g1", "status": "auto_approved", "autonomy": "notify_on_complete"}]}
+
+    def test_manual_approval_returns_no_artifact(self) -> None:
+        state = {"run_context": {"_pipeline_default_autonomy": "manual_approval"}}
+        autonomy, result = _hitl_gate_autonomy_result("g1", state, human_only=False)
+        assert autonomy.value == "manual_approval"
+        assert result is None
+
+    def test_human_only_overrides_autonomy_skip(self) -> None:
+        """human_only gates always interrupt even at fully_autonomous."""
+        state = {"run_context": {"_pipeline_default_autonomy": "fully_autonomous"}}
+        autonomy, result = _hitl_gate_autonomy_result("g1", state, human_only=True)
+        assert autonomy.value == "fully_autonomous"
+        assert result is None
