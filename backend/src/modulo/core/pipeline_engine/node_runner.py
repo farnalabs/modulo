@@ -2315,6 +2315,339 @@ def _is_sandbox_session_lost_echo(output_json: Any) -> bool:
     return any(_SANDBOX_SESSION_LOST_SUMMARY in s for s in haystack)
 
 
+async def _sandbox_resolve_secret_ref(
+    secret_key: str,
+    *,
+    session_factory: Callable[..., Any] | None,
+    org_id: str,
+) -> str | None:
+    """Resolve a ``{{ secrets.KEY }}`` reference to a string value.
+
+    The org vault (per-org encrypted secrets table) is consulted first
+    so pipelines resolve against the tenant's stored secrets and honour
+    rotation on every run. Falls back to the process environment when
+    the key is not in the vault.
+    """
+    if session_factory is not None:
+        org_uuid: uuid.UUID | None = None
+        org_id_raw = org_id
+        if org_id_raw:
+            try:
+                org_uuid = uuid.UUID(str(org_id_raw))
+            except (TypeError, ValueError):
+                org_uuid = None
+        if org_uuid is not None:
+            from modulo.core.secrets_backend import create_secrets_backend
+            from modulo.db.rls import set_rls_org
+            from modulo.settings import get_settings
+
+            try:
+                async with session_factory() as session, session.begin():
+                    await set_rls_org(session, org_uuid)
+                    backend = create_secrets_backend(fernet_key=get_settings().fernet_key, session=session)
+                    return await backend.get_secret(secret_key)
+            except KeyError:
+                pass  # not in vault -> fall back
+            except Exception:
+                _log.exception("env_var.secret_resolve_error", extra={"secret_key": secret_key})
+    # Fall back to process environment.
+    return os.environ.get(secret_key)
+
+
+async def _sandbox_acquire_dispatch_marker(
+    *,
+    session_factory: Callable[..., Any] | None,
+    claim_lease: str | None,
+    org_id: str,
+    run_id: str,
+    node_id: str,
+) -> str | None:
+    """DB-atomic dispatch marker (dist/runtime-core A4): one transaction
+    reads ``runs.claim_count`` (fenced on the claim token + status), then
+    claims the dispatch slot IMMEDIATELY BEFORE ``AsyncSandbox.create``.
+
+    ``UPDATE runs SET sandbox_dispatch_state=:marker, sandbox_id=:sid
+    WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND
+    status='running'`` — the marker is a structured JSON carrying the
+    attempt key. The UPDATE is atomic, no read-then-create TOCTOU;
+    rowcount 0 means the claim is superseded or the run is not running,
+    the caller raises :class:`SupersededNodeError` and MUST NOT create a
+    sandbox. The SELECT and UPDATE share one transaction, and the UPDATE
+    re-checks the same fenced WHERE, so a concurrent claim rotation
+    between them makes the UPDATE match zero rows and the attempt key is
+    never persisted for a superseded claim.
+
+    Returns the attempt key on success, ``None`` when denied. Fail-open
+    (returns a claim-token-derived attempt key WITHOUT writing) when no
+    session factory or no claim lease is available.
+    """
+    if session_factory is None or not claim_lease:
+        # Fail-open: no DB fence — derive a per-claim attempt key from the
+        # (rotating) claim token so node output still distinguishes attempts.
+        return f"run:{run_id}:node:{node_id}:{_claim_token_attempt_suffix(claim_lease)}"
+    org_id_raw = org_id
+    try:
+        org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
+    except (TypeError, ValueError):
+        org_uuid = None
+    if org_uuid is None:
+        return f"run:{run_id}:node:{node_id}:{_claim_token_attempt_suffix(claim_lease)}"
+    from sqlalchemy import text as _sql_text
+
+    from modulo.db.rls import set_rls_org
+
+    async with session_factory() as session, session.begin():
+        await set_rls_org(session, org_uuid)
+        row = (
+            await session.execute(
+                _sql_text(
+                    "SELECT claim_count FROM runs WHERE id=:rid AND organisation_id=:oid "
+                    "AND claim_token=:tok AND status='running'"
+                ),
+                {"rid": run_id, "oid": str(org_uuid), "tok": claim_lease},
+            )
+        ).fetchone()
+        if row is None:
+            return None
+        key = f"run:{run_id}:node:{node_id}:{int(row[0])}"
+        result = await session.execute(
+            _sql_text(
+                "UPDATE runs SET sandbox_dispatch_state=:marker, sandbox_id=:sid "
+                "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running' "
+                "RETURNING id"
+            ),
+            {
+                "rid": run_id,
+                "oid": str(org_uuid),
+                "tok": claim_lease,
+                "sid": None,
+                "marker": _dispatch_marker_json(key),
+            },
+        )
+        if result.fetchone() is None:
+            return None
+        return key
+
+
+async def _sandbox_store_dispatch_marker_sandbox(
+    sandbox_id_value: str | None,
+    *,
+    session_factory: Callable[..., Any] | None,
+    claim_lease: str | None,
+    org_id: str,
+    run_id: str,
+    node_id: str,
+    attempt_key: str | None,
+) -> None:
+    """Persist the real sandbox id onto the runs row after a successful create."""
+    if session_factory is None or not claim_lease:
+        return
+    org_id_raw = org_id
+    try:
+        org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
+    except (TypeError, ValueError):
+        org_uuid = None
+    if org_uuid is None:
+        return
+    from sqlalchemy import text as _sql_text
+
+    from modulo.db.rls import set_rls_org
+
+    async with session_factory() as session, session.begin():
+        await set_rls_org(session, org_uuid)
+        await session.execute(
+            _sql_text(
+                "UPDATE runs SET sandbox_dispatch_state=:marker, sandbox_id=:sid "
+                "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running'"
+            ),
+            {
+                "rid": run_id,
+                "oid": str(org_uuid),
+                "tok": claim_lease,
+                "sid": sandbox_id_value,
+                "marker": _dispatch_marker_json(attempt_key or ""),
+            },
+        )
+
+
+async def _sandbox_store_script_lease(
+    *,
+    session_factory: Callable[..., Any] | None,
+    claim_lease: str | None,
+    org_id: str,
+    run_id: str,
+    node_id: str,
+    attempt_key: str | None,
+) -> None:
+    """FAR-296 Phase 2 fencing lease: record the script-mode execution claim.
+
+    Reuses the EXISTING ``runs.sandbox_dispatch_state`` machinery — no
+    parallel lease store. Persists ``{"state": "script_executing",
+    "attempt_key": ...}`` IMMEDIATELY BEFORE ``sandbox.commands.run``, so
+    the durable marker proves "the script PROCESS started (execution
+    claimed, completion marker pending)". Fenced on the claim token +
+    status so a superseded original cannot stamp a lease on a successor's
+    row. Fail-open (no session factory / claim lease / org) — the lease
+    is a safety backstop, never a correctness dependency.
+    """
+    if session_factory is None or not claim_lease:
+        return
+    org_id_raw = org_id
+    try:
+        org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
+    except (TypeError, ValueError):
+        org_uuid = None
+    if org_uuid is None:
+        return
+    from sqlalchemy import text as _sql_text
+
+    from modulo.db.rls import set_rls_org
+
+    async with session_factory() as session, session.begin():
+        await set_rls_org(session, org_uuid)
+        result = await session.execute(
+            _sql_text(
+                "UPDATE runs SET sandbox_dispatch_state=:marker "
+                "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running'"
+            ),
+            {
+                "rid": run_id,
+                "oid": str(org_uuid),
+                "tok": claim_lease,
+                "marker": json.dumps({"state": "script_executing", "attempt_key": attempt_key or ""}),
+            },
+        )
+        if result.rowcount == 0:
+            # The UPDATE was fenced on claim_token + status but matched
+            # zero rows — the claim was superseded (token rotated by a
+            # successor) or the run is no longer running. The lease was
+            # NEVER acquired, so a subsequent fault must NOT be treated as
+            # post-claim/terminal. Fail as a RETRYABLE SupersededNodeError
+            # so the caller never marks the lease claimed.
+            raise SupersededNodeError("script lease denied — run superseded or not running")
+
+
+async def _sandbox_mint_run_api_key_for_sandbox(
+    *,
+    session_factory: Callable[..., Any] | None,
+    org_id: str,
+    run_id: str,
+    node_id: str,
+    sandbox_timeout: int,
+) -> str | None:
+    """Mint a short-TTL runner-role API key for this script-mode sandbox (FAR-296 Phase 3b).
+
+    Returns the raw key value, or None when minting is unavailable/failed
+    (fail-open — the sandbox runs without the key rather than failing the
+    dispatch). TTL = max(15 min, node_timeout + 5 min), capped by the
+    org-level max (default 1 hour). The raw value is returned to the
+    caller only, which injects it into the sandbox envs — it is NEVER
+    logged, checkpointed, or placed in LangGraph state.
+    """
+    if session_factory is None:
+        return None
+    org_id_raw = org_id
+    try:
+        org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
+    except (TypeError, ValueError):
+        org_uuid = None
+    if org_uuid is None:
+        return None
+    try:
+        run_uuid = uuid.UUID(str(run_id))
+    except (TypeError, ValueError):
+        return None
+    try:
+        from modulo.auth.api_key import mint_run_api_key
+        from modulo.db.crud.run import get_run_api_key_ttl_seconds
+
+        ttl_seconds = await get_run_api_key_ttl_seconds(session_factory, org_uuid, sandbox_timeout)
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, org_uuid)
+            # account_id: the run's triggering user; fall back to the
+            # first active admin in the org when the run row has none.
+            from sqlalchemy import text as _sql_text
+
+            row = (
+                await session.execute(
+                    _sql_text("SELECT account_id FROM runs WHERE id=:rid AND organisation_id=:oid"),
+                    {"rid": str(run_uuid), "oid": str(org_uuid)},
+                )
+            ).fetchone()
+            account_id_raw = row[0] if row else None
+            if account_id_raw is None:
+                admin_row = (
+                    await session.execute(
+                        _sql_text(
+                            "SELECT a.id FROM accounts a JOIN org_memberships om ON om.account_id = a.id "
+                            "WHERE om.organisation_id=:oid AND om.role='admin' AND om.deactivated_at IS NULL "
+                            "ORDER BY a.created_at LIMIT 1"
+                        ),
+                        {"oid": str(org_uuid)},
+                    )
+                ).fetchone()
+                account_id_raw = admin_row[0] if admin_row else None
+            if account_id_raw is None:
+                return None
+            minted = await mint_run_api_key(
+                session,
+                org_id=org_uuid,
+                run_id=run_uuid,
+                node_id=node_id,
+                account_id=uuid.UUID(str(account_id_raw)),
+                ttl_seconds=ttl_seconds,
+            )
+            if minted is None:
+                return None
+            _key_row, full_key = minted
+            return full_key
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "sandbox_agent.run_api_key_mint_failed",
+            extra={"run_id": run_id, "node_id": node_id},
+        )
+        return None
+
+
+async def _sandbox_clear_dispatch_marker(
+    *,
+    session_factory: Callable[..., Any] | None,
+    claim_lease: str | None,
+    org_id: str,
+    run_id: str,
+    node_id: str,
+) -> None:
+    """Fenced marker clear — only when the claim token still matches.
+
+    A superseded original (token rotated by a successor) must not clear
+    the successor's dispatch marker / sandbox id.
+    """
+    if session_factory is None or not claim_lease:
+        return
+    org_id_raw = org_id
+    try:
+        org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
+    except (TypeError, ValueError):
+        org_uuid = None
+    if org_uuid is None:
+        return
+    from sqlalchemy import text as _sql_text
+
+    from modulo.db.rls import set_rls_org
+
+    async with session_factory() as session, session.begin():
+        await set_rls_org(session, org_uuid)
+        await session.execute(
+            _sql_text(
+                "UPDATE runs SET sandbox_dispatch_state=NULL, sandbox_id=NULL "
+                "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok"
+            ),
+            {"rid": run_id, "oid": str(org_uuid), "tok": claim_lease},
+        )
+
+
 def make_sandbox_agent_fn(
     node_def: dict[str, Any],
     *,
@@ -2476,39 +2809,6 @@ def make_sandbox_agent_fn(
         run_id: str = str(state.get("_run_id", ""))
         pipeline_id: str = str(state.get("_pipeline_id", ""))
         org_id: str = str(state.get("_org_id", ""))
-
-        async def _resolve_secret_ref(secret_key: str) -> str | None:
-            """Resolve a ``{{ secrets.KEY }}`` reference to a string value.
-
-            The org vault (per-org encrypted secrets table) is consulted first
-            so pipelines resolve against the tenant's stored secrets and honour
-            rotation on every run. Falls back to the process environment when
-            the key is not in the vault.
-            """
-            if session_factory is not None:
-                org_uuid: uuid.UUID | None = None
-                org_id_raw = state.get("_org_id")
-                if org_id_raw:
-                    try:
-                        org_uuid = uuid.UUID(str(org_id_raw))
-                    except (TypeError, ValueError):
-                        org_uuid = None
-                if org_uuid is not None:
-                    from modulo.core.secrets_backend import create_secrets_backend
-                    from modulo.db.rls import set_rls_org
-                    from modulo.settings import get_settings
-
-                    try:
-                        async with session_factory() as session, session.begin():
-                            await set_rls_org(session, org_uuid)
-                            backend = create_secrets_backend(fernet_key=get_settings().fernet_key, session=session)
-                            return await backend.get_secret(secret_key)
-                    except KeyError:
-                        pass  # not in vault -> fall back
-                    except Exception:
-                        _log.exception("env_var.secret_resolve_error", extra={"secret_key": secret_key})
-            # Fall back to process environment.
-            return os.environ.get(secret_key)
 
         # FAR-296 mode split: llm mode renders the prompt + agent_command through
         # the SandboxedEnvironment; script mode runs script_command VERBATIM —
@@ -2686,83 +2986,25 @@ def make_sandbox_agent_fn(
             (returns a claim-token-derived attempt key WITHOUT writing) when no
             session factory or no claim lease is available.
             """
-            if session_factory is None or not claim_lease:
-                # Fail-open: no DB fence — derive a per-claim attempt key from the
-                # (rotating) claim token so node output still distinguishes attempts.
-                return f"run:{run_id}:node:{node_id}:{_claim_token_attempt_suffix(claim_lease)}"
-            org_id_raw = state.get("_org_id")
-            try:
-                org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
-            except (TypeError, ValueError):
-                org_uuid = None
-            if org_uuid is None:
-                return f"run:{run_id}:node:{node_id}:{_claim_token_attempt_suffix(claim_lease)}"
-            from sqlalchemy import text as _sql_text
-
-            from modulo.db.rls import set_rls_org
-
-            async with session_factory() as session, session.begin():
-                await set_rls_org(session, org_uuid)
-                row = (
-                    await session.execute(
-                        _sql_text(
-                            "SELECT claim_count FROM runs WHERE id=:rid AND organisation_id=:oid "
-                            "AND claim_token=:tok AND status='running'"
-                        ),
-                        {"rid": run_id, "oid": str(org_uuid), "tok": claim_lease},
-                    )
-                ).fetchone()
-                if row is None:
-                    return None
-                key = f"run:{run_id}:node:{node_id}:{int(row[0])}"
-                result = await session.execute(
-                    _sql_text(
-                        "UPDATE runs SET sandbox_dispatch_state=:marker, sandbox_id=:sid "
-                        "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running' "
-                        "RETURNING id"
-                    ),
-                    {
-                        "rid": run_id,
-                        "oid": str(org_uuid),
-                        "tok": claim_lease,
-                        "sid": None,
-                        "marker": _dispatch_marker_json(key),
-                    },
-                )
-                if result.fetchone() is None:
-                    return None
-                return key
+            return await _sandbox_acquire_dispatch_marker(
+                session_factory=session_factory,
+                claim_lease=claim_lease,
+                org_id=org_id,
+                run_id=run_id,
+                node_id=node_id,
+            )
 
         async def _store_dispatch_marker_sandbox(sandbox_id_value: str | None) -> None:
             """Persist the real sandbox id onto the runs row after a successful create."""
-            if session_factory is None or not claim_lease:
-                return
-            org_id_raw = state.get("_org_id")
-            try:
-                org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
-            except (TypeError, ValueError):
-                org_uuid = None
-            if org_uuid is None:
-                return
-            from sqlalchemy import text as _sql_text
-
-            from modulo.db.rls import set_rls_org
-
-            async with session_factory() as session, session.begin():
-                await set_rls_org(session, org_uuid)
-                await session.execute(
-                    _sql_text(
-                        "UPDATE runs SET sandbox_dispatch_state=:marker, sandbox_id=:sid "
-                        "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running'"
-                    ),
-                    {
-                        "rid": run_id,
-                        "oid": str(org_uuid),
-                        "tok": claim_lease,
-                        "sid": sandbox_id_value,
-                        "marker": _dispatch_marker_json(attempt_key or ""),
-                    },
-                )
+            await _sandbox_store_dispatch_marker_sandbox(
+                sandbox_id_value,
+                session_factory=session_factory,
+                claim_lease=claim_lease,
+                org_id=org_id,
+                run_id=run_id,
+                node_id=node_id,
+                attempt_key=attempt_key,
+            )
 
         async def _store_script_lease() -> None:
             """FAR-296 Phase 2 fencing lease: record the script-mode execution claim.
@@ -2776,41 +3018,14 @@ def make_sandbox_agent_fn(
             row. Fail-open (no session factory / claim lease / org) — the lease
             is a safety backstop, never a correctness dependency.
             """
-            if session_factory is None or not claim_lease:
-                return
-            org_id_raw = state.get("_org_id")
-            try:
-                org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
-            except (TypeError, ValueError):
-                org_uuid = None
-            if org_uuid is None:
-                return
-            from sqlalchemy import text as _sql_text
-
-            from modulo.db.rls import set_rls_org
-
-            async with session_factory() as session, session.begin():
-                await set_rls_org(session, org_uuid)
-                result = await session.execute(
-                    _sql_text(
-                        "UPDATE runs SET sandbox_dispatch_state=:marker "
-                        "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running'"
-                    ),
-                    {
-                        "rid": run_id,
-                        "oid": str(org_uuid),
-                        "tok": claim_lease,
-                        "marker": json.dumps({"state": "script_executing", "attempt_key": attempt_key or ""}),
-                    },
-                )
-                if result.rowcount == 0:
-                    # The UPDATE was fenced on claim_token + status but matched
-                    # zero rows — the claim was superseded (token rotated by a
-                    # successor) or the run is no longer running. The lease was
-                    # NEVER acquired, so a subsequent fault must NOT be treated as
-                    # post-claim/terminal. Fail as a RETRYABLE SupersededNodeError
-                    # so the caller never marks the lease claimed.
-                    raise SupersededNodeError("script lease denied — run superseded or not running")
+            await _sandbox_store_script_lease(
+                session_factory=session_factory,
+                claim_lease=claim_lease,
+                org_id=org_id,
+                run_id=run_id,
+                node_id=node_id,
+                attempt_key=attempt_key,
+            )
 
         async def _mint_run_api_key_for_sandbox() -> str | None:
             """Mint a short-TTL runner-role API key for this script-mode sandbox (FAR-296 Phase 3b).
@@ -2822,71 +3037,13 @@ def make_sandbox_agent_fn(
             caller only, which injects it into the sandbox envs — it is NEVER
             logged, checkpointed, or placed in LangGraph state.
             """
-            if session_factory is None:
-                return None
-            org_id_raw = state.get("_org_id")
-            try:
-                org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
-            except (TypeError, ValueError):
-                org_uuid = None
-            if org_uuid is None:
-                return None
-            try:
-                run_uuid = uuid.UUID(str(run_id))
-            except (TypeError, ValueError):
-                return None
-            try:
-                from modulo.auth.api_key import mint_run_api_key
-                from modulo.db.crud.run import get_run_api_key_ttl_seconds
-
-                ttl_seconds = await get_run_api_key_ttl_seconds(session_factory, org_uuid, sandbox_timeout)
-                async with session_factory() as session, session.begin():
-                    await set_rls_org(session, org_uuid)
-                    # account_id: the run's triggering user; fall back to the
-                    # first active admin in the org when the run row has none.
-                    from sqlalchemy import text as _sql_text
-
-                    row = (
-                        await session.execute(
-                            _sql_text("SELECT account_id FROM runs WHERE id=:rid AND organisation_id=:oid"),
-                            {"rid": str(run_uuid), "oid": str(org_uuid)},
-                        )
-                    ).fetchone()
-                    account_id_raw = row[0] if row else None
-                    if account_id_raw is None:
-                        admin_row = (
-                            await session.execute(
-                                _sql_text(
-                                    "SELECT a.id FROM accounts a JOIN org_memberships om ON om.account_id = a.id "
-                                    "WHERE om.organisation_id=:oid AND om.role='admin' AND om.deactivated_at IS NULL "
-                                    "ORDER BY a.created_at LIMIT 1"
-                                ),
-                                {"oid": str(org_uuid)},
-                            )
-                        ).fetchone()
-                        account_id_raw = admin_row[0] if admin_row else None
-                    if account_id_raw is None:
-                        return None
-                    minted = await mint_run_api_key(
-                        session,
-                        org_id=org_uuid,
-                        run_id=run_uuid,
-                        node_id=node_id,
-                        account_id=uuid.UUID(str(account_id_raw)),
-                        ttl_seconds=ttl_seconds,
-                    )
-                    if minted is None:
-                        return None
-                    _key_row, full_key = minted
-                    return full_key
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.exception(
-                    "sandbox_agent.run_api_key_mint_failed",
-                    extra={"run_id": run_id, "node_id": node_id},
-                )
-                return None
+            return await _sandbox_mint_run_api_key_for_sandbox(
+                session_factory=session_factory,
+                org_id=org_id,
+                run_id=run_id,
+                node_id=node_id,
+                sandbox_timeout=sandbox_timeout,
+            )
 
         async def _clear_dispatch_marker() -> None:
             """Fenced marker clear — only when the claim token still matches.
@@ -2894,28 +3051,13 @@ def make_sandbox_agent_fn(
             A superseded original (token rotated by a successor) must not clear
             the successor's dispatch marker / sandbox id.
             """
-            if session_factory is None or not claim_lease:
-                return
-            org_id_raw = state.get("_org_id")
-            try:
-                org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
-            except (TypeError, ValueError):
-                org_uuid = None
-            if org_uuid is None:
-                return
-            from sqlalchemy import text as _sql_text
-
-            from modulo.db.rls import set_rls_org
-
-            async with session_factory() as session, session.begin():
-                await set_rls_org(session, org_uuid)
-                await session.execute(
-                    _sql_text(
-                        "UPDATE runs SET sandbox_dispatch_state=NULL, sandbox_id=NULL "
-                        "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok"
-                    ),
-                    {"rid": run_id, "oid": str(org_uuid), "tok": claim_lease},
-                )
+            await _sandbox_clear_dispatch_marker(
+                session_factory=session_factory,
+                claim_lease=claim_lease,
+                org_id=org_id,
+                run_id=run_id,
+                node_id=node_id,
+            )
 
         try:
             # DB-atomic dispatch marker (dist/runtime-core A4) — replaces the
@@ -2994,7 +3136,11 @@ def make_sandbox_agent_fn(
 
             env_vars_extra: dict[str, str] = await resolve_env_var_refs(
                 node_def.get("env_vars") or {},
-                _resolve_secret_ref,
+                lambda k: _sandbox_resolve_secret_ref(
+                    k,
+                    session_factory=session_factory,
+                    org_id=org_id,
+                ),
             )
 
             try:
