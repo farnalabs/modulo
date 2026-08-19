@@ -49,3 +49,25 @@ class OrgDeletedError(RuntimeError):
         self.org_id = org_id
         self.deleted = deleted
         super().__init__(f"cannot create run: organisation {org_id} is " + ("deleted" if deleted else "missing"))
+
+
+class RateLimitConflictError(RuntimeError):
+    """Raised by ``create_run`` when the rate-limit unique constraint fires.
+
+    The partial unique index ``uq_runs_pipeline_rate_limit_key`` on
+    ``(pipeline_id, rate_limit_key) WHERE rate_limit_key IS NOT NULL`` catches
+    concurrent creates that both pass the windowed count check. The CRUD layer
+    translates the ``IntegrityError`` to this domain exception so callers
+    (trigger engine, routes) can map it to a structured rate-limit response
+    without importing database-layer internals.
+    """
+
+    def __init__(
+        self,
+        *,
+        pipeline_id: uuid.UUID | None = None,
+        rate_limit_key: str | None = None,
+    ) -> None:
+        self.pipeline_id = pipeline_id
+        self.rate_limit_key = rate_limit_key
+        super().__init__(f"rate limit conflict for pipeline {pipeline_id}, key {rate_limit_key!r}")

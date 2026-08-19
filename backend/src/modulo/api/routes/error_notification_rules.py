@@ -9,7 +9,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
-from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
@@ -133,7 +133,10 @@ async def create_notification_rule(
             await set_rls_org(session, org_id)
 
             count_result = await session.execute(
-                select(func.count(ErrorNotificationRule.id)).where(ErrorNotificationRule.organisation_id == org_id)
+                select(func.count(ErrorNotificationRule.id)).where(
+                    ErrorNotificationRule.organisation_id == org_id,
+                    ErrorNotificationRule.deleted_at.is_(None),
+                )
             )
             current_count = count_result.scalar_one() or 0
 
@@ -158,6 +161,12 @@ async def create_notification_rule(
             await session.flush()
     except HTTPException:
         raise
+    except IntegrityError as exc:
+        _log.warning("error_notification_rules.create_notification_rule_integrity")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Maximum {max_rules} notification rules per organisation reached",
+        ) from exc
     except ProgrammingError as exc:
         _log.exception("error_notification_rules.create_notification_rule")
         raise HTTPException(

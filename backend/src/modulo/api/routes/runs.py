@@ -30,7 +30,7 @@ from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitiv
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.dispatch import dispatch_run
-from modulo.core.exceptions import OrgDeletedError
+from modulo.core.exceptions import OrgDeletedError, RateLimitConflictError
 from modulo.core.guardrails import GuardrailSummary
 from modulo.core.line_diff import iter_line_diffs
 from modulo.core.node_output_split import node_return, node_telemetry
@@ -799,6 +799,12 @@ async def trigger_run(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except RateLimitConflictError as exc:
+        _log.warning("runs.trigger_run rate_limit_conflict: %s", exc.rate_limit_key)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded for this pipeline",
         ) from None
     except ProgrammingError:
         _log.exception(_CODE_RUNS_TRIGGER_RUN)
