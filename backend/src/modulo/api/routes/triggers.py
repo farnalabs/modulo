@@ -27,7 +27,7 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
 from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK, mask_config_json
 from modulo.auth.jwt import TenantPrincipal
-from modulo.auth.secret_storage import encrypt_stored_secret
+from modulo.auth.secret_storage import _is_encrypted_token, encrypt_stored_secret
 from modulo.core.cron_helpers import (
     _count_ongoing_runs,
     compute_next_fire,
@@ -198,15 +198,16 @@ _SECRET_CONFIG_KEYS = frozenset({"hmac_secret", "signing_secret"})
 def _encrypt_trigger_config_secrets(config: dict[str, Any] | None, fernet_key: str) -> dict[str, Any]:
     """Encrypt known secret fields in a trigger config_json before storage.
 
-    Only encrypts values that are plaintext strings (not already encrypted bytes
-    or masked placeholders). Existing encrypted values are left unchanged.
+    Only encrypts values that are plaintext strings (not already encrypted
+    bytes/base64 strings or masked placeholders). Existing encrypted values
+    are left unchanged so updates are idempotent.
     """
     if not config:
         return {}
     result = dict(config)
     for key in _SECRET_CONFIG_KEYS:
         val = result.get(key)
-        if isinstance(val, str) and val and val != SENSITIVE_VALUE_MASK:
+        if isinstance(val, str) and val and val != SENSITIVE_VALUE_MASK and not _is_encrypted_token(val):
             try:
                 result[key] = encrypt_stored_secret(val, fernet_key).decode()
             except Exception:

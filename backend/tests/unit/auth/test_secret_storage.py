@@ -46,6 +46,26 @@ def test_decode_stored_secret_with_legacy_plaintext_bytes() -> None:
     assert result == "legacy-bytes"
 
 
+def test_decode_stored_secret_with_base64_string_roundtrip() -> None:
+    """A base64 string persisted via the write path must decrypt back.
+
+    Regression for the review finding that `encrypt_stored_secret(...).decode()`
+    stores a `gAAAA...` str in JSON columns but `decode_stored_secret` returned
+    every str unchanged, so consumers got ciphertext at runtime.
+    """
+    plaintext = "smtp-password"
+    stored = encrypt_stored_secret(plaintext, _FERNET_KEY).decode()
+    assert isinstance(stored, str)
+    assert stored.startswith("gAAAA")
+    assert decode_stored_secret(stored, _FERNET_KEY) == plaintext
+
+
+def test_decode_stored_secret_plaintext_with_fernet_prefix_raises() -> None:
+    """A plaintext prefixed with gAAAA and non-decryptable must raise."""
+    with pytest.raises(DecryptionError, match="cannot be decrypted"):
+        decode_stored_secret("gAAAAA-some-ciphertext", _FERNET_KEY)
+
+
 def test_decode_stored_secret_with_invalid_token_raises() -> None:
     wrong_key = Fernet.generate_key().decode()
     wrong_encrypted = Fernet(wrong_key.encode()).encrypt(b"other-data")
