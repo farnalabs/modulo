@@ -119,7 +119,7 @@ Two concrete implementations of every primitive type exist to validate the abstr
 ### Frontend
 
 - Vue 3 + Pinia scaffold; org context in all stores; `planStore` hydrated from `GET /api/v1/license`
-- shadcn-vue + Radix Vue baseline primitives
+- PrimeVue component library baseline (migrated from shadcn-vue + Radix Vue in FAR-317)
 - Theme system: `data-theme` on root element; `standard` + `agent` themes; `?theme=<name>` override; `localStorage` persistence
 - Sidebar tier badge (Free/Team/License expired pill in nav footer)
 - `/settings/license` page (tier card, feature checklist, license key management, upgrade CTA)

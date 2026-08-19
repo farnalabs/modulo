@@ -182,7 +182,7 @@ modulo/
 ## Stack (quick reference)
 
 - **Backend**: Python 3.12, uv, FastAPI, LangGraph, SQLAlchemy 2 async + asyncpg/aiosqlite/aiomysql, Alembic
-- **Frontend**: Vue 3 (Composition API), Pinia, shadcn-vue + Radix Vue, Vue Flow, Tailwind, Playwright
+- **Frontend**: Vue 3 (Composition API), Pinia, PrimeVue, Vue Flow, Tailwind, Playwright
 - **API types**: FastAPI OpenAPI → `openapi-typescript` → typed `openapi-fetch` client at `src/lib/api/schema.d.ts`
 - **Lint**: ruff, mypy --strict, bandit, semgrep, vulture, import-linter, gitleaks
 - **Tests**: pytest + pytest-cov, pytest-bdd, testcontainers, factory-boy, pytest-xdist
@@ -318,7 +318,7 @@ Coverage minimums: `modulo.auth` 90%, `pipeline_engine` 85%, `db.rls` 95%, overa
 16. Remote MCP server — `/mcp` HTTP+SSE, API key bearer auth, dual-layer scope enforcement
 
 ### Phase 5 — Frontend
-17. shadcn-vue init — radix-vue, lucide-vue-next, cvа, baseline primitives in `src/components/ui/`
+17. PrimeVue component library set up — accessible primitives (Button, Badge, Dialog, Tooltip, Select, etc.) themed via the `frontend/src/lib/primevue-theme.ts` token bridge (replaced shadcn-vue + Radix Vue in FAR-317)
 18. Vue 3 + Pinia scaffold — org context, planStore, theme system (`data-theme`, standard + agent), sidebar
 19. `/settings/license` page
 20. Pipeline canvas — Vue Flow, node/edge serialisation

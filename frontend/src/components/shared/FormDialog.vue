@@ -19,7 +19,6 @@
 </template>
 
 <script setup lang="ts">
-import type { HTMLAttributes } from 'vue'
 import Dialog from 'primevue/dialog'
 import Button from 'primevue/button'
 
@@ -29,7 +28,6 @@ const props = defineProps<{
   confirmText?: string
   confirmDisabled?: boolean
   loading?: boolean
-  class?: HTMLAttributes['class']
 }>()
 
 const modelValue = defineModel<boolean>('open')

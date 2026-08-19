@@ -11,7 +11,7 @@ GitHub's `ubicloud-standard-2` runner (2 vCPU). Facts and rules:
   the config file — it lives in `.github/workflows/ci.yml` (Frontend and WCAG
   job), which invokes vitest directly with `--pool=threads --maxWorkers=2`.
 - **Why 2 and not 4:** 4 concurrently-loading jsdom environments (Vue SFCs +
-  ECharts/reka-ui/vue-query) over-subscribe the 2 cores, starving the event
+  ECharts/PrimeVue/vue-query) over-subscribe the 2 cores, starving the event
   loop — `flushPromises()` (setImmediate) was observed blocked 10+ seconds
   while content was already rendered. 2 workers ≈ 1:1 with CPU capacity. This
   is a capacity match, not a race-hiding hack; do not reduce it further or

@@ -80,7 +80,7 @@
                 <td class="py-2.5 font-mono text-muted-foreground">{{ key.lookup_prefix }}</td>
                 <td class="py-2.5 capitalize">{{ key.role }}</td>
                 <td class="py-2.5">
-                  <Badge :variant="key.is_active ? 'default' : 'secondary'">
+                  <Badge :severity="key.is_active ? 'success' : 'secondary'">
                     {{ key.is_active ? 'Active' : 'Revoked' }}
                   </Badge>
                 </td>

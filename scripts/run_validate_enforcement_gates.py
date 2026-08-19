@@ -6,7 +6,7 @@ Checks that the CI and delivery enforcement gates are structurally intact:
 
 1. No ``continue-on-error: true`` on CI validation jobs in .github/workflows/ci.yml
 2. verify-main.ps1 (devtools sibling) uses Fail (not Warn) for vue-tsc / npm audit / pip-audit
-3. gate.ps1 (devtools sibling) has a Playwright @smoke step
+3. smoke-test.ps1 (devtools sibling) has a Playwright @smoke step
 4. AGENTS.md has a "Non-Negotiable Enforcement Gates" section
 
 The devtools sibling path is resolved the same way the .ps1 does: via
@@ -110,13 +110,15 @@ def main() -> int:
         f"Change Warn to Fail for pip-audit check in {verify_main}",
     )
 
-    # Check 3: gate.ps1 has a Playwright @smoke step.
-    gate_ps1 = os.path.join(devtools_root, "harness", "tools", "gate.ps1")
-    gate_content = _read(gate_ps1)
+    # Check 3: smoke-test.ps1 has a Playwright @smoke step. The local
+    # gate.ps1 merge path was retired (2026-08-18); the Playwright @smoke E2E
+    # gate now lives in devtools' smoke-test.ps1.
+    smoke_test = os.path.join(devtools_root, "harness", "tools", "smoke-test.ps1")
+    smoke_content = _read(smoke_test)
     check(
-        "gate.ps1 has Playwright @smoke step",
-        gate_content is not None and ("playwright" in gate_content or "@smoke" in gate_content),
-        f"Add Playwright @smoke step to {gate_ps1} (Phase 4b, after merge)",
+        "smoke-test.ps1 has Playwright @smoke step",
+        smoke_content is not None and ("playwright" in smoke_content or "@smoke" in smoke_content),
+        f"Add Playwright @smoke step to {smoke_test}",
     )
 
     # Check 4: AGENTS.md has the enforcement gates section.
