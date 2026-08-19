@@ -579,8 +579,9 @@ def _make_session_factory(session: AsyncMock) -> MagicMock:
 def _make_resume_session(snapshot: MagicMock) -> AsyncMock:
     """Session mock whose execute() order matches resume()'s query sequence.
 
-    resume() queries the snapshot FIRST, then the pipeline — the opposite of
-    execute(), so the shared _make_session iterator is not reusable here.
+    resume() queries the snapshot's graph_json FIRST (the atomic sandbox-capacity
+    gate, FAR-1306), then the snapshot itself, then the pipeline — the opposite
+    of execute(), so the shared _make_session iterator is not reusable here.
     """
     pipeline = _make_pipeline()
 
@@ -590,6 +591,9 @@ def _make_resume_session(snapshot: MagicMock) -> AsyncMock:
     snapshot_result = MagicMock()
     snapshot_result.scalar_one.return_value = snapshot
 
+    graph_json_result = MagicMock()
+    graph_json_result.scalar_one_or_none.return_value = snapshot.graph_json
+
     eval_result = MagicMock()
     scalars_mock = MagicMock()
     scalars_mock.all.return_value = []
@@ -598,7 +602,7 @@ def _make_resume_session(snapshot: MagicMock) -> AsyncMock:
     count_result = MagicMock()
     count_result.scalar.return_value = 0
 
-    execute_results = iter([snapshot_result, pipeline_result, eval_result, count_result])
+    execute_results = iter([graph_json_result, snapshot_result, pipeline_result, eval_result, count_result])
 
     async def _execute(*_args: Any, **_kwargs: Any) -> Any:
         try:
