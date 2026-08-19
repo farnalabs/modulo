@@ -977,7 +977,7 @@ describe('RunDetailView', () => {
     const section = wrapper.find('[data-testid="run-detail-work-items"]')
     expect(section.exists()).toBe(true)
     expect(section.text()).toContain('Work items')
-    expect(section.text()).toContain('pr')
+    expect(section.text()).toContain('PR')
     expect(section.text()).toContain('https://github.com/acme/repo/pull/42')
     expect(section.text()).toContain('github')
     expect(section.text()).toContain('open')
