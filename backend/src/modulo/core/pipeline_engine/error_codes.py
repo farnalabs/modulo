@@ -218,6 +218,15 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity="warning",
         guidance="E2B provisioner rate-limited sandbox creation (429); the run will be retried.",
     ),
+    "sandbox.queue_timeout": ErrorCodeSpec(
+        error_class="sandbox",
+        retryable=True,
+        alert_severity="warning",
+        guidance=(
+            "Sandbox provisioning was retried but the rate-limit retry budget"
+            " was exhausted within the node timeout window."
+        ),
+    ),
     # --- node guard codes ------------------------------------------------
     _CODE_NODE_TIMEOUT: ErrorCodeSpec(
         error_class="node",
@@ -393,6 +402,12 @@ LEGACY_ALIASES: dict[str, str] = {
     # ``harness.unknown`` fallback.
     "SandboxRateLimitedError": "sandbox.rate_limited",
     "RateLimitException": "sandbox.rate_limited",
+    # FAR-296 Phase 4b: rate-limit retry exhaustion maps to the distinct
+    # ``sandbox.queue_timeout`` code (the "queue" for capacity timed out).
+    "SandboxQueueTimeoutError": "sandbox.queue_timeout",
+    "SandboxRateLimitExhaustedError": "sandbox.queue_timeout",
+    # FAR-296 Phase 4b: dispatch-time capacity gate maps to ``capacity.org``.
+    "SandboxCapacityExceededError": "capacity.org",
     "executor_setup_failed": _CODE_HARNESS_EXECUTOR_FAILED,
     "executor_failed": _CODE_HARNESS_EXECUTOR_FAILED,
     "executor_heartbeat_lost": "harness.executor_heartbeat_lost",

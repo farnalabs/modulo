@@ -1,24 +1,8 @@
 <template>
   <div class="page-wide">
     <DashboardNotificationsPanel class="-mt-3 mb-4" />
-    <PageHeader :title="$t('views.DashboardView.dashboard')" :subtitle="$t('views.DashboardView.overview_of_your_organisations_pipelines_and_runs')" data-testid="dashboard-title" />
-    <!-- Loading skeleton grid -->
-    <div v-if="loading" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-      <div v-for="n in 6" :key="n" class="card p-4">
-        <div class="flex items-center gap-3">
-          <div class="h-9 w-9 animate-pulse rounded-lg bg-muted" />
-          <div class="min-w-0 flex-1 space-y-2">
-            <div class="h-3 w-20 animate-pulse rounded bg-muted" />
-            <div class="h-6 w-12 animate-pulse rounded bg-muted" />
-          </div>
-        </div>
-      </div>
-    </div>
-    <!-- Full-page error -->
-    <ErrorAlert v-else-if="error && !summary" :message="error" :on-retry="dashboardStore.fetchSummary" />
-    <template v-else-if="summary">
-      <!-- Rolling-window toggle (FAR-92/FAR-115): period-scopes the stat cards below -->
-      <div class="flex justify-end mb-4">
+    <PageHeader :title="$t('views.DashboardView.dashboard')" :subtitle="$t('views.DashboardView.overview_of_your_organisations_pipelines_and_runs')" data-testid="dashboard-title">
+      <template #right>
         <div class="flex flex-wrap justify-end gap-1">
           <button
             v-for="w in trendWindows"
@@ -34,7 +18,23 @@
             {{ $t(w.labelKey) }}
           </button>
         </div>
+      </template>
+    </PageHeader>
+    <!-- Loading skeleton grid -->
+    <div v-if="loading" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div v-for="n in 6" :key="n" class="card p-4">
+        <div class="flex items-center gap-3">
+          <div class="h-9 w-9 animate-pulse rounded-lg bg-muted" />
+          <div class="min-w-0 flex-1 space-y-2">
+            <div class="h-3 w-20 animate-pulse rounded bg-muted" />
+            <div class="h-6 w-12 animate-pulse rounded bg-muted" />
+          </div>
+        </div>
       </div>
+    </div>
+    <!-- Full-page error -->
+    <ErrorAlert v-else-if="error && !summary" :message="error" :on-retry="dashboardStore.fetchSummary" />
+    <template v-else-if="summary">
       <!-- Row 1: Summary stat cards -->
       <div :class="['grid gap-4 sm:grid-cols-2 lg:grid-cols-4 transition-opacity duration-200', periodRefreshing ? 'opacity-60' : 'opacity-100']">
         <StatCard :label="$t('views.DashboardView.pipelines')" :value="cardValue(summary.period?.metrics?.active_pipelines?.current, summary.active_pipelines)" color="primary" to="/pipelines" :delta="periodMetrics?.active_pipelines ?? null" :no-baseline-label="selectedWindow != null ? $t('views.DashboardView.no_prior_data') : undefined">
@@ -46,15 +46,15 @@
         <StatCard :label="$t('views.DashboardView.running')" :value="cardValue(summary.period?.metrics?.run_counts_by_status?.running?.current, summary.run_counts_by_status?.running ?? 0)" color="success" :to="`/runs?status=${RUN_STATUS.RUNNING}`" :delta="periodMetrics?.run_counts_by_status?.running ?? null" :no-baseline-label="selectedWindow != null ? $t('views.DashboardView.no_prior_data') : undefined">
           <template #icon><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></template>
         </StatCard>
-        <StatCard :label="$t('views.DashboardView.awaiting_human')" :value="cardValue(summary.period?.metrics?.run_counts_by_status?.awaiting_human?.current, summary.run_counts_by_status?.awaiting_human ?? 0)" color="warning" :to="`/runs?status=${RUN_STATUS.AWAITING_HUMAN}`" :delta="periodMetrics?.run_counts_by_status?.awaiting_human ?? null" :no-baseline-label="selectedWindow != null ? $t('views.DashboardView.no_prior_data') : undefined">
+        <StatCard :label="$t('views.DashboardView.awaiting_human')" :value="cardValue(summary.period?.metrics?.run_counts_by_status?.awaiting_human?.current, summary.run_counts_by_status?.awaiting_human ?? 0)" color="warning" :to="`/runs?status=${RUN_STATUS.AWAITING_HUMAN}`" :delta="periodMetrics?.run_counts_by_status?.awaiting_human ?? null" :no-baseline-label="selectedWindow != null ? $t('views.DashboardView.no_prior_data') : undefined" :inverted="true">
           <template #icon><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></template>
         </StatCard>
       </div>
       <div class="grid gap-4 sm:grid-cols-2">
-        <StatCard :label="$t('views.DashboardView.failed')" :value="cardValue(summary.period?.metrics?.run_counts_by_status?.failed?.current, summary.run_counts_by_status?.failed ?? 0)" color="destructive" :to="`/runs?status=${RUN_STATUS.FAILED}`" :delta="periodMetrics?.run_counts_by_status?.failed ?? null" :no-baseline-label="selectedWindow != null ? $t('views.DashboardView.no_prior_data') : undefined">
+        <StatCard :label="$t('views.DashboardView.failed')" :value="cardValue(summary.period?.metrics?.run_counts_by_status?.failed?.current, summary.run_counts_by_status?.failed ?? 0)" color="destructive" :to="`/runs?status=${RUN_STATUS.FAILED}`" :delta="periodMetrics?.run_counts_by_status?.failed ?? null" :no-baseline-label="selectedWindow != null ? $t('views.DashboardView.no_prior_data') : undefined" :inverted="true">
           <template #icon><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></template>
         </StatCard>
-        <StatCard :label="$t('views.DashboardView.idle')" :value="cardValue(summary.period?.metrics?.run_counts_by_status?.idle?.current, summary.run_counts_by_status?.idle ?? 0)" color="muted" to="/pipelines" :delta="periodMetrics?.run_counts_by_status?.idle ?? null" :no-baseline-label="selectedWindow != null ? $t('views.DashboardView.no_prior_data') : undefined">
+        <StatCard :label="$t('views.DashboardView.idle')" :value="cardValue(summary.period?.metrics?.run_counts_by_status?.idle?.current, summary.run_counts_by_status?.idle ?? 0)" color="muted" to="/pipelines" :delta="periodMetrics?.run_counts_by_status?.idle ?? null" :no-baseline-label="selectedWindow != null ? $t('views.DashboardView.no_prior_data') : undefined" :inverted="true">
           <template #icon><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></template>
         </StatCard>
       </div>
@@ -76,7 +76,7 @@
               </span>
               <span class="text-xs text-muted-foreground">{{ summary.eval_pass_rate.total_evals }} {{ $t('views.DashboardView.total_evals') }}</span>
             </div>
-            <Sparkline class="mt-2 h-10 w-full" :data="evalSparklineData" :labels="summaryTrendLabels" unit="%" color="var(--color-primary)" />
+            <Sparkline class="mt-2 h-12 w-full" :data="evalSparklineData" :labels="summaryTrendLabels" unit="%" color="var(--color-primary)" :show-y-axis="true" />
           </div>
           <div v-else class="flex items-center justify-center py-6 text-sm text-muted-foreground">{{ $t('views.DashboardView.no_eval_data_yet') }}</div>
         </router-link>
@@ -90,24 +90,9 @@
             </span>
           </div>
           <p class="text-xs text-muted-foreground mt-1">{{ spendTrackedDays }} {{ $t('views.DashboardView.days_tracked') }}</p>
-          <Sparkline class="mt-2 h-10 w-full" :data="spendSparklineData" :labels="summaryTrendLabels" unit="$" color="var(--color-warning)" />
+          <Sparkline class="mt-2 h-12 w-full" :data="spendSparklineData" :labels="summaryTrendLabels" unit="$" color="var(--color-warning)" :show-y-axis="true" />
         </router-link>
       </div>
-      <!-- Run a Pipeline shortcut -->
-      <router-link
-        to="/pipelines"
-        class="card p-4 flex items-center gap-3 hover:bg-accent/50 transition-all cursor-pointer"
-        data-testid="dashboard-run-pipeline"
-      >
-        <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
-          <Play class="h-[18px] w-[18px]" aria-hidden="true" />
-        </div>
-        <div>
-          <p class="text-sm font-medium text-foreground">{{ $t('views.DashboardView.run_a_pipeline') }}</p>
-          <p class="text-xs text-muted-foreground">{{ $t('views.DashboardView.select_a_pipeline_and_run_it_with_a_prompt') }}</p>
-        </div>
-        <ChevronRight class="ml-auto h-4 w-4 text-muted-foreground" aria-hidden="true" />
-      </router-link>
       <!-- Team breakdown (Team only) -->
       <div v-if="isTeam && summary.teams && summary.teams.length > 0" class="card p-4">
         <div class="flex items-center justify-between mb-4">
@@ -167,15 +152,15 @@
         <div v-if="trendData.length > 1" class="space-y-4">
           <div>
             <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.run_count') }}</p>
-            <Sparkline class="h-12 w-full" :data="trendRunCounts" :labels="trendLabels" :unit="$t('views.DashboardView.runs')" color="var(--color-primary)" />
+            <Sparkline class="h-16 w-full" :data="trendRunCounts" :labels="trendLabels" :unit="$t('views.DashboardView.runs')" color="var(--color-primary)" :show-y-axis="true" :show-x-ticks="true" />
           </div>
           <div>
             <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.eval_pass_rate_label') }}</p>
-            <Sparkline class="h-12 w-full" :data="trendEvalRates" :labels="trendLabels" unit="%" color="var(--color-success)" />
+            <Sparkline class="h-16 w-full" :data="trendEvalRates" :labels="trendLabels" unit="%" color="var(--color-success)" :show-y-axis="true" :show-x-ticks="true" />
           </div>
           <div>
             <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.token_spend') }}</p>
-            <Sparkline class="h-12 w-full" :data="trendSpendData" :labels="trendLabels" unit="$" color="var(--color-warning)" />
+            <Sparkline class="h-16 w-full" :data="trendSpendData" :labels="trendLabels" unit="$" color="var(--color-warning)" :show-y-axis="true" :show-x-ticks="true" />
           </div>
         </div>
         <div v-else class="flex items-center justify-center py-12">
@@ -216,7 +201,7 @@ import { useDashboardStore } from '../stores/dashboard'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import Sparkline from '../components/shared/Sparkline.vue'
 import StatCard from '../components/StatCard.vue'
-import { ChevronUp, ChevronDown, ChevronRight, Play } from '@lucide/vue'
+import { ChevronUp, ChevronDown } from '@lucide/vue'
 import { RUN_STATUS } from '../constants/filters'
 import { formatMoney } from '../lib/money'
 import { runStatusBadgeClass, formatRunDate } from '../utils/runUtils'

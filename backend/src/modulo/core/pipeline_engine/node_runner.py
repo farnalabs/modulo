@@ -200,12 +200,32 @@ class ScriptBudgetKilledError(ScriptModeError):
 class SandboxRateLimitedError(SandboxNodeFailedError):
     """E2B rate-limited the sandbox creation (429 / concurrent-sandbox limit).
 
+    Raised for a SINGLE rate-limit event when the retry loop is NOT enabled
+    (the legacy path). Subclassing ``SandboxNodeFailedError`` maps it to the
+    retryable ``sandbox.no_output_json`` family by default; the executor's
+    LEGACY_ALIASES routes ``SandboxRateLimitedError`` to the dedicated
+    retryable ``sandbox.rate_limited`` code.
+    """
+
+
+class SandboxQueueTimeoutError(SandboxNodeFailedError):
+    """E2B rate-limit retry budget exhausted — sandbox queue timed out (FAR-296 Phase 4b).
+
     Raised when ``AsyncSandbox.create`` exhausts the bounded retry/backoff loop
     (FAR-296 Phase 4a). The sandbox was NEVER created and the script PROCESS was
-    NEVER started, so this is a PRE-CLAIM failure — retryable. Subclassing
-    ``SandboxNodeFailedError`` maps it to the retryable ``sandbox.no_output_json``
-    family by default; the executor's LEGACY_ALIASES routes ``SandboxRateLimitedError``
-    to the dedicated retryable ``sandbox.rate_limited`` code.
+    NEVER started, so this is a PRE-CLAIM failure — retryable. Maps to the
+    distinct ``sandbox.queue_timeout`` code via the executor's LEGACY_ALIASES,
+    separate from the single-event ``sandbox.rate_limited`` code.
+    """
+
+
+class SandboxCapacityExceededError(SandboxNodeFailedError):
+    """Org sandbox concurrency cap reached — dispatch-time capacity gate (FAR-296 Phase 4b).
+
+    Raised BEFORE sandbox provisioning when the org's active sandbox lease
+    count equals or exceeds the configured cap. The sandbox was NEVER created
+    and the script PROCESS was NEVER started, so this is a PRE-CLAIM failure —
+    retryable. Maps to ``capacity.org`` via the executor's LEGACY_ALIASES.
     """
 
 
@@ -3431,6 +3451,54 @@ async def _sandbox_agent_impl(
         )
 
     try:
+        # FAR-296 Phase 4b: dispatch-time sandbox capacity gate. Fail-fast
+        # before wasting E2B provisioning time — if the org is at sandbox
+        # capacity, raise a retryable capacity.org error immediately instead
+        # of letting the sandbox provision and then get demoted at claim time.
+        if sandbox_mode == "script" and session_factory is not None:
+            _org_id_raw = state.get("_org_id")
+            try:
+                _org_uuid = uuid.UUID(str(_org_id_raw)) if _org_id_raw else None
+            except (TypeError, ValueError):
+                _org_uuid = None
+            if _org_uuid is not None:
+                try:
+                    from modulo.db.crud.run import (
+                        count_active_sandbox_leases_for_org,
+                        get_sandbox_concurrency_limit,
+                    )
+                    from modulo.db.rls import set_rls_org
+
+                    async with session_factory() as _cap_session, _cap_session.begin():
+                        await set_rls_org(_cap_session, _org_uuid)
+                        _cap = await get_sandbox_concurrency_limit(_cap_session, _org_uuid)
+                        if _cap is not None:
+                            _active = await count_active_sandbox_leases_for_org(
+                                _cap_session, _org_uuid, exclude_run_id=uuid.UUID(str(run_id))
+                            )
+                            if _active >= _cap:
+                                _log.info(
+                                    "sandbox_agent.dispatch_capacity_denied",
+                                    extra={
+                                        "run_id": run_id,
+                                        "org_id": str(_org_uuid),
+                                        "active": _active,
+                                        "cap": _cap,
+                                    },
+                                )
+                                raise SandboxCapacityExceededError(
+                                    f"Sandbox dispatch denied: org {_org_uuid} at capacity "
+                                    f"({_active}/{_cap} active sandbox leases)"
+                                )
+                except SandboxCapacityExceededError:
+                    raise
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.warning(
+                        "sandbox_agent.dispatch_capacity_check_failed",
+                        extra={"run_id": run_id, "org_id": str(_org_uuid)},
+                    )
         # DB-atomic dispatch marker (dist/runtime-core A4) — replaces the
         # retired Redis SETNX E2B fence. Exactly ONE executor wins the
         # dispatch slot; a superseded claim / non-running run is refused
@@ -3486,7 +3554,7 @@ async def _sandbox_agent_impl(
             except RateLimitException as _rle:
                 _rate_limit_attempt += 1
                 if _rate_limit_attempt > _SANDBOX_RATE_LIMIT_MAX_RETRIES:
-                    raise SandboxRateLimitedError(
+                    raise SandboxQueueTimeoutError(
                         f"E2B rate-limited after {_rate_limit_attempt} attempts creating sandbox for node '{node_id}'"
                     ) from None
                 _backoff = _SANDBOX_RATE_LIMIT_BASE_BACKOFF_S * (2 ** (_rate_limit_attempt - 1))

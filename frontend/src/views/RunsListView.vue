@@ -1,35 +1,37 @@
 <template>
   <div class="page-wide">
-    <PageHeader :title="$t('views.RunsListView.runs')" :subtitle="$t('views.RunsListView.view_all_pipeline_executions')" />
-
-    <FilterBar
-      :search="{ placeholder: $t('views.RunsListView.search_by_pipeline_name') }"
-      :search-value="filterSearch"
-      :filters="[
-        { key: 'status', label: 'Status', options: [
-          { value: RUN_STATUS.PENDING, label: 'Pending' },
-          { value: RUN_STATUS.RUNNING, label: 'Running' },
-          { value: RUN_STATUS.AWAITING_HUMAN, label: 'Awaiting Human' },
-          { value: RUN_STATUS.COMPLETE, label: 'Complete' },
-          { value: RUN_STATUS.FAILED, label: 'Failed' },
-          { value: RUN_STATUS.CANCELLED, label: 'Cancelled' },
-          { value: RUN_STATUS.EVAL_FAILED, label: 'Eval Failed' },
-          { value: RUN_STATUS.STALLED, label: 'Stalled' },
-        ]},
-        { key: 'trigger_type', label: 'Trigger Type', options: [
-          { value: TRIGGER_TYPE.MANUAL, label: 'Manual' },
-          { value: TRIGGER_TYPE.WEBHOOK, label: 'Webhook' },
-          { value: TRIGGER_TYPE.CRON, label: 'Cron' },
-          { value: TRIGGER_TYPE.POLLING, label: 'Polling' },
-          { value: TRIGGER_TYPE.AGENT_SIGNAL, label: 'Agent Signal' },
-          { value: TRIGGER_TYPE.ONGOING, label: 'Ongoing' },
-          { value: TRIGGER_TYPE.CORRECTION, label: 'Correction' },
-        ]},
-      ]"
-      :filter-values="{ status: filterStatus, trigger_type: filterTriggerType }"
-      @update:search="filterSearch = $event"
-      @update:filter="handleFilterUpdate"
-    ></FilterBar>
+    <PageHeader :title="$t('views.RunsListView.runs')" :subtitle="$t('views.RunsListView.view_all_pipeline_executions')">
+      <template #right>
+        <FilterBar
+          :search="{ placeholder: $t('views.RunsListView.search_by_pipeline_name') }"
+          :search-value="filterSearch"
+          :filters="[
+            { key: 'status', label: 'Status', options: [
+              { value: RUN_STATUS.PENDING, label: 'Pending' },
+              { value: RUN_STATUS.RUNNING, label: 'Running' },
+              { value: RUN_STATUS.AWAITING_HUMAN, label: 'Awaiting Human' },
+              { value: RUN_STATUS.COMPLETE, label: 'Complete' },
+              { value: RUN_STATUS.FAILED, label: 'Failed' },
+              { value: RUN_STATUS.CANCELLED, label: 'Cancelled' },
+              { value: RUN_STATUS.EVAL_FAILED, label: 'Eval Failed' },
+              { value: RUN_STATUS.STALLED, label: 'Stalled' },
+            ]},
+            { key: 'trigger_type', label: 'Trigger Type', options: [
+              { value: TRIGGER_TYPE.MANUAL, label: 'Manual' },
+              { value: TRIGGER_TYPE.WEBHOOK, label: 'Webhook' },
+              { value: TRIGGER_TYPE.CRON, label: 'Cron' },
+              { value: TRIGGER_TYPE.POLLING, label: 'Polling' },
+              { value: TRIGGER_TYPE.AGENT_SIGNAL, label: 'Agent Signal' },
+              { value: TRIGGER_TYPE.ONGOING, label: 'Ongoing' },
+              { value: TRIGGER_TYPE.CORRECTION, label: 'Correction' },
+            ]},
+          ]"
+          :filter-values="{ status: filterStatus, trigger_type: filterTriggerType }"
+          @update:search="filterSearch = $event"
+          @update:filter="handleFilterUpdate"
+        ></FilterBar>
+      </template>
+    </PageHeader>
 
     <LoadingSpinner v-if="loading" />
 
@@ -47,11 +49,8 @@
           :columns="[
             { key: 'pipeline_name', label: $t('views.RunsListView.pipeline'), sortable: true },
             { key: 'status', label: $t('views.RunsListView.status'), sortable: true },
-            { key: 'error', label: $t('views.RunsListView.error'), sortable: true },
             { key: 'trigger_type', label: $t('views.RunsListView.trigger'), sortable: true },
-            { key: 'trigger_actor', label: $t('views.RunsListView.triggered_by'), sortable: true },
             { key: 'heartbeat', label: $t('views.RunsListView.heartbeat'), sortable: false },
-            { key: 'input_preview', label: $t('views.RunsListView.input'), sortable: false },
             { key: 'run_number', label: '#', numeric: true, sortable: true },
             { key: 'started_at', label: $t('views.RunsListView.start'), sortable: true },
             { key: 'completed_at', label: $t('views.RunsListView.end'), sortable: true },
@@ -72,29 +71,25 @@
             </router-link>
           </template>
           <template #cell-status="{ value, row }">
-            <span :class="runStatusBadgeClass(value as string)" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize">
-              {{ value }}
-            </span>
-            <span
-              v-if="(row as RunListItem).capacity?.waiting"
-              :data-testid="`runs-list-queued-${row.run_id}`"
-              class="ml-1.5 inline-flex items-center rounded-full bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning capitalize"
-            >{{ $t('views.RunsListView.queued') }}</span>
-          </template>
-          <template #cell-error="{ row }">
-            <RunErrorTag
-              v-if="row.error_code"
-              :code="(row.error_code as string | null | undefined)"
-              :detail="(row.error_detail as string | null | undefined)?.slice(0, 200)"
-              :data-testid="`runs-list-error-${row.run_id}`"
-            />
-            <span v-else>—</span>
+            <div class="flex flex-wrap items-center gap-1">
+              <span :class="runStatusBadgeClass(value as string)" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize">
+                {{ value }}
+              </span>
+              <span
+                v-if="(row as RunListItem).capacity?.waiting"
+                :data-testid="`runs-list-queued-${row.run_id}`"
+                class="inline-flex items-center rounded-full bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning capitalize"
+              >{{ $t('views.RunsListView.queued') }}</span>
+              <RunErrorTag
+                v-if="(row as RunListItem).error_code"
+                :code="(row as RunListItem).error_code"
+                :detail="((row as RunListItem).error_detail as string | null | undefined)?.slice(0, 200)"
+                :data-testid="`runs-list-error-${row.run_id}`"
+              />
+            </div>
           </template>
           <template #cell-trigger_type="{ value }">
             <span class="text-xs text-muted-foreground">{{ triggerTypeLabel(value as string | null | undefined, t) }}</span>
-          </template>
-          <template #cell-trigger_actor="{ row }">
-            <span :data-testid="`runs-list-trigger-actor-${row.run_id}`" class="text-xs text-muted-foreground">{{ row.trigger_actor || triggerTypeLabel(row.trigger_type as string | null | undefined, t) }}</span>
           </template>
           <template #cell-heartbeat="{ row }">
             <span
@@ -102,15 +97,6 @@
               :class="isListHeartbeatStale(row as RunListItem) ? 'text-warning font-medium' : 'text-muted-foreground'"
               class="text-xs whitespace-nowrap"
             >{{ formatHeartbeat(heartbeatAgeFor(row as RunListItem, now)) }}</span>
-          </template>
-          <template #cell-input_preview="{ row }">
-            <span
-              v-if="inputPreviews[row.run_id as string]"
-              class="block max-w-[260px] truncate font-mono text-xs text-muted-foreground"
-              :title="inputPreviews[row.run_id as string]"
-              :data-testid="`runs-list-input-${row.run_id}`"
-            >{{ inputPreviews[row.run_id as string] }}</span>
-            <span v-else class="text-muted-foreground">—</span>
           </template>
           <template #cell-run_number="{ value }">
             <span class="tabular-nums">{{ value ?? '—' }}</span>
@@ -339,14 +325,6 @@ const childCounts = computed<Record<string, number>>(() => {
   return byRunId
 })
 
-const inputPreviews = computed<Record<string, string>>(() => {
-  const byRunId: Record<string, string> = {}
-  for (const run of runs.value) {
-    byRunId[run.run_id] = inputPayloadText(run.input_payload as Record<string, unknown> | null | undefined)
-  }
-  return byRunId
-})
-
 watch([filterStatus, filterTriggerType, filterSearch], ([status, triggerType, search]) => {
   localStorage.setItem(`${FILTER_STORAGE_KEY}.status`, status)
   localStorage.setItem(`${FILTER_STORAGE_KEY}.trigger_type`, triggerType)
@@ -441,15 +419,6 @@ function formatDuration(startIso: string | null | undefined, endIso: string | nu
 
 function formatElapsed(startIso: string): string {
   return `${formatDuration(startIso, new Date(now.value).toISOString())} ${t('views.RunsListView.elapsed')}`
-}
-
-function inputPayloadText(payload: Record<string, unknown> | null | undefined): string {
-  if (!payload || typeof payload !== 'object' || Object.keys(payload).length === 0) return ''
-  try {
-    return JSON.stringify(payload)
-  } catch {
-    return String(payload)
-  }
 }
 
 function heartbeatAgeFor(run: RunListItem, nowMs: number): number | null {

@@ -117,7 +117,6 @@ routes:
         type: list_page
         <<: *community
         deprecated: false
-        exact: true
 
     /runs/diff:
         name: runs-diff
