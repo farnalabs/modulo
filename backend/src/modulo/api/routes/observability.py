@@ -16,7 +16,7 @@ from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 from modulo.auth.jwt import TenantPrincipal
-from modulo.core.ssrf import validate_outbound_url
+from modulo.core.ssrf import validate_outbound_url_async
 from modulo.db.crud.observability import get_otel_config, update_otel_config
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
@@ -239,7 +239,7 @@ async def test_otel_connection(
         return TestSpanResult(success=False, message="OTLP endpoint is required")
 
     try:
-        validate_outbound_url(endpoint)
+        await validate_outbound_url_async(endpoint)
     except ValueError as exc:
         return TestSpanResult(success=False, message=f"Rejected: {exc}")
 

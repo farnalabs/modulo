@@ -27,7 +27,7 @@ from modulo.api.models.error_forwarder_config import (
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.error_tracking.forwarders import BaseForwarder, get_forwarder
-from modulo.core.ssrf import validate_outbound_url
+from modulo.core.ssrf import validate_outbound_url_async
 from modulo.db.models.error_event import ErrorEvent
 from modulo.db.models.error_forwarder_config import ErrorForwarderConfig
 from modulo.db.models.error_group import ErrorGroup
@@ -108,7 +108,7 @@ def validate_forwarder_config(forwarder_type: str, config: dict[str, Any] | None
     return errors
 
 
-def _validate_forwarder_urls(forwarder_type: str, config: dict[str, Any]) -> None:
+async def _validate_forwarder_urls(forwarder_type: str, config: dict[str, Any]) -> None:
     """Validate outbound URLs in forwarder config to prevent SSRF.
 
     The final outbound target of each forwarder derives from a user-supplied
@@ -135,7 +135,7 @@ def _validate_forwarder_urls(forwarder_type: str, config: dict[str, Any]) -> Non
     for key, url_value in candidates:
         if isinstance(url_value, str) and url_value:
             try:
-                validate_outbound_url(url_value)
+                await validate_outbound_url_async(url_value)
             except ValueError as exc:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -364,7 +364,7 @@ async def test_forwarder(
             ) from exc
 
     # SSRF guard: validate outbound URL before forward()
-    _validate_forwarder_urls(forwarder_type, config)
+    await _validate_forwarder_urls(forwarder_type, config)
 
     test_group = ErrorGroup(
         organisation_id=org_id,

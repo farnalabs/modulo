@@ -210,8 +210,8 @@ class TestTestConnectionSsrfGuard:
         with (
             patch("modulo.api.routes.error_forwarder_config.get_forwarder") as mock_get,
             patch(
-                "modulo.api.routes.error_forwarder_config.validate_outbound_url",
-                side_effect=ValueError("targets a private/internal network address"),
+                "modulo.api.routes.error_forwarder_config.validate_outbound_url_async",
+                new=AsyncMock(side_effect=ValueError("targets a private/internal network address")),
             ),
         ):
             fwd_instance = AsyncMock()

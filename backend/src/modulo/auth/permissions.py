@@ -159,8 +159,6 @@ PERMISSIONS: dict[str, str] = {
     # require_system_permission ignores the org hierarchy entirely)
     "system.config.manage": "admin",
     "system.org.manage": "admin",
-    "system.rotation.manage": "admin",
-    "system.license.manage": "admin",
     # admin / secondary routes
     "cost.manage": "admin",
     "sso.manage": "admin",
@@ -234,6 +232,7 @@ PERMISSIONS: dict[str, str] = {
     "observability.view": "viewer",
     "notification.view": "viewer",
     "notification.self": "viewer",
+    "notification.endpoint.manage": "viewer",
     # dashboard
     "dashboard.summary": "viewer",
     "dashboard.trends": "viewer",

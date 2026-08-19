@@ -401,7 +401,7 @@ class TestOidcConnection:
         provider = _make_mock_provider()
         with (
             patch("httpx.AsyncClient.get", new=AsyncMock(side_effect=httpx.ConnectError("Connection refused"))),
-            patch("modulo.api.routes.admin_sso.validate_outbound_url"),
+            patch("modulo.api.routes.admin_sso.validate_outbound_url_async", new=AsyncMock()),
         ):
             result = await _test_oidc_connection(provider)
             assert result.success is False
@@ -421,7 +421,7 @@ class TestOidcConnection:
         )
         with (
             patch("httpx.AsyncClient.get", new=AsyncMock(return_value=mock_resp)),
-            patch("modulo.api.routes.admin_sso.validate_outbound_url"),
+            patch("modulo.api.routes.admin_sso.validate_outbound_url_async", new=AsyncMock()),
         ):
             result = await _test_oidc_connection(provider)
             assert result.success is True

@@ -80,7 +80,10 @@ def client() -> Generator[TestClient, None, None]:
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
-    with patch("modulo.api.routes.notifications.validate_outbound_url"):
+    with (
+        patch("modulo.api.routes.notifications.validate_outbound_url"),
+        patch("modulo.api.routes.notifications.validate_outbound_url_async", new=AsyncMock()),
+    ):
         yield TestClient(app)
     app.dependency_overrides.clear()
 

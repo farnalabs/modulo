@@ -7,6 +7,7 @@ observability test, and error-forwarder test paths.
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import logging
 import os
@@ -81,11 +82,71 @@ def _validate_url_syntax(url: str) -> str:
     return hostname.rstrip(".").strip("[]")
 
 
+def _validate_literal_ip(decoded: str) -> bool:
+    """Block private/internal literal IPs; return True when ``decoded`` is an IP.
+
+    Returns False when ``decoded`` is a hostname (not a literal IP), signalling
+    that the caller must DNS-resolve it. Raises ValueError for blocked literal
+    IPs (fail-closed).
+    """
+    try:
+        ip = ipaddress.ip_address(decoded)
+    except ValueError:
+        return False
+    if _is_blocked_ip(str(ip)):
+        raise ValueError(
+            f"URL targets a private/internal network address: {decoded}. "
+            "Use a public URL or add the address to SSRF_ALLOW_PRIVATE_RANGES."
+        )
+    return True
+
+
+def _check_resolved(decoded: str, ip_strings: list[str]) -> None:
+    """Raise if any resolved address of a hostname is blocked."""
+    for ip_str in ip_strings:
+        if _is_blocked_ip(ip_str):
+            raise ValueError(
+                f"URL hostname {decoded} resolves to a private/internal address ({ip_str}). Use a public URL."
+            )
+
+
+def _resolve_all_sync(host: str) -> list[str]:
+    try:
+        addrinfos = socket.getaddrinfo(host, 0, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    except (OSError, socket.gaierror):
+        # Fail-closed on DNS resolution failure
+        raise ValueError(f"DNS resolution failed for {host}. Cannot verify the target is not internal.") from None
+    result: list[str] = []
+    for _fam, _typ, _proto, _canon, sockaddr in addrinfos:
+        ip_str = sockaddr[0]
+        assert isinstance(ip_str, str)
+        result.append(ip_str)
+    return result
+
+
+async def _resolve_all_async(host: str) -> list[str]:
+    """Async DNS resolution that does not block the event loop."""
+    loop = asyncio.get_running_loop()
+    try:
+        addrinfos = await loop.getaddrinfo(host, 0, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM)
+    except (OSError, socket.gaierror):
+        raise ValueError(f"DNS resolution failed for {host}. Cannot verify the target is not internal.") from None
+    result: list[str] = []
+    for _fam, _typ, _proto, _canon, sockaddr in addrinfos:
+        ip_str = sockaddr[0]
+        assert isinstance(ip_str, str)
+        result.append(ip_str)
+    return result
+
+
 def validate_outbound_url(url: str) -> None:
     """Validate that a URL does not point to an internal/private destination.
 
     Performs synchronous DNS resolution. For use in sync contexts (Pydantic
-    validators, route handlers). Raises ValueError if the URL is unsafe.
+    validators, synchronous call sites). Raises ValueError if the URL is unsafe.
+
+    For async callers use :func:`validate_outbound_url_async` so DNS resolution
+    does not block the event loop.
 
     NOTE — Accepted residual risk (DNS rebinding): this function resolves the
     hostname, verifies all resolved addresses are non-internal, then returns.
@@ -103,31 +164,19 @@ def validate_outbound_url(url: str) -> None:
     hardening PR.
     """
     decoded = _validate_url_syntax(url)
+    if _validate_literal_ip(decoded):
+        return  # literal IP handled above
+    _check_resolved(decoded, _resolve_all_sync(decoded))
 
-    # Check if hostname is a raw IP
-    try:
-        ip = ipaddress.ip_address(decoded)
-        if _is_blocked_ip(str(ip)):
-            raise ValueError(
-                f"URL targets a private/internal network address: {decoded}. "
-                "Use a public URL or add the address to SSRF_ALLOW_PRIVATE_RANGES."
-            )
-        return  # valid public IP, no DNS needed
-    except ValueError:
-        if "private/internal" in str(decoded):
-            raise
 
-    # For hostnames, resolve and check ALL A/AAAA records synchronously
-    try:
-        addrinfos = socket.getaddrinfo(decoded, 0, socket.AF_UNSPEC, socket.SOCK_STREAM)
-    except (OSError, socket.gaierror):
-        # Fail-closed on DNS resolution failure
-        raise ValueError(f"DNS resolution failed for {decoded}. Cannot verify the target is not internal.") from None
+async def validate_outbound_url_async(url: str) -> None:
+    """Async variant of :func:`validate_outbound_url` for event-loop-hostile callers.
 
-    for _family, _type, _proto, _canonname, sockaddr in addrinfos:
-        ip_str = sockaddr[0]
-        assert isinstance(ip_str, str)
-        if _is_blocked_ip(ip_str):
-            raise ValueError(
-                f"URL hostname {decoded} resolves to a private/internal address ({ip_str}). Use a public URL."
-            )
+    Resolves the hostname with ``asyncio.get_running_loop().getaddrinfo`` so the
+    DNS lookup does not block the event loop. Raises ValueError if the URL is
+    unsafe.
+    """
+    decoded = _validate_url_syntax(url)
+    if _validate_literal_ip(decoded):
+        return  # literal IP handled above
+    _check_resolved(decoded, await _resolve_all_async(decoded))

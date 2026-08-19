@@ -20,13 +20,13 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.notifier import endpoint_events_to_list
-from modulo.core.ssrf import validate_outbound_url
+from modulo.core.ssrf import validate_outbound_url, validate_outbound_url_async
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
 _CODE_NOTIFICATION_VIEW = "notification.view"
-_CODE_NOTIFICATION_MANAGE = "notification.self"
+_CODE_NOTIFICATION_MANAGE = "notification.endpoint.manage"
 _CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING = "notifications.endpoint_table_missing"
 _MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN = (
     "Notifications are not available. Run database migrations to enable this feature."
@@ -272,7 +272,7 @@ async def update_endpoint(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ENDPOINT_NOT_FOUND)
 
             if req.url is not None:
-                validate_outbound_url(req.url)
+                await validate_outbound_url_async(req.url)
                 ep.url = req.url
             if req.secret is not None:
                 fernet = Fernet(settings.fernet_key.encode())
