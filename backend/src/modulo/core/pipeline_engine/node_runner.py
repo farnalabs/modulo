@@ -2487,7 +2487,7 @@ def make_sandbox_agent_fn(
     from e2b.exceptions import RateLimitException  # type: ignore[import-untyped]
     from opentelemetry import trace as _otel_trace
 
-    def _emit_script_span_event(name: str, attrs: dict) -> None:
+    def _emit_script_span_event(name: str, attrs: dict[str, Any]) -> None:
         """Emit an OTel span event for script-mode milestones (FAR-296 Phase 5a)."""
         try:
             _span = _otel_trace.get_current_span()
