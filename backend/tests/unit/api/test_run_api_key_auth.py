@@ -70,6 +70,10 @@ async def test_api_key_runner_principal_is_accepted() -> None:
             return_value=_FakeFactory(_make_session()),
         ),
         patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("runner")) as validate_patch,
+        patch(
+            "modulo.auth.dependencies.resolve_role_from_membership",
+            new=AsyncMock(return_value="runner"),
+        ),
     ):
         principal = await get_current_tenant_user_or_api_key(
             credentials=_credentials(_KEY),
@@ -144,6 +148,10 @@ async def test_api_key_postgres_dialect_uses_lookup_function() -> None:
             return_value=_FakeFactory(session),
         ),
         patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("runner")),
+        patch(
+            "modulo.auth.dependencies.resolve_role_from_membership",
+            new=AsyncMock(return_value="runner"),
+        ),
     ):
         principal = await get_current_tenant_user_or_api_key(
             credentials=_credentials(_KEY),
@@ -166,6 +174,10 @@ async def test_api_key_operator_role_principal_is_accepted() -> None:
             return_value=_FakeFactory(_make_session()),
         ),
         patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
+        patch(
+            "modulo.auth.dependencies.resolve_role_from_membership",
+            new=AsyncMock(return_value="operator"),
+        ),
     ):
         principal = await get_current_tenant_user_or_api_key(
             credentials=_credentials(_KEY),

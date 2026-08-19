@@ -136,6 +136,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         resolved = settings or get_settings()
         self._bypass_token = resolved.modulo_ratelimit_bypass_token
+        self._secret_key = resolved.secret_key
         self._registry = registry or _create_registry(resolved)
 
     async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
@@ -187,8 +188,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 return rule
         return RateLimitRule(path_prefix="", max_requests=0, window_s=0)
 
-    @staticmethod
-    def _client_key(request: Request) -> str:
+    def _client_key(self, request: Request) -> str:
         path = request.url.path
 
         # Normalize HITL paths to strip variable run/gate UUIDs, preventing
@@ -217,10 +217,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             # JWT: verify signature before trusting claims for rate-limit bucketing.
             # Unverified claims can be forged to rotate buckets.
             try:
-                from modulo.settings import get_settings as _get_settings
-
-                settings = _get_settings()
-                claims = jwt.decode(token, settings.secret_key, algorithms=["HS256"])
+                claims = jwt.decode(token, self._secret_key, algorithms=["HS256"])
                 org_id = claims.get("org_id", "")
                 user_id = claims.get("user_id", "") or claims.get("account_id", "")
                 if org_id and user_id:

@@ -25,25 +25,25 @@ def middleware():
 
 
 class TestClientKey:
-    def test_auth_principal_api_key(self):
+    def test_auth_principal_api_key(self, middleware):
         scope = {"auth_principal": {"type": "api_key", "org_id": "org-1", "prefix": "abcd1234"}}
         request = make_mock_request(scope=scope)
-        assert RateLimitMiddleware._client_key(request) == "ak:org-1:abcd1234:/api/v1/runs"
+        assert middleware._client_key(request) == "ak:org-1:abcd1234:/api/v1/runs"
 
-    def test_auth_principal_user(self):
+    def test_auth_principal_user(self, middleware):
         request = make_mock_request(scope={"auth_principal": {"type": "user", "org_id": "org-1", "user_id": "user-7"}})
-        assert RateLimitMiddleware._client_key(request) == "user:org-1:user-7:/api/v1/runs"
+        assert middleware._client_key(request) == "user:org-1:user-7:/api/v1/runs"
 
-    def test_auth_principal_takes_precedence_over_authorization_header(self):
+    def test_auth_principal_takes_precedence_over_authorization_header(self, middleware):
         request = make_mock_request(
             scope={"auth_principal": {"type": "api_key", "org_id": "org-1", "prefix": "abcd1234"}},
             headers={"Authorization": "Bearer mk_abcdefgh_test1234567890123456789012"},
         )
-        assert RateLimitMiddleware._client_key(request) == "ak:org-1:abcd1234:/api/v1/runs"
+        assert middleware._client_key(request) == "ak:org-1:abcd1234:/api/v1/runs"
 
-    def test_no_client_and_no_xff_falls_back_to_unknown(self):
+    def test_no_client_and_no_xff_falls_back_to_unknown(self, middleware):
         request = make_mock_request(headers={}, client=None)
-        assert RateLimitMiddleware._client_key(request) == "ip:unknown:/api/v1/runs"
+        assert middleware._client_key(request) == "ip:unknown:/api/v1/runs"
 
 
 class TestRuleFor:
