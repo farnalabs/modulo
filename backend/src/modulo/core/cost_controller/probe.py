@@ -85,7 +85,7 @@ _explain_checked = False
 _SAMPLE_QUERY_EXPLAIN_TEMPLATE = (
     "SELECT id, total_cost_usd, cost_breakdown, started_at, ledger_written, ledger_refused_at "
     "FROM runs "
-    "WHERE organisation_id = '{org_id}' "
+    "WHERE organisation_id = :org_id "
     "AND status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded') "
     "AND cost_breakdown IS NOT NULL "
     "ORDER BY started_at DESC "
@@ -168,8 +168,8 @@ async def _assert_sample_query_index(session: AsyncSession, org_id: uuid.UUID) -
     try:
         await session.execute(text("SET enable_seqscan = off"))
         try:
-            query = _SAMPLE_QUERY_EXPLAIN_TEMPLATE.format(org_id=str(org_id))
-            plan_rows = await session.execute(text("EXPLAIN " + query))
+            bound_query = text("EXPLAIN " + _SAMPLE_QUERY_EXPLAIN_TEMPLATE)
+            plan_rows = await session.execute(bound_query, {"org_id": str(org_id)})
             plan = "\n".join(str(r[0]) for r in plan_rows.all())
             if "ix_runs_probe" not in plan:
                 _log.warning("cost_probe.sample_index_not_used", extra={"plan": plan[:800]})

@@ -279,15 +279,15 @@ class TestAuthRateLimitMiddlewareEnabled:
 
 
 class TestClientKeyEdgeCases:
-    def test_x_forwarded_for_is_used_when_present(self):
-        """_client_ip should prefer X-Forwarded-For header when present."""
+    def test_client_host_preferred_over_x_forwarded_for(self):
+        """_client_ip should prefer request.client.host over X-Forwarded-For."""
         request = make_mock_request(
             path="/api/v1/auth/login",
             headers={"X-Forwarded-For": "203.0.113.42"},
             client=MagicMock(host="192.0.2.1"),
         )
         ip = AuthRateLimitMiddleware._client_ip(request)
-        assert ip == "203.0.113.42"
+        assert ip == "192.0.2.1"
 
     def test_x_forwarded_for_uses_first_hop_ip(self):
         """_client_ip should take the first entry of a comma-separated XFF list."""

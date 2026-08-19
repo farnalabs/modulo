@@ -9,6 +9,7 @@ explicitly rather than relying on the module-level `get_settings()` call.
 import asyncio
 import hmac
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any, ClassVar
 
@@ -30,6 +31,13 @@ redis_available: bool = False
 _log = logging.getLogger(__name__)
 
 _redis_clients: set[Any] = set()
+
+# Pattern to strip variable UUID segments from HITL paths to prevent
+# per-segment bucket rotation (FAR-1304).
+_RE_VARIABLE_SEGMENT = re.compile(
+    r"/runs/[0-9a-f-]+/hitl/[0-9a-f-]+",
+    re.IGNORECASE,
+)
 
 
 class _NoopRateLimiter:
@@ -183,6 +191,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     def _client_key(request: Request) -> str:
         path = request.url.path
 
+        # Normalize HITL paths to strip variable run/gate UUIDs, preventing
+        # per-segment bucket rotation on variable-path endpoints.
+        if "/hitl/" in path:
+            path = _RE_VARIABLE_SEGMENT.sub("/runs/<run_id>/hitl/<gate_id>", path)
+
         # 1. Auth principal set by outer middleware (MCP sub-app)
         principal = request.scope.get("auth_principal")
         if principal:
@@ -191,17 +204,23 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             if principal["type"] == "user":
                 return f"user:{principal['org_id']}:{principal['user_id']}:{path}"
 
-        # 2. Parse Authorization header directly
+        # 2. Parse Authorization header — verify JWT before trusting claims
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
             token = auth_header[len("Bearer ") :].strip()
 
+            # mk_ API keys: use prefix + path (no bucket rotation via prefix)
             if token.startswith("mk_"):
                 prefix = token[3:11]
                 return f"ak:none:{prefix}:{path}"
 
+            # JWT: verify signature before trusting claims for rate-limit bucketing.
+            # Unverified claims can be forged to rotate buckets.
             try:
-                claims = jwt.decode(token, options={"verify_signature": False})
+                from modulo.settings import get_settings as _get_settings
+
+                settings = _get_settings()
+                claims = jwt.decode(token, settings.secret_key, algorithms=["HS256"])
                 org_id = claims.get("org_id", "")
                 user_id = claims.get("user_id", "") or claims.get("account_id", "")
                 if org_id and user_id:
@@ -209,14 +228,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             except Exception as exc:
                 _log.debug("ratelimit.jwt_decode_failed", extra={"error": str(exc)})
 
-        # 3. Fallback to IP-based keying
-        forwarded = request.headers.get("X-Forwarded-For", "")
-        if forwarded:
-            ip = forwarded.split(",")[0].strip()
-        elif request.client and request.client.host:
+        # 3. Fallback to IP-based keying — use request.client.host (the
+        #    actual peer IP) instead of the first X-Forwarded-For value,
+        #    which is attacker-controlled when the proxy doesn't strip it.
+        ip = "unknown"
+        if request.client is not None and request.client.host:
             ip = request.client.host
-        else:
-            ip = "unknown"
+        elif forwarded := request.headers.get("X-Forwarded-For", ""):
+            ip = forwarded.split(",")[0].strip()
         return f"ip:{ip}:{path}"
 
 
@@ -315,11 +334,11 @@ class AuthRateLimitMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _client_ip(request: Request) -> str:
+        if request.client is not None and request.client.host:
+            return request.client.host
         forwarded = request.headers.get("X-Forwarded-For", "")
         if forwarded:
             return forwarded.split(",")[0].strip()
-        if request.client and request.client.host:
-            return request.client.host
         return "unknown"
 
 
