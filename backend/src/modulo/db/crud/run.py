@@ -33,6 +33,7 @@ from modulo.db.lifecycle_refs import (
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES, Run
+from modulo.db.unique_violation import is_unique_violation
 
 _log = logging.getLogger(__name__)
 
@@ -49,29 +50,8 @@ CAPACITY_MARKERS = frozenset({ERROR_CODE_ORG_CAPACITY_LIMITED, ERROR_CODE_PIPELI
 # Day-key format used for run-usage bucketing and the --older-than parser.
 _DAY_FORMAT = "%Y-%m-%d"
 
-
-def _is_unique_violation(exc: IntegrityError) -> bool:
-    """Return True if *exc* is a unique-constraint violation (not FK, NOT NULL, etc.).
-
-    Handles PostgreSQL (pgcode 23505), SQLite (UNIQUE constraint failed), and
-    MariaDB/MySQL (IntegrityError: 1062 Duplicate entry). Mirrors the helper used
-    by the trigger engine's dedup path so the two rate-limit conflict paths share
-    identical detection semantics.
-    """
-    orig = getattr(exc, "orig", None)
-    if orig is None:
-        return False
-    pgcode = getattr(orig, "pgcode", None)
-    if pgcode is not None:
-        return str(pgcode) == "23505"
-    msg = str(orig)
-    if "UNIQUE constraint failed" in msg:
-        return True
-    if isinstance(orig, Exception):
-        err_args = getattr(orig, "args", None)
-        if err_args and err_args[0] == 1062:
-            return True
-    return False
+# Legacy underscore alias for the neutral helper (see modulo.db.unique_violation).
+_is_unique_violation = is_unique_violation
 
 
 # The canonical whitelist of run statuses (subset of the ``ck_runs_status``

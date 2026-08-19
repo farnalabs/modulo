@@ -65,6 +65,7 @@ from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.models.webhook import WebhookDedupHash, WebhookPayload
 from modulo.db.settings_resolver import ensure_triggers_resumable
+from modulo.db.unique_violation import is_unique_violation
 
 _log = logging.getLogger(__name__)
 
@@ -161,33 +162,13 @@ def sha256_hex(data: bytes | None) -> str:
 _sha256_hex = sha256_hex
 
 
+# Unique-violation detection lives in the neutral low-level module
+# (modulo.db.unique_violation) so this dedup path and create_run's admission
+# path share identical semantics. Legacy underscore name kept for
+# backward-compatible imports.
 def _is_unique_violation(exc: IntegrityError) -> bool:
-    """Return True if *exc* is a unique-constraint violation (not FK, NOT NULL, etc.).
-
-    Handles PostgreSQL (pgcode 23505), SQLite (UNIQUE constraint failed), and
-    MariaDB/MySQL (IntegrityError: 1062 Duplicate entry).
-    """
-    orig = getattr(exc, "orig", None)
-    if orig is None:
-        return False
-
-    # PostgreSQL - asyncpg raises with pgcode attribute
-    pgcode = getattr(orig, "pgcode", None)
-    if pgcode is not None:
-        return str(pgcode) == "23505"
-
-    # SQLite - aiosqlite wraps the message as a string
-    msg = str(orig)
-    if "UNIQUE constraint failed" in msg:
-        return True
-
-    # MariaDB / MySQL DBAPI errors expose the numeric code in args[0].
-    if isinstance(orig, Exception):
-        err_args = getattr(orig, "args", None)
-        if err_args and err_args[0] == 1062:
-            return True
-
-    return False
+    """Return True if *exc* is a unique-constraint violation (not FK, NOT NULL, etc.)."""
+    return is_unique_violation(exc)
 
 
 def verify_timestamp(modulo_timestamp: str | None) -> int:

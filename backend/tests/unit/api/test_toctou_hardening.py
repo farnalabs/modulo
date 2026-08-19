@@ -149,6 +149,31 @@ class TestMigration0117:
 
 
 # ---------------------------------------------------------------------------
+# Run model — rate-limit index is the source of truth (migration 0117 / #1105)
+# ---------------------------------------------------------------------------
+
+
+class TestRunRateLimitIndex:
+    def test_model_declares_partial_unique_index(self) -> None:
+        """The Run model must declare the partial unique index that migration
+        0117 creates, so create_all-based environments (test fixtures, dev
+        bootstrap) get the DB-level rate-limit backstop instead of silently
+        drifting from the migration."""
+        indexes = {idx.name: idx for idx in Run.__table__.indexes}
+        assert "uq_runs_pipeline_rate_limit_key" in indexes
+        idx = indexes["uq_runs_pipeline_rate_limit_key"]
+        assert idx.unique is True
+        assert {c.name for c in idx.columns} == {"pipeline_id", "rate_limit_key"}
+
+    def test_model_does_not_regenerate_dropped_index(self) -> None:
+        """Migration 0117 drops ix_runs_rate_limit_key; the model must not
+        declare index=True on rate_limit_key (which would recreate it)."""
+        assert "ix_runs_rate_limit_key" not in {idx.name for idx in Run.__table__.indexes}
+        col = Run.__table__.c.rate_limit_key
+        assert col.index is None
+
+
+# ---------------------------------------------------------------------------
 # _is_unique_violation (#1105)
 # ---------------------------------------------------------------------------
 
@@ -327,15 +352,21 @@ async def _seed_run_base(session: AsyncSession) -> None:
     await session.commit()
 
 
-async def _create_unique_rate_limit_index(sqlite_engine: AsyncEngine) -> None:
+async def _assert_unique_rate_limit_index(sqlite_engine: AsyncEngine) -> None:
+    """Assert the per-pipeline rate-limit backstop exists in the live DB.
+
+    The Run model now declares ``uq_runs_pipeline_rate_limit_key`` in
+    ``__table_args__`` (migration 0117), so ``create_all`` — which the
+    sqlite_engine fixture runs from the ORM metadata — creates it automatically.
+    Previously the test had to manufacture the index by hand because the model
+    didn't declare it (the model/migration drift this PR fixes); that manual DDL
+    would now collide with the model-declared index.
+    """
     async with sqlite_engine.begin() as conn:
-        await conn.execute(
-            text(
-                "CREATE UNIQUE INDEX uq_runs_pipeline_rate_limit_key "
-                "ON runs (pipeline_id, rate_limit_key) "
-                "WHERE rate_limit_key IS NOT NULL"
-            )
+        rows = await conn.exec_driver_sql(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='uq_runs_pipeline_rate_limit_key'"
         )
+        assert rows.fetchall(), "uq_runs_pipeline_rate_limit_key missing from DB — model must declare it"
 
 
 class TestRateLimitConflictPath:
@@ -346,7 +377,7 @@ class TestRateLimitConflictPath:
         RateLimitConflictError. Before the savepoint fix, the failed flush aborted
         the outer transaction and the caller's subsequent flush raised
         PendingRollbackError — a 503, not the intended 429."""
-        await _create_unique_rate_limit_index(sqlite_engine)
+        await _assert_unique_rate_limit_index(sqlite_engine)
         await _seed_run_base(sqlite_session)
         maker = async_sessionmaker(sqlite_engine, expire_on_commit=False)
 
@@ -385,7 +416,7 @@ class TestRateLimitConflictPath:
     async def test_distinct_keys_do_not_conflict(
         self, sqlite_engine: AsyncEngine, sqlite_session: AsyncSession
     ) -> None:
-        await _create_unique_rate_limit_index(sqlite_engine)
+        await _assert_unique_rate_limit_index(sqlite_engine)
         await _seed_run_base(sqlite_session)
         maker = async_sessionmaker(sqlite_engine, expire_on_commit=False)
 

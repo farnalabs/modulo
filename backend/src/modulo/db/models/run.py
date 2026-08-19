@@ -16,6 +16,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    text,
 )
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -103,6 +104,16 @@ class Run(OrgScoped):
         # polling) + billing overview — org_id + created_at. Migration 0066.
         # The cost-controller refusal SUM reads the ledger, NOT runs (0066).
         Index("ix_runs_refusal", "organisation_id", "created_at"),
+        # Per-pipeline trigger rate-limit backstop (migration 0117 / #1105) —
+        # one active run per (pipeline, rate_limit_key). create_run admits
+        # atomically and translates the IntegrityError to a rate-limit error.
+        Index(
+            "uq_runs_pipeline_rate_limit_key",
+            "pipeline_id",
+            "rate_limit_key",
+            unique=True,
+            postgresql_where=text("rate_limit_key IS NOT NULL"),
+        ),
     )
 
     pipeline_id: Mapped[uuid.UUID] = mapped_column(
@@ -151,7 +162,7 @@ class Run(OrgScoped):
     error_code: Mapped[str | None] = mapped_column(String(255))
     langgraph_thread_id: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
     input_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
-    rate_limit_key: Mapped[str | None] = mapped_column(String(512), nullable=True, index=True)
+    rate_limit_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     claimed_by: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
     # SAQ dispatch tracking (PR B, migration 0031) — dispatcher reflects where
     # the job actually went: 'saq' iff enqueued to SAQ; NULL iff legacy (pre-PR C).
