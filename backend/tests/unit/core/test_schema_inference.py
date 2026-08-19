@@ -146,7 +146,7 @@ class TestBuildInferPrompt:
         from modulo.core.schema_registry.inference import connector_category
 
         assert connector_category("jira") == "issue-tracker"
-        assert connector_category("linear") == "issue-tracker"
+        assert connector_category("linear") == "generic"
         assert connector_category("github") == "git-host"
         assert connector_category("circleci") == "ci-runner"
         assert connector_category("slack") == "chat"
