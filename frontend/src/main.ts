@@ -32,10 +32,11 @@ async function main() {
       preset: Aura,
       options: {
         // PrimeVue's darkModeSelector selects the DARK token set. Our app is
-        // dark by default (`:root` in style.css) and light is toggled via the
-        // `html.light` class, so the dark selector is ":root:not(.light)" —
-        // dark when light is absent, light when the class is present.
-        darkModeSelector: ':root:not(.light)',
+        // dark by default (`class="dark"` on <html>) and light is toggled by
+        // removing `.dark`. Simple class selectors work correctly with the
+        // @primeuix/styled engine (complex selectors like `:root:not(.light)`
+        // get double-wrapped, producing invalid nested CSS).
+        darkModeSelector: '.dark',
       },
     },
   })

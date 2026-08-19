@@ -97,9 +97,8 @@ const remyDockedStyle = computed(() =>
 
 function toggleTheme() {
   const root = document.documentElement;
-  root.classList.toggle("light");
   root.classList.toggle("dark");
-  isLight.value = root.classList.contains("light");
+  isLight.value = !root.classList.contains("dark");
   // Re-apply the PrimeVue token bridge so the `--p-*` mappings re-read the
   // now-active (light/dark) source HSL variables (ADR 024 Decision 4).
   applyPrimeVueTokenBridge();

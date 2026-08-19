@@ -69,20 +69,21 @@ over unstyled so we keep PrimeVue's polished component styling out of the box
 while still overriding tokens through CSS variables.
 
 **Dark mode mapping.** PrimeVue's `darkModeSelector` selects the **dark** token
-set. Modulo's app is **dark by default** (`:root` in `style.css` is dark) and
-light is toggled via the `html.light` class. The Aura preset resolves the dark
-selector as a custom rule, so we set:
+set. Modulo's app is **dark by default** (`class="dark"` on `<html>`) and
+light is toggled by removing `.dark`. We use a simple class selector:
 
 ```ts
-theme: { preset: Aura, options: { darkModeSelector: ':root:not(.light)' } }
+theme: { preset: Aura, options: { darkModeSelector: '.dark' } }
 ```
 
-`darkModeSelector: ':root:not(.light)'` selects the dark token set whenever the
-`.light` class is **absent** (i.e. the app is dark by default) and the light
-token set when `html.light` is present. This is the correct inverse of pointing
-the selector at `html.light` (which would wrongly treat light mode as the dark
-theme). The `[data-theme="agent"]` theme is **not** wired in Phase 0 — that is a
-Phase 1 concern; Phase 0 only requires standard light/dark to work.
+The `@primeuix/styled` engine's `getSelectorRule()` double-wraps complex
+selectors (like `:root:not(.light)`) with the default `:root,:host` inner
+selector, producing invalid nested CSS
+(`:root:not(.light){:root,:host{color-scheme:dark}}`). Simple class selectors
+like `.dark` work correctly: `.dark{color-scheme:dark}`. Dark mode is the
+default (`class="dark"` on `<html>`); toggling to light mode removes the
+class. The `[data-theme="agent"]` theme is **not** wired in Phase 0 — that is
+a Phase 1 concern; Phase 0 only requires standard light/dark to work.
 
 ## Decision 4 — Single source-of-truth token bridge + guard test
 
@@ -157,8 +158,8 @@ are trying to remove.
   are retired and eventually `reka-ui` + `radix-vue` are removed from
   `package.json`.
 - PrimeVue ships with the Aura preset in styled mode; standard light/dark
-  follow the existing `html.light` theme toggle via
-  `darkModeSelector: ':root:not(.light)'`. The `[data-theme="agent"]` theme is a
+  follow the existing `class="dark"` theme toggle via
+  `darkModeSelector: '.dark'`. The `[data-theme="agent"]` theme is a
   Phase 1 follow-up.
 - The token bridge (`frontend/src/lib/primevue-theme.ts`) is the single point
   of integration between our theme and PrimeVue, owned by a named owner and
