@@ -30,9 +30,18 @@ class _AutobeginAwareSession:
     def __init__(self, *, scalars_all: list[object] | None = None) -> None:
         self._in_tx = False
         self._scalars_all = scalars_all if scalars_all is not None else []
+        self.info: dict[object, object] = {}
 
     def begin(self) -> "_BeginCtx":
         return _BeginCtx(self)
+
+    def in_transaction(self) -> bool:
+        return self._in_tx
+
+    def get_bind(self) -> MagicMock:
+        bind = MagicMock()
+        bind.dialect.name = "sqlite"
+        return bind
 
     async def execute(self, stmt: object, *args: object) -> MagicMock:
         assert self._in_tx, "execute() ran outside session.begin() (autobegin=False)"
