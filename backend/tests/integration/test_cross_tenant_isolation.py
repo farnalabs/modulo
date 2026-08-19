@@ -15,6 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.auth.jwt import create_access_token
+from modulo.core.feature_flags import LicenseData, LicenseKeyTier
 
 os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
 os.environ.setdefault("REDIS_URL", "")
@@ -127,6 +128,126 @@ async def _seed_pipeline(
     return pipeline_id
 
 
+async def _seed_pipeline_snapshot(
+    db_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+) -> uuid.UUID:
+    snapshot_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, "
+                "snapshot_version, graph_json, connector_bindings_json, "
+                "schema_pins_json, prompt_pins_json, model_backend_pins_json, "
+                "run_context_defaults, config_json) "
+                "VALUES (:id, :pid, :oid, 1, '{}'::json, '[]'::json, "
+                "'[]'::json, '[]'::json, '[]'::json, '{}'::json, '{}'::json)",
+            ),
+            {"id": str(snapshot_id), "pid": str(pipeline_id), "oid": str(org_id)},
+        )
+    return snapshot_id
+
+
+async def _seed_run(
+    db_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    run_number: int = 1,
+) -> uuid.UUID:
+    run_id = uuid.uuid4()
+    snapshot_id = await _seed_pipeline_snapshot(db_engine, org_id, pipeline_id)
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO runs (id, organisation_id, pipeline_id, "
+                "snapshot_id, status, trigger_type, langgraph_thread_id, "
+                "input_hash, run_number) "
+                "VALUES (:id, :oid, :pid, :sid, 'complete', 'manual', "
+                ":thread, :hash, :rn)",
+            ),
+            {
+                "id": str(run_id),
+                "oid": str(org_id),
+                "pid": str(pipeline_id),
+                "sid": str(snapshot_id),
+                "thread": f"thread-{run_id.hex}",
+                "hash": "0" * 64,
+                "rn": run_number,
+            },
+        )
+    return run_id
+
+
+async def _seed_eval_definition(
+    db_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    user_id: uuid.UUID,
+    name: str,
+    node_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    eval_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO eval_definitions (id, organisation_id, pipeline_id, "
+                "node_id, name, eval_type, config_json, failure_behaviour, "
+                "suite_id, account_id) "
+                "VALUES (:id, :oid, :pid, :nid, :name, 'regex', '{}'::json, "
+                "'warn', NULL, :uid)",
+            ),
+            {
+                "id": str(eval_id),
+                "oid": str(org_id),
+                "pid": str(pipeline_id),
+                "nid": str(node_id) if node_id else None,
+                "name": name,
+                "uid": str(user_id),
+            },
+        )
+    return eval_id
+
+
+async def _seed_sso_provider(
+    db_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    name: str,
+) -> uuid.UUID:
+    provider_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO sso_providers (id, organisation_id, provider_type, name, "
+                "client_id, discovery_url, enabled, auto_provision, default_role) "
+                "VALUES (:id, :oid, 'oidc', :name, 'client-a', "
+                "'https://idp.example.com/.well-known/openid-configuration', "
+                "true, true, 'runner')",
+            ),
+            {"id": str(provider_id), "oid": str(org_id), "name": name},
+        )
+    return provider_id
+
+
+async def _seed_pipeline_with_nodes(
+    db_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    name: str,
+    node_id: uuid.UUID,
+) -> uuid.UUID:
+    pipeline_id = await _seed_pipeline(db_engine, org_id, user_id, name)
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text("UPDATE pipelines SET graph_nodes_json = :nodes WHERE id = :pid"),
+            {
+                "nodes": str([{"id": str(node_id), "name": "eval-node"}]),
+                "pid": str(pipeline_id),
+            },
+        )
+    return pipeline_id
+
+
 # ---------------------------------------------------------------------------
 # HTTP client fixture — FastAPI app wired to the testcontainer database
 # ---------------------------------------------------------------------------
@@ -137,7 +258,7 @@ async def integration_client(
     db_url: str,
     app_engine: AsyncEngine,
 ) -> AsyncClient:
-    from modulo.api.dependencies import _get_engine, get_db_session
+    from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
     from modulo.api.main import app
     from modulo.settings import Settings, get_settings
 
@@ -151,6 +272,22 @@ async def integration_client(
         modulo_admin_password="",
     )
 
+    # CommunityTier does not include the ``sso`` feature flag (it is a
+    # team-tier feature). The SSO admin endpoints are gated by
+    # ``require_feature('sso')``; override the plan context with a licensed
+    # team-tier plan so the cross-tenant SSO isolation tests can reach the
+    # handlers and exercise their deny paths.
+    plan = LicenseKeyTier(
+        LicenseData(
+            tier="team",
+            features=["sso"],
+            expires_at="",
+            org_id="",
+            raw_payload={},
+            raw_key="test-license-key",
+        )
+    )
+
     async def override_session() -> AsyncGenerator[AsyncSession, None]:
         # app_engine sessions run as a non-superuser role, so the RLS policies
         # actually filter cross-org rows (the testcontainers superuser bypasses
@@ -162,6 +299,7 @@ async def integration_client(
     app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[_get_engine] = lambda: app_engine
     app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_plan_context] = lambda: plan
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test", timeout=30.0) as client:
@@ -232,6 +370,80 @@ async def pipeline_b(
     user_b: uuid.UUID,
 ) -> uuid.UUID:
     return await _seed_pipeline(db_engine, org_b, user_b, "CrossTenant-PipelineB")
+
+
+@pytest_asyncio.fixture(scope="module")
+async def sso_provider_b(
+    db_engine: AsyncEngine,
+    org_b: uuid.UUID,
+) -> uuid.UUID:
+    return await _seed_sso_provider(db_engine, org_b, "OrgB-Provider")
+
+
+@pytest_asyncio.fixture(scope="module")
+async def run_b(
+    db_engine: AsyncEngine,
+    org_b: uuid.UUID,
+    pipeline_b: uuid.UUID,
+) -> uuid.UUID:
+    return await _seed_run(db_engine, org_b, pipeline_b, run_number=1)
+
+
+@pytest_asyncio.fixture(scope="module")
+async def run_a_cross_pipeline(
+    db_engine: AsyncEngine,
+    org_a: uuid.UUID,
+    pipeline_b: uuid.UUID,
+) -> uuid.UUID:
+    """A run owned by org A but pointing at org B's pipeline.
+
+    Seeded directly (bypassing RLS) to model the pre-hardening state where a
+    run's pipeline was not ownership-checked. The from-run endpoint must reject
+    this with the new pipeline-ownership check.
+    """
+    return await _seed_run(db_engine, org_a, pipeline_b, run_number=2)
+
+
+@pytest_asyncio.fixture(scope="module")
+async def coverage_node_id() -> uuid.UUID:
+    return uuid.uuid4()
+
+
+@pytest_asyncio.fixture(scope="module")
+async def coverage_pipeline_a(
+    db_engine: AsyncEngine,
+    org_a: uuid.UUID,
+    user_a: uuid.UUID,
+    coverage_node_id: uuid.UUID,
+) -> uuid.UUID:
+    return await _seed_pipeline_with_nodes(db_engine, org_a, user_a, "CrossTenant-CoveragePipelineA", coverage_node_id)
+
+
+@pytest_asyncio.fixture(scope="module")
+async def coverage_eval_a(
+    db_engine: AsyncEngine,
+    org_a: uuid.UUID,
+    coverage_pipeline_a: uuid.UUID,
+    user_a: uuid.UUID,
+    coverage_node_id: uuid.UUID,
+) -> uuid.UUID:
+    return await _seed_eval_definition(
+        db_engine, org_a, coverage_pipeline_a, user_a, "OrgA-CoverageEval", node_id=coverage_node_id
+    )
+
+
+@pytest_asyncio.fixture(scope="module")
+async def coverage_eval_b_cross(
+    db_engine: AsyncEngine,
+    org_b: uuid.UUID,
+    coverage_pipeline_a: uuid.UUID,
+    user_b: uuid.UUID,
+    coverage_node_id: uuid.UUID,
+) -> uuid.UUID:
+    """An eval definition on org A's coverage pipeline owned by org B."""
+    return await _seed_eval_definition(
+        db_engine, org_b, coverage_pipeline_a, user_b, "OrgB-CrossCoverageEval", node_id=coverage_node_id
+    )
 
 
 # ===================================================================
@@ -431,3 +643,249 @@ class TestSystemAdminExplicitOrgParam:
         data = resp.json()
         assert data["email"] == "sysadmin-created@test.local"
         assert data["org_role"] == "operator"
+
+
+# ===================================================================
+# Test 7: Evals cross-tenant pipeline IDOR (POST /api/v1/evals)
+# ===================================================================
+
+
+class TestEvalsCreateCrossTenant:
+    """Creating eval definitions against another org's pipeline must fail."""
+
+    async def test_create_eval_against_other_org_pipeline_returns_404(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+        pipeline_b: uuid.UUID,
+    ) -> None:
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.post(
+            "/api/v1/evals",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "pipeline_id": str(pipeline_b),
+                "name": "cross-tenant-eval",
+                "eval_type": "regex",
+            },
+        )
+        assert resp.status_code == 404, (
+            f"Expected 404 for eval against another org's pipeline, got {resp.status_code}: {resp.text}"
+        )
+
+    async def test_create_eval_against_own_org_pipeline_succeeds(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+        pipeline_a: uuid.UUID,
+    ) -> None:
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.post(
+            "/api/v1/evals",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "pipeline_id": str(pipeline_a),
+                "name": "own-org-eval",
+                "eval_type": "regex",
+            },
+        )
+        assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
+        assert resp.json()["pipeline_id"] == str(pipeline_a)
+
+
+# ===================================================================
+# Test 8: Evals from-run cross-tenant pipeline IDOR
+# ===================================================================
+
+
+class TestEvalsCreateFromRunCrossTenant:
+    """Creating a run-derived eval against a cross-tenant pipeline must fail."""
+
+    async def test_from_run_referencing_other_org_pipeline_returns_404(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+        run_a_cross_pipeline: uuid.UUID,
+    ) -> None:
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.post(
+            "/api/v1/evals/from-run",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "run_id": str(run_a_cross_pipeline),
+                "node_id": str(uuid.uuid4()),
+                "name": "from-run-cross-tenant",
+                "eval_type": "regex",
+            },
+        )
+        assert resp.status_code == 404, (
+            f"Expected 404 for from-run against another org's pipeline, got {resp.status_code}: {resp.text}"
+        )
+
+    async def test_from_run_other_org_run_returns_404(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+        run_b: uuid.UUID,
+    ) -> None:
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.post(
+            "/api/v1/evals/from-run",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "run_id": str(run_b),
+                "node_id": str(uuid.uuid4()),
+                "name": "from-run-other-org-run",
+                "eval_type": "regex",
+            },
+        )
+        assert resp.status_code == 404, f"Expected 404 for other-org run, got {resp.status_code}: {resp.text}"
+
+
+# ===================================================================
+# Test 9: SSO provider cross-tenant IDOR
+# ===================================================================
+
+
+class TestSsoProviderCrossTenant:
+    """Org A admin must not access Org B's SSO provider through any surface."""
+
+    async def test_list_providers_does_not_return_other_org_provider(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+        sso_provider_b: uuid.UUID,
+    ) -> None:
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            "/api/v1/admin/sso/providers",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        provider_ids = {p["id"] for p in resp.json()}
+        assert str(sso_provider_b) not in provider_ids, "OrgA should not see OrgB's SSO provider in the list"
+
+    async def test_get_group_mappings_other_org_provider_returns_404(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+        sso_provider_b: uuid.UUID,
+    ) -> None:
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            f"/api/v1/admin/sso/providers/{sso_provider_b}/group-mappings",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
+
+    async def test_update_other_org_provider_returns_404(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+        sso_provider_b: uuid.UUID,
+    ) -> None:
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.put(
+            f"/api/v1/admin/sso/providers/{sso_provider_b}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"name": "hijacked"},
+        )
+        assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
+
+    async def test_toggle_other_org_provider_returns_404(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+        sso_provider_b: uuid.UUID,
+    ) -> None:
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.put(
+            f"/api/v1/admin/sso/providers/{sso_provider_b}/toggle",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
+
+    async def test_delete_other_org_provider_returns_404(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+        sso_provider_b: uuid.UUID,
+    ) -> None:
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.delete(
+            f"/api/v1/admin/sso/providers/{sso_provider_b}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
+
+    async def test_test_connection_other_org_provider_returns_404(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+        sso_provider_b: uuid.UUID,
+    ) -> None:
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.post(
+            f"/api/v1/admin/sso/providers/{sso_provider_b}/test",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
+
+    async def test_set_group_mappings_other_org_provider_returns_404(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+        sso_provider_b: uuid.UUID,
+    ) -> None:
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.put(
+            f"/api/v1/admin/sso/providers/{sso_provider_b}/group-mappings",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"mappings": []},
+        )
+        assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
+
+
+# ===================================================================
+# Test 10: eval_coverage org filter
+# ===================================================================
+
+
+class TestEvalCoverageOrgFilter:
+    """Another org's eval definitions must not appear in a pipeline's coverage."""
+
+    async def test_coverage_excludes_other_org_eval_definitions(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+        coverage_pipeline_a: uuid.UUID,
+        coverage_node_id: uuid.UUID,
+        coverage_eval_a: uuid.UUID,
+        coverage_eval_b_cross: uuid.UUID,
+    ) -> None:
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            f"/api/v1/evals/coverage?pipeline_id={coverage_pipeline_a}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        node = next(
+            (n for n in resp.json()["nodes"] if n["node_id"] == str(coverage_node_id)),
+            None,
+        )
+        assert node is not None, "Coverage should include the seeded node"
+        assert node["eval_count"] == 1, (
+            f"Coverage should count only OrgA's eval definition (1), got {node['eval_count']}"
+        )
