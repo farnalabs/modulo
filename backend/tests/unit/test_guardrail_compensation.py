@@ -2,7 +2,7 @@
 
 Covers:
   * the connector compensating-callback contract (default no-op, GitHub
-    close-PR, Linear unassign/archive, not-supported, failed-on-error);
+    close-PR, not-supported, failed-on-error);
   * the ``compensate_blocked_run`` orchestrator (blocked_partial summary
     written, connector-node compensation, failure isolation, guard-the-guard);
   * the blocked_partial summary builder shape;
@@ -36,7 +36,6 @@ from modulo.connectors.base import (
     HealthResult,
 )
 from modulo.connectors.github import GitHubConnector
-from modulo.connectors.linear import LinearConnector
 from modulo.core.guardrails.compensation import compensate_blocked_run
 from modulo.db.models.base import Base
 from modulo.db.models.run import Run
@@ -158,60 +157,6 @@ async def test_github_compensate_requires_repo_and_number():
         error="guardrail block",
     )
     assert no_number.outcome == CompensationOutcome.NOT_SUPPORTED
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_linear_compensate_unassign():
-    issue_id = "lin-issue-1"
-    route = respx.post("https://api.linear.app/graphql").mock(
-        return_value=httpx.Response(
-            200,
-            json={"data": {"issueUpdate": {"success": True, "issue": {"id": issue_id}}}},
-        ),
-    )
-    connector = LinearConnector(api_key="lin-test-key")
-    result = await connector.compensate(
-        CompensationOperation(resource="issue_assign", data={"id": issue_id, "assigneeId": "u1"}, output={}),
-        context=_ctx(),
-        error="guardrail block",
-    )
-    assert result.outcome == CompensationOutcome.COMPENSATED
-    assert result.resource_id == issue_id
-    assert "assigneeId" in route.calls.last.request.content.decode()
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_linear_compensate_archives_created_issue():
-    issue_id = "lin-issue-2"
-    route = respx.post("https://api.linear.app/graphql").mock(
-        return_value=httpx.Response(
-            200,
-            json={"data": {"issueArchive": {"success": True}}},
-        ),
-    )
-    connector = LinearConnector(api_key="lin-test-key")
-    result = await connector.compensate(
-        CompensationOperation(resource="issue", data={"title": "x"}, output={"id": issue_id}),
-        context=_ctx(),
-        error="guardrail block",
-    )
-    assert result.outcome == CompensationOutcome.COMPENSATED
-    assert result.resource_id == issue_id
-    assert route.called
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_linear_compensate_not_supported_resource():
-    connector = LinearConnector(api_key="lin-test-key")
-    result = await connector.compensate(
-        CompensationOperation(resource="issue_comment", data={}, output={}),
-        context=_ctx(),
-        error="guardrail block",
-    )
-    assert result.outcome == CompensationOutcome.NOT_SUPPORTED
 
 
 # ---------------------------------------------------------------------------

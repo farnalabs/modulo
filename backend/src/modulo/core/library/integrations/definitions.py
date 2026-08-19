@@ -221,35 +221,7 @@ PAGERDUTY_INTEGRATION: dict[str, Any] = {
 }
 
 # ---------------------------------------------------------------------------
-# 7. linear
-# ---------------------------------------------------------------------------
-LINEAR_INTEGRATION: dict[str, Any] = {
-    "name": "Linear",
-    "description": (
-        "Linear issue tracking integration. Creates, updates, and "
-        "queries issues, supports team and project management workflows."
-    ),
-    "version": "1.0.0",
-    "author": "Modulo",
-    "tags": ["issue-tracking", "project-management", "canonical"],
-    "connector_type": "linear",
-    "default_config": {
-        "base_url": "https://api.linear.app",
-        "api_version": "2024-01-23",
-        "team_id": "",
-    },
-    "credential_fields": {
-        "api_key": {
-            "type": "string",
-            "description": "Linear personal API key",
-            "required": True,
-        },
-    },
-    "tool_group": "issue_tracking",
-}
-
-# ---------------------------------------------------------------------------
-# 8. jira
+# 7. jira
 # ---------------------------------------------------------------------------
 JIRA_INTEGRATION: dict[str, Any] = {
     "name": "Jira",

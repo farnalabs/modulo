@@ -17,7 +17,6 @@ from hypothesis import strategies as st
 from modulo.connectors.base import ConnectorQuery, ConnectorResult
 from modulo.connectors.github import GitHubConnector
 from modulo.connectors.jira import JiraConnector
-from modulo.connectors.linear import LinearConnector
 from modulo.connectors.notion import NotionConnector
 from modulo.connectors.slack import SlackConnector
 
@@ -27,11 +26,6 @@ from modulo.connectors.slack import SlackConnector
 @pytest.fixture
 def gh_connector():
     return GitHubConnector(token="ghp_test_fuzz")
-
-
-@pytest.fixture
-def linear_connector():
-    return LinearConnector(api_key="lin-api-key-fuzz")
 
 
 @pytest.fixture
@@ -301,47 +295,6 @@ async def test_github_single_issue_fuzz(gh_connector, data):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Linear fuzz tests
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-@settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
-)
-@given(data=st.data())
-async def test_linear_issue_fuzz(linear_connector, data):
-    with respx.mock:
-        respx.post("https://api.linear.app/graphql").mock(
-            return_value=httpx.Response(200, json=data.draw(graphql_response()))
-        )
-        await _assert_safe_query(
-            linear_connector,
-            ConnectorQuery(
-                resource="issue",
-                filters={"id": "fuzz-id-001"},
-            ),
-        )
-
-
-@settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
-)
-@given(data=st.data())
-async def test_linear_search_fuzz(linear_connector, data):
-    with respx.mock:
-        respx.post("https://api.linear.app/graphql").mock(
-            return_value=httpx.Response(200, json=data.draw(graphql_response()))
-        )
-        await _assert_safe_query(
-            linear_connector,
-            ConnectorQuery(
-                resource="search",
-                filters={"query": "fuzz"},
-            ),
-        )
-
-
-# ═══════════════════════════════════════════════════════════════════════════
 # Notion fuzz tests
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -505,14 +458,6 @@ async def test_jira_search_fuzz(jira_connector, data):
 # ═══════════════════════════════════════════════════════════════════════════
 
 _GITHUB_ISSUE_TPL = {"number": 1, "title": "Bug", "state": "open", "body": "desc", "labels": [], "assignee": None}
-_LINEAR_ISSUE_TPL = {
-    "id": "abc-123",
-    "title": "Issue",
-    "description": "desc",
-    "priority": 2,
-    "state": {"id": "st1", "name": "Todo"},
-    "assignee": None,
-}
 _NOTION_PAGE_TPL = {
     "object": "page",
     "id": "page-1",
@@ -542,26 +487,6 @@ async def test_github_single_issue_mutated_fuzz(gh_connector, data):
             ConnectorQuery(
                 resource="issue",
                 filters={"repo": "owner/repo", "issue_number": 1},
-            ),
-        )
-
-
-@settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
-)
-@given(data=st.data())
-async def test_linear_single_issue_mutated_fuzz(linear_connector, data):
-    """Linear issue endpoint fed mutated valid responses."""
-    with respx.mock:
-        mutated = data.draw(mutate_response(_LINEAR_ISSUE_TPL))
-        # Wrap in GraphQL envelope like Linear's API returns
-        gql_payload = {"data": {"issue": mutated}}
-        respx.post("https://api.linear.app/graphql").mock(return_value=httpx.Response(200, json=gql_payload))
-        await _assert_safe_query(
-            linear_connector,
-            ConnectorQuery(
-                resource="issue",
-                filters={"id": "abc-123"},
             ),
         )
 

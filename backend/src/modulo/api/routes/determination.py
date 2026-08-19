@@ -40,7 +40,6 @@ _DETERMINATION_SCOPES = frozenset(
         ConnectorType.GITHUB,
         ConnectorType.GITLAB,
         ConnectorType.JIRA,
-        ConnectorType.LINEAR,
     }
 )
 

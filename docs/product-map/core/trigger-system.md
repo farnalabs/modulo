@@ -144,7 +144,7 @@ concurrency management via `max_concurrent_runs`.
 - [x] Daily spend limit (`trigger.daily_spend_limit`) enforced before run creation — `spend_limit_reached` TriggerEvent, `next_fire_at` advanced, `skipped` returned
 - [x] Connector instance loaded from DB by `connector_instance_id` in `config_json`
 - [x] Credentials decrypted via Fernet-backed secrets backend
-- [x] One-shot connector built via `_build_polling_connector()` (filesystem, github, gitlab, linear, jira, slack)
+- [x] One-shot connector built via `_build_polling_connector()` (filesystem, github, gitlab, jira, slack)
 - [x] Poll query executed via `connector.query(ConnectorQuery(resource=poll_query))`
 - [x] JMESPath `condition_expression` evaluated against query result records
 - [x] Condition met → run created with `input_payload` containing `records`, `total`, `poll_query`

@@ -146,21 +146,6 @@ def test_development_node_uses_gitlab_connector() -> None:
     assert dev.connector_type == "gitlab"
 
 
-def test_planning_suggestion_uses_linear_when_no_jira() -> None:
-    samples = [
-        make_sample(
-            "issues",
-            [{"state": {"name": "Todo"}, "title": "T1"}],
-            connector_type=ConnectorType.LINEAR,
-        )
-    ]
-    findings = infer(samples)
-    draft = generate_draft(samples, findings)
-    planning = next((s for s in draft.automation_suggestions if s["stage"] == "planning"), None)
-    assert planning is not None
-    assert planning["connector_type"] == "linear"
-
-
 def test_data_without_detectable_stages_falls_back_to_start_end_edge() -> None:
     samples = [
         make_sample(

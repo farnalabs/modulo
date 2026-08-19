@@ -39,7 +39,6 @@ from modulo.connectors.gitlab import GitLabConnector
 from modulo.connectors.grafana import GrafanaConnector
 from modulo.connectors.jenkins import JenkinsConnector
 from modulo.connectors.jira import JiraConnector
-from modulo.connectors.linear import LinearConnector
 from modulo.connectors.microsoft_teams import MicrosoftTeamsConnector
 from modulo.connectors.monday import MondayConnector
 from modulo.connectors.n8n import N8NConnector
@@ -85,7 +84,6 @@ _BUILD_CASES: list[tuple[str, dict[str, Any], dict[str, Any], type[ConnectorBase
     ("gitlab_ci", {}, {"token": "gl_token"}, GitLabCIRunner, ConnectorType.CI_RUNNER),
     ("gitlab", {}, {"token": "gitlab_token"}, GitLabConnector, ConnectorType.GITLAB),
     ("shell", {"allowed_commands": ["echo", "cat"]}, {}, ShellConnector, ConnectorType.SHELL),
-    ("linear", {}, {"api_key": "linear_key"}, LinearConnector, ConnectorType.LINEAR),
     ("jira", {"instance": "acme.atlassian.net"}, {"token": "jira_token"}, JiraConnector, ConnectorType.JIRA),
     ("slack", {}, {"bot_token": "xoxb-test"}, SlackConnector, ConnectorType.SLACK),
     ("sharepoint", {}, {"token": "sp_token"}, SharePointConnector, ConnectorType.SHAREPOINT),

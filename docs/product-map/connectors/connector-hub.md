@@ -6,7 +6,6 @@ bdd:
   - backend/tests/bdd/features/connectors/connector_health.feature
   - backend/tests/bdd/features/connectors/github_connector.feature
   - backend/tests/bdd/features/connectors/jira_connector.feature
-  - backend/tests/bdd/features/connectors/linear_connector.feature
   - backend/tests/bdd/features/connectors/slack_connector.feature
   - backend/tests/bdd/features/connectors/schema_inference.feature
   - backend/tests/bdd/features/connectors/connector_decrypt_error.feature
@@ -128,7 +127,6 @@ All connectors receive `_TracedConnector` wrapping at construction time. All use
 
 #### Issue Tracking & Project Management
 
-- [x] `type_id = "linear"` → `LinearConnector(api_key=creds.api_key)`; BDD exists (linear_connector.feature — placeholder); ConnectorType.LINEAR; enum entry exists
 - [x] `type_id = "jira"` → `JiraConnector(instance=config.instance, creds=creds)` — `instance` or `base_url` is required; `ValueError` if missing; supports token or email+api_token auth; BDD exists (jira_connector.feature: 18 real scenarios); ConnectorType.JIRA; enum entry exists
 - [x] `type_id = "shortcut"` → `ShortcutConnector(token=creds.token)`; BDD feature file exists (shortcut.feature: 10 scenarios); ConnectorType.SHORTCUT; enum entry exists; unit tests exist (test_shortcut_connector.py)
 - [x] `type_id = "trello"` → `TrelloConnector(api_key=creds.api_key, token=creds.token)` — two required credentials; BDD feature file exists (trello.feature: 9 scenarios); ConnectorType.TRELLO; enum entry exists; unit tests exist (test_trello_connector.py)
@@ -288,19 +286,6 @@ All connectors receive `_TracedConnector` wrapping at construction time. All use
 - [x] Write resource `"issue_update"` — updates issue fields via `PUT /issue/{key}`
 - [x] `health_check()` verifies connectivity via `GET /myself` — returns display name on success
 - [x] 5 BDD scenarios exist — query issue, search issues, create issue, update issue, missing issue_key error
-
-### Linear Connector
-
-- [x] `ConnectorType.LINEAR` with capabilities: `ticket_read`, `ticket_write`, `ticket_search`
-- [x] Auth via `api_key` in `Authorization` header; GraphQL API at `https://api.linear.app/graphql`
-- [x] Query resource `"issue"` — fetches single issue by `id` filter via GraphQL query
-- [x] Query resource `"search"` — searches issues by text via `searchIssues` GraphQL query
-- [x] Write resource `"issue"` — creates issue via `issueCreate` mutation
-- [x] Write resource `"issue_update"` — updates issue fields via `issueUpdate` mutation
-- [x] GraphQL errors in response body raise `ValueError("Linear API error: ...")`
-- [x] `health_check()` runs `viewer` query — returns `ok=False` with detail on HTTP errors or missing viewer
-- [x] Generic exceptions in health check are caught and returned as `ok=False` (never propagate)
-- [x] BDD scenarios exist — `linear_connector.feature` has 24 scenarios (21 happy-path + 3 error-path) with real step definitions
 
 ### Slack Connector
 
