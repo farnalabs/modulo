@@ -19,6 +19,7 @@ import pytest
 
 from modulo.db.bootstrap_role import (
     _MIGRATE_ROLE,
+    _SYSTEM_ROLE,
     ACCOUNTS_WRITABLE_COLUMNS,
     REQUIRED_VARS,
     _apply_accounts_allow_list,
@@ -62,6 +63,7 @@ class _FakeConn:
 
     def __init__(self, **options: Any) -> None:
         self.roles: dict[str, bool] = options.get("roles", {})
+        self.role_bypassrls: dict[str, bool] = options.get("role_bypassrls", {})
         self.tables: set[str] = set(options.get("tables", set()))
         self.columns: dict[str, set[str]] = options.get("columns", {})
         self.table_update_grantees: list[str] = options.get("table_update_grantees", [])
@@ -94,6 +96,9 @@ class _FakeConn:
             return col in self.column_updatable
         if "select rolsuper from pg_roles" in lowered:
             return self.is_superuser
+        if "rolbypassrls from pg_roles" in lowered:
+            role_name = args[0] if args else ""
+            return self.role_bypassrls.get(role_name, True)
         return None
 
     async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
@@ -125,7 +130,16 @@ def _full_accounts_columns() -> set[str]:
 def _clean_posture_conn() -> _FakeConn:
     """A connection that yields a perfectly clean allow-list posture."""
     return _FakeConn(
-        roles={"modulo_app": True, _MIGRATE_ROLE: True, "modulo_breakglass": True},
+        roles={
+            "modulo_app": True,
+            _MIGRATE_ROLE: True,
+            "modulo_breakglass": True,
+            _SYSTEM_ROLE: True,
+        },
+        role_bypassrls={
+            "modulo_app": False,
+            _SYSTEM_ROLE: True,
+        },
         tables={"accounts"},
         columns={"accounts": _full_accounts_columns()},
         column_updatable=set(ACCOUNTS_WRITABLE_COLUMNS),
@@ -409,6 +423,23 @@ class TestFindAllowListViolations:
         violations = await _find_allow_list_violations(conn, "modulo_app")
         assert any(_MIGRATE_ROLE in v for v in violations)
         assert any("modulo_breakglass" in v for v in violations)
+
+    async def test_detects_missing_system_role_bypassrls(self, conn: _FakeConn) -> None:
+        conn.tables = {"accounts"}
+        conn.columns = {"accounts": _full_accounts_columns()}
+        conn.column_updatable = set(ACCOUNTS_WRITABLE_COLUMNS)
+        # modulo_system role exists but without BYPASSRLS
+        conn.roles[_SYSTEM_ROLE] = True
+        conn.role_bypassrls = {_SYSTEM_ROLE: False}
+
+        violations = await _find_allow_list_violations(conn, "modulo_app")
+        assert any("modulo_system" in v and "BYPASSRLS" in v for v in violations)
+
+    async def test_clean_posture_includes_system_role(self) -> None:
+        clean = _clean_posture_conn()
+        violations = await _find_allow_list_violations(clean, "modulo_app")
+        # modulo_system has BYPASSRLS in the clean conn — no violation
+        assert not any("modulo_system" in v for v in violations)
 
 
 # ---------------------------------------------------------------------------

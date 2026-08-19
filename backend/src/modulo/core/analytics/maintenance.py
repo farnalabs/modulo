@@ -1,8 +1,7 @@
 """Analytics facts maintenance — backfill, reconcile, retention (ADR 020).
 
-ONE plain ``modulo_app`` cron (like ``retention_cleanup``): sessions WITHOUT
-``set_rls_org`` — ``modulo_app`` is BYPASSRLS, so cross-org scans work,
-matching every existing system cron. Non-Postgres backends no-op (the
+System cron: uses modulo_system role (LOGIN, BYPASSRLS) for cross-org access.
+modulo_app is NOBYPASSRLS. Non-Postgres backends no-op (the
 INSERT...SELECT anti-join and ``ON CONFLICT`` are Postgres-idiomatic).
 
 Roles:

@@ -46,6 +46,7 @@ REQUIRED_VARS = ["DATABASE_ADMIN_URL", "DATABASE_URL"]
 
 _BREAK_GLASS_ROLE = "modulo_breakglass"
 _MIGRATE_ROLE = "modulo_migrate"
+_SYSTEM_ROLE = "modulo_system"
 
 # The single-sourced allow-list constant for writable accounts columns.
 # Every future column added to accounts must be allow-listed here or be
@@ -247,6 +248,13 @@ async def _find_allow_list_violations(conn: asyncpg.Connection, app_user: str) -
             f"app role {app_user} is a member of: " + ", ".join(sorted(r["rolname"] for r in member_rows))
         )
 
+    # modulo_system must have BYPASSRLS — it is the dedicated cross-org system
+    # cron role. If BYPASSRLS was stripped, system crons silently return zero rows.
+    if not await conn.fetchval("SELECT rolbypassrls FROM pg_roles WHERE rolname = $1", _SYSTEM_ROLE):
+        violations.append(
+            f"modulo_system role {_SYSTEM_ROLE} does not have BYPASSRLS — system crons need cross-org data access"
+        )
+
     return violations
 
 
@@ -284,16 +292,24 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
     bg_user = _parse_role(bg_url) or _BREAK_GLASS_ROLE
     bg_pass = _parse_password(bg_url) or secrets.token_urlsafe(24)
 
+    sys_url = os.environ.get("MODULO_SYSTEM_DATABASE_URL", "")
+    sys_user = _parse_role(sys_url) or _SYSTEM_ROLE
+    sys_pass = _parse_password(sys_url) or secrets.token_urlsafe(24)
+
     conn = await asyncpg.connect(admin_conn_str, ssl=admin_ssl)
     try:
         # Idempotent role creation — skips if already exists.
         # modulo_app must NEVER have BYPASSRLS — RLS policies enforce tenant
-        # isolation. Only modulo_breakglass and modulo_migrate get BYPASSRLS
-        # (cross-org system roles).
+        # isolation. modulo_system (cross-org system cron role) gets BYPASSRLS.
         await _create_or_update_role(conn, app_user, login=True, password=app_pass, bypassrls=False)
 
         await _create_or_update_role(conn, _MIGRATE_ROLE, login=False, password=None, bypassrls=True)
         await _create_or_update_role(conn, bg_user, login=True, password=bg_pass, bypassrls=True)
+        # modulo_system: dedicated LOGIN BYPASSRLS role for cross-org system cron
+        # jobs (analytics_facts_maintenance, journey_reconcile, retention_cleanup,
+        # dispatcher_reconcile). Only system crons use this role; modulo_app is
+        # NOBYPASSRLS for tenant isolation.
+        await _create_or_update_role(conn, sys_user, login=True, password=sys_pass, bypassrls=True)
 
         # Role grants for schema/DDL ownership (merged from the break-glass
         # 0036 deliverable + the cost 0065 MIGRATE-role deploy-wiring):
@@ -319,6 +335,7 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
         # Grant DML on existing tables.
         await conn.execute(f'GRANT USAGE ON SCHEMA public TO "{app_user}"')
         await conn.execute(f'GRANT USAGE ON SCHEMA public TO "{bg_user}"')
+        await conn.execute(f'GRANT USAGE ON SCHEMA public TO "{sys_user}"')
         # modulo_migrate owns the SECURITY DEFINER ``lookup_api_key_org``
         # function (0036 transfers ownership) used by API-key auth. The
         # function executes as modulo_migrate, so it needs USAGE on schema
@@ -328,11 +345,18 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
         await conn.execute(f'GRANT USAGE ON SCHEMA public TO "{_MIGRATE_ROLE}"')
         await conn.execute(f'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "{app_user}"')
         await conn.execute(f'GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO "{app_user}"')
+        # modulo_system: DML on all tables for cross-org system crons.
+        await conn.execute(f'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "{sys_user}"')
+        await conn.execute(f'GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO "{sys_user}"')
         # Grant DML on future tables.
         await conn.execute(
             f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "{app_user}"'
         )
         await conn.execute(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "{app_user}"')
+        await conn.execute(
+            f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "{sys_user}"'
+        )
+        await conn.execute(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON SEQUENCES TO "{sys_user}"')
 
         # Re-apply the accounts UPDATE allow-list (active from deliverable A).
         await _apply_accounts_allow_list(conn, app_user)

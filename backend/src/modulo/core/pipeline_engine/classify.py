@@ -677,8 +677,9 @@ async def reconcile_missing_classifications(
 
     RLS: with *org_ids* the sweep processes each org under its own RLS context
     (cross-org). With None it runs in the caller's context (a single-org caller,
-    or a privileged/owner-role factory that bypasses RLS — the dispatcher
-    wiring runs system-scoped, BYPASSRLS cross-org like the other system crons).
+    or a modulo_system role factory that bypasses RLS — the dispatcher
+    wiring runs system-scoped, modulo_system BYPASSRLS cross-org like the other
+    system crons).
 
     Returns ``{"scanned", "classified", "unclassified", "errors"}``.
     """

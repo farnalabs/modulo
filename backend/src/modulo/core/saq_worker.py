@@ -560,7 +560,7 @@ async def retention_cleanup(ctx: dict[str, Any]) -> dict[str, Any]:
     ``UndefinedTable``/``UndefinedColumn``) is caught, logged as a warning, and
     the job still reports the runs purge count (``checkpoints_deleted=0``)
     without failing — the app boot creates the schema later. The retention
-    session is intentionally system-scoped (no ``set_rls_org``) — checkpoint
+    session is system-scoped (modulo_system role, LOGIN, BYPASSRLS) — checkpoint
     retention is cross-org by design and operates on the saver's unqualified
     tables.
     """
@@ -569,13 +569,13 @@ async def retention_cleanup(ctx: dict[str, Any]) -> dict[str, Any]:
     from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
     from modulo.db.crud.run import batch_delete_old_terminal_runs
 
-    factory = _make_session_factory()
+    factory = _make_system_session_factory()
     async with factory() as session, session.begin():
         deleted = await batch_delete_old_terminal_runs(session)
 
     checkpoints_deleted = 0
     try:
-        async with factory() as session, session.begin():
+        async with _make_system_session_factory()() as session, session.begin():
             checkpoints_deleted = await batch_delete_langgraph_checkpoints(session)
     except ProgrammingError:
         _log.warning(
@@ -701,27 +701,26 @@ async def cost_probe(ctx: dict[str, Any]) -> dict[str, Any]:
 async def analytics_facts_maintenance(ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — daily run-facts backfill + reconcile + retention (ADR 020).
 
-    ONE plain modulo_app cron (sessions without set_rls_org — modulo_app is
-    BYPASSRLS, cross-org works, matching every existing system cron).
-    Non-Postgres backends no-op.
+    System cron: uses modulo_system role (LOGIN, BYPASSRLS) for cross-org access.
+    modulo_app is NOBYPASSRLS. Non-Postgres backends no-op.
     """
     from modulo.core.analytics.maintenance import run_maintenance
 
-    return await run_maintenance(_make_session_factory())
+    return await run_maintenance(_make_system_session_factory())
 
 
 async def journey_reconcile(ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — hourly bounded journey reconciliation sweep (FAR-143).
 
     Re-derives ``journeys`` evidence from terminal runs whose journey rows are
-    MISSING or STALE (see ``modulo.core.lifecycle_map.reconcile``). Runs as ONE
-    plain modulo_app cron (no ``set_rls_org`` — BYPASSRLS, cross-org scans
-    work, matching every existing system cron). The sweep is batch-bounded and
-    idempotent, so an hourly tick simply drains whatever backlog remains.
+    MISSING or STALE (see ``modulo.core.lifecycle_map.reconcile``). System cron:
+    uses modulo_system role (LOGIN, BYPASSRLS) for cross-org access. modulo_app
+    is NOBYPASSRLS. The sweep is batch-bounded and idempotent, so an hourly
+    tick simply drains whatever backlog remains.
     """
     from modulo.core.lifecycle_map.reconcile import reconcile_journeys
 
-    async with _make_session_factory()() as session, session.begin():
+    async with _make_system_session_factory()() as session, session.begin():
         advanced = await reconcile_journeys(session)
     if advanced:
         _log.info("saq.journey_reconcile.advanced", extra={"advanced": advanced})
@@ -801,6 +800,48 @@ def _make_session_factory() -> Any:
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
     return async_sessionmaker(_get_async_engine(), expire_on_commit=False, autobegin=False)
+
+
+# ---------------------------------------------------------------------------
+# System cron engine — dedicated modulo_system role (LOGIN, BYPASSRLS)
+# ---------------------------------------------------------------------------
+
+_SYSTEM_ASYNC_ENGINE: AsyncEngine | None = None
+
+
+def _get_system_async_engine() -> AsyncEngine:
+    """Engine for cross-org system crons using the modulo_system role.
+
+    Falls back to the regular engine when MODULO_SYSTEM_DATABASE_URL is not set,
+    so deployments that haven't provisioned the system role still work (system
+    crons run as modulo_app with BYPASSRLS — the pre-PR-1634 posture).
+    """
+    global _SYSTEM_ASYNC_ENGINE
+    if _SYSTEM_ASYNC_ENGINE is None:
+        settings = get_settings()
+        if settings.modulo_system_database_url:
+            from sqlalchemy.ext.asyncio import create_async_engine
+
+            _SYSTEM_ASYNC_ENGINE = create_async_engine(
+                settings.modulo_system_database_url,
+                pool_pre_ping=True,
+                pool_size=settings.saq_worker_db_pool_size,
+                max_overflow=0,
+            )
+        else:
+            _SYSTEM_ASYNC_ENGINE = _get_async_engine()
+    return _SYSTEM_ASYNC_ENGINE
+
+
+def _make_system_session_factory() -> Any:
+    """Session factory for cross-org system crons (modulo_system role).
+
+    Does NOT include the RLS reset hook — system crons operate cross-org
+    intentionally and never call set_rls_org.
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    return async_sessionmaker(_get_system_async_engine(), expire_on_commit=False, autobegin=False)
 
 
 def _runs_functions() -> list[tuple[str, Any]]:

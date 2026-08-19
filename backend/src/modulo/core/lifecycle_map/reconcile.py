@@ -37,10 +37,9 @@ reconciled run is a no-op — the sweep is idempotent.
 
 FAIL-OPEN per run: a per-run advance failure is logged and counted in the
 returned error tally — one bad run never aborts the sweep. The caller owns
-the session and its transaction; the system cron runs WITHOUT ``set_rls_org``
-(``modulo_app`` is BYPASSRLS — cross-org scans work, matching the analytics
-maintenance cron), and the stage lookup inside ``advance_journeys`` is
-explicitly org-filtered.
+the session and its transaction; the system cron uses the modulo_system role
+(LOGIN, BYPASSRLS) for cross-org access, and the stage lookup inside
+``advance_journeys`` is explicitly org-filtered.
 
 Metrics
 -------
