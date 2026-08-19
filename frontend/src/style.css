@@ -421,6 +421,7 @@
 }
 
 :root {
+  color-scheme: dark;
   --background: 226 24% 11%;
   --foreground: 210 28% 93%;
   --card: 224 22% 15%;
@@ -463,6 +464,7 @@
    --foreground = ink-900, --secondary = ink-50, --muted = ink-50,
    --muted-foreground = ink-400, --border = ink-50, --input = ink-50 */
 .light {
+  color-scheme: light;
   --background: 0 0% 100%;
   --foreground: 220 29% 6%;
   --card: 0 0% 100%;
