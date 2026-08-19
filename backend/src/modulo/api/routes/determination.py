@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import uuid
 from typing import ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -32,8 +31,6 @@ _CODE_DETERMINATION_CREATE_DETERMINATION_DRAFT = "determination.create_determina
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/determination", tags=["determination"])
-
-_PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 _DETERMINATION_SCOPES = frozenset(
     {
@@ -122,14 +119,14 @@ def _sample_to_response(s: ScanSample) -> SampleResponse:
 @handle_db_errors(_CODE_DETERMINATION_RUN_DETERMINATION)
 async def run_determination(
     session: AsyncSession = Depends(get_db_session),
-    _: TenantPrincipal = require_permission("determination.scan"),
+    principal: TenantPrincipal = require_permission("determination.scan"),
     settings: Settings = Depends(get_settings),
 ) -> DeterminationResponse:
     """Scan all connected tools and produce an SDLC maturity assessment."""
     try:
         try:
             async with session.begin():
-                await set_rls_org(session, _PLACEHOLDER_ORG_ID)
+                await set_rls_org(session, principal.organisation_id)
                 instances = await list_connector_instances(session, page_size=100)
 
         except ProgrammingError:
@@ -195,7 +192,7 @@ async def run_determination(
 @handle_db_errors(_CODE_DETERMINATION_CREATE_DETERMINATION_DRAFT)
 async def create_determination_draft(
     session: AsyncSession = Depends(get_db_session),
-    _: TenantPrincipal = require_permission("determination.scan"),
+    principal: TenantPrincipal = require_permission("determination.scan"),
     settings: Settings = Depends(get_settings),
 ) -> DraftResponse:
     """Run determination scan and produce an editable pipeline draft.
@@ -207,7 +204,7 @@ async def create_determination_draft(
     try:
         try:
             async with session.begin():
-                await set_rls_org(session, _PLACEHOLDER_ORG_ID)
+                await set_rls_org(session, principal.organisation_id)
                 instances = await list_connector_instances(session, page_size=100)
 
         except ProgrammingError:

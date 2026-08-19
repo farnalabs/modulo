@@ -26,7 +26,9 @@ Deliverable (A) of the break-glass admin recovery plan adds:
     posture are ASSERTED (fatal): no table-level UPDATE grant on accounts for
     modulo_app OR PUBLIC, UPDATE-grant set-equality with the allow-list, the
     three break-glass columns not writable by modulo_app, ``rolsuper = false``
-    for the app role, and no membership in the privileged roles.
+    for the app role, ``rolbypassrls = false`` for the app role (tenant
+    isolation relies on RLS policies — BYPASSRLS is only for cross-org system
+    roles), and no membership in the privileged roles.
 """
 
 import asyncio
@@ -73,22 +75,41 @@ def _parse_password(url: str) -> str:
     return unquote(parsed.password) if parsed.password else ""
 
 
-async def _create_or_update_role(conn: asyncpg.Connection, name: str, *, login: bool, password: str | None) -> None:
-    """Idempotently create/update a role, applying LOGIN/BYPASSRLS."""
+async def _create_or_update_role(
+    conn: asyncpg.Connection, name: str, *, login: bool, password: str | None, bypassrls: bool = True
+) -> None:
+    """Idempotently create/update a role, optionally applying LOGIN/BYPASSRLS.
+
+    ``modulo_app`` must NEVER have BYPASSRLS — RLS policies enforce tenant
+    isolation. Only ``modulo_breakglass`` and ``modulo_migrate`` (cross-org
+    system roles) receive BYPASSRLS.
+    """
     quoted_pass = (password or "").replace("'", "''")
     exists = await conn.fetchval("SELECT 1 FROM pg_roles WHERE rolname = $1", name)
     if not exists:
         if login:
-            await conn.execute(f"CREATE ROLE \"{name}\" LOGIN BYPASSRLS PASSWORD '{quoted_pass}'")
+            if bypassrls:
+                await conn.execute(f"CREATE ROLE \"{name}\" LOGIN BYPASSRLS PASSWORD '{quoted_pass}'")
+            else:
+                await conn.execute(f"CREATE ROLE \"{name}\" LOGIN PASSWORD '{quoted_pass}'")
         else:
-            await conn.execute(f'CREATE ROLE "{name}" NOSUPERUSER NOLOGIN BYPASSRLS')
-        _log.info("Created role: %s", name)
+            if bypassrls:
+                await conn.execute(f'CREATE ROLE "{name}" NOSUPERUSER NOLOGIN BYPASSRLS')
+            else:
+                await conn.execute(f'CREATE ROLE "{name}" NOSUPERUSER NOLOGIN')
+        _log.info("Created role: %s (bypassrls=%s)", name, bypassrls)
     else:
         if login:
-            await conn.execute(f"ALTER ROLE \"{name}\" WITH LOGIN BYPASSRLS PASSWORD '{quoted_pass}'")
+            if bypassrls:
+                await conn.execute(f"ALTER ROLE \"{name}\" WITH LOGIN BYPASSRLS PASSWORD '{quoted_pass}'")
+            else:
+                await conn.execute(f"ALTER ROLE \"{name}\" WITH LOGIN PASSWORD '{quoted_pass}'")
         else:
-            await conn.execute(f'ALTER ROLE "{name}" WITH NOSUPERUSER NOLOGIN BYPASSRLS')
-        _log.info("Updated role: %s", name)
+            if bypassrls:
+                await conn.execute(f'ALTER ROLE "{name}" WITH NOSUPERUSER NOLOGIN BYPASSRLS')
+            else:
+                await conn.execute(f'ALTER ROLE "{name}" WITH NOSUPERUSER NOLOGIN')
+        _log.info("Updated role: %s (bypassrls=%s)", name, bypassrls)
 
 
 async def _table_exists(conn: asyncpg.Connection, table: str) -> bool:
@@ -165,6 +186,8 @@ async def _find_allow_list_violations(conn: asyncpg.Connection, app_user: str) -
       allow-listed writable columns (inverted schema-evolution set-equality),
       and the three break-glass columns are NOT writable by it;
     * ``rolsuper = false`` for the app role;
+    * ``rolbypassrls = false`` for the app role (tenant isolation relies on
+      RLS policies — BYPASSRLS is only for cross-org system roles);
     * ``modulo_app`` is not a member of ``modulo_breakglass`` / ``modulo_migrate``.
 
     Runs only when the ``accounts`` table exists — the before-alembic boot run
@@ -207,6 +230,9 @@ async def _find_allow_list_violations(conn: asyncpg.Connection, app_user: str) -
 
     if await conn.fetchval("SELECT rolsuper FROM pg_roles WHERE rolname = $1", app_user):
         violations.append(f"app role {app_user} is a superuser")
+
+    if await conn.fetchval("SELECT rolbypassrls FROM pg_roles WHERE rolname = $1", app_user):
+        violations.append(f"app role {app_user} has BYPASSRLS — tenant isolation relies on RLS policies")
 
     member_rows = await conn.fetch(
         "SELECT b.rolname FROM pg_auth_members m "
@@ -261,10 +287,13 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
     conn = await asyncpg.connect(admin_conn_str, ssl=admin_ssl)
     try:
         # Idempotent role creation — skips if already exists.
-        await _create_or_update_role(conn, app_user, login=True, password=app_pass)
+        # modulo_app must NEVER have BYPASSRLS — RLS policies enforce tenant
+        # isolation. Only modulo_breakglass and modulo_migrate get BYPASSRLS
+        # (cross-org system roles).
+        await _create_or_update_role(conn, app_user, login=True, password=app_pass, bypassrls=False)
 
-        await _create_or_update_role(conn, _MIGRATE_ROLE, login=False, password=None)
-        await _create_or_update_role(conn, bg_user, login=True, password=bg_pass)
+        await _create_or_update_role(conn, _MIGRATE_ROLE, login=False, password=None, bypassrls=True)
+        await _create_or_update_role(conn, bg_user, login=True, password=bg_pass, bypassrls=True)
 
         # Role grants for schema/DDL ownership (merged from the break-glass
         # 0036 deliverable + the cost 0065 MIGRATE-role deploy-wiring):

@@ -987,7 +987,7 @@ async def get_pipeline_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            pipeline = await get_pipeline(session, pipeline_id)
+            pipeline = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
     except ProgrammingError:
         logger.exception(_CODE_ROUTES_PIPELINES)
 
