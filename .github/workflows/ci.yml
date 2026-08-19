@@ -99,6 +99,7 @@ jobs:
         run: |
           uv run --no-sync pytest tests/bdd/steps/test_auth.py tests/bdd/steps/test_eval.py \
             tests/bdd/steps/test_eval_block_steps.py tests/bdd/steps/test_hitl.py \
+            tests/bdd/steps/test_health_checks.py \
             -q --tb=short --timeout=120 -p no:warnings
       - uses: actions/upload-artifact@v4
         if: always()
