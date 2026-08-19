@@ -1533,6 +1533,39 @@ def _build_hitl_gate_artifact(gate_id: str, status: str, **extra: Any) -> dict[s
     return {"artifacts": [{"node_id": gate_id, "status": status, **extra}]}
 
 
+async def _dispatch_reject_correction_inner(
+    session_factory: Any,
+    org_id: Any,
+    run_id_for_correction: Any,
+    correction_target: Any,
+    node_output: dict[str, Any],
+    decision: Any,
+    gate_id: str,
+) -> None:
+    """Dispatch a single-node correction for a rejected HITL gate (best-effort)."""
+    from modulo.core.feedback_manager import dispatch_reject_correction
+
+    try:
+        await dispatch_reject_correction(
+            session_factory=session_factory,
+            org_id=org_id,
+            run_id=run_id_for_correction,
+            node_id=str(correction_target),
+            node_input=node_output,
+            rejection_reason=(
+                (decision.get("reason") if isinstance(decision, dict) else None) or "rejected via HITL gate"
+            ),
+            gate_id=gate_id,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "hitl_gate.reject_correction_dispatch_failed",
+            extra={"gate_id": gate_id, "node_id": str(correction_target)},
+        )
+
+
 async def _dispatch_reject_correction_best_effort(
     state: dict[str, Any],
     decision: Any,
@@ -1554,29 +1587,9 @@ async def _dispatch_reject_correction_best_effort(
         run_id_for_correction = state.get("_run_id")
         node_output = state.get("output")
         if correction_target and run_id_for_correction and isinstance(node_output, dict):
-            from modulo.core.feedback_manager import dispatch_reject_correction
-
-            try:
-                await dispatch_reject_correction(
-                    session_factory=session_factory,
-                    org_id=org_id,
-                    run_id=run_id_for_correction,
-                    node_id=str(correction_target),
-                    node_input=node_output,
-                    rejection_reason=(
-                        (decision.get("reason") if isinstance(decision, dict) else None) or "rejected via HITL gate"
-                    ),
-                    gate_id=gate_id,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                # Best-effort: the correction dispatch must never crash the
-                # reject path — log and fall through to normal reject routing.
-                _log.exception(
-                    "hitl_gate.reject_correction_dispatch_failed",
-                    extra={"gate_id": gate_id, "node_id": str(correction_target)},
-                )
+            await _dispatch_reject_correction_inner(
+                session_factory, org_id, run_id_for_correction, correction_target, node_output, decision, gate_id
+            )
 
 
 async def _hitl_gate_resume_result(
@@ -1651,6 +1664,50 @@ def _hitl_gate_condition_skip(gate_id: str, condition_expr: str | None, state: d
     return None
 
 
+def _resolve_llm_judge_callable(eval_def: Any) -> Any:
+    """Resolve the LLM judge callable for an eval definition, if configured."""
+    if eval_def.eval_type == EvalType.LLM_JUDGE and eval_def.config.get("model_backend_id"):
+        from modulo.core.pipeline_engine.decorator import get_model_backend_hub
+
+        hub = get_model_backend_hub()
+        if hub is not None:
+            return _build_llm_judge_callable(hub, str(eval_def.config["model_backend_id"]))
+    return None
+
+
+async def _persist_gate_eval_results(
+    state: dict[str, Any],
+    eval_definitions: Sequence[EvalDefinition],
+    eval_results_by_name: dict[str, EvalResult],
+    session_factory: Any,
+    org_id: Any,
+) -> None:
+    """Persist gate eval results to the eval_results table (best-effort)."""
+    if session_factory is not None and org_id is not None:
+        try:
+            _run_id: uuid.UUID | None = state.get("_run_id")
+            if _run_id is not None:
+                async with session_factory() as session, session.begin():
+                    await set_rls_org(session, org_id)
+                    for eval_def in eval_definitions:
+                        eval_result = eval_results_by_name[eval_def.name]
+                        node_uuid: uuid.UUID | None = uuid.UUID(eval_def.node_id) if eval_def.node_id else None
+                        db_result = EvalResultModel(
+                            organisation_id=org_id,
+                            run_id=_run_id,
+                            node_id=node_uuid,
+                            eval_id=eval_def.id,
+                            passed=eval_result.passed,
+                            score=eval_result.score,
+                            detail=eval_result.detail,
+                        )
+                        session.add(db_result)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("hitl_gate.persist_eval_failed")
+
+
 async def _run_gate_evals(
     state: dict[str, Any],
     eval_definitions: Sequence[EvalDefinition] | None,
@@ -1664,18 +1721,7 @@ async def _run_gate_evals(
     if eval_definitions:
         engine = EvalEngine()
         for eval_def in eval_definitions:
-            llm_judge_callable: Any = None
-            if eval_def.eval_type == EvalType.LLM_JUDGE and eval_def.config.get("model_backend_id"):
-                from modulo.core.pipeline_engine.decorator import (
-                    get_model_backend_hub,
-                )
-
-                hub = get_model_backend_hub()
-                if hub is not None:
-                    llm_judge_callable = _build_llm_judge_callable(
-                        hub,
-                        str(eval_def.config["model_backend_id"]),
-                    )
+            llm_judge_callable = _resolve_llm_judge_callable(eval_def)
             eval_result = engine.evaluate(
                 _resolve_gate_eval_target(state, eval_def.node_id, node_type_map),
                 eval_def,
@@ -1694,32 +1740,7 @@ async def _run_gate_evals(
                 },
             )
         # If any block eval failed, EvalBlockedError was raised above.
-
-        # Persist eval results to the eval_results table so post-run
-        # suite-level threshold checks can read them.
-        if session_factory is not None and org_id is not None:
-            try:
-                _run_id: uuid.UUID | None = state.get("_run_id")
-                if _run_id is not None:
-                    async with session_factory() as session, session.begin():
-                        await set_rls_org(session, org_id)
-                        for eval_def in eval_definitions:
-                            eval_result = eval_results_by_name[eval_def.name]
-                            node_uuid: uuid.UUID | None = uuid.UUID(eval_def.node_id) if eval_def.node_id else None
-                            db_result = EvalResultModel(
-                                organisation_id=org_id,
-                                run_id=_run_id,
-                                node_id=node_uuid,
-                                eval_id=eval_def.id,
-                                passed=eval_result.passed,
-                                score=eval_result.score,
-                                detail=eval_result.detail,
-                            )
-                            session.add(db_result)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.exception("hitl_gate.persist_eval_failed")
+        await _persist_gate_eval_results(state, eval_definitions, eval_results_by_name, session_factory, org_id)
     return eval_results_by_name
 
 

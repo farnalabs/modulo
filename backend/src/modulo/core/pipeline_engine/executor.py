@@ -929,6 +929,51 @@ def _record_node_markers(
     return stall_reason, agent_failure, session_lost
 
 
+def _accumulate_node_token_usage(
+    node_name: str,
+    token_usage: dict[str, Any],
+    node_token_usage: dict[str, dict[str, int]],
+    guard: RunawayGuard | None,
+    node_token_budgets: dict[str, int] | None,
+) -> None:
+    """Accumulate token usage for a single node and enforce the per-node budget."""
+    node_data = node_token_usage.setdefault(node_name, {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})
+    pt = token_usage.get("input_tokens", token_usage.get("prompt_tokens", 0)) or 0
+    ct = token_usage.get("output_tokens", token_usage.get("completion_tokens", 0)) or 0
+    tt = token_usage.get("total_tokens", 0) or 0
+    node_data["input_tokens"] += pt
+    node_data["output_tokens"] += ct
+    node_data["total_tokens"] += tt
+    if guard is not None:
+        guard.record_tokens(tt)
+    if node_token_budgets is not None:
+        node_budget = node_token_budgets.get(node_name)
+        if node_budget is not None and node_data["total_tokens"] > node_budget:
+            raise RunawayRunError("token_budget", node_data["total_tokens"], node_budget)
+
+
+def _extract_chat_model_token_usage(output: Any) -> dict[str, Any]:
+    """Extract token usage from a chat model end event output."""
+    usage_metadata = getattr(output, "usage_metadata", None) if isinstance(output, BaseMessage) else None
+    if usage_metadata is not None:
+        return {
+            "input_tokens": usage_metadata.get("input_tokens", 0) or 0,
+            "output_tokens": usage_metadata.get("output_tokens", 0) or 0,
+            "total_tokens": usage_metadata.get("total_tokens", 0) or 0,
+        }
+    if isinstance(output, dict):
+        # Legacy fallback: llm_output.token_usage
+        llm_output = output.get("llm_output", {})
+        return llm_output.get("token_usage", {}) if isinstance(llm_output, dict) else {}
+    return {}
+
+
+def _extract_llm_token_usage(output: Any) -> dict[str, Any]:
+    """Extract token usage from an llm end event output (legacy interface)."""
+    llm_output = output.get("llm_output", {}) if isinstance(output, dict) else {}
+    return llm_output.get("token_usage", {}) if isinstance(llm_output, dict) else {}
+
+
 def _accumulate_chat_model_tokens(
     lg_event: Any,
     node_token_usage: dict[str, dict[str, int]],
@@ -946,40 +991,9 @@ def _accumulate_chat_model_tokens(
     if node_name:
         data = lg_event.get("data", {})
         output = data.get("output", {}) if isinstance(data, dict) else {}
-        usage_metadata = getattr(output, "usage_metadata", None) if isinstance(output, BaseMessage) else None
-        if usage_metadata is not None:
-            token_usage = {
-                "input_tokens": usage_metadata.get("input_tokens", 0) or 0,
-                "output_tokens": usage_metadata.get("output_tokens", 0) or 0,
-                "total_tokens": usage_metadata.get("total_tokens", 0) or 0,
-            }
-        elif isinstance(output, dict):
-            # Legacy fallback: llm_output.token_usage
-            llm_output = output.get("llm_output", {})
-            token_usage = llm_output.get("token_usage", {}) if isinstance(llm_output, dict) else {}
-        else:
-            token_usage = {}
+        token_usage = _extract_chat_model_token_usage(output)
         if isinstance(token_usage, dict):
-            node_data = node_token_usage.setdefault(
-                node_name, {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-            )
-            pt = token_usage.get("input_tokens", token_usage.get("prompt_tokens", 0)) or 0
-            ct = token_usage.get("output_tokens", token_usage.get("completion_tokens", 0)) or 0
-            tt = token_usage.get("total_tokens", 0) or 0
-            node_data["input_tokens"] += pt
-            node_data["output_tokens"] += ct
-            node_data["total_tokens"] += tt
-            if guard is not None:
-                guard.record_tokens(tt)
-            # Per-node token budget check
-            if node_token_budgets is not None:
-                node_budget = node_token_budgets.get(node_name)
-                if node_budget is not None and node_data["total_tokens"] > node_budget:
-                    raise RunawayRunError(
-                        "token_budget",
-                        node_data["total_tokens"],
-                        node_budget,
-                    )
+            _accumulate_node_token_usage(node_name, token_usage, node_token_usage, guard, node_token_budgets)
 
 
 def _accumulate_llm_tokens(
@@ -999,28 +1013,9 @@ def _accumulate_llm_tokens(
     if node_name:
         data = lg_event.get("data", {})
         output = data.get("output", {}) if isinstance(data, dict) else {}
-        llm_output = output.get("llm_output", {}) if isinstance(output, dict) else {}
-        token_usage = llm_output.get("token_usage", {}) if isinstance(llm_output, dict) else {}
+        token_usage = _extract_llm_token_usage(output)
         if isinstance(token_usage, dict):
-            node_data = node_token_usage.setdefault(
-                node_name, {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-            )
-            pt = token_usage.get("prompt_tokens", 0) or 0
-            ct = token_usage.get("completion_tokens", 0) or 0
-            tt = token_usage.get("total_tokens", 0) or 0
-            node_data["input_tokens"] += pt
-            node_data["output_tokens"] += ct
-            node_data["total_tokens"] += tt
-            if guard is not None:
-                guard.record_tokens(tt)
-            if node_token_budgets is not None:
-                node_budget = node_token_budgets.get(node_name)
-                if node_budget is not None and node_data["total_tokens"] > node_budget:
-                    raise RunawayRunError(
-                        "token_budget",
-                        node_data["total_tokens"],
-                        node_budget,
-                    )
+            _accumulate_node_token_usage(node_name, token_usage, node_token_usage, guard, node_token_budgets)
 
 
 def _terminal_failure(
