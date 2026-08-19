@@ -164,7 +164,7 @@
           :aria-label="$t('views.RunDetailView.node_progress_aria', { name: chip.name, state: nodeStateLabel(chip.state) })"
           :data-testid="`run-detail-node-progress-${chip.name}`"
           class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium transition-colors hover:opacity-80"
-          :class="chipClass(chip.state)"
+          :class="[chipClass(chip.state), expandedLogs.has(chip.name) ? 'underline decoration-dotted underline-offset-2' : '']"
           @click="toggleNodeLogs(chip.name)"
         >
           <template v-if="chip.state === 'running'">
@@ -177,13 +177,23 @@
           <Check v-else-if="chip.state === 'completed'" class="h-3 w-3" aria-hidden="true" />
           <X v-else-if="chip.state === 'failed'" class="h-3 w-3" aria-hidden="true" />
           <span v-else class="h-1.5 w-1.5 rounded-full bg-muted-foreground/40" aria-hidden="true"></span>
-          <span>{{ chip.name }}</span>
+          <span>{{ nodeLabel(chip.name) }}</span>
         </button>
       </div>
 
       <!-- Run Input Payload — the parameters provided when the run was scheduled -->
       <div v-if="runIO?.input_payload" data-testid="run-detail-input-payload" class="rounded-lg border border-border bg-card p-4 mb-4">
-        <h3 class="text-sm font-semibold mb-1">{{ $t('views.RunDetailView.run_input') }}</h3>
+        <div class="flex items-center justify-between mb-1">
+          <h3 class="text-sm font-semibold">{{ $t('views.RunDetailView.run_input') }}</h3>
+          <button
+            type="button"
+            class="text-xs text-primary hover:bg-primary/10 rounded px-2 py-1"
+            data-testid="run-detail-copy-input"
+            @click="copyInputPayload"
+          >
+            {{ inputPayloadCopied ? $t('views.RunDetailView.copied') : $t('views.RunDetailView.copy') }}
+          </button>
+        </div>
         <JsonViewer :data="runIO.input_payload" :show-toolbar="true" :max-height="'16rem'" />
       </div>
 
@@ -192,8 +202,20 @@
         <h3 class="text-sm font-semibold mb-2">{{ $t('views.RunDetailView.work_items') }}</h3>
         <div class="space-y-1.5">
           <div v-for="(item, idx) in run.work_item_refs" :key="`${item.kind}-${item.ref}-${idx}`" class="flex flex-wrap items-center gap-2 text-xs">
-            <span class="inline-flex items-center rounded-full bg-muted px-2 py-0.5 font-medium capitalize">{{ item.kind || '—' }}</span>
-            <code class="rounded bg-muted px-1.5 py-0.5 font-mono">{{ item.ref || '—' }}</code>
+            <template v-if="isGithubWorkItem(item)">
+              <a v-if="getPrUrl(item)" :href="getPrUrl(item)!" target="_blank" rel="noopener noreferrer" :data-testid="`run-detail-pr-link-${idx}`" class="inline-flex items-center gap-1 text-primary hover:underline">
+                <span class="badge text-xs badge-context-blue">{{ githubKindLabel(item) }}</span>
+                <span class="font-medium">#{{ githubRefId(item) }}</span>
+              </a>
+              <span v-else class="inline-flex items-center gap-1">
+                <span class="badge text-xs badge-context-blue">{{ githubKindLabel(item) }}</span>
+                <span class="font-medium">#{{ githubRefId(item) }}</span>
+              </span>
+            </template>
+            <template v-else>
+              <span class="inline-flex items-center rounded-full bg-muted px-2 py-0.5 font-medium capitalize">{{ item.kind || '—' }}</span>
+              <code class="rounded bg-muted px-1.5 py-0.5 font-mono">{{ item.ref || '—' }}</code>
+            </template>
             <span v-if="item.source" class="text-muted-foreground">{{ item.source }}</span>
             <span v-if="item.status" class="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-muted-foreground capitalize">{{ item.status }}</span>
           </div>
@@ -694,6 +716,7 @@
 
 <script setup lang="ts">
 import { computed, onUnmounted, ref } from 'vue'
+import type { Ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { api, getAccessToken } from '../lib/api/client'
@@ -814,6 +837,7 @@ const copied = ref(false)
 const shareCopied = ref(false)
 const promptCopied = ref(false)
 const outputCopied = ref(false)
+const inputPayloadCopied = ref(false)
 const pollInterval = ref<ReturnType<typeof setInterval> | null>(null)
 const promptLoading = ref(new Set<string>())
 const revealedPrompts = ref<Record<string, null | { prompt: string; messages: { role: string; content: string }[]; tokenCount: number; promptAlwaysVisible: boolean }>>({})
@@ -1000,11 +1024,11 @@ async function copyRunId() {
   await copyText(run.value.run_id)
 }
 
-async function copyText(text: string) {
+async function copyText(text: string, flag: Ref<boolean> = copied) {
   try {
     await navigator.clipboard.writeText(text)
-    copied.value = true
-    setTimeout(() => { copied.value = false }, 2000)
+    flag.value = true
+    setTimeout(() => { flag.value = false }, 2000)
   } catch (e) {
     console.warn('Failed to copy text', e)
   }
@@ -1013,6 +1037,36 @@ async function copyText(text: string) {
 function nodeLabel(nodeId: string): string {
   const labels = runIO.value?.node_labels as Record<string, string> | undefined
   return labels?.[nodeId] || shortId(nodeId)
+}
+
+const GITHUB_KINDS = ['github', 'github_pr', 'github_issue'] as const
+
+function isGithubWorkItem(item: WorkItemRef): boolean {
+  return GITHUB_KINDS.includes((item.kind || '').toLowerCase() as (typeof GITHUB_KINDS)[number])
+}
+
+function githubKindLabel(item: WorkItemRef): string {
+  const kind = (item.kind || '').toLowerCase()
+  const key =
+    kind === 'github' || kind === 'github_pr' || kind === 'github_issue'
+      ? `views.RunDetailView.work_item_kind_${kind}`
+      : 'views.RunDetailView.work_item_kind_github_default'
+  return t(key)
+}
+
+function githubRefId(item: WorkItemRef): string {
+  return (item.ref || '').trim().replace(/^[^/\s]+\/[^/\s]+#/, '')
+}
+
+function getPrUrl(item: WorkItemRef): string | null {
+  const kind = (item.kind || '').toLowerCase()
+  const ref = (item.ref || '').trim()
+  const m = ref.match(/^([^/\s]+)\/([^/\s]+)#(.+)$/)
+  if (!m) return null
+  const [, owner, repo, id] = m
+  if (kind === 'github_pr') return `https://github.com/${owner}/${repo}/pull/${id}`
+  if (kind === 'github_issue') return `https://github.com/${owner}/${repo}/issues/${id}`
+  return `https://github.com/${owner}/${repo}`
 }
 
 async function revealPrompt(nodeName: string) {
@@ -1304,6 +1358,12 @@ async function copyOutput() {
   } catch (e) {
     console.warn('Failed to copy output', e)
   }
+}
+
+async function copyInputPayload() {
+  const payload = runIO.value?.input_payload
+  if (!payload) return
+  await copyText(JSON.stringify(payload, null, 2), inputPayloadCopied)
 }
 
 async function claimGate(gate: components['schemas']['GateResponse']) {
