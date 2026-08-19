@@ -407,3 +407,28 @@ def test_script_budget_killed_is_known_and_expands():
     assert map_legacy_code("script.budget_killed") == "script.budget_killed"
     assert class_for("script.budget_killed") == "script"
     assert class_for("ScriptBudgetKilledError") == "script"
+
+
+def test_sandbox_rate_limited_is_known_retryable_and_expands():
+    """sandbox.rate_limited is a known, RETRYABLE code (FAR-296 Phase 4a E2B
+    rate-limit queueing). Both the retryable wrapper ``SandboxRateLimitedError``
+    and the un-retried e2b ``RateLimitException`` class name resolve to it — a
+    429 must never fall through to the permanent ``harness.unknown``."""
+    known = known_error_codes()
+    assert "sandbox.rate_limited" in known
+    assert "SandboxRateLimitedError" in known
+    assert "RateLimitException" in known
+    spec = ERROR_CODE_REGISTRY["sandbox.rate_limited"]
+    assert spec.error_class == "sandbox"
+    assert spec.retryable is True
+    assert spec.alert_severity == "warning"
+    assert is_retryable("SandboxRateLimitedError") is True
+    assert is_retryable("RateLimitException") is True
+    assert is_retryable("sandbox.rate_limited") is True
+    assert map_legacy_code("SandboxRateLimitedError") == "sandbox.rate_limited"
+    assert map_legacy_code("RateLimitException") == "sandbox.rate_limited"
+    assert class_for("SandboxRateLimitedError") == "sandbox"
+    assert class_for("RateLimitException") == "sandbox"
+    assert "sandbox.rate_limited" in expand_code_variants("SandboxRateLimitedError")
+    assert "SandboxRateLimitedError" in expand_code_variants("sandbox.rate_limited")
+    assert "RateLimitException" in expand_code_variants("sandbox.rate_limited")

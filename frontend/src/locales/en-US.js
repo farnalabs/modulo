@@ -973,8 +973,6 @@ export default {
       "trend_90d": "90d",
       "trend_all_time": "All time",
       "no_prior_data": "No prior period data",
-      "run_a_pipeline": "Run a Pipeline",
-      "select_a_pipeline_and_run_it_with_a_prompt": "Choose a pipeline and configure its parameters before running it.",
       "invalid_dashboard_data": "Received invalid dashboard data from server.",
       "invalid_trends_data": "Received invalid trends data from server.",
       "invalid_days_parameter": "Invalid days parameter: must be a positive integer.",

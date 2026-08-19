@@ -107,9 +107,9 @@ const deltaAbsText = computed(() => {
   return `${sign}${formatted}`;
 });
 
-function arrowFor(delta: number, inverted: boolean): string {
-  if (delta > 0) return inverted ? '▼' : '▲'
-  if (delta < 0) return inverted ? '▲' : '▼'
+function arrowFor(delta: number): string {
+  if (delta > 0) return '▲'
+  if (delta < 0) return '▼'
   return '→'
 }
 
@@ -122,13 +122,13 @@ function classFor(delta: number, inverted: boolean): string {
 const deltaArrow = computed(() => {
   const d = deltaPct.value;
   if (d == null) return "";
-  return arrowFor(d, props.inverted ?? false);
+  return arrowFor(d);
 });
 
 const deltaAbsArrow = computed(() => {
   const d = deltaAbs.value;
   if (d == null) return "";
-  return arrowFor(d, props.inverted ?? false);
+  return arrowFor(d);
 });
 
 const deltaClass = computed(() => {

@@ -5,6 +5,17 @@ test.describe('JsonViewer design-token theming', { tag: '@regression' }, () => {
   // dev server can exceed the 30s default before any assertion runs.
   test.setTimeout(90_000)
 
+  test.beforeEach(async ({ page }) => {
+    // The Remy floating panel (rendered on staging where dev-mode is on) opens
+    // by default and its fixed-position overlay intercepts clicks on interactive
+    // page content, timing out locator.click() with "subtree intercepts pointer
+    // events". Force the panel closed before the app boots so it can never cover
+    // the JsonViewer toolbar/expand controls. Mirrors view-modes-admin.spec.ts.
+    await page.addInitScript(() => {
+      localStorage.setItem('remy-panel-state', 'closed')
+    })
+  })
+
   test('renders vue-json-pretty with token colours and no dep palette leaks', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
 
