@@ -34,18 +34,6 @@ const sampleViews = {
 }
 
 test.describe('View Modes Admin CRUD', { tag: "@regression" }, () => {
-  test.beforeEach(async ({ page }) => {
-    // The Remy floating panel (rendered on staging where dev-mode is on) opens
-    // by default and its fixed-position overlay intercepts clicks on the
-    // header's Create View button, timing out locator.click() with
-    // "subtree intercepts pointer events". Force the panel closed before the
-    // app boots so it can never cover page controls. The small Remy FAB (shown
-    // only when the panel is closed) sits bottom-right and never overlaps.
-    await page.addInitScript(() => {
-      localStorage.setItem('remy-panel-state', 'closed')
-    })
-  })
-
   test('page loads and shows header + Create View button', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.route('**/api/v1/views**', (route) => {
