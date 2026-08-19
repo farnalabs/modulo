@@ -946,3 +946,74 @@ async def test_check_node_start_sandbox_unknown_fails_closed(monkeypatch: pytest
     )
     assert result.blocked is True
     assert result.state == "unknown"
+
+
+async def test_build_live_manifest_sandbox_git_credentials_scoped_is_certified():
+    """Scoped git credentials are the SAFE state and are NOT polarity-inverted:
+    raw scoped=True -> the manifest's sandbox.git_credentials is True (the
+    'git credentials are scoped' guarantee is confirmed)."""
+    registered = await build_live_manifest(
+        AsyncMock(),
+        org_id=_ORG_ID,
+        connector_instance_ids=[],
+        environment_profile_id=None,
+        agent_id=None,
+        node_def=_sandbox_node(git_credentials="scoped"),
+    )
+    assert registered.get("sandbox.git_credentials") is True
+
+
+async def test_build_live_manifest_sandbox_git_credentials_unscoped_violates_claim():
+    """Unscoped/full-access git credentials -> raw False -> the manifest's
+    sandbox.git_credentials is False (the scoped-git guarantee is violated)."""
+    registered = await build_live_manifest(
+        AsyncMock(),
+        org_id=_ORG_ID,
+        connector_instance_ids=[],
+        environment_profile_id=None,
+        agent_id=None,
+        node_def=_sandbox_node(git_credentials="unscoped"),
+    )
+    assert registered.get("sandbox.git_credentials") is False
+
+
+async def test_build_live_manifest_sandbox_git_credentials_undeclared_is_unknown():
+    """An undeclared git-credential surface cannot be confirmed either way ->
+    the capability is absent from the manifest (unknown) -> fail-closed."""
+    registered = await build_live_manifest(
+        AsyncMock(),
+        org_id=_ORG_ID,
+        connector_instance_ids=[],
+        environment_profile_id=None,
+        agent_id=None,
+        node_def=_sandbox_node(),
+    )
+    assert registered.get("sandbox.git_credentials") is None
+
+
+async def test_check_node_start_sandbox_scoped_git_certifies_guardrail(monkeypatch: pytest.MonkeyPatch):
+    """A block guardrail requiring sandbox.git_credentials on a node with SCOPED
+    git credentials is CERTIFIED (present) — confirmed the credentials are
+    limited, not full-access."""
+    result = await _run_hoisted_check(
+        monkeypatch,
+        guardrails=[_gr("g_scopedgit", "block", ["sandbox.git_credentials"])],
+        node_def=_sandbox_node(git_credentials="scoped"),
+    )
+    assert result.blocked is False
+    assert result.state == "present"
+    assert result.claimed is True
+
+
+async def test_check_node_start_sandbox_unscoped_git_blocks_guardrail(monkeypatch: pytest.MonkeyPatch):
+    """A block guardrail requiring sandbox.git_credentials on a node with
+    UNscoped git credentials is non-conformant (absent) -> fail-closed block:
+    the scoped-git guarantee is false."""
+    result = await _run_hoisted_check(
+        monkeypatch,
+        guardrails=[_gr("g_scopedgit", "block", ["sandbox.git_credentials"])],
+        node_def=_sandbox_node(git_credentials="unscoped"),
+    )
+    assert result.blocked is True
+    assert result.state == "absent"
+    assert result.gate_id == "guardrail_conformance_g_scopedgit"

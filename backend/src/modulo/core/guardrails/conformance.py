@@ -104,20 +104,42 @@ def _capabilities_for_agent(row: Any) -> set[str]:
     return set()
 
 
+# Sandbox capabilities whose block-guarantee is a DENY/negative guarantee —
+# ``required_capabilities=["sandbox.write_files"]`` certifies writes are
+# IMPOSSIBLE and ``["sandbox.egress"]`` certifies no egress, so the RAW
+# mechanical polarity (True = risk present) is INVERTED when stamped into the
+# manifest. ``sandbox.git_credentials`` is NOT here: its guarantee is positive
+# (certifies git credentials are scoped/limited), so its raw polarity already
+# matches the manifest (True = scoped = the certified state). Keyed on the
+# capability names from ``sandbox_mode.SANDBOX_CAPABILITY_*``.
+_SANDBOX_DENY_POLARITY_CAPS = frozenset(
+    {
+        "sandbox.write_files",
+        "sandbox.egress",
+    }
+)
+
+
 def _add_sandbox_surface(registered: dict[str, bool | None], sandbox_caps: dict[str, bool | None]) -> None:
     """Stamp the mechanically-derived sandbox surface with CONFORMANCE polarity.
 
-    A block-action conformance claim on the sandbox surface is a DENY/negative
-    guarantee: ``required_capabilities=["sandbox.write_files"]`` certifies that
-    writes are IMPOSSIBLE, ``["sandbox.egress"]`` certifies no egress. The
-    mechanical derivation (:func:`derive_sandbox_capabilities`) returns the RAW
-    polarity (True = writable / egress allowed / scoped credentials), so the
-    manifest inverts it and the existing three-state derivation reads it
-    correctly:
+    A block-action conformance claim on the sandbox surface is, for the
+    write/egress pair, a DENY/negative guarantee: ``["sandbox.write_files"]``
+    certifies that writes are IMPOSSIBLE, ``["sandbox.egress"]`` certifies no
+    egress. The mechanical derivation (:func:`derive_sandbox_capabilities`)
+    returns the RAW polarity (True = writable / egress allowed), so the
+    manifest INVERTS those two and the existing three-state derivation reads
+    them correctly:
 
       mechanical False (confirmed absent) -> registered True  (guarantee holds)
       mechanical True  (present)           -> registered False (claim violated)
       None (unknown)                       -> registered None (fail-closed)
+
+    ``sandbox.git_credentials`` is a POSITIVE guarantee — ``["sandbox.git_credentials"]``
+    certifies the node's git credentials are SCOPED (limited) — so its raw
+    polarity already matches the manifest (scoped=True -> registered True) and
+    is stamped AS-IS, never inverted. Inverting it would certify the risky
+    state (unscoped/full-access) and block the safe state (scoped).
 
     The sandbox surface is stamped LAST (overriding any earlier surface) — the
     node's actual sandbox configuration is authoritative for the sandbox
@@ -125,7 +147,12 @@ def _add_sandbox_surface(registered: dict[str, bool | None], sandbox_caps: dict[
     confirmed state.
     """
     for capability, value in sandbox_caps.items():
-        registered[capability] = None if value is None else not value
+        if value is None:
+            registered[capability] = None
+        elif capability in _SANDBOX_DENY_POLARITY_CAPS:
+            registered[capability] = not value
+        else:
+            registered[capability] = value
 
 
 async def build_live_manifest(
