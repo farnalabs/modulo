@@ -98,13 +98,23 @@ async def get_notification(
     *,
     org_id: uuid.UUID,
     notification_id: uuid.UUID,
+    user_id: uuid.UUID | None = None,
 ) -> Notification | None:
-    result = await session.execute(
-        select(Notification).where(
-            Notification.organisation_id == org_id,
-            Notification.id == notification_id,
-        )
-    )
+    """Fetch a notification by ID, optionally enforcing user visibility.
+
+    When ``user_id`` is provided, applies the same visibility clause used by
+    list/dashboard queries so that scope='user' notifications belonging to
+    other users and scope='admin' notifications are hidden from non-admin
+    callers. Without ``user_id``, returns any notification in the org (legacy
+    behaviour for system-internal callers).
+    """
+    filters = [
+        Notification.organisation_id == org_id,
+        Notification.id == notification_id,
+    ]
+    if user_id is not None:
+        filters.append(_visible_to_user_clause(user_id))
+    result = await session.execute(select(Notification).where(*filters))
     return result.scalar_one_or_none()
 
 

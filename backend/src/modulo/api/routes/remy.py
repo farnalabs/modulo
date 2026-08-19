@@ -107,6 +107,10 @@ _resume_events: dict[str, asyncio.Event] = {}
 _session_approvals: dict[str, dict[str, dict[str, Any]]] = {}
 _SESSION_APPROVAL_TTL = timedelta(minutes=30)
 
+# Index: account_id -> set of session_ids that belong to this account.
+# Used by per-account logout scoping (FAR-1470).
+_account_sessions: dict[str, set[str]] = {}
+
 # ── Redis registry (lazy-init, multi-worker capable) ─────────────────────
 
 _redis_registry: Any | None = None
@@ -460,6 +464,10 @@ async def _validate_session_ownership(
     chat_session = await db.get(ChatSession, session_id)
     if chat_session is None or chat_session.user_id != principal.account_id:
         raise HTTPException(status_code=404, detail=_MSG_SESSION_NOT_FOUND)
+    # Track session→account mapping for per-account logout (FAR-1470)
+    account_id_str = str(principal.account_id)
+    session_id_str = str(session_id)
+    _account_sessions.setdefault(account_id_str, set()).add(session_id_str)
     return chat_session
 
 
@@ -571,12 +579,22 @@ async def _clear_session_approvals(session_id: str) -> None:
     _session_approvals.pop(session_id, None)
 
 
-def clear_all_session_approvals() -> None:
-    """Clear all in-memory session approvals (called on logout).
-    NOTE: Does NOT clear Redis-backed approvals — multi-worker logout
-    needs an async variant that calls RemyRedisRegistry.clear_session_approvals.
+def clear_session_approvals_for_account(account_id: str) -> None:
+    """Clear session approvals for a specific account only (FAR-1470).
+
+    Scopes the logout to the caller's own sessions instead of clearing
+    every user's in-memory approvals, using the account→sessions index. If the
+    index wasn't populated on this worker (sessions live on another instance),
+    there is nothing scoped to clear here — deliberately no clear-all fallback,
+    which would wipe every account's approvals (FAR-1470 regression).
     """
-    _session_approvals.clear()
+    session_ids = _account_sessions.pop(account_id, set())
+    for sid in session_ids:
+        _session_approvals.pop(sid, None)
+    # No clear-all fallback: if the account index wasn't populated on this
+    # worker (sessions live on another instance), clearing every account's
+    # in-memory approvals would recreate the cross-account wipe FAR-1470
+    # set out to fix. The account has no scoped approvals here to clear.
 
 
 def _get_all_tool_definitions(include_ui_tools: bool = True) -> list[dict[str, Any]]:

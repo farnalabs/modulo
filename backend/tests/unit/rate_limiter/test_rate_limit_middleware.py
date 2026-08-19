@@ -214,73 +214,81 @@ class TestRuleFor:
 
 
 class TestClientKey:
-    def test_api_key_principal(self):
+    @pytest.fixture
+    def middleware(self) -> RateLimitMiddleware:
+        return RateLimitMiddleware(
+            app=FastAPI(),
+            settings=make_settings(),
+            registry=_registry(),
+        )
+
+    def test_api_key_principal(self, middleware):
         scope = {"auth_principal": {"type": "api_key", "org_id": "org1", "prefix": "mk_abcdefgh"}}
         req = make_mock_request(scope=scope)
-        assert RateLimitMiddleware._client_key(req) == "ak:org1:mk_abcdefgh:/api/v1/runs"
+        assert middleware._client_key(req) == "ak:org1:mk_abcdefgh:/api/v1/runs"
 
-    def test_user_principal(self):
+    def test_user_principal(self, middleware):
         scope = {"auth_principal": {"type": "user", "org_id": "org1", "user_id": "u1"}}
         req = make_mock_request(scope=scope)
-        assert RateLimitMiddleware._client_key(req) == "user:org1:u1:/api/v1/runs"
+        assert middleware._client_key(req) == "user:org1:u1:/api/v1/runs"
 
-    def test_unknown_principal_type_falls_back_to_ip(self):
+    def test_unknown_principal_type_falls_back_to_ip(self, middleware):
         """A truthy auth_principal with an unrecognised type must fall through to IP keying."""
         scope = {"auth_principal": {"type": "service", "org_id": "org1"}}
         req = make_mock_request(scope=scope, headers={"X-Forwarded-For": "203.0.113.9"})
-        assert RateLimitMiddleware._client_key(req) == "ip:203.0.113.9:/api/v1/runs"
+        assert middleware._client_key(req) == "ip:203.0.113.9:/api/v1/runs"
 
-    def test_bearer_management_api_key(self):
+    def test_bearer_management_api_key(self, middleware):
         token = "mk_abcdefgh1234567890"
         req = make_mock_request(headers={"Authorization": f"Bearer {token}"})
-        assert RateLimitMiddleware._client_key(req) == "ak:none:abcdefgh:/api/v1/runs"
+        assert middleware._client_key(req) == "ak:none:abcdefgh:/api/v1/runs"
 
-    def test_bearer_jwt_with_org_and_user(self):
+    def test_bearer_jwt_with_org_and_user(self, middleware):
         token = jwt.encode({"org_id": "o1", "user_id": "u1"}, "a" * 32, algorithm="HS256")
         req = make_mock_request(headers={"Authorization": f"Bearer {token}"})
-        assert RateLimitMiddleware._client_key(req) == "user:o1:u1:/api/v1/runs"
+        assert middleware._client_key(req) == "user:o1:u1:/api/v1/runs"
 
-    def test_bearer_jwt_falls_back_to_account_id(self):
+    def test_bearer_jwt_falls_back_to_account_id(self, middleware):
         token = jwt.encode({"org_id": "o1", "account_id": "a1"}, "a" * 32, algorithm="HS256")
         req = make_mock_request(headers={"Authorization": f"Bearer {token}"})
-        assert RateLimitMiddleware._client_key(req) == "user:o1:a1:/api/v1/runs"
+        assert middleware._client_key(req) == "user:o1:a1:/api/v1/runs"
 
-    def test_bearer_jwt_without_identity_falls_back_to_ip(self):
+    def test_bearer_jwt_without_identity_falls_back_to_ip(self, middleware):
         token = jwt.encode({"scope": "public"}, "a" * 32, algorithm="HS256")
         req = make_mock_request(headers={"Authorization": f"Bearer {token}", "X-Forwarded-For": "203.0.113.9"})
-        assert RateLimitMiddleware._client_key(req) == "ip:203.0.113.9:/api/v1/runs"
+        assert middleware._client_key(req) == "ip:203.0.113.9:/api/v1/runs"
 
-    def test_bearer_jwt_without_org_id_falls_back_to_ip(self):
+    def test_bearer_jwt_without_org_id_falls_back_to_ip(self, middleware):
         """A JWT with only user_id must not key on a missing org_id."""
         token = jwt.encode({"user_id": "u1"}, "a" * 32, algorithm="HS256")
         req = make_mock_request(headers={"Authorization": f"Bearer {token}", "X-Forwarded-For": "203.0.113.9"})
-        assert RateLimitMiddleware._client_key(req) == "ip:203.0.113.9:/api/v1/runs"
+        assert middleware._client_key(req) == "ip:203.0.113.9:/api/v1/runs"
 
-    def test_bearer_jwt_without_user_id_falls_back_to_ip(self):
+    def test_bearer_jwt_without_user_id_falls_back_to_ip(self, middleware):
         """A JWT with only org_id must not key on a missing user_id."""
         token = jwt.encode({"org_id": "o1"}, "a" * 32, algorithm="HS256")
         req = make_mock_request(headers={"Authorization": f"Bearer {token}", "X-Forwarded-For": "203.0.113.9"})
-        assert RateLimitMiddleware._client_key(req) == "ip:203.0.113.9:/api/v1/runs"
+        assert middleware._client_key(req) == "ip:203.0.113.9:/api/v1/runs"
 
-    def test_invalid_bearer_token_falls_back_to_ip(self):
+    def test_invalid_bearer_token_falls_back_to_ip(self, middleware):
         headers = {"Authorization": "Bearer garbage.not.a.jwt.x", "X-Forwarded-For": "198.51.100.7"}
         req = make_mock_request(headers=headers)
-        assert RateLimitMiddleware._client_key(req) == "ip:198.51.100.7:/api/v1/runs"
+        assert middleware._client_key(req) == "ip:198.51.100.7:/api/v1/runs"
 
-    def test_x_forwarded_for_first_hop(self):
+    def test_x_forwarded_for_first_hop(self, middleware):
         req = make_mock_request(headers={"X-Forwarded-For": "198.51.100.7, 10.0.0.1"})
-        assert RateLimitMiddleware._client_key(req) == "ip:198.51.100.7:/api/v1/runs"
+        assert middleware._client_key(req) == "ip:198.51.100.7:/api/v1/runs"
 
-    def test_client_host_fallback(self):
+    def test_client_host_fallback(self, middleware):
         req = make_mock_request(client=MagicMock(host="203.0.113.42"))
-        assert RateLimitMiddleware._client_key(req) == "ip:203.0.113.42:/api/v1/runs"
+        assert middleware._client_key(req) == "ip:203.0.113.42:/api/v1/runs"
 
-    def test_client_host_none_falls_back_to_unknown(self):
+    def test_client_host_none_falls_back_to_unknown(self, middleware):
         client = MagicMock()
         client.host = None
         req = make_mock_request(client=client)
-        assert RateLimitMiddleware._client_key(req) == "ip:unknown:/api/v1/runs"
+        assert middleware._client_key(req) == "ip:unknown:/api/v1/runs"
 
-    def test_no_client_falls_back_to_unknown(self):
+    def test_no_client_falls_back_to_unknown(self, middleware):
         req = make_mock_request(client=None)
-        assert RateLimitMiddleware._client_key(req) == "ip:unknown:/api/v1/runs"
+        assert middleware._client_key(req) == "ip:unknown:/api/v1/runs"
