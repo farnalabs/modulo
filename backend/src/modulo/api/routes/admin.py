@@ -19,7 +19,13 @@ from modulo.api.constants import (
     MSG_UNEXPECTED_ERROR,
 )
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_feature, require_permission, require_system_or_org_admin
+from modulo.api.dependencies import (
+    deny_break_glass_mint,
+    get_db_session,
+    require_feature,
+    require_permission,
+    require_system_or_org_admin,
+)
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
@@ -430,6 +436,17 @@ async def admin_create_user(
                         status_code=status.HTTP_409_CONFLICT,
                         detail="A user with this email already exists in this organisation",
                     )
+                # SECURITY (#1185): refuse password hash overwrite when the
+                # account belongs to other orgs — prevents cross-tenant takeover.
+                # Allow adoption for SSO/SCIM accounts (no local password).
+                if existing.password_hash is not None and existing.auth_provider == "local":
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=(
+                            "EMAIL_ACCOUNT_EXISTS: An account with this email exists"
+                            " in another organisation. Password-based adoption is not allowed."
+                        ),
+                    )
 
         try:
             validate_password_strength(req.password)
@@ -446,6 +463,16 @@ async def admin_create_user(
 
             if existing is not None:
                 account = existing
+                # SECURITY (#1185): only allow password hash overwrite for
+                # accounts that have NO existing password (SSO/SCIM JIT).
+                if account.password_hash is not None:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=(
+                            "EMAIL_ACCOUNT_EXISTS: An account with this email exists"
+                            " in another organisation. Password-based adoption is not allowed."
+                        ),
+                    )
                 account.password_hash = pw_hash
             else:
                 account = await create_account(
@@ -741,7 +768,7 @@ async def admin_update_org(
     )
 
 
-@router.post("/org/regenerate-api-key", status_code=status.HTTP_200_OK)
+@router.post("/org/regenerate-api-key", status_code=status.HTTP_200_OK, dependencies=[Depends(deny_break_glass_mint)])
 @handle_db_errors("admin.admin_regenerate_api_key")
 async def admin_regenerate_api_key(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -935,13 +962,18 @@ async def admin_update_user(
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
 
+            # SECURITY (#1188): verify the target has membership in the caller's org
+            # before allowing any mutation — prevents cross-tenant account interference.
+            target_membership = await get_membership_by_account_and_org(session, user_id, current_user.organisation_id)
+            if target_membership is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="User not found in this organisation",
+                )
+
             target_role_after = req.org_role
             if target_role_after is None:
-                current_membership = await get_membership_by_account_and_org(
-                    session, user_id, current_user.organisation_id
-                )
-                if current_membership is not None:
-                    target_role_after = current_membership.role
+                target_role_after = target_membership.role
 
             await assert_not_last_admin(
                 session,
@@ -1236,6 +1268,15 @@ async def admin_reactivate_user(
                     detail=_MSG_BREAK_GLASS_ACCOUNTS_CANNOT,
                 )
 
+            # SECURITY (#1188): verify the target has membership in the caller's org
+            # before reactivating — prevents cross-tenant account interference.
+            membership = await get_membership_by_account_and_org(session, user_id, current_user.organisation_id)
+            if membership is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="User not found in this organisation",
+                )
+
             account.active = True
 
             from sqlalchemy import update as sa_update
@@ -1338,6 +1379,15 @@ async def admin_reset_password(
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=_MSG_BREAK_GLASS_ACCOUNTS_CANNOT,
+                )
+
+            # SECURITY (#1186): verify the target is a member of the caller's org
+            # before resetting password — prevents cross-tenant credential takeover.
+            membership = await get_membership_by_account_and_org(session, user_id, current_user.organisation_id)
+            if membership is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="User not found in this organisation",
                 )
 
             temporary_password = secrets.token_urlsafe(18)[:24]

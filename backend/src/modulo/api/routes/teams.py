@@ -924,6 +924,20 @@ async def remove_member_endpoint(
             if membership is None or membership.team_id != team_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_MEMBERSHIP_NOT_FOUND)
 
+            # SECURITY (#1194): operator cannot remove someone with equal or
+            # higher team role — prevents intra-org privilege interference.
+            if not is_admin:
+                target_level = TEAM_ROLE_HIERARCHY.get(membership.role, -1)
+                caller_level = TEAM_ROLE_HIERARCHY.get(caller_membership.role, -1)
+                if target_level >= caller_level:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail=(
+                            f"Cannot remove member with role '{membership.role}'"
+                            f" — your role is '{caller_membership.role}'"
+                        ),
+                    )
+
             if membership.role == "operator":
                 await _assert_not_last_operator(session, team_id, membership_id)
 
@@ -1035,6 +1049,21 @@ async def change_member_role_endpoint(
             if existing is None or existing.team_id != team_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_MEMBERSHIP_NOT_FOUND)
             old_role = existing.role
+
+            # SECURITY (#1194): operator cannot demote someone with equal or
+            # higher team role — prevents intra-org privilege interference.
+            if not is_admin:
+                target_level = TEAM_ROLE_HIERARCHY.get(old_role, -1)
+                caller_level = TEAM_ROLE_HIERARCHY.get(caller_membership.role, -1)
+                if target_level >= caller_level:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail=(
+                            f"Cannot change role of member with role '{old_role}'"
+                            f" — your role is '{caller_membership.role}'"
+                        ),
+                    )
+
             if old_role == "operator" and req.role != "operator":
                 await _assert_not_last_operator(session, team_id, membership_id)
             membership = await update_member_role(session, membership_id, req.role)

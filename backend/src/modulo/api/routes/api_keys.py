@@ -268,6 +268,12 @@ async def list_api_keys_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("api_key.update"),
 ) -> list[dict[str, Any]]:
+    # SECURITY (#1305): raise floor to operator — runners should not enumerate all org keys.
+    if ORG_ROLE_HIERARCHY.get(principal.org_role, -1) < ORG_ROLE_HIERARCHY["operator"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin or operator users can list API keys",
+        )
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
