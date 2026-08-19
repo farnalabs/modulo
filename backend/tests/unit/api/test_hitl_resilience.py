@@ -2,6 +2,7 @@
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -105,6 +106,65 @@ class TestApproveGateAtSandboxCapacity:
         )
         assert resp.status_code == 409
         assert "gate left undecided" in resp.json()["detail"]
+
+
+class TestResumeSandboxCapacityExceeded:
+    """Executor-level (post pre-check) SandboxCapacityExceededError → 409 on each
+    of the four resume routes. Regression for the reviewer finding: the route's
+    fast-fail pre-check was mocked, but the executor's atomic gate (FAR-1306) was
+    never covered at the route layer."""
+
+    @staticmethod
+    def _executor_raising() -> MagicMock:
+        from modulo.core.pipeline_engine.executor import SandboxCapacityExceededError
+
+        executor = MagicMock()
+        executor.resume = AsyncMock(
+            side_effect=SandboxCapacityExceededError(_ORG_ID),
+        )
+        return executor
+
+    @pytest.mark.parametrize(
+        ("path", "payload", "hitl_method"),
+        [
+            ("hitl/gate-1/approve", {"claim_token": "test-token", "notes": "approved"}, "approve"),
+            (
+                "hitl/gate-1/approve-with-modification",
+                {"claim_token": "test-token", "modified_output": {"key": "value"}, "notes": "mod"},
+                "approve_with_modification",
+            ),
+            (
+                "hitl/gate-1/deliver-manual",
+                {"claim_token": "test-token", "output": {"result": "ok"}},
+                "deliver_manual",
+            ),
+            (
+                "manual/gate-1/submit",
+                {"claim_token": "test-token", "output": {"result": "ok"}},
+                "approve",
+            ),
+        ],
+    )
+    def test_resume_capacity_exceeded_returns_409(
+        self,
+        client: TestClient,
+        path: str,
+        payload: dict[str, Any],
+        hitl_method: str,
+    ) -> None:
+        executor = self._executor_raising()
+        with (
+            patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
+            patch(
+                f"modulo.api.routes.hitl.HITLManager.{hitl_method}",
+                new=AsyncMock(),
+            ),
+            patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
+        ):
+            resp = client.post(f"/api/v1/runs/{_RUN_ID}/{path}", json=payload)
+
+        assert resp.status_code == 409
+        assert executor.resume.await_count == 1
 
 
 class TestApproveWithModificationSQLAlchemyError:

@@ -22515,7 +22515,9 @@ export interface operations {
     };
     validate_schema_endpoint_api_v1_schemas_validate_post: {
         parameters: {
-            query?: never;
+            query?: {
+                _fresh?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -22548,7 +22550,9 @@ export interface operations {
     };
     import_schema_endpoint_api_v1_schemas_import_post: {
         parameters: {
-            query?: never;
+            query?: {
+                _fresh?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
