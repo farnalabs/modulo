@@ -2406,6 +2406,50 @@ async def test_execute_capacity_blocked_returns_pending_without_retry_task():
     create_task.assert_not_called()
 
 
+async def test_resume_at_org_sandbox_capacity_raises():
+    """The atomic resume() gate (FAR-1306) must raise SandboxCapacityExceededError
+    when the org's active sandbox count already meets the cap — even though the
+    HITL route's fast-fail pre-check was mocked open. Regression for the reviewer
+    finding: no test exercised the executor exception, only the route pre-check."""
+    from modulo.core.pipeline_engine.executor import SandboxCapacityExceededError
+
+    run = _make_run()
+    snapshot = _make_snapshot()
+    snapshot.graph_json = {"nodes": [{"id": "agent-a", "node_type": "sandbox_agent"}]}
+
+    graph_json_result = MagicMock()
+    graph_json_result.scalar_one_or_none.return_value = snapshot.graph_json
+
+    session = AsyncMock(spec=AsyncSession)
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    session.execute = AsyncMock(return_value=graph_json_result)
+
+    @asynccontextmanager
+    async def _ctx():
+        yield session
+
+    executor = PipelineExecutor(MagicMock())
+    executor._session_factory = MagicMock(side_effect=lambda: _ctx())
+
+    org_id = uuid.uuid4()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=2),
+        patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", return_value=2),
+        pytest.raises(SandboxCapacityExceededError),
+    ):
+        await executor.resume(run_id=run.id, org_id=org_id, resume_data={"action": "approved"})
+
+    graph_lock_exec = session.execute.await_args_list[1]
+    assert "pg_advisory_xact_lock" in graph_lock_exec.args[0].text
+
+
 @pytest.mark.parametrize("terminal_status", ["complete", "failed", "cancelled", "eval_failed"])
 async def test_execute_returns_terminal_run_without_retry_task(terminal_status: str):
     """A terminal run returned by _check_capacity is returned as-is, never resurrected.

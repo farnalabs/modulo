@@ -43,6 +43,7 @@ from sqlalchemy import Boolean, Uuid, bindparam, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.audit_logger import append_audit_event
+from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 from modulo.core.cost_controller.finalize import derive_node_type_map, finalize_cost
 from modulo.core.eval_engine import (
     EvalBlockedError,
@@ -1931,13 +1932,17 @@ class PipelineExecutor:
             ):
                 cap = await get_sandbox_concurrency_limit(session, org_id)
                 if cap is not None:
-                    # pg_advisory_lock(key1, key2) — key1 = org hash, key2 = 0.
-                    # Blocks until the lock is free (serialises concurrent resumes
-                    # for the same org) and holds it until the transaction commits.
-                    lock_key = hash(str(org_id)) % (2**31)
+                    # pg_advisory_xact_lock(k1, k2) — the two int4 keys are derived
+                    # from a deterministic md5 of the org UUID (same pattern as the
+                    # break-glass migration), so all workers/machines for the same
+                    # org hash to the SAME key (unlike hash(str(org_id)), which
+                    # PYTHONHASHSEED salts per-process). xact-scoped, so it is
+                    # released automatically exactly at this transaction's commit /
+                    # rollback — never leaked onto a pooled connection.
+                    k1, k2 = _uuid_to_lock_keys(org_id)
                     await session.execute(
-                        text("SELECT pg_advisory_lock(:lk)"),
-                        {"lk": lock_key},
+                        text("SELECT pg_advisory_xact_lock(:k1, :k2)"),
+                        {"k1": k1, "k2": k2},
                     )
                     active = await count_active_sandbox_runs_for_org(session, org_id, exclude_run_id=run_id)
                     if active >= cap:
