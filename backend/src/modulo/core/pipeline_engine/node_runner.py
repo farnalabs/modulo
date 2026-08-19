@@ -4475,6 +4475,10 @@ async def _sandbox_cancel_retention_persist(
         asyncio.get_running_loop()
     except RuntimeError:
         return
+    # nosemgrep: create-task-without-guard — this helper is an `async def`, so a
+    # running event loop always exists; the rule's own `async def` exclusion
+    # applies. CI's --baseline-commit mode flags it only because this helper is
+    # new on this branch.
     _persist_task = asyncio.create_task(
         _persist_raw_output_marker(
             session_factory,
