@@ -459,7 +459,8 @@ class TestBootstrap:
             )
 
         joined = "\n".join(fake.executed)
-        assert "CREATE ROLE \"modulo_app\" LOGIN BYPASSRLS PASSWORD 'apppw'" in joined
+        assert "CREATE ROLE \"modulo_app\" LOGIN PASSWORD 'apppw'" in joined
+        assert "CREATE ROLE \"modulo_app\" LOGIN BYPASSRLS PASSWORD 'apppw'" not in joined
         assert 'CREATE ROLE "modulo_migrate" NOSUPERUSER NOLOGIN BYPASSRLS' in joined
         assert 'GRANT CREATE ON SCHEMA public TO "modulo_migrate"' in joined
         assert "GRANT REFERENCES ON TABLE public.organisations" in joined

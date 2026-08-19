@@ -109,11 +109,24 @@ async def create_pipeline(
 
 
 async def get_pipeline(
-    session: AsyncSession, pipeline_id: uuid.UUID, *, include_deleted: bool = False
+    session: AsyncSession,
+    pipeline_id: uuid.UUID,
+    *,
+    include_deleted: bool = False,
+    organisation_id: uuid.UUID | None = None,
 ) -> Pipeline | None:
+    """Fetch a single pipeline by ID.
+
+    Defence-in-depth: when *organisation_id* is provided, the query also
+    filters on ``organisation_id`` so cross-tenant access is impossible even
+    if RLS is misconfigured. RLS-based callers may omit it, but API-facing
+    callers SHOULD pass it.
+    """
     stmt = select(Pipeline).where(Pipeline.id == pipeline_id)
     if not include_deleted:
         stmt = stmt.where(Pipeline.deleted_at.is_(None))
+    if organisation_id is not None:
+        stmt = stmt.where(Pipeline.organisation_id == organisation_id)
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
 

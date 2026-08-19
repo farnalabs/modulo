@@ -1164,6 +1164,10 @@ export default {
       "queued_waiting_slot": "Queued — waiting for a free slot ({active} active / {limit} limit)",
       "queued_starting_soon": "Queued — starting soon",
       "work_items": "Work items",
+      "work_item_kind_github": "GitHub",
+      "work_item_kind_github_pr": "PR",
+      "work_item_kind_github_issue": "Issue",
+      "work_item_kind_github_default": "GitHub",
       "child_runs": "Child runs",
       "stale": "stale",
       "ago": "{s}s ago",
@@ -1242,7 +1246,8 @@ export default {
       "saving": "Saving\u2026",
       "toggle_langsmith": "Toggle LangSmith",
       "save_failed": "Save failed:",
-      "failed_to_load_settings": "Failed to load settings:"
+      "failed_to_load_settings": "Failed to load settings:",
+      "viewer_readonly_note": "You have view-only access to observability settings. An operator or admin can make changes."
     },
     "AdminCostBreakdownView": {
       "cost_breakdown": "Cost Breakdown",

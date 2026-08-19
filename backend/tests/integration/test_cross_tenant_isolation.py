@@ -610,6 +610,114 @@ class TestCrossOrgSingleResourceFetch:
 
 
 # ===================================================================
+# Test 5b: SECURITY #1185 — cross-tenant password-account adoption denied
+# ===================================================================
+
+
+class TestCrossTenantPasswordAdoptionDenied:
+    """An admin must not adopt a local-password account that lives in another org.
+
+    ``admin_create_user`` (admin.py /admin/users) must 409 with the
+    ``EMAIL_ACCOUNT_EXISTS ... Password-based adoption is not allowed`` detail
+    when the email already exists in a DIFFERENT org with a local password.
+    """
+
+    async def test_admin_create_user_rejects_cross_org_local_password_account(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        org_b: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        # user_b lives in org_b with a local password; admin of org_a must not
+        # be able to adopt that account via /admin/users.
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.post(
+            "/api/v1/admin/users",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "email": "admin-b@test.local",
+                "display_name": "Cross Org Adoption",
+                "password": "testpassword123",
+                "org_role": "runner",
+            },
+        )
+        assert resp.status_code == 409, f"Expected 409, got {resp.status_code}: {resp.text}"
+        assert "Password-based adoption is not allowed" in resp.json()["detail"]
+
+
+# ===================================================================
+# Test 5c: SECURITY #1186/#1188 — cross-tenant membership guards on admin
+#         user mutation return 404
+# ===================================================================
+
+
+class TestCrossTenantMembershipGuards:
+    """admin_update_user / admin_reactivate_user / admin_reset_password must 404
+    when the target user has NO membership in the caller's org."""
+
+    async def test_admin_update_user_rejects_cross_org_account(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+        user_b: uuid.UUID,
+    ) -> None:
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.put(
+            f"/api/v1/admin/users/{user_b}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"org_role": "runner"},
+        )
+        assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
+        assert "User not found in this organisation" in resp.json()["detail"]
+
+    async def test_admin_reactivate_user_rejects_cross_org_account(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+        user_b: uuid.UUID,
+    ) -> None:
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.post(
+            f"/api/v1/admin/users/{user_b}/reactivate",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
+        assert "User not found in this organisation" in resp.json()["detail"]
+
+    async def test_admin_reset_password_rejects_cross_org_account(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+        user_b: uuid.UUID,
+    ) -> None:
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.post(
+            f"/api/v1/admin/users/{user_b}/reset-password",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
+        assert "User not found in this organisation" in resp.json()["detail"]
+
+    async def test_admin_update_user_succeeds_for_own_org(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.put(
+            f"/api/v1/admin/users/{user_a}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"org_role": "admin"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+
+
+# ===================================================================
 # Test 6: System admin uses explicit org_id parameter
 # ===================================================================
 

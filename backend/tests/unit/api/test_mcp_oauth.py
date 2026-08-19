@@ -93,6 +93,29 @@ def runner_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
+@pytest.fixture
+def viewer_client() -> Generator[TestClient, None, None]:
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="viewer",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="viewer",
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
 # ---------------------------------------------------------------------------
 # POST /api/v1/mcp/oauth/clients
 # ---------------------------------------------------------------------------
@@ -243,6 +266,12 @@ class TestListOAuthClients:
 
         assert resp.status_code == 200
         assert not resp.json()
+
+    def test_list_viewer_gets_403(self, viewer_client: TestClient) -> None:
+        """A viewer must not enumerate OAuth clients (redirect_uris/scopes attack surface)."""
+        resp = viewer_client.get(self.ENDPOINT)
+        assert resp.status_code == 403
+        assert "Only admin or operator users can list OAuth clients" in resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

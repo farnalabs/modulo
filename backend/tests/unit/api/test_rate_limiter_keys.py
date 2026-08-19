@@ -178,12 +178,14 @@ class TestRateLimitKeyDerivation:
         key = self._get_key(app)
         assert "/api/v1/runs" in key
 
-    def test_unauthenticated_with_xff_uses_first_ip(self, spy_registry: MagicMock) -> None:
+    def test_unauthenticated_with_xff_uses_client_host(self, spy_registry: MagicMock) -> None:
+        """client.host is preferred over X-Forwarded-For to prevent spoofing."""
         self._spy_registry = spy_registry
         app = _make_app(registry=spy_registry)
         key = self._get_key(app, headers={"X-Forwarded-For": "203.0.113.42, 10.0.0.1"})
-        assert "203.0.113.42" in key
-        assert key.startswith("ip:203.0.113.42:")
+        # client.host from TestClient is "testclient"; XFF is ignored
+        assert "testclient" in key
+        assert key.startswith("ip:testclient:")
 
     # ---- backward compatibility ----
 
