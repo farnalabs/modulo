@@ -39,6 +39,98 @@ _SANDBOX_RESOURCE_LIMIT_KEYS = frozenset(
     }
 )
 
+# ---------------------------------------------------------------------------
+# Sandbox capability vocabulary (FAR-212 PR A)
+# ---------------------------------------------------------------------------
+
+# Capability names for the sandbox write/egress surface. These are the names
+# the conformance hard-block certifies against: a block-action guardrail whose
+# ``required_capabilities`` carries one of these certifies the corresponding
+# risk is IMPOSSIBLE (see ``conformance._add_sandbox_surface`` for the
+# polarity inversion between the raw derivation and the conformance manifest).
+SANDBOX_CAPABILITY_WRITE_FILES = "sandbox.write_files"
+SANDBOX_CAPABILITY_EGRESS = "sandbox.egress"
+SANDBOX_CAPABILITY_GIT_CREDENTIALS = "sandbox.git_credentials"
+
+# Declared git-credential scope values. ``scoped`` (True) means the sandbox has
+# git credentials that are limited; ``unscoped``/``absent`` (False) means the
+# credentials are full-access or not present. Any unrecognised string
+# contributes None (unknown) — fail-closed for a block guardrail.
+_SANDBOX_GIT_CREDENTIAL_SCOPED = frozenset({"scoped", "scoped_org", "limited", "true", "on"})
+_SANDBOX_GIT_CREDENTIAL_UNSCOPED = frozenset({"unscoped", "none", "absent", "false", "off"})
+
+
+def derive_sandbox_capabilities(node_def: dict[str, Any]) -> dict[str, bool | None]:
+    """Mechanically derive a sandbox_agent node's write/egress capability profile.
+
+    Reads the node's ACTUAL configuration — the FAR-296 Phase 3 egress surface
+    (``egress_policy``), the declared read-only workspace flag (``read_only``),
+    and the declared git-credential scope (``git_credentials``) — and returns
+    ``{capability: bool | None}`` with the RAW mechanical polarity:
+
+      ``sandbox.egress``
+          False when ``egress_policy`` is ``"deny_all"`` or ``"selected"`` —
+          node_runner maps both to ``allow_internet_access=False`` (FAR-296
+          Phase 3); True when the policy is absent (default) or ``"default"``;
+          None when the declared value is unrecognised.
+      ``sandbox.write_files``
+          False when the node declares a read-only workspace (``read_only``);
+          True when writable (the sandbox default — an undeclared surface means
+          the workspace is writable); None when the declared value is not a
+          boolean (PR B finalises the mount surface).
+      ``sandbox.git_credentials``
+          True when the node declares scoped git credentials; False when it
+          declares them unscoped or absent; None when the surface is undeclared
+          or the declared value is unrecognised.
+
+    The derivation is MECHANICAL — it reads the node's actual configuration,
+    never a declared claim — so a conformance hard-block can CERTIFY writes /
+    egress are impossible rather than merely un-declared. The polarity here is
+    raw (True = present / risked); the conformance manifest reader inverts it
+    (``conformance._add_sandbox_surface``) because a block guardrail's
+    ``required_capabilities`` on the sandbox surface is a deny/negative
+    guarantee. Non-sandbox nodes contribute an empty profile.
+    """
+    node_type = node_def.get("node_type")
+    if node_type is not None and node_type != "sandbox_agent":
+        return {}
+
+    caps: dict[str, bool | None] = {}
+
+    egress_policy = node_def.get("egress_policy")
+    if egress_policy is None:
+        caps[SANDBOX_CAPABILITY_EGRESS] = True
+    elif isinstance(egress_policy, str) and egress_policy in _SANDBOX_EGRESS_POLICIES:
+        caps[SANDBOX_CAPABILITY_EGRESS] = egress_policy not in ("deny_all", "selected")
+    else:
+        caps[SANDBOX_CAPABILITY_EGRESS] = None
+
+    read_only = node_def.get("read_only")
+    if read_only is None:
+        caps[SANDBOX_CAPABILITY_WRITE_FILES] = True
+    elif isinstance(read_only, bool):
+        caps[SANDBOX_CAPABILITY_WRITE_FILES] = not read_only
+    else:
+        caps[SANDBOX_CAPABILITY_WRITE_FILES] = None
+
+    git_credentials = node_def.get("git_credentials")
+    if git_credentials is None:
+        caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] = None
+    elif isinstance(git_credentials, bool):
+        caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] = git_credentials
+    elif isinstance(git_credentials, str):
+        normalised = git_credentials.strip().lower()
+        if normalised in _SANDBOX_GIT_CREDENTIAL_SCOPED:
+            caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] = True
+        elif normalised in _SANDBOX_GIT_CREDENTIAL_UNSCOPED:
+            caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] = False
+        else:
+            caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] = None
+    else:
+        caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] = None
+
+    return caps
+
 
 def _validate_sandbox_mode_config(node_def: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
     """Validate a sandbox_agent node's mode-scoped command configuration.

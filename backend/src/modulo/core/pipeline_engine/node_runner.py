@@ -1123,6 +1123,7 @@ async def _run_conformance_gate(
     node_id: str,
     connector_instance_ids: list[uuid.UUID] | None = None,
     agent_id: uuid.UUID | None = None,
+    node_def: dict[str, Any] | None = None,
 ) -> bool:
     """FAR-215 mid-run capability re-check at node start (block -> HITL).
 
@@ -1139,7 +1140,10 @@ async def _run_conformance_gate(
     Reads the run-scoped conformance context (session_factory, org_id,
     environment_profile_id, pipeline_id, hoisted claimed guardrails, run-start
     load-failed marker) set by the executor; the node's bound connector
-    instance ids and agent id come from the node definition.
+    instance ids and agent id come from the node definition. *node_def*, when
+    provided, is forwarded to the live-manifest reader so a ``sandbox_agent``
+    node's mechanically-derived sandbox capability surface (write/egress/git
+    credential scope — FAR-212 PR A) is included in the conformance manifest.
 
     Behaviour:
       - On resume of THIS node's conformance block (``state`` carries the
@@ -1190,6 +1194,7 @@ async def _run_conformance_gate(
         connector_instance_ids=list(connector_instance_ids or []),
         environment_profile_id=env_profile_uuid,
         agent_id=agent_id,
+        node_def=node_def,
         claimed_guardrails=claimed_guardrails,
         claims_load_failed=claims_load_failed,
     )
@@ -2364,9 +2369,11 @@ def make_sandbox_agent_fn(
 
         # FAR-215: mid-run capability re-check at node start (block -> HITL).
         # The gate raises a LangGraph interrupt on block; control only reaches
-        # the sandbox body when the node may proceed.
+        # the sandbox body when the node may proceed. node_def is forwarded so
+        # the sandbox capability surface (write/egress/git credential scope) is
+        # mechanically derived into the conformance manifest (FAR-212 PR A).
         agent_id = _parse_uuid_opt(node_def.get("agent_id"))
-        await _run_conformance_gate(state, node_id=node_id, agent_id=agent_id)
+        await _run_conformance_gate(state, node_id=node_id, agent_id=agent_id, node_def=node_def)
 
         run_context: dict[str, Any] = state.get("run_context") or {}
         raw_input: Any = run_context.get("input", {})

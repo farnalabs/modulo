@@ -16,6 +16,7 @@ import pytest
 
 from modulo.core.eval_engine import EvalDefinition, EvalType
 from modulo.core.guardrails.conformance import (
+    ConformanceRecheckResult,
     build_live_manifest,
     check_node_start,
     decide_conformance,
@@ -755,5 +756,193 @@ async def test_build_live_manifest_unreadable_surface_fails_closed(monkeypatch: 
     derivation = decide_conformance(["github.write"], registered)
     assert derivation.state == "unknown"
     result = evaluate_conformance([_gr("g_block", "block", ["github.write"])], registered)
+    assert result.blocked is True
+    assert result.state == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Sandbox capability surface (FAR-212 PR A): mechanically derived from the
+# node's actual config, stamped into the manifest with conformance polarity
+# (a block guardrail's required_capabilities on the sandbox surface is a
+# deny/negative guarantee — confirmed-absent write/egress is the certification).
+# ---------------------------------------------------------------------------
+
+
+def _sandbox_node(**overrides: Any) -> dict[str, Any]:
+    node: dict[str, Any] = {"id": "node-1", "node_type": "sandbox_agent", "agent_prompt": "p", "agent_command": "c"}
+    node.update(overrides)
+    return node
+
+
+async def test_build_live_manifest_sandbox_egress_denied_is_certified():
+    """egress_policy='deny_all' -> mechanical egress False -> the manifest's
+    sandbox.egress is True (the 'no egress' guarantee is confirmed)."""
+    registered = await build_live_manifest(
+        AsyncMock(),
+        org_id=_ORG_ID,
+        connector_instance_ids=[],
+        environment_profile_id=None,
+        agent_id=None,
+        node_def=_sandbox_node(egress_policy="deny_all"),
+    )
+    assert registered.get("sandbox.egress") is True
+
+
+async def test_build_live_manifest_sandbox_read_only_is_certified():
+    """read_only=True -> mechanical write_files False -> the manifest's
+    sandbox.write_files is True (writes confirmed impossible)."""
+    registered = await build_live_manifest(
+        AsyncMock(),
+        org_id=_ORG_ID,
+        connector_instance_ids=[],
+        environment_profile_id=None,
+        agent_id=None,
+        node_def=_sandbox_node(read_only=True),
+    )
+    assert registered.get("sandbox.write_files") is True
+
+
+async def test_build_live_manifest_sandbox_writable_violates_claim():
+    """A writable sandbox -> mechanical write_files True -> the manifest's
+    sandbox.write_files is False (the no-writes claim is violated)."""
+    registered = await build_live_manifest(
+        AsyncMock(),
+        org_id=_ORG_ID,
+        connector_instance_ids=[],
+        environment_profile_id=None,
+        agent_id=None,
+        node_def=_sandbox_node(read_only=False),
+    )
+    assert registered.get("sandbox.write_files") is False
+
+
+async def test_build_live_manifest_non_sandbox_node_no_surface():
+    """A non-sandbox node contributes no sandbox capability surface."""
+    registered = await build_live_manifest(
+        AsyncMock(),
+        org_id=_ORG_ID,
+        connector_instance_ids=[],
+        environment_profile_id=None,
+        agent_id=None,
+        node_def={"id": "node-1", "node_type": "agent"},
+    )
+    assert "sandbox.write_files" not in registered
+    assert "sandbox.egress" not in registered
+
+
+async def test_build_live_manifest_sandbox_egress_default_is_violated():
+    """A default-egress sandbox (internet allowed) -> mechanical egress True ->
+    sandbox.egress is False (the no-egress claim is violated)."""
+    registered = await build_live_manifest(
+        AsyncMock(),
+        org_id=_ORG_ID,
+        connector_instance_ids=[],
+        environment_profile_id=None,
+        agent_id=None,
+        node_def=_sandbox_node(egress_policy="default"),
+    )
+    assert registered.get("sandbox.egress") is False
+
+
+async def test_build_live_manifest_sandbox_unknown_surface_fail_closed():
+    """An unrecognised egress policy (no mechanical fact) -> the capability is
+    absent from the manifest (unknown) -> a block guardrail fails CLOSED."""
+    registered = await build_live_manifest(
+        AsyncMock(),
+        org_id=_ORG_ID,
+        connector_instance_ids=[],
+        environment_profile_id=None,
+        agent_id=None,
+        node_def=_sandbox_node(egress_policy="allow_all"),
+    )
+    assert registered.get("sandbox.egress") is None
+    derivation = decide_conformance(["sandbox.egress"], registered)
+    assert derivation.state == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Full gate: sandbox capability claims reach check_node_start (FAR-212 PR A)
+# ---------------------------------------------------------------------------
+
+
+async def _run_hoisted_check(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    guardrails: list[Any],
+    node_def: dict[str, Any] | None,
+) -> ConformanceRecheckResult:
+    import modulo.core.guardrails.conformance as mod
+
+    async def _noop_rls(session: Any, org_id: uuid.UUID) -> None:
+        return None
+
+    monkeypatch.setattr(mod, "_set_rls", _noop_rls)
+    session = _manifest_session()
+    session.begin = MagicMock(return_value=session)
+    factory = MagicMock()
+    factory.return_value = session
+    factory.return_value.__aenter__ = AsyncMock(return_value=session)
+    factory.return_value.__aexit__ = AsyncMock(return_value=None)
+    return await check_node_start(
+        factory,
+        org_id=_ORG_ID,
+        pipeline_id=uuid.uuid4(),
+        node_id="node-1",
+        connector_instance_ids=[],
+        environment_profile_id=None,
+        agent_id=None,
+        node_def=node_def,
+        claimed_guardrails=guardrails,
+    )
+
+
+async def test_check_node_start_sandbox_read_only_certifies_write_guardrail(monkeypatch: pytest.MonkeyPatch):
+    """A block guardrail requiring sandbox.write_files on a read-only sandbox is
+    CERTIFIED (present) — the conformance hard-block confirms writes are
+    impossible rather than trusting a declaration."""
+    result = await _run_hoisted_check(
+        monkeypatch,
+        guardrails=[_gr("g_nowrite", "block", ["sandbox.write_files"])],
+        node_def=_sandbox_node(read_only=True),
+    )
+    assert result.blocked is False
+    assert result.state == "present"
+    assert result.claimed is True
+
+
+async def test_check_node_start_sandbox_deny_all_certifies_egress_guardrail(monkeypatch: pytest.MonkeyPatch):
+    """A block guardrail requiring sandbox.egress on a deny_all sandbox is
+    CERTIFIED (present) — confirmed no egress."""
+    result = await _run_hoisted_check(
+        monkeypatch,
+        guardrails=[_gr("g_noegress", "block", ["sandbox.egress"])],
+        node_def=_sandbox_node(egress_policy="deny_all"),
+    )
+    assert result.blocked is False
+    assert result.state == "present"
+    assert result.claimed is True
+
+
+async def test_check_node_start_sandbox_writable_blocks_write_guardrail(monkeypatch: pytest.MonkeyPatch):
+    """A block guardrail requiring sandbox.write_files on a WRITABLE sandbox is
+    non-conformant (absent) -> fail-closed block: the no-writes claim is false."""
+    result = await _run_hoisted_check(
+        monkeypatch,
+        guardrails=[_gr("g_nowrite", "block", ["sandbox.write_files"])],
+        node_def=_sandbox_node(read_only=False),
+    )
+    assert result.blocked is True
+    assert result.state == "absent"
+    assert result.gate_id == "guardrail_conformance_g_nowrite"
+
+
+async def test_check_node_start_sandbox_unknown_fails_closed(monkeypatch: pytest.MonkeyPatch):
+    """No sandbox surface (no node_def) -> the capability is unknown -> the
+    block guardrail fails CLOSED (never fail-open on an unreadable surface)."""
+    result = await _run_hoisted_check(
+        monkeypatch,
+        guardrails=[_gr("g_nowrite", "block", ["sandbox.write_files"])],
+        node_def=None,
+    )
     assert result.blocked is True
     assert result.state == "unknown"

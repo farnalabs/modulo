@@ -1827,6 +1827,20 @@ Compliance bundles as guardrail-as-code (`modulo.core.guardrails.policy_pack`). 
 
 **T1 go/no-go gate:** a NAMED enterprise use case (a real customer/org adopting a specific pack) must be committed before block-mode promotion of any pack. SOC 2 pack content is shipped (FAR-216 PR B, above); GDPR pack content remains a separate future delivery.
 
+#### Sandbox write/egress mediation (T3 — FAR-212)
+
+The "never write a file" / "no egress" promise for a `sandbox_agent` node must be mechanically enforceable at the sandbox boundary, not merely declared. The capability-profile derivation (PR A) makes the sandbox's write/egress/git-credential surface a first-class conformance surface the hard-block can certify against.
+
+**Capability vocabulary (mechanically derived, `modulo.core.pipeline_engine.sandbox_mode.derive_sandbox_capabilities`):**
+
+- `sandbox.write_files` — False when the node declares a read-only workspace (`read_only`), True when writable (the sandbox default), None when the declared surface is unrecognised.
+- `sandbox.egress` — False when `egress_policy` is `deny_all` or `selected` (the dispatch maps both to `allow_internet_access=False`, FAR-296 Phase 3), True when `default`/absent, None when the declared value is unrecognised.
+- `sandbox.git_credentials` — True when the node declares scoped git credentials, False when it declares them unscoped/absent, None when the surface is undeclared or unrecognised.
+
+The derivation is MECHANICAL — it reads the node's actual configuration, never a declared claim — so the conformance hard-block CERTIFIES writes/egress are impossible rather than trusting a declaration.
+
+**Conformance wiring (PR A):** the live-manifest reader (`conformance.build_live_manifest`) derives the sandbox surface from the `sandbox_agent` node's config at node start and stamps it into the capability manifest. A block-action guardrail's `required_capabilities` on the sandbox surface is a DENY/negative guarantee: `["sandbox.write_files"]` certifies writes are impossible, `["sandbox.egress"]` certifies no egress. The manifest inverts the raw mechanical polarity (confirmed-absent write/egress is the certified guarantee), so the existing three-state derivation reads it correctly — confirmed-absent → `present` (certified), present → `absent` (claim violated → fail-closed block), unknown → `unknown` (fail-closed block). Enforcement of the policy surface itself (read-only mounts, network-egress allowlist, git-credential scope) is PR B.
+
 #### Alpha Note
 The Eval Engine component appears in the §6.1 architecture diagram. Eval System is a **v1 feature** — no eval definitions, no eval UI, and no conditional HITL in alpha. Alpha runs do not execute evals.
 
