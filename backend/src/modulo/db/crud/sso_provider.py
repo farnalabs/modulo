@@ -35,13 +35,20 @@ _UPDATABLE_SSO_FIELDS = frozenset(
 _LOG_AUDIT_RECORD_FAILED = "Failed to record audit event for SSO provider %s"
 
 
-async def list_providers(session: AsyncSession) -> list[SsoProvider]:
-    result = await session.execute(select(SsoProvider).order_by(SsoProvider.created_at))
+async def list_providers(session: AsyncSession, *, org_id: uuid.UUID) -> list[SsoProvider]:
+    result = await session.execute(
+        select(SsoProvider).where(SsoProvider.organisation_id == org_id).order_by(SsoProvider.created_at)
+    )
     return list(result.scalars().all())
 
 
-async def get_provider(session: AsyncSession, provider_id: uuid.UUID) -> SsoProvider | None:
-    result = await session.execute(select(SsoProvider).where(SsoProvider.id == provider_id))
+async def get_provider(
+    session: AsyncSession, provider_id: uuid.UUID, *, org_id: uuid.UUID | None = None
+) -> SsoProvider | None:
+    conditions = [SsoProvider.id == provider_id]
+    if org_id is not None:
+        conditions.append(SsoProvider.organisation_id == org_id)
+    result = await session.execute(select(SsoProvider).where(*conditions))
     return result.scalar_one_or_none()
 
 
@@ -112,11 +119,12 @@ async def update_provider(
     session: AsyncSession,
     provider_id: uuid.UUID,
     *,
+    org_id: uuid.UUID,
     actor_user_id: uuid.UUID | None = None,
     fernet_key: str,
     **updates: str | bool | list[str] | None,
 ) -> SsoProvider | None:
-    provider = await get_provider(session, provider_id)
+    provider = await get_provider(session, provider_id, org_id=org_id)
     if provider is None:
         return None
 
@@ -176,9 +184,10 @@ async def delete_provider(
     session: AsyncSession,
     provider_id: uuid.UUID,
     *,
+    org_id: uuid.UUID,
     actor_user_id: uuid.UUID | None = None,
 ) -> bool:
-    provider = await get_provider(session, provider_id)
+    provider = await get_provider(session, provider_id, org_id=org_id)
     if provider is None:
         return False
 
@@ -211,9 +220,10 @@ async def toggle_provider(
     session: AsyncSession,
     provider_id: uuid.UUID,
     *,
+    org_id: uuid.UUID,
     actor_user_id: uuid.UUID | None = None,
 ) -> SsoProvider | None:
-    provider = await get_provider(session, provider_id)
+    provider = await get_provider(session, provider_id, org_id=org_id)
     if provider is None:
         return None
     provider.enabled = not provider.enabled
@@ -241,8 +251,10 @@ async def set_group_mappings(
     session: AsyncSession,
     provider_id: uuid.UUID,
     mappings: list[dict[str, object]],
+    *,
+    org_id: uuid.UUID,
 ) -> SsoProvider | None:
-    provider = await get_provider(session, provider_id)
+    provider = await get_provider(session, provider_id, org_id=org_id)
     if provider is None:
         return None
     provider.group_mappings = mappings

@@ -25,6 +25,7 @@ from modulo.db.crud.sso_provider import (
     toggle_provider,
     update_provider,
 )
+from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
 _CODE_SSO_MANAGE = "sso.manage"
@@ -127,7 +128,8 @@ async def get_providers(
 ) -> list[SsoProviderResponse]:
     try:
         async with session.begin():
-            providers = await list_providers(session)
+            await set_rls_org(session, current_user.organisation_id)
+            providers = await list_providers(session, org_id=current_user.organisation_id)
         return [SsoProviderResponse.model_validate(p) for p in providers]
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available: %s", exc, exc_info=True)
@@ -167,6 +169,7 @@ async def create_provider_endpoint(
 ) -> SsoProviderResponse:
     try:
         async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
             provider = await create_provider(
                 session,
                 provider_type=req.provider_type,
@@ -235,9 +238,11 @@ async def update_provider_endpoint(
 
     try:
         async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
             provider = await update_provider(
                 session,
                 provider_id,
+                org_id=current_user.organisation_id,
                 actor_user_id=current_user.account_id,
                 fernet_key=settings.fernet_key,
                 **updates,
@@ -292,7 +297,13 @@ async def delete_provider_endpoint(
 ) -> None:
     try:
         async with session.begin():
-            deleted = await delete_provider(session, provider_id, actor_user_id=current_user.account_id)
+            await set_rls_org(session, current_user.organisation_id)
+            deleted = await delete_provider(
+                session,
+                provider_id,
+                org_id=current_user.organisation_id,
+                actor_user_id=current_user.account_id,
+            )
     except IntegrityError:
         _log.exception("admin_sso.delete_provider_endpoint")
         raise HTTPException(
@@ -337,7 +348,8 @@ async def test_provider_connection(
 ) -> SsoProviderTestResult:
     try:
         async with session.begin():
-            provider = await get_provider(session, provider_id)
+            await set_rls_org(session, current_user.organisation_id)
+            provider = await get_provider(session, provider_id, org_id=current_user.organisation_id)
     except IntegrityError:
         _log.exception("admin_sso.test_provider_connection")
         raise HTTPException(
@@ -516,7 +528,13 @@ async def toggle_provider_endpoint(
 ) -> SsoProviderResponse:
     try:
         async with session.begin():
-            provider = await toggle_provider(session, provider_id, actor_user_id=current_user.account_id)
+            await set_rls_org(session, current_user.organisation_id)
+            provider = await toggle_provider(
+                session,
+                provider_id,
+                org_id=current_user.organisation_id,
+                actor_user_id=current_user.account_id,
+            )
     except IntegrityError:
         _log.exception("admin_sso.toggle_provider_endpoint")
         raise HTTPException(
@@ -577,7 +595,13 @@ async def set_group_mappings_endpoint(
     mappings_dict = [m.model_dump() for m in req.mappings]
     try:
         async with session.begin():
-            provider = await set_group_mappings(session, provider_id, mappings_dict)
+            await set_rls_org(session, current_user.organisation_id)
+            provider = await set_group_mappings(
+                session,
+                provider_id,
+                mappings_dict,
+                org_id=current_user.organisation_id,
+            )
     except IntegrityError:
         _log.exception("admin_sso.set_group_mappings_endpoint")
         raise HTTPException(
@@ -622,7 +646,8 @@ async def get_group_mappings_endpoint(
 ) -> GroupMappingsResponse:
     try:
         async with session.begin():
-            provider = await get_provider(session, provider_id)
+            await set_rls_org(session, current_user.organisation_id)
+            provider = await get_provider(session, provider_id, org_id=current_user.organisation_id)
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available on get_group_mappings: %s", exc, exc_info=True)
         raise HTTPException(

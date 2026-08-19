@@ -140,12 +140,15 @@ class TestCreateEvalDefinition:
     URL = "/api/v1/evals"
 
     def test_create_returns_201(self, admin_client: TestClient) -> None:
+        mock_pipeline = MagicMock()
+        mock_pipeline.id = _PIPELINE_ID
         mock_session = _make_mock_session()
         mock_session.execute.side_effect = [
             _make_result(),  # require_permission authz_enforce (kill-switch) read
             _make_result(scalar_value=None),  # set_rls_org
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
+            _make_result(scalar_one_value=mock_pipeline),  # pipeline ownership check
         ]
         mock_session.add = MagicMock()
         mock_session.flush = AsyncMock()
@@ -176,12 +179,15 @@ class TestCreateEvalDefinition:
         assert data["config_json"] == {"pattern": r"\d+"}
 
     def test_create_omit_optionals(self, admin_client: TestClient) -> None:
+        mock_pipeline = MagicMock()
+        mock_pipeline.id = _PIPELINE_ID
         mock_session = _make_mock_session()
         mock_session.execute.side_effect = [
             _make_result(),  # require_permission authz_enforce (kill-switch) read
             _make_result(scalar_value=None),  # set_rls_org
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
+            _make_result(scalar_one_value=mock_pipeline),  # pipeline ownership check
         ]
         mock_session.add = MagicMock()
         mock_session.flush = AsyncMock()
@@ -253,12 +259,15 @@ class TestCreateEvalDefinition:
         assert resp.status_code == 422
 
     def test_create_guardrail_detection_envelope_accepted(self, admin_client: TestClient) -> None:
+        mock_pipeline = MagicMock()
+        mock_pipeline.id = _PIPELINE_ID
         mock_session = _make_mock_session()
         mock_session.execute.side_effect = [
             _make_result(),  # require_permission authz_enforce (kill-switch) read
             _make_result(scalar_value=None),  # set_rls_org
             _make_result(scalar_value=None),  # set_rls_user_context (user_id)
             _make_result(scalar_value=None),  # set_rls_user_context (org_role)
+            _make_result(scalar_one_value=mock_pipeline),  # pipeline ownership check
         ]
         mock_session.add = MagicMock()
         mock_session.flush = AsyncMock()

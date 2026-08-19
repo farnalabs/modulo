@@ -338,6 +338,7 @@ async def dashboard_summary(
                 select(func.count())
                 .select_from(Pipeline)
                 .where(
+                    Pipeline.organisation_id == org_id,
                     Pipeline.archived_at.is_(None),
                     Pipeline.deleted_at.is_(None),
                 )
