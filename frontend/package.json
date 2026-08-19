@@ -80,7 +80,6 @@
         "openapi-typescript": "^7.13.0",
         "postcss": "^8.5.15",
         "rollup": "^4.62.2",
-        "shadcn-vue": "^2.7.4",
         "tailwindcss": "^3.4.17",
         "typescript": "~5.4.0",
         "v8-to-istanbul": "^9.3.0",
