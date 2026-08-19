@@ -822,17 +822,6 @@ function openActionMenu(event: MouseEvent, p: PipelineItem) {
   actionMenuRef.value?.toggle(event)
 }
 
-function openRunDialog(p: PipelineItem) {
-  selectedPipeline.value = p
-  prompt.value = ''
-  showAdvanced.value = false
-  advancedPayload.value = ''
-  runError.value = null
-  confirmEmptyRun.value = false
-  emptyRunWarning.value = null
-  showRunDialog.value = true
-}
-
 function openRename(p: PipelineItem) {
   renameTarget.value = p
   renameName.value = p.name
