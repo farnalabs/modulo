@@ -596,6 +596,90 @@ def test_gate_without_reject_target_compiles():
     assert compiled is not None
 
 
+def test_inner_cache_check_returns_prepopulated_value():
+    """The lock-guarded double-check serves a value another writer cached
+    between the outer fast-path check and lock acquisition."""
+    pid, sid = uuid.uuid4(), uuid.uuid4()
+
+    class _RaceCache:
+        def __init__(self) -> None:
+            self._checks = 0
+
+        def __contains__(self, _key: object) -> bool:
+            self._checks += 1
+            # First check is the outer fast-path (miss); the lock-guarded
+            # double-check sees the key populated by a "concurrent writer".
+            return self._checks > 1
+
+        def __getitem__(self, _key: object) -> str:
+            return "race-value"
+
+        def move_to_end(self, _key: object) -> None:
+            pass
+
+    with patch("modulo.core.pipeline_engine.graph_cache._CACHE", _RaceCache()):
+        result = get_or_compile(pid, sid, lambda: "factory-value")
+    assert result == "race-value"
+
+
+def test_reject_edge_missing_source_raises():
+    """A reject edge without a source/source_node_id fails the edge lookup."""
+    graph: dict[str, Any] = {
+        "nodes": [{"id": "a"}, {"id": "b"}],
+        "edges": [{"edge_type": "reject", "target_node_id": "b"}],
+    }
+    with pytest.raises(ValueError, match="missing source"):
+        build_graph_from_json(graph)
+
+
+def test_unknown_node_type_raises():
+    """An unrecognised node_type is rejected at compile time."""
+    graph: dict[str, Any] = {"nodes": [{"id": "a", "node_type": "bogus"}], "edges": []}
+    with pytest.raises(ValueError, match="Unknown node_type"):
+        build_graph_from_json(graph)
+
+
+def test_sandbox_agent_node_compiles():
+    """A sandbox_agent node is added via make_sandbox_agent_fn."""
+    graph: dict[str, Any] = {
+        "nodes": [
+            {"id": "agent", "node_type": "sandbox_agent", "agent_prompt": "summarise", "agent_command": "opencode run"},
+        ],
+        "edges": [],
+    }
+    compiled = build_graph_from_json(graph)
+    assert compiled is not None
+
+
+def test_connector_node_compiles():
+    """A connector node with a binding is added via make_connector_fn."""
+    graph: dict[str, Any] = {
+        "nodes": [
+            {
+                "id": "conn",
+                "node_type": "connector",
+                "connector_binding": {"instance_id": str(uuid.uuid4()), "type": "shell", "operation": "query"},
+            },
+        ],
+        "edges": [],
+    }
+    compiled = build_graph_from_json(graph)
+    assert compiled is not None
+
+
+def test_loop_edge_defaults_to_first_normal_target():
+    """A loop edge without default_target falls back to the first normal target."""
+    graph: dict[str, Any] = {
+        "nodes": [{"id": "loop"}, {"id": "a"}, {"id": "b"}],
+        "edges": [
+            {"source": "loop", "target": "a", "type": "loop", "max_iterations": 2},
+            {"source": "loop", "target": "b", "type": "normal"},
+        ],
+    }
+    compiled = build_graph_from_json(graph)
+    assert compiled is not None
+
+
 def test_gate_with_reject_edge_type_compiles():
     """A graph with a reject-type edge (as kickback source) compiles."""
     graph: dict[str, Any] = {

@@ -33,25 +33,25 @@ function Check-LastExit {
 }
 
 # Step 1: Run unit tests with overall coverage
-Write-Step "Running unit tests (overall coverage threshold: 61%)"
-uv run --no-sync pytest tests/unit/ -n $Parallelism --cov=src/modulo --cov-report=xml --cov-report=term-missing --cov-fail-under=61 -q
-Check-LastExit -Module "Overall" -Threshold 61
+Write-Step "Running unit tests (overall coverage threshold: 80%)"
+uv run --no-sync pytest tests/unit/ -n $Parallelism --cov=src/modulo --cov-report=xml --cov-report=term-missing --cov-fail-under=80 -q
+Check-LastExit -Module "Overall" -Threshold 80
 End-Step
 
 # Step 2: Per-module coverage checks
 Write-Step "Per-module coverage thresholds"
 
-Write-Host "Checking modulo.auth (threshold: 73%)"
-uv run --no-sync coverage report --include="src/modulo/auth/*" --fail-under=73
-Check-LastExit -Module "modulo.auth" -Threshold 73
+Write-Host "Checking modulo.auth (threshold: 90%)"
+uv run --no-sync coverage report --include="src/modulo/auth/*" --fail-under=90
+Check-LastExit -Module "modulo.auth" -Threshold 90
 
-Write-Host "Checking modulo.core.pipeline_engine (threshold: 43%)"
-uv run --no-sync coverage report --include="src/modulo/core/pipeline_engine/*" --fail-under=43
-Check-LastExit -Module "modulo.core.pipeline_engine" -Threshold 43
+Write-Host "Checking modulo.core.pipeline_engine (threshold: 85%)"
+uv run --no-sync coverage report --include="src/modulo/core/pipeline_engine/*" --fail-under=85
+Check-LastExit -Module "modulo.core.pipeline_engine" -Threshold 85
 
-Write-Host "Checking modulo.db.rls (threshold: 83%)"
-uv run --no-sync coverage report --include="src/modulo/db/rls.py" --fail-under=83
-Check-LastExit -Module "modulo.db.rls" -Threshold 83
+Write-Host "Checking modulo.db.rls (threshold: 95%)"
+uv run --no-sync coverage report --include="src/modulo/db/rls.py" --fail-under=95
+Check-LastExit -Module "modulo.db.rls" -Threshold 95
 
 End-Step
 

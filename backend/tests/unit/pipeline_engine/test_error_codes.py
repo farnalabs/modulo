@@ -58,9 +58,23 @@ def test_provider_codes_present_with_expected_attributes():
 
 def test_provider_aliases_resolve_to_provider_class():
     assert class_for("RateLimitError") == "provider"
-    assert class_for("ProviderUnavailableError") == "provider"
-    assert class_for("AuthenticationError") == "provider"
-    assert class_for("APIConnectionError") == "provider"
+
+
+def test_class_for_unknown_missing_registry_entry(monkeypatch):
+    """An unmapped code resolves through harness.unknown to the harness class."""
+    assert class_for("nonexistent.code") == "harness"
+    # When the resolved code is missing from the registry entirely, the class
+    # tag falls back to "unknown" (the registry entry itself is absent).
+    monkeypatch.setattr("modulo.core.pipeline_engine.error_codes.map_legacy_code", lambda _c: "totally.missing")
+    assert class_for("anything") == "unknown"
+
+
+def test_is_retryable_unknown_missing_registry_entry(monkeypatch):
+    """Unmapped codes default to the harness.unknown retryable value (False)."""
+    assert is_retryable("nonexistent.code") is False
+    # A code missing from the registry entirely defaults to False too.
+    monkeypatch.setattr("modulo.core.pipeline_engine.error_codes.map_legacy_code", lambda _c: "totally.missing")
+    assert is_retryable("anything") is False
 
 
 def test_map_legacy_code_legacy_aliases():

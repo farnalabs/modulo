@@ -1,6 +1,5 @@
 """Password hashing, verification, and entropy tests for v1 user management."""
 
-import bcrypt as _bcrypt_lib
 import pytest
 
 from modulo.auth.passwords import (
@@ -13,9 +12,12 @@ from modulo.auth.passwords import (
 
 _VALID_32 = "a" * 32
 
-
-def _h(password: str) -> str:
-    return _bcrypt_lib.hashpw(password.encode(), _bcrypt_lib.gensalt()).decode()
+# Fixed pre-computed bcrypt hashes (deterministic at collection time — a
+# runtime hashpw() call inside parametrize would give every xdist worker a
+# different salt, producing different test IDs and a "Different tests were
+# collected" error under -n auto).
+_FIXED_CORRECT_HASH = "$2b$12$PwbPE3Ys6rLZkdOK31EY.OqczKrMogDL6fN/3eTWvpBYWtfHn5qvK"
+_FIXED_PASSWORD_HASH = "$2b$12$KNr1IlzDr3Q7tpMVJbbKLuKfJixTh99WG7a.vi9yuV/IJ1QzLXpEG"
 
 
 # ---------------------------------------------------------------------------
@@ -49,10 +51,10 @@ def test_hash_password_rejects_over_72_utf8_bytes() -> None:
 @pytest.mark.parametrize(
     ("password", "user_active", "user_hash", "expected"),
     [
-        ("any", False, _h("correct"), False),
+        ("any", False, _FIXED_CORRECT_HASH, False),
         ("any", True, None, False),
-        ("CorrectHorseBattery99!", True, _h("CorrectHorseBattery99!"), True),
-        ("wrong", True, _h("CorrectHorseBattery99!"), False),
+        ("CorrectHorseBattery99!", True, _FIXED_PASSWORD_HASH, True),
+        ("wrong", True, _FIXED_PASSWORD_HASH, False),
     ],
 )
 def test_authenticate_db_user(password: str, user_active: bool, user_hash: str | None, expected: bool) -> None:
