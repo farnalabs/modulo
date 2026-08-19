@@ -157,7 +157,7 @@ class TestSelfReportedCost:
         assert _extract_reported_cost({"model_cost_usd": 0.000001}, max_reportable_usd_min=0.01) is None
 
     def test_build_model_cost_fields_empty_without_report(self) -> None:
-        assert _build_model_cost_fields({}) == {}
+        assert not _build_model_cost_fields({})
 
     def test_build_model_cost_fields_populated(self) -> None:
         fields = _build_model_cost_fields({"model_cost_usd": 5})
@@ -205,8 +205,8 @@ class TestLogEntryHelpers:
     def test_log_entry_text_priority(self) -> None:
         assert _log_entry_text({"message": "hello"}) == "hello"
         assert _log_entry_text({"fields": {"k": "v"}}) == str({"k": "v"})
-        assert _log_entry_text({}) == ""
-        assert _log_entry_text({"message": None, "fields": None}) == ""
+        assert not _log_entry_text({})
+        assert not _log_entry_text({"message": None, "fields": None})
 
     def test_combine_prefers_informative_levels(self) -> None:
         entries = [
@@ -235,7 +235,7 @@ class TestLogEntryHelpers:
 
 class TestMarkerTextAndSentinel:
     def test_normalize_marker_text(self) -> None:
-        assert _normalize_marker_text(None) == ""
+        assert not _normalize_marker_text(None)
         assert _normalize_marker_text(b"bytes") == "bytes"
         assert _normalize_marker_text(123) == "123"
 

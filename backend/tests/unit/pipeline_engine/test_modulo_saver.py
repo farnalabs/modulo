@@ -380,7 +380,8 @@ class TestDecryptEdgePaths:
         old_key = Fernet.generate_key().decode()
         new_key = Fernet.generate_key().decode()
         old_fernet = Fernet(old_key.encode())
-        saver = ModuloPostgresSaver(mock_conn, organisation_id=_ORG_ID, fernet_key=new_key, fernet_key_old=old_key)
+        saver = await _make_saver(mock_conn, fernet_key=new_key)
+        saver._fernet_old = Fernet(old_key.encode())
         ciphertext = old_fernet.encrypt(b"legacy-data")
         assert saver._decrypt_with_fallback(ciphertext) == b"legacy-data"
 
@@ -407,7 +408,7 @@ class TestDecryptEdgePaths:
     async def test_decrypt_writes_short_entry_skipped(self, mock_conn):
         saver = await _make_saver(mock_conn)
         writes = [[b"task", b"ch"]]  # len < 4 â€” skipped
-        assert saver._decrypt_writes(writes) == []
+        assert not saver._decrypt_writes(writes)
 
 
 class TestAgetTupleRowPath:
@@ -576,6 +577,8 @@ class TestReconnect:
     async def test_reconnect_noop_without_conn_string(self, mock_conn):
         saver = await _make_saver(mock_conn)
         await saver._reconnect()  # should return silently
+        assert saver.conn is mock_conn
+        assert saver._conn_string is None
 
     async def test_reconnect_skips_when_not_stale(self, mock_conn):
         saver = ModuloPostgresSaver(
@@ -583,6 +586,8 @@ class TestReconnect:
         )
         saver._connection_is_stale = MagicMock(return_value=False)
         await saver._reconnect()  # no close, no reconnect
+        assert saver.conn is mock_conn
+        saver._connection_is_stale.assert_called_once()
 
     async def test_reconnect_success(self, mock_conn):
         saver = ModuloPostgresSaver(

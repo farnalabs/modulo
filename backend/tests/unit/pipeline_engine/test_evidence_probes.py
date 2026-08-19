@@ -662,7 +662,7 @@ class TestHeuristicMetrics:
         )
         assert evidence._get_meter() is None
 
-    def test_ensure_early_returns_when_handles_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_ensure_early_returns_when_handles_set(self) -> None:
         evidence._heuristic_errors_total = object()
         evidence._ensure()
         assert evidence._heuristic_errors_total is not None
@@ -701,9 +701,7 @@ class TestSandboxProviderUnavailablePaths:
         result = asyncio.run(provider.git_diff_empty(uuid.uuid4(), "node-a"))
         assert result == EvidenceResult.unverifiable
 
-    def test_run_evidence_probe_cancelled_error_propagates(
-        self, sqlite_factory, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_run_evidence_probe_cancelled_error_propagates(self, sqlite_factory) -> None:
         class _CancellingProvider:
             async def git_diff_empty(self, run_id, node_id):
                 raise asyncio.CancelledError

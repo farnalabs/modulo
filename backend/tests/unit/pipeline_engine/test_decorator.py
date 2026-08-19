@@ -423,7 +423,7 @@ async def test_context_setter_only_reserved_keys_no_write_log():
         return {"run_context": {"cancelled": True}}
 
     result = await ctx_node(_LIVE_STATE)
-    assert result["run_context"] == {}
+    assert not result["run_context"]
     assert "_run_context_write_log" not in result
 
 
