@@ -1,5 +1,6 @@
 """Step definitions for admin tier-catalog BDD scenarios."""
 
+import logging
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -7,12 +8,13 @@ from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 from redis.asyncio import Redis as AsyncRedis
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
-
 from tests.bdd.conftest import ORG_ID, _active_client, make_settings
 
 scenarios("tier_catalog.feature")
 
 _TIERS_CACHE_PREFIX = "tiers:"
+
+logger = logging.getLogger(__name__)
 
 
 @pytest.fixture(autouse=True)
@@ -37,7 +39,7 @@ async def _clear_tiers_cache() -> None:
         )
         await redis.delete(_TIERS_CACHE_PREFIX + str(ORG_ID))
     except Exception:
-        pass
+        logger.warning("tiers.cache_clear_failed", exc_info=True)
     finally:
         if redis is not None:
             await redis.aclose()
