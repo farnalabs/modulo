@@ -12088,6 +12088,8 @@ export interface components {
             resource_limits?: {
                 [key: string]: unknown;
             } | null;
+            /** Wallclock Budget Seconds */
+            wallclock_budget_seconds?: number | null;
             /** Delivery Sentinel */
             delivery_sentinel?: string | null;
             /** Env Vars */
