@@ -197,6 +197,8 @@ __all__ = [
     "_nodes",
     "_projects",
     "_build_types",
+    # --- Sandbox exception classes referenced via LEGACY_ALIASES string lookup ---
+    "SandboxRateLimitedError",
     "created_by_me",
     "circuit_breaker_tripped_at",
     "last_event_id",

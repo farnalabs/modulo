@@ -24,7 +24,8 @@ from pydantic import ValidationError
 from modulo.api.routes.pipelines import PipelineGraphNode
 from modulo.core.graph_validator import GraphValidator, ValidationResult
 from modulo.core.pipeline_engine.node_runner import (
-    SandboxRateLimitedError,
+    SandboxCapacityExceededError,
+    SandboxQueueTimeoutError,
     ScriptBudgetKilledError,
     ScriptFailedError,
     ScriptInvalidOutputError,
@@ -39,6 +40,7 @@ from modulo.core.pipeline_engine.sandbox_mode import (
 )
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
+_DEFAULT_RUN_ID = str(uuid.UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"))
 
 
 @pytest.fixture(autouse=True)
@@ -88,7 +90,7 @@ def _run_state(payload: Any = None) -> dict:
     run_context = {"input": {"task": "x"}} if payload is None else {"input": payload}
     return {
         "run_context": run_context,
-        "_run_id": "run-1",
+        "_run_id": _DEFAULT_RUN_ID,
         "_pipeline_id": "pipe-1",
         "_org_id": _ORG_ID,
     }
@@ -1221,8 +1223,8 @@ async def test_e2b_rate_limit_retries_then_succeeds():
 
 async def test_e2b_rate_limit_exhausts_retries():
     """E2B rate-limiting every create attempt exhausts the bounded retries and
-    the run fails with the RETRYABLE SandboxRateLimitedError (mapping to
-    sandbox.rate_limited) — never the permanent harness.unknown."""
+    the run fails with the RETRYABLE SandboxQueueTimeoutError (mapping to
+    sandbox.queue_timeout) — never the permanent harness.unknown."""
     node_def = _script_node_def()
     fn = make_sandbox_agent_fn(node_def)
     create = AsyncMock(side_effect=RateLimitException("rate limited"))
@@ -1230,7 +1232,7 @@ async def test_e2b_rate_limit_exhausts_retries():
     with (
         patch("e2b.AsyncSandbox.create", new=create),
         patch("modulo.core.pipeline_engine.node_runner._SANDBOX_RATE_LIMIT_BASE_BACKOFF_S", 0),
-        pytest.raises(SandboxRateLimitedError, match="rate-limited"),
+        pytest.raises(SandboxQueueTimeoutError, match="rate-limited"),
     ):
         await fn(_run_state())
 
@@ -1256,7 +1258,121 @@ async def test_e2b_rate_limit_retry_is_cancellable():
 
 
 # ---------------------------------------------------------------------------
-# FAR-296 Phase 5a: OTel span events at script-mode lifecycle milestones
+# 9. FAR-296 Phase 4b: lease-based concurrency count, dispatch-time capacity
+#    gate, queue-timeout code
+# ---------------------------------------------------------------------------
+
+
+async def test_dispatch_capacity_denied_before_provisioning():
+    """When the org is at sandbox capacity, the dispatch-time gate raises
+    SandboxCapacityExceededError (mapping to capacity.org) BEFORE any sandbox
+    is provisioned — no E2B create call is made."""
+    node_def = _script_node_def()
+
+    async def _fake_count(*_a: Any, **_kw: Any) -> int:
+        return 5  # at or above cap
+
+    async def _fake_get_limit(*_a: Any, **_kw: Any) -> int:
+        return 5
+
+    async def _noop_set_rls(*_a: Any, **_kw: Any) -> None:
+        pass
+
+    # Build a mock session that supports nested async context managers:
+    #   async with session_factory() as session:
+    #     async with session.begin():
+    mock_session = MagicMock()
+
+    # session.begin() returns an async context manager
+    mock_begin_ctx = AsyncMock()
+    mock_begin_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_begin_ctx.__aexit__ = AsyncMock(return_value=False)
+    mock_session.begin = MagicMock(return_value=mock_begin_ctx)
+
+    # session_factory() returns an async context manager
+    mock_session_ctx = AsyncMock()
+    mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+    session_factory = MagicMock(return_value=mock_session_ctx)
+    fn = make_sandbox_agent_fn(node_def, session_factory=session_factory)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new_callable=AsyncMock) as mock_create,
+        patch(
+            "modulo.db.crud.run.count_active_sandbox_leases_for_org",
+            new=_fake_count,
+        ),
+        patch(
+            "modulo.db.crud.run.get_sandbox_concurrency_limit",
+            new=_fake_get_limit,
+        ),
+        patch(
+            "modulo.db.rls.set_rls_org",
+            new=_noop_set_rls,
+        ),
+        pytest.raises(SandboxCapacityExceededError, match="at capacity"),
+    ):
+        await fn(_run_state())
+
+    # Sandbox must NOT have been created
+    mock_create.assert_not_called()
+
+
+async def test_dispatch_capacity_not_checked_for_llm_mode():
+    """LLM mode does NOT trigger the dispatch-time capacity gate — even when
+    the org is at capacity. LLM-mode dispatches go through the executor's
+    claim-time check instead."""
+    node_def: dict[str, Any] = {
+        "id": str(uuid.uuid4()),
+        "node_type": "sandbox_agent",
+        "position": {"x": 0, "y": 0},
+        "template_id": "opencode",
+        "mode": "llm",
+        "agent_prompt": "Do the thing",
+        "agent_command": "opencode run --auto",
+    }
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(side_effect=_read_router('{"result": "ok"}'))
+    sandbox.commands.run = AsyncMock(
+        return_value=MagicMock(wait=AsyncMock(return_value=MagicMock(exit_code=0, stdout="", stderr="")))
+    )
+    sandbox.kill = AsyncMock()
+
+    # The dispatch-time capacity gate is ONLY checked when sandbox_mode == "script".
+    # For LLM mode, the gate code is never entered — verify the node completes
+    # successfully without any capacity check.
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+
+
+async def test_e2b_rate_limit_exhaustion_maps_to_queue_timeout():
+    """When AsyncSandbox.create always raises RateLimitException, the final
+    exception is SandboxQueueTimeoutError (sandbox.queue_timeout), NOT
+    SandboxRateLimitedError (sandbox.rate_limited)."""
+    node_def = _script_node_def()
+    fn = make_sandbox_agent_fn(node_def)
+    create = AsyncMock(side_effect=RateLimitException("rate limited"))
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=create),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_RATE_LIMIT_BASE_BACKOFF_S", 0),
+        pytest.raises(SandboxQueueTimeoutError) as exc_info,
+    ):
+        await fn(_run_state())
+
+    # Verify the exception class name resolves to sandbox.queue_timeout
+    from modulo.core.pipeline_engine.error_codes import map_legacy_code
+
+    assert map_legacy_code(type(exc_info.value).__name__) == "sandbox.queue_timeout"
+
+
+# ---------------------------------------------------------------------------
+# 10. FAR-296 Phase 5a: OTel span events at script-mode lifecycle milestones
 # ---------------------------------------------------------------------------
 
 

@@ -178,17 +178,15 @@ describe('RunsListView', () => {
     wrapper.unmount()
   })
 
-  it('renders an input payload preview for runs with parameters', async () => {
+  it('does not render an input preview column even when runs have parameters', async () => {
     mockResponses['/api/v1/runs'] = listWith([
       { ...baseRun, status: 'running', input_payload: { task: 'fix bug', pr_number: 42 } },
     ])
     const wrapper = mountView()
     await flushPromises()
     await nextTick()
-    const cell = wrapper.find('[data-testid="runs-list-input-run1"]')
-    expect(cell.exists()).toBe(true)
-    expect(cell.text()).toContain('fix bug')
-    expect(cell.attributes('title')).toContain('pr_number')
+    expect(wrapper.find('[data-testid="runs-list-input-run1"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('fix bug')
     wrapper.unmount()
   })
 
@@ -554,25 +552,23 @@ describe('RunsListView', () => {
     wrapper.unmount()
   })
 
-  it('renders the trigger actor column value', async () => {
+  it('does not render a trigger actor column', async () => {
     mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, trigger_actor: 'Duncan (GitHub)' }])
     const wrapper = mountView()
     await flushPromises()
     await nextTick()
-    const cell = wrapper.find('[data-testid="runs-list-trigger-actor-run1"]')
-    expect(cell.exists()).toBe(true)
-    expect(cell.text()).toContain('Duncan (GitHub)')
+    expect(wrapper.find('[data-testid="runs-list-trigger-actor-run1"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Duncan (GitHub)')
     wrapper.unmount()
   })
 
-  it('renders the trigger type label for the trigger actor when absent', async () => {
+  it('renders the trigger type label for the trigger column when actor is absent', async () => {
     mockResponses['/api/v1/runs'] = listWith([baseRun])
     const wrapper = mountView()
     await flushPromises()
     await nextTick()
-    const cell = wrapper.find('[data-testid="runs-list-trigger-actor-run1"]')
-    expect(cell.exists()).toBe(true)
-    expect(cell.text()).toBe('Manual')
+    expect(wrapper.find('[data-testid="runs-list-trigger-actor-run1"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Manual')
     wrapper.unmount()
   })
 
