@@ -29,7 +29,7 @@ _EXCLUDED_NETWORKS = [
 _allow_private_networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
 
 
-def _load_allowlist() -> None:
+def _check_allowlist() -> None:
     raw = os.environ.get("SSRF_ALLOW_PRIVATE_RANGES", "")
     if not raw:
         return
@@ -42,7 +42,7 @@ def _load_allowlist() -> None:
                 _log.warning("ssrf.invalid_allowlist_entry", extra={"cidr": cidr})
 
 
-_load_allowlist()
+_check_allowlist()
 
 
 def _is_blocked_ip(ip_str: str) -> bool:
