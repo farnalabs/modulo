@@ -583,16 +583,18 @@ def clear_session_approvals_for_account(account_id: str) -> None:
     """Clear session approvals for a specific account only (FAR-1470).
 
     Scopes the logout to the caller's own sessions instead of clearing
-    every user's in-memory approvals. Falls back to clearing all if the
-    account index is empty (e.g. single-worker with no index populated).
+    every user's in-memory approvals, using the account→sessions index. If the
+    index wasn't populated on this worker (sessions live on another instance),
+    there is nothing scoped to clear here — deliberately no clear-all fallback,
+    which would wipe every account's approvals (FAR-1470 regression).
     """
     session_ids = _account_sessions.pop(account_id, set())
-    if session_ids:
-        for sid in session_ids:
-            _session_approvals.pop(sid, None)
-    else:
-        # Fallback: account index not populated (single-worker start-up)
-        _session_approvals.clear()
+    for sid in session_ids:
+        _session_approvals.pop(sid, None)
+    # No clear-all fallback: if the account index wasn't populated on this
+    # worker (sessions live on another instance), clearing every account's
+    # in-memory approvals would recreate the cross-account wipe FAR-1470
+    # set out to fix. The account has no scoped approvals here to clear.
 
 
 def _get_all_tool_definitions(include_ui_tools: bool = True) -> list[dict[str, Any]]:

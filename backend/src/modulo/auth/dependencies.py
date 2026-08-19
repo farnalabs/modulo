@@ -8,6 +8,7 @@ from jwt import InvalidTokenError as JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal, decode_principal
+from modulo.auth.permissions import _clamp_role
 from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
@@ -231,7 +232,18 @@ async def get_current_tenant_user_or_api_key(
                 extra={"account_id": str(key.account_id), "org_id": str(key.organisation_id)},
             )
             raise OrganisationMembershipNotFound()
-        clamped_role = min(key.role, live_role) if key.role != live_role else key.role
+        clamped_role = _clamp_role(key.role, live_role)
+        if not clamped_role:
+            _log.warning(
+                "auth.api_key_clamp_failed",
+                extra={
+                    "account_id": str(key.account_id),
+                    "org_id": str(key.organisation_id),
+                    "minted_role": key.role,
+                    "live_role": live_role,
+                },
+            )
+            raise OrganisationMembershipNotFound()
         return TenantPrincipal(
             username=key.name,
             organisation_id=key.organisation_id,
