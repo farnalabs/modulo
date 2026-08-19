@@ -970,17 +970,77 @@ describe('RunDetailView', () => {
     const wrapper = await mountWithDetail({
       ...baseDetail(),
       work_item_refs: [
-        { kind: 'pr', ref: 'https://github.com/acme/repo/pull/42', source: 'github', status: 'open' },
+        { kind: 'github_pr', ref: 'acme/repo#42', source: 'derived', status: 'open' },
+        { kind: 'linear', ref: 'FAR-123', source: 'derived' },
       ],
     })
 
     const section = wrapper.find('[data-testid="run-detail-work-items"]')
     expect(section.exists()).toBe(true)
     expect(section.text()).toContain('Work items')
-    expect(section.text()).toContain('PR')
-    expect(section.text()).toContain('https://github.com/acme/repo/pull/42')
-    expect(section.text()).toContain('github')
+
+    const prLink = section.find('[data-testid="run-detail-pr-link-0"]')
+    expect(prLink.exists()).toBe(true)
+    expect(prLink.attributes('href')).toBe('https://github.com/acme/repo/pull/42')
+    expect(prLink.text()).toContain('PR')
+    expect(prLink.text()).toContain('#42')
+    expect(section.text()).toContain('derived')
     expect(section.text()).toContain('open')
+
+    expect(section.text()).toContain('linear')
+    expect(section.text()).toContain('FAR-123')
+    wrapper.unmount()
+  })
+
+  it('renders a github_pr item without a link when the ref is not URL-derivable', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      work_item_refs: [
+        { kind: 'github_pr', ref: '42', source: 'derived' },
+      ],
+    })
+
+    const section = wrapper.find('[data-testid="run-detail-work-items"]')
+    expect(section.find('[data-testid="run-detail-pr-link-0"]').exists()).toBe(false)
+    expect(section.text()).toContain('PR')
+    expect(section.text()).toContain('#42')
+    wrapper.unmount()
+  })
+
+  it('copies the run input payload with the copy button', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    mockInputPayload = { task: 'fix bug', pr_number: 42 }
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') {
+        return Promise.resolve({ data: { ...baseDetail() }, error: undefined })
+      }
+      if (url === '/api/v1/runs/{run_id}/io') {
+        return Promise.resolve({
+          data: { outputs_json: null, input_payload: mockInputPayload },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    const copyBtn = wrapper.find('[data-testid="run-detail-copy-input"]')
+    expect(copyBtn.exists()).toBe(true)
+    expect(copyBtn.attributes('type')).toBe('button')
+    await copyBtn.trigger('click')
+    await flushPromises()
+
+    expect(writeText).toHaveBeenCalled()
+    expect(writeText.mock.calls[0][0]).toContain('"pr_number": 42')
+    expect(wrapper.find('[data-testid="run-detail-copy-input"]').text()).toContain('Copied!')
     wrapper.unmount()
   })
 

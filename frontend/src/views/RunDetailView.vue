@@ -186,7 +186,9 @@
         <div class="flex items-center justify-between mb-1">
           <h3 class="text-sm font-semibold">{{ $t('views.RunDetailView.run_input') }}</h3>
           <button
+            type="button"
             class="text-xs text-primary hover:bg-primary/10 rounded px-2 py-1"
+            data-testid="run-detail-copy-input"
             @click="copyInputPayload"
           >
             {{ inputPayloadCopied ? $t('views.RunDetailView.copied') : $t('views.RunDetailView.copy') }}
@@ -200,14 +202,14 @@
         <h3 class="text-sm font-semibold mb-2">{{ $t('views.RunDetailView.work_items') }}</h3>
         <div class="space-y-1.5">
           <div v-for="(item, idx) in run.work_item_refs" :key="`${item.kind}-${item.ref}-${idx}`" class="flex flex-wrap items-center gap-2 text-xs">
-            <template v-if="isPrWorkItem(item)">
-              <a v-if="getPrUrl(item)" :href="getPrUrl(item)!" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 text-primary hover:underline">
-                <span class="badge text-xs badge-context-blue">PR</span>
-                <span class="font-medium">#{{ item.ref }}</span>
+            <template v-if="isGithubWorkItem(item)">
+              <a v-if="getPrUrl(item)" :href="getPrUrl(item)!" target="_blank" rel="noopener noreferrer" :data-testid="`run-detail-pr-link-${idx}`" class="inline-flex items-center gap-1 text-primary hover:underline">
+                <span class="badge text-xs badge-context-blue">{{ githubKindLabel(item) }}</span>
+                <span class="font-medium">#{{ githubRefId(item) }}</span>
               </a>
               <span v-else class="inline-flex items-center gap-1">
-                <span class="badge text-xs badge-context-blue">PR</span>
-                <span class="font-medium">#{{ item.ref }}</span>
+                <span class="badge text-xs badge-context-blue">{{ githubKindLabel(item) }}</span>
+                <span class="font-medium">#{{ githubRefId(item) }}</span>
               </span>
             </template>
             <template v-else>
@@ -714,6 +716,7 @@
 
 <script setup lang="ts">
 import { computed, onUnmounted, ref } from 'vue'
+import type { Ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { api, getAccessToken } from '../lib/api/client'
@@ -1021,11 +1024,11 @@ async function copyRunId() {
   await copyText(run.value.run_id)
 }
 
-async function copyText(text: string) {
+async function copyText(text: string, flag: Ref<boolean> = copied) {
   try {
     await navigator.clipboard.writeText(text)
-    copied.value = true
-    setTimeout(() => { copied.value = false }, 2000)
+    flag.value = true
+    setTimeout(() => { flag.value = false }, 2000)
   } catch (e) {
     console.warn('Failed to copy text', e)
   }
@@ -1036,13 +1039,30 @@ function nodeLabel(nodeId: string): string {
   return labels?.[nodeId] || shortId(nodeId)
 }
 
-function isPrWorkItem(item: WorkItemRef): boolean {
-  return (item.kind || '').toLowerCase() === 'pr'
+const GITHUB_KINDS = ['github', 'github_pr', 'github_issue'] as const
+
+function isGithubWorkItem(item: WorkItemRef): boolean {
+  return GITHUB_KINDS.includes((item.kind || '').toLowerCase() as (typeof GITHUB_KINDS)[number])
+}
+
+function githubKindLabel(item: WorkItemRef): string {
+  const labels: Record<string, string> = { github: 'GitHub', github_pr: 'PR', github_issue: 'Issue' }
+  return labels[(item.kind || '').toLowerCase()] ?? 'GitHub'
+}
+
+function githubRefId(item: WorkItemRef): string {
+  return (item.ref || '').trim().replace(/^[^/\s]+\/[^/\s]+#/, '')
 }
 
 function getPrUrl(item: WorkItemRef): string | null {
-  if (item.source && /^https?:\/\//.test(item.source)) return item.source
-  return null
+  const kind = (item.kind || '').toLowerCase()
+  const ref = (item.ref || '').trim()
+  const m = ref.match(/^([^/\s]+)\/([^/\s]+)#(.+)$/)
+  if (!m) return null
+  const [, owner, repo, id] = m
+  if (kind === 'github_pr') return `https://github.com/${owner}/${repo}/pull/${id}`
+  if (kind === 'github_issue') return `https://github.com/${owner}/${repo}/issues/${id}`
+  return `https://github.com/${owner}/${repo}`
 }
 
 async function revealPrompt(nodeName: string) {
@@ -1339,13 +1359,7 @@ async function copyOutput() {
 async function copyInputPayload() {
   const payload = runIO.value?.input_payload
   if (!payload) return
-  try {
-    await navigator.clipboard.writeText(JSON.stringify(payload, null, 2))
-    inputPayloadCopied.value = true
-    setTimeout(() => { inputPayloadCopied.value = false }, 2000)
-  } catch (e) {
-    console.warn('Failed to copy input payload', e)
-  }
+  await copyText(JSON.stringify(payload, null, 2), inputPayloadCopied)
 }
 
 async function claimGate(gate: components['schemas']['GateResponse']) {
