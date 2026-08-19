@@ -197,9 +197,28 @@ class ScriptBudgetKilledError(ScriptModeError):
     killer (FAR-296 Phase 3b-3). Post-claim, TERMINAL (never retryable)."""
 
 
+class SandboxRateLimitedError(SandboxNodeFailedError):
+    """E2B rate-limited the sandbox creation (429 / concurrent-sandbox limit).
+
+    Raised when ``AsyncSandbox.create`` exhausts the bounded retry/backoff loop
+    (FAR-296 Phase 4a). The sandbox was NEVER created and the script PROCESS was
+    NEVER started, so this is a PRE-CLAIM failure — retryable. Subclassing
+    ``SandboxNodeFailedError`` maps it to the retryable ``sandbox.no_output_json``
+    family by default; the executor's LEGACY_ALIASES routes ``SandboxRateLimitedError``
+    to the dedicated retryable ``sandbox.rate_limited`` code.
+    """
+
+
 def _script_budget_killed_message(node_id: str) -> str:
-    """Message for a platform-side resource-cap kill (ScriptBudgetKilledError)."""
-    return f"Script-mode sandbox exceeded resource limits for node '{node_id}' — killed by platform-side runtime killer"
+    """Message for a platform-side budget kill (ScriptBudgetKilledError).
+
+    Covers BOTH kill sources: the resource-cap killer (FAR-296 Phase 3b-3) and
+    the wall-clock spend budget killer (FAR-296 Phase 4a).
+    """
+    return (
+        f"Script-mode sandbox exceeded its budget (resource limits or wall-clock spend) "
+        f"for node '{node_id}' — killed by platform-side runtime killer"
+    )
 
 
 class OutputSchemaValidationError(ValueError):
@@ -274,6 +293,13 @@ _SANDBOX_BUDGET_POLL_INTERVAL_TICKS = 6
 # tick forever; the shield keeps SDK internal tasks alive).
 _SANDBOX_METRICS_POLL_TIMEOUT = 10.0
 _SANDBOX_KILL_TIMEOUT = 15.0
+# FAR-296 Phase 4a: E2B concurrent-sandbox rate-limit (429 / resource exhausted)
+# retry. ``AsyncSandbox.create`` can be rate-limited by the E2B provisioner; a
+# 429 is TRANSIENT. Retry with exponential backoff, bounded by the create-timeout
+# window and the node timeout. Exhausting the retries fails RETRYABLY
+# (sandbox.rate_limited) — never the permanent ``harness.unknown`` fallback.
+_SANDBOX_RATE_LIMIT_MAX_RETRIES = 3
+_SANDBOX_RATE_LIMIT_BASE_BACKOFF_S = 5
 
 
 # The raw returned value is a non-metric Python number (int/float, not bool).
@@ -2702,6 +2728,8 @@ class _SandboxWatchdog:
         stream_broker: RunEventBroker | None,
         stream_enabled: bool,
         drained_chunks: list[str],
+        wallclock_budget_seconds: int | None,
+        start_time: float,
     ) -> None:
         if sandbox is None:
             raise RuntimeError("Sandbox was not created before use")
@@ -2727,6 +2755,12 @@ class _SandboxWatchdog:
         self._fs_min_stat_interval = 2.0
         self._budget_killed = False
         self._budget_check_ticks = 0
+        # FAR-296 Phase 4a: wall-clock spend budget. The watchdog's tick checks
+        # the elapsed wall-clock against this budget and kills the sandbox when
+        # exceeded (script mode only). ``start_time`` is the monotonic clock at
+        # node start so the elapsed measurement survives the provisioning phase.
+        self._wallclock_budget_seconds = wallclock_budget_seconds
+        self._start_time = start_time
 
     @property
     def budget_killed(self) -> bool:
@@ -3015,10 +3049,22 @@ class _SandboxWatchdog:
             return False
         if not killed:
             return False
+        await self.kill_sandbox_for_budget(self._node_id, reason="resource_limits_exceeded")
+        return True
+
+    async def kill_sandbox_for_budget(self, node_id: str, reason: str) -> None:
+        """Kill the sandbox for a budget overrun (resource caps or wall-clock spend).
+
+        Shared kill semantics for BOTH budget killers (FAR-296 Phase 3b-3
+        resource caps + Phase 4a wall-clock spend): set ``self._budget_killed``,
+        kill the sandbox (bounded + shielded), and log on failure that the
+        sandbox MAY REMAIN ALIVE (the node's finally-block teardown is the
+        second kill attempt).
+        """
         self._budget_killed = True
         _log.warning(
             "sandbox_agent.budget_killed",
-            extra={"node_id": self._node_id, "run_id": self._run_id},
+            extra={"node_id": node_id, "run_id": self._run_id, "reason": reason},
         )
         try:
             await asyncio.wait_for(
@@ -3028,25 +3074,24 @@ class _SandboxWatchdog:
         except asyncio.CancelledError:
             raise
         except Exception:
-            # Best-effort kill. The failure is logged but the cap was
-            # genuinely exceeded — the self._sandbox MAY REMAIN ALIVE after
-            # this (the kill timed out / the SDK errored), so the
-            # budget flag still propagates as a terminal outcome and
-            # the self._sandbox teardown in the node's finally block is the
-            # second kill attempt.
+            # Best-effort kill. The failure is logged but the budget was
+            # genuinely exceeded — the sandbox MAY REMAIN ALIVE after this
+            # (the kill timed out / the SDK errored), so the budget flag still
+            # propagates as a terminal outcome and the sandbox teardown in the
+            # node's finally block is the second kill attempt.
             _log.exception(
                 "sandbox_agent.resource_kill_failed",
                 extra={
-                    "node_id": self._node_id,
+                    "node_id": node_id,
                     "run_id": self._run_id,
                     "budget_killed": True,
+                    "reason": reason,
                 },
             )
             _log.warning(
                 "sandbox_agent.budget_killed_sandbox_may_remain_alive",
-                extra={"node_id": self._node_id, "run_id": self._run_id},
+                extra={"node_id": node_id, "run_id": self._run_id},
             )
-        return True
 
     async def tick(self) -> None:
         await self.drain_sandbox_log()
@@ -3057,6 +3102,31 @@ class _SandboxWatchdog:
         self._budget_check_ticks += 1
         if self._budget_check_ticks % _SANDBOX_BUDGET_POLL_INTERVAL_TICKS == 0:
             await self.enforce_resource_limits()
+        # FAR-296 Phase 4a: wall-clock spend budget. Pure monotonic comparison —
+        # no SDK poll needed. When the elapsed time exceeds the budget and the
+        # sandbox has not already been budget-killed, kill it. The guard
+        # ``and not self._budget_killed`` prevents a second kill if the
+        # resource-cap killer already fired. Gated to script mode only —
+        # LLM-mode nodes do not take a wall-clock budget; raising
+        # ScriptBudgetKilledError (script-specific, terminal) for an LLM-mode
+        # node would be a misclassification.
+        if (
+            self._sandbox_mode == "script"
+            and self._wallclock_budget_seconds is not None
+            and (time.monotonic() - self._start_time) >= self._wallclock_budget_seconds
+            and not self._budget_killed
+        ):
+            _elapsed = time.monotonic() - self._start_time
+            _log.warning(
+                "sandbox_agent.wallclock_budget_overrun",
+                extra={
+                    "run_id": self._run_id,
+                    "node_id": self._node_id,
+                    "budget_seconds": self._wallclock_budget_seconds,
+                    "elapsed_seconds": round(_elapsed, 1),
+                },
+            )
+            await self.kill_sandbox_for_budget(self._node_id, reason="wallclock_budget_exceeded")
 
 
 async def _sandbox_agent_impl(
@@ -3070,6 +3140,7 @@ async def _sandbox_agent_impl(
     egress_policy: str | None,
     egress_allowlist: list[dict[str, Any]] | None,
     resource_limits: dict[str, Any] | None,
+    wallclock_budget_seconds: int | None,
     output_schema_json: dict[str, Any] | None,
     sandbox_timeout: int,
     stall_timeout_override: Any,
@@ -3085,6 +3156,7 @@ async def _sandbox_agent_impl(
     node_id: str,
 ) -> dict[str, Any]:
     from e2b import AsyncSandbox
+    from e2b.exceptions import RateLimitException  # type: ignore[import-untyped]
     from opentelemetry import trace as _otel_trace
 
     from modulo.core.guardrails.loop_intercept import (
@@ -3383,23 +3455,57 @@ async def _sandbox_agent_impl(
             _metadata["resource_limits"] = json.dumps(resource_limits)
         if egress_policy == "selected" and egress_allowlist:
             _metadata["egress_allowlist"] = json.dumps(egress_allowlist)
-        sandbox = await asyncio.wait_for(
-            AsyncSandbox.create(
-                template=template_id,
-                timeout=sandbox_timeout,
-                allow_internet_access=(egress_policy not in ("deny_all", "selected")),
-                # deny_all/selected -> no internet; default/None -> internet
-                # allowed (e2b default). IMPORTANT (FAR-296 Phase 3b-3):
-                # ``selected`` DENIES ALL egress at this boolean level — the
-                # host:port egress_allowlist is carried only as metadata and
-                # is NOT yet honored by any enforcement point (no template-side
-                # mechanism exists; the e2b SDK has no native allowlist
-                # control). ``selected`` is functionally equivalent to
-                # ``deny_all`` until that point lands.
-                metadata=_metadata or None,
-            ),
-            timeout=min(sandbox_timeout, 120),
-        )
+        # FAR-296 Phase 4a: E2B concurrent-sandbox rate limits (429 / resource
+        # exhausted) are TRANSIENT. Retry ``AsyncSandbox.create`` with
+        # exponential backoff, bounded by the create timeout window and the
+        # node timeout. A run that exhausts the retries fails RETRYABLY
+        # (sandbox.rate_limited) — it must NOT permanently fail as
+        # harness.unknown.
+        _rate_limit_attempt = 0
+        while True:
+            try:
+                sandbox = await asyncio.wait_for(
+                    AsyncSandbox.create(
+                        template=template_id,
+                        timeout=sandbox_timeout,
+                        allow_internet_access=(egress_policy not in ("deny_all", "selected")),
+                        # deny_all/selected -> no internet; default/None ->
+                        # internet allowed (e2b default). IMPORTANT
+                        # (FAR-296 Phase 3b-3): ``selected`` DENIES ALL egress
+                        # at this boolean level — the host:port egress_allowlist
+                        # is carried only as metadata and is NOT yet honored by
+                        # any enforcement point (no template-side mechanism
+                        # exists; the e2b SDK has no native allowlist control).
+                        # ``selected`` is functionally equivalent to ``deny_all``
+                        # until that point lands.
+                        metadata=_metadata or None,
+                    ),
+                    timeout=min(sandbox_timeout, 120),
+                )
+                break
+            except RateLimitException as _rle:
+                _rate_limit_attempt += 1
+                if _rate_limit_attempt > _SANDBOX_RATE_LIMIT_MAX_RETRIES:
+                    raise SandboxRateLimitedError(
+                        f"E2B rate-limited after {_rate_limit_attempt} attempts creating sandbox for node '{node_id}'"
+                    ) from None
+                _backoff = _SANDBOX_RATE_LIMIT_BASE_BACKOFF_S * (2 ** (_rate_limit_attempt - 1))
+                _log.warning(
+                    "sandbox_agent.e2b_rate_limited_retrying",
+                    extra={
+                        "run_id": run_id,
+                        "node_id": node_id,
+                        "attempt": _rate_limit_attempt,
+                        "backoff_seconds": _backoff,
+                    },
+                )
+                try:
+                    await asyncio.wait_for(
+                        asyncio.sleep(_backoff),
+                        timeout=min(sandbox_timeout, 120),
+                    )
+                except asyncio.CancelledError:
+                    raise
         if sandbox is None:
             raise RuntimeError("Sandbox was not created before use")
         _sandbox_id = getattr(sandbox, "sandbox_id", None) or None
@@ -3514,6 +3620,8 @@ async def _sandbox_agent_impl(
                 stream_broker=_stream_broker,
                 stream_enabled=_stream_enabled,
                 drained_chunks=_drained_chunks,
+                wallclock_budget_seconds=wallclock_budget_seconds,
+                start_time=start_time,
             )
 
             _drain_fn = watchdog.drain_sandbox_log
@@ -3547,6 +3655,31 @@ async def _sandbox_agent_impl(
                     or os.environ.get("GITHUB_TOKEN", "")
                 )
             sandbox_envs.update(env_vars_extra)
+            # FAR-296 Phase 4a: wall-clock spend budget — non-tick path. A very
+            # slow provisioning sequence may already have consumed the budget
+            # before the script process starts. Even though no side effects
+            # occurred, the budget was exhausted — re-dispatching would waste
+            # another provisioning cycle on a run that already consumed its
+            # budget allocation. Script mode only: LLM-mode nodes do not take a
+            # wall-clock budget; raising ScriptBudgetKilledError for an LLM-mode
+            # node would be a misclassification.
+            if (
+                sandbox_mode == "script"
+                and wallclock_budget_seconds is not None
+                and (time.monotonic() - start_time) >= wallclock_budget_seconds
+                and not watchdog.budget_killed
+            ):
+                _log.warning(
+                    "sandbox_agent.wallclock_budget_overrun_pre_run",
+                    extra={
+                        "run_id": run_id,
+                        "node_id": node_id,
+                        "budget_seconds": wallclock_budget_seconds,
+                        "elapsed_seconds": round(time.monotonic() - start_time, 1),
+                    },
+                )
+                watchdog._budget_killed = True
+                raise ScriptBudgetKilledError(_script_budget_killed_message(node_id)) from None
             # FAR-296 Phase 2 fencing lease (script mode only): persist the
             # execution claim IMMEDIATELY BEFORE the script process starts so
             # a durable marker proves the script RAN. Once claimed, any fault
@@ -3620,6 +3753,30 @@ async def _sandbox_agent_impl(
                         extra={"node_id": node_id, "run_id": run_id},
                     )
                     _bridge_server = None
+            # FAR-296 Phase 4a: wall-clock spend budget — non-tick path (final
+            # check immediately before the command starts). A very slow bridge /
+            # env setup may have consumed the budget; do not start the command
+            # past the budget. ``_budget_killed`` may already be set by the
+            # pre-lease check above (script mode) — guard against a double
+            # kill/raise. Script mode only: same rationale as the pre-lease
+            # check.
+            if (
+                sandbox_mode == "script"
+                and wallclock_budget_seconds is not None
+                and (time.monotonic() - start_time) >= wallclock_budget_seconds
+                and not watchdog.budget_killed
+            ):
+                _log.warning(
+                    "sandbox_agent.wallclock_budget_overrun_pre_run",
+                    extra={
+                        "run_id": run_id,
+                        "node_id": node_id,
+                        "budget_seconds": wallclock_budget_seconds,
+                        "elapsed_seconds": round(time.monotonic() - start_time, 1),
+                    },
+                )
+                watchdog._budget_killed = True
+                raise ScriptBudgetKilledError(_script_budget_killed_message(node_id)) from None
             wrapped_command = f"( {_bridge_wrapped_command} ) > {_SANDBOX_LOG_PATH} 2>&1"
             cmd_handle = await asyncio.wait_for(
                 sandbox.commands.run(
@@ -4370,6 +4527,11 @@ def make_sandbox_agent_fn(
     egress_policy: str | None = node_def.get("egress_policy")
     egress_allowlist: list[dict[str, Any]] | None = node_def.get("egress_allowlist")
     resource_limits: dict[str, Any] | None = node_def.get("resource_limits")
+    # FAR-296 Phase 4a: wall-clock spend budget (seconds). When set, the sandbox
+    # is killed once the wall-clock elapsed time exceeds this budget — a tighter
+    # spend bound than the node timeout. Validated (positive int) at save-time
+    # and here; a None value disables the wall-clock killer.
+    wallclock_budget_seconds: int | None = node_def.get("wallclock_budget_seconds")
     # FAR-296 Phase 3: script mode that REQUIRES enforcement (egress denial or
     # resource limits) requires a REMOTE E2B provider (the E2B API key) because
     # local providers have no egress/resource enforcement point — deny_all /
@@ -4456,6 +4618,7 @@ def make_sandbox_agent_fn(
             egress_policy=egress_policy,
             egress_allowlist=egress_allowlist,
             resource_limits=resource_limits,
+            wallclock_budget_seconds=wallclock_budget_seconds,
             output_schema_json=output_schema_json,
             sandbox_timeout=sandbox_timeout,
             stall_timeout_override=stall_timeout_override,

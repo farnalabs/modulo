@@ -452,6 +452,11 @@ class PipelineGraphNode(BaseModel):
     egress_policy: Literal["default", "deny_all", "selected"] | None = None
     egress_allowlist: list[dict[str, Any]] | None = None
     resource_limits: dict[str, Any] | None = None
+    # FAR-296 Phase 4a: wall-clock spend budget (seconds). When set, the
+    # node's sandbox is killed by the platform-side runtime killer once the
+    # wall-clock elapsed time exceeds this budget — a tighter spend bound than
+    # the node timeout. Must be a positive int (validated at save-time).
+    wallclock_budget_seconds: int | None = None
     # FAR-228: opt-in idempotency gate for side-effecting sandbox nodes. When
     # non-empty, a FULL-LINE occurrence of this literal in the sandbox output
     # marks the run's delivery as done (raw-output marker ``delivery_done``),
@@ -528,6 +533,7 @@ class PipelineGraphNode(BaseModel):
                 _validate_sandbox_egress_config,
                 _validate_sandbox_mode_config,
                 _validate_sandbox_resource_limits_config,
+                _validate_sandbox_wallclock_budget_config,
             )
 
             _validate_sandbox_mode_config(self.model_dump())
@@ -538,6 +544,11 @@ class PipelineGraphNode(BaseModel):
                 str(self.id),
             )
             _validate_sandbox_resource_limits_config(self.model_dump())
+            _validate_sandbox_wallclock_budget_config(
+                self.wallclock_budget_seconds,
+                self.timeout_seconds,
+                str(self.id),
+            )
             if not self.template_id:
                 raise ValueError("Sandbox agent nodes require a template_id (e.g. 'opencode')")
             self._validate_sandbox_env_vars()

@@ -1366,3 +1366,38 @@ async def test_sandbox_resource_limits_non_dict_is_error():
     result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
     assert not result.is_valid
     assert any(i.code == "SANDBOX_RESOURCE_LIMITS_INVALID" for i in result.issues)
+
+
+async def test_sandbox_wallclock_budget_positive_int_passes():
+    """A positive-int wallclock_budget_seconds passes graph save (FAR-296 Phase 4a)."""
+    graph = {"nodes": [_sandbox_node(wallclock_budget_seconds=120)], "edges": []}
+    result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+    assert result.is_valid
+    assert not any(i.code.startswith("SANDBOX_WALLCLOCK_BUDGET_") for i in result.issues)
+
+
+async def test_sandbox_wallclock_budget_zero_is_error():
+    """wallclock_budget_seconds=0 is rejected (fail-closed) — a 0 budget is
+    never a valid spend cap."""
+    graph = {"nodes": [_sandbox_node(wallclock_budget_seconds=0)], "edges": []}
+    result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+    assert not result.is_valid
+    assert any(i.code == "SANDBOX_WALLCLOCK_BUDGET_INVALID" for i in result.issues)
+
+
+async def test_sandbox_wallclock_budget_negative_is_error():
+    """wallclock_budget_seconds < 0 is rejected (fail-closed)."""
+    graph = {"nodes": [_sandbox_node(wallclock_budget_seconds=-5)], "edges": []}
+    result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+    assert not result.is_valid
+    assert any(i.code == "SANDBOX_WALLCLOCK_BUDGET_INVALID" for i in result.issues)
+
+
+async def test_sandbox_wallclock_budget_non_int_is_error():
+    """wallclock_budget_seconds that is not an int (e.g. a string) is rejected
+    (fail-closed) — a budget that cannot be compared to the wall clock must
+    never silently no-op the spend cap."""
+    graph = {"nodes": [_sandbox_node(wallclock_budget_seconds="120")], "edges": []}
+    result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+    assert not result.is_valid
+    assert any(i.code == "SANDBOX_WALLCLOCK_BUDGET_INVALID" for i in result.issues)
