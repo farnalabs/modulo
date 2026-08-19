@@ -1142,8 +1142,9 @@ async def _run_conformance_gate(
     load-failed marker) set by the executor; the node's bound connector
     instance ids and agent id come from the node definition. *node_def*, when
     provided, is forwarded to the live-manifest reader so a ``sandbox_agent``
-    node's mechanically-derived sandbox capability surface (write/egress/git
-    credential scope — FAR-212 PR A) is included in the conformance manifest.
+    node's mechanically-derived sandbox capability surface (egress certification;
+    write/git-credential unknown until PR B — FAR-212 PR A) is included in the
+    conformance manifest.
 
     Behaviour:
       - On resume of THIS node's conformance block (``state`` carries the
@@ -2370,8 +2371,9 @@ def make_sandbox_agent_fn(
         # FAR-215: mid-run capability re-check at node start (block -> HITL).
         # The gate raises a LangGraph interrupt on block; control only reaches
         # the sandbox body when the node may proceed. node_def is forwarded so
-        # the sandbox capability surface (write/egress/git credential scope) is
-        # mechanically derived into the conformance manifest (FAR-212 PR A).
+        # the sandbox capability surface (egress certification; write/git-credential
+        # unknown until PR B — FAR-212 PR A) is mechanically derived into the
+        # conformance manifest.
         agent_id = _parse_uuid_opt(node_def.get("agent_id"))
         await _run_conformance_gate(state, node_id=node_id, agent_id=agent_id, node_def=node_def)
 

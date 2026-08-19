@@ -134,16 +134,18 @@ def test_with_agent_commands_returns_callable():
 # ---------------------------------------------------------------------------
 # FAR-212 PR A: the sandbox_agent builder forwards its node_def to the
 # conformance gate so the mechanically-derived sandbox capability surface
-# (write/egress/git-credential scope) reaches the live manifest.
+# (egress; write/git-credential surfaces resolve unknown) reaches the live
+# manifest.
 # ---------------------------------------------------------------------------
 
 
 async def test_sandbox_agent_passes_node_def_to_conformance_gate(monkeypatch):
     """The builder's node function calls the conformance gate with the node's
     full definition dict — the live-manifest reader needs the ACTUAL config
-    (egress_policy, read_only, git_credentials) to certify write/egress
-    impossibility. Without the forwarding the sandbox surface would stay
-    unknown and every block guardrail would fail closed for the wrong reason."""
+    (egress_policy) to certify egress impossibility. write_files / git_credentials
+    are not certified from node keys (no enforced surface yet — FAR-212 PR B).
+    Without the forwarding the sandbox surface would stay absent entirely and
+    even the egress guarantee could not be certified."""
     import modulo.core.pipeline_engine.node_runner as nr
 
     node_def = _base_node_def(egress_policy="deny_all", read_only=True)

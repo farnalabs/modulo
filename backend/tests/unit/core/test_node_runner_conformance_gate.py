@@ -421,10 +421,10 @@ async def test_gate_forwards_claims_load_failed_marker(monkeypatch: pytest.Monke
 
 async def test_gate_forwards_node_def_to_check_node_start(monkeypatch: pytest.MonkeyPatch):
     """The gate forwards the node's definition dict to ``check_node_start`` so a
-    ``sandbox_agent`` node's mechanically-derived sandbox surface
-    (write/egress/git-credential scope — FAR-212 PR A) lands in the live
-    manifest. Without this forwarding the sandbox surface would be absent
-    (unknown) and every block guardrail would fail closed for the wrong reason."""
+    ``sandbox_agent`` node's mechanically-derived sandbox surface (egress
+    certification; write/git-credential unknown — FAR-212 PR A) lands in the
+    live manifest. Without this forwarding the sandbox surface would be absent
+    and even the egress guarantee could not be certified."""
     _set_ctx(monkeypatch)
     check = _patch_check_node_start(
         monkeypatch,
