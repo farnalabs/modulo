@@ -12088,6 +12088,13 @@ export interface components {
             resource_limits?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Read Only
+             * @default false
+             */
+            read_only: boolean;
+            /** Git Credentials */
+            git_credentials?: ("scoped" | "unscoped" | "none") | null;
             /** Wallclock Budget Seconds */
             wallclock_budget_seconds?: number | null;
             /** Delivery Sentinel */
