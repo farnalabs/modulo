@@ -12,7 +12,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_permission
+from modulo.api.dependencies import get_db_session, require_permission, require_system_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.license import (
     LicenseError,
@@ -188,7 +188,7 @@ async def get_license_status(
 @handle_db_errors("admin.license.upload_license")
 async def upload_license(
     req: LicenseUploadRequest,
-    _: TenantPrincipal = require_permission(_CODE_ORG_LICENSE_MANAGE),
+    _: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
 ) -> LicenseUploadResponse:
     try:
         validation = parse_and_verify(req.license_key)
@@ -223,7 +223,7 @@ async def issue_license(
     req: LicenseIssueRequest,
     background_tasks: BackgroundTasks,
     settings: Settings = Depends(get_settings),
-    _: TenantPrincipal = require_permission(_CODE_ORG_LICENSE_MANAGE),
+    _: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
 ) -> LicenseIssueResponse:
     """Manually issue (sign) a team license key for a customer.
 

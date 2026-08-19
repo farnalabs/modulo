@@ -116,6 +116,8 @@ def _setup_client(ctx: dict[str, Any]) -> None:
         "organisation_id": "00000000-0000-0000-0000-000000000001",
         "account_id": "00000000-0000-0000-0000-000000000002",
         "org_role": "admin" if is_admin else "operator",
+        # License upload/issue now require system-admin level (require_system_permission).
+        "is_system_admin": is_admin,
     }
 
     _app.dependency_overrides[get_settings] = lambda: _settings

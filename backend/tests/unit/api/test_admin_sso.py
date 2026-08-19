@@ -6,6 +6,7 @@ from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
@@ -398,7 +399,10 @@ class TestOidcConnection:
         from modulo.api.routes.admin_sso import _test_oidc_connection
 
         provider = _make_mock_provider()
-        with patch("httpx.AsyncClient.get", new=AsyncMock(side_effect=Exception("Connection refused"))):
+        with (
+            patch("httpx.AsyncClient.get", new=AsyncMock(side_effect=httpx.ConnectError("Connection refused"))),
+            patch("modulo.api.routes.admin_sso.validate_outbound_url_async", new=AsyncMock()),
+        ):
             result = await _test_oidc_connection(provider)
             assert result.success is False
 
@@ -415,7 +419,10 @@ class TestOidcConnection:
                 "token_endpoint": "https://example.com/token",
             }
         )
-        with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=mock_resp)):
+        with (
+            patch("httpx.AsyncClient.get", new=AsyncMock(return_value=mock_resp)),
+            patch("modulo.api.routes.admin_sso.validate_outbound_url_async", new=AsyncMock()),
+        ):
             result = await _test_oidc_connection(provider)
             assert result.success is True
             assert result.provider_info is not None

@@ -645,7 +645,10 @@ async def _seed_sso_providers(settings: Settings) -> None:
         required_fields = ("provider_id", "client_id", "client_secret", "discovery_url")
         for entry in entries:
             if not isinstance(entry, dict) or any(key not in entry for key in required_fields):
-                logger.warning("startup.sso_provider_skipped", extra={"entry": str(entry)})
+                safe_entry = (
+                    {k: v for k, v in entry.items() if k != "client_secret"} if isinstance(entry, dict) else entry
+                )
+                logger.warning("startup.sso_provider_skipped", extra={"entry": str(safe_entry)})
                 continue
 
             provider = SsoProvider(

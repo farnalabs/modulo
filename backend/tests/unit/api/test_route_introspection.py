@@ -44,7 +44,6 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("DELETE", "/scim/v2/Groups/{group_id}"): "SCIM shared-secret channel",
     # Error telemetry: HMAC-signed ingestion + public ingestion + session key.
     ("POST", "/api/v1/errors/ingest/public"): "public error ingestion (telemetry)",
-    ("POST", "/api/v1/errors/forwarders/{forwarder_type}/test"): "forwarder test (telemetry)",
     # Onboarding: creation-only + user onboarding actions (ADR creation-only rule).
     ("POST", "/api/v1/onboarding/actions/{action_id}/complete"): "onboarding user action",
     ("POST", "/api/v1/onboarding/actions/{action_id}/skip"): "onboarding user action",

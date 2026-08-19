@@ -35,6 +35,17 @@ from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
+# Keys from settings_json that are safe to expose in the API response.
+# Secret fields (license_key, smtp_password, api keys) are excluded.
+_SAFE_ORG_SETTINGS_KEYS = frozenset(
+    {
+        "logo_url",
+        "feature_overrides",
+        "timezone",
+        "locale",
+    }
+)
+
 router = APIRouter(tags=["viewmodel"])
 
 # ---------------------------------------------------------------------------
@@ -375,7 +386,9 @@ async def viewmodel_current(
         org=OrganisationInfo(
             org_id=org.id if org else current_user.organisation_id or uuid.uuid4(),
             org_name=org.name if org else "System Admin",
-            settings=org.settings_json if org else {},
+            settings={k: v for k, v in (org.settings_json or {}).items() if k in _SAFE_ORG_SETTINGS_KEYS}
+            if org
+            else {},
         ),
         org_role=current_user.org_role or "",
         team_memberships=[TeamMembershipInfo(team_id=m.team_id, team_role=m.role) for m in memberships],

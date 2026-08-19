@@ -7,6 +7,7 @@ import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select, update
@@ -26,6 +27,7 @@ from modulo.api.models.error_forwarder_config import (
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.error_tracking.forwarders import BaseForwarder, get_forwarder
+from modulo.core.ssrf import validate_outbound_url_async
 from modulo.db.models.error_event import ErrorEvent
 from modulo.db.models.error_forwarder_config import ErrorForwarderConfig
 from modulo.db.models.error_group import ErrorGroup
@@ -104,6 +106,41 @@ def validate_forwarder_config(forwarder_type: str, config: dict[str, Any] | None
             expected_name = getattr(expected_type, "__name__", str(expected_type))
             errors.append(f"config key '{key}' must be a {expected_name}")
     return errors
+
+
+async def _validate_forwarder_urls(forwarder_type: str, config: dict[str, Any]) -> None:
+    """Validate outbound URLs in forwarder config to prevent SSRF.
+
+    The final outbound target of each forwarder derives from a user-supplied
+    URL-bearing field, so each must be guarded, not just Loki's ``push_url``:
+      - loki:     ``push_url`` is POSTed to directly.
+      - sentry:   the ``dsn``'s hostname becomes the API base
+                  (``https://{host}/api/0/...``).
+      - datadog:  the ``site`` becomes the API base (``https://api.{site}/...``).
+    """
+    candidates: list[tuple[str, str]] = []
+    if forwarder_type == "loki":
+        candidates = [("push_url", config.get("push_url", ""))]
+    elif forwarder_type == "sentry":
+        dsn = config.get("dsn")
+        if isinstance(dsn, str) and dsn:
+            parsed = urlparse(dsn)
+            if parsed.scheme in ("http", "https") and parsed.hostname:
+                candidates = [("dsn", f"{parsed.scheme}://{parsed.hostname}")]
+    elif forwarder_type == "datadog":
+        site = config.get("site", "datadoghq.com")
+        if isinstance(site, str) and site:
+            candidates = [("site", f"https://api.{site}")]
+
+    for key, url_value in candidates:
+        if isinstance(url_value, str) and url_value:
+            try:
+                await validate_outbound_url_async(url_value)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=f"SSRF check failed for {key}: {exc}",
+                ) from exc
 
 
 def _is_configured(forwarder_type: str, config_json: dict[str, Any] | None) -> bool:
@@ -275,7 +312,7 @@ async def test_forwarder(
     forwarder_type: str,
     req: TestConnectionRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    principal: TenantPrincipal = require_permission(_CODE_ERROR_FORWARDER_MANAGE),
 ) -> ForwarderTestResult:
     org_id = principal.organisation_id
     if org_id is None:
@@ -325,6 +362,9 @@ async def test_forwarder(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
             ) from exc
+
+    # SSRF guard: validate outbound URL before forward()
+    await _validate_forwarder_urls(forwarder_type, config)
 
     test_group = ErrorGroup(
         organisation_id=org_id,

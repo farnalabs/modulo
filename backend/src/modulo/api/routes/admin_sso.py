@@ -16,6 +16,7 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_feature, require_permission
 from modulo.api.middleware.sensitive_mask import SensitiveValue
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.ssrf import validate_outbound_url_async
 from modulo.db.crud.sso_provider import (
     create_provider,
     delete_provider,
@@ -392,15 +393,20 @@ async def _test_oidc_connection(provider: Any) -> SsoProviderTestResult:
         )
 
     try:
+        await validate_outbound_url_async(provider.discovery_url)
+    except ValueError as exc:
+        return SsoProviderTestResult(success=False, message=f"Rejected: {exc}")
+
+    try:
         async with httpx.AsyncClient() as client:
             resp = await client.get(provider.discovery_url, timeout=httpx.Timeout(10.0, connect=5.0))
             resp.raise_for_status()
             disc = resp.json()
-    except Exception as exc:
+    except (httpx.HTTPError, ValueError):
         _log.warning("admin_sso._test_oidc_connection", exc_info=True)
         return SsoProviderTestResult(
             success=False,
-            message=f"Failed to fetch discovery document: {exc}",
+            message="Failed to fetch discovery document",
         )
 
     if not disc.get("authorization_endpoint"):
@@ -431,15 +437,19 @@ async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
     metadata_xml = provider.metadata_xml
     if not metadata_xml and provider.metadata_url:
         try:
+            await validate_outbound_url_async(provider.metadata_url)
+        except ValueError as exc:
+            return SsoProviderTestResult(success=False, message=f"Rejected: {exc}")
+        try:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(provider.metadata_url, timeout=httpx.Timeout(10.0, connect=5.0))
                 resp.raise_for_status()
                 metadata_xml = resp.text
-        except Exception as exc:
+        except Exception:
             _log.warning("admin_sso._test_saml_connection", exc_info=True)
             return SsoProviderTestResult(
                 success=False,
-                message=f"Failed to fetch metadata: {exc}",
+                message="Failed to fetch metadata",
             )
 
     if not metadata_xml:

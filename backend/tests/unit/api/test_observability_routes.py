@@ -97,7 +97,8 @@ def free_client() -> Generator[TestClient, None, None]:
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
-    yield TestClient(app)
+    with patch("modulo.api.routes.observability.validate_outbound_url_async", new=AsyncMock()):
+        yield TestClient(app)
     app.dependency_overrides.clear()
 
 

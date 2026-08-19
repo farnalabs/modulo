@@ -21,7 +21,7 @@ from modulo.api.dependencies import _get_engine, get_db_session, get_plan_contex
 from modulo.api.middleware import rate_limiter as rl_mod
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware
 from modulo.api.routes.admin_rate_limits import router
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.rate_limiter import RateLimitRule
 from modulo.settings import Settings, get_settings
@@ -30,12 +30,13 @@ _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 
 
-def _make_principal(role: str = "admin") -> TenantPrincipal:
+def _make_principal(role: str = "admin", *, system_admin: bool = False) -> TenantPrincipal:
     return TenantPrincipal(
         username="admin" if role == "admin" else "viewer",
         organisation_id=_ORG_ID,
         account_id=_USER_ID,
         org_role=role,
+        is_system_admin=system_admin,
     )
 
 
@@ -82,6 +83,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_tenant_user] = lambda: _make_principal("admin")
+    app.dependency_overrides[get_current_user] = lambda: _make_principal("admin", system_admin=True)
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
