@@ -316,8 +316,8 @@ async def test_env_var_secret_ref_resolves_from_vault():
     backend.get_secret.assert_awaited_once_with("FOO")
 
 
-async def test_env_var_secret_ref_falls_back_to_host_env():
-    """Vault raises KeyError but the host env has FOO -> host value wins."""
+async def test_env_var_secret_ref_does_not_fall_back_to_host_env(caplog):
+    """Vault raises KeyError but the host env has FOO -> no fallback (security)."""
     node_def = _base_node_def(env_vars={"FOO": "{{ secrets.FOO }}"})
     session = MagicMock()
     session.__aenter__.return_value = session
@@ -332,6 +332,7 @@ async def test_env_var_secret_ref_falls_back_to_host_env():
     sandbox = _make_sandbox_mock()
 
     with (
+        caplog.at_level(logging.WARNING),
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch("modulo.core.secrets_backend.create_secrets_backend", return_value=backend),
         patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="test-key")),
@@ -342,7 +343,8 @@ async def test_env_var_secret_ref_falls_back_to_host_env():
 
     assert result["output"]["status"] == "completed"
     envs = sandbox.commands.run.call_args.kwargs["envs"]
-    assert envs["FOO"] == "host-value"
+    assert not envs["FOO"]
+    assert any("env_var.secret_ref_not_found" in m for m in caplog.messages)
 
 
 async def test_env_var_plain_value_passes_through():

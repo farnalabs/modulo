@@ -104,13 +104,14 @@ def validate_outbound_url(url: str) -> None:
 
     # For hostnames, resolve and check ALL A/AAAA records synchronously
     try:
-        _, _, _, _, sockaddr_list = socket.getaddrinfo(decoded, 0, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        addrinfos = socket.getaddrinfo(decoded, 0, socket.AF_UNSPEC, socket.SOCK_STREAM)
     except (OSError, socket.gaierror):
         # Fail-closed on DNS resolution failure
         raise ValueError(f"DNS resolution failed for {decoded}. Cannot verify the target is not internal.") from None
 
-    for _family, _, _, _, sockaddr in sockaddr_list:
+    for _family, _type, _proto, _canonname, sockaddr in addrinfos:
         ip_str = sockaddr[0]
+        assert isinstance(ip_str, str)
         if _is_blocked_ip(ip_str):
             raise ValueError(
                 f"URL hostname {decoded} resolves to a private/internal address ({ip_str}). Use a public URL."
