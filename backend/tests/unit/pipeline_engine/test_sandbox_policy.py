@@ -44,7 +44,8 @@ def test_git_scoped_script_limits_to_github() -> None:
     # github.com (scoped credential) — it outputs nothing for any other host.
     assert "github.com" in script
     # The helper checks the host field equals the allowlisted github.com.
-    assert "host" in script and "github.com" in script
+    assert "host" in script
+    assert "github.com" in script
 
 
 def test_git_none_script_provisions_no_credentials() -> None:
@@ -108,7 +109,7 @@ async def test_apply_sandbox_policy_no_policy_no_steps() -> None:
         egress_policy="default",
         egress_allowlist=None,
     )
-    assert sandbox.commands.runs == []
+    assert not sandbox.commands.runs
 
 
 # ---------------------------------------------------------------------------
@@ -117,9 +118,10 @@ async def test_apply_sandbox_policy_no_policy_no_steps() -> None:
 
 
 def test_validate_read_only_accepts_bool_and_none() -> None:
-    _validate_sandbox_read_only_config({"id": "n1", "read_only": True})
-    _validate_sandbox_read_only_config({"id": "n1", "read_only": False})
-    _validate_sandbox_read_only_config({"id": "n1", "read_only": None})
+    # Valid values must not raise; the validator returns None on success.
+    assert _validate_sandbox_read_only_config({"id": "n1", "read_only": True}) is None
+    assert _validate_sandbox_read_only_config({"id": "n1", "read_only": False}) is None
+    assert _validate_sandbox_read_only_config({"id": "n1", "read_only": None}) is None
 
 
 def test_validate_read_only_rejects_non_bool() -> None:
@@ -129,8 +131,8 @@ def test_validate_read_only_rejects_non_bool() -> None:
 
 def test_validate_git_credentials_accepts_scopes() -> None:
     for scope in ("scoped", "unscoped", "none"):
-        _validate_sandbox_git_credentials_config({"id": "n1", "git_credentials": scope})
-    _validate_sandbox_git_credentials_config({"id": "n1", "git_credentials": None})
+        assert _validate_sandbox_git_credentials_config({"id": "n1", "git_credentials": scope}) is None
+    assert _validate_sandbox_git_credentials_config({"id": "n1", "git_credentials": None}) is None
 
 
 def test_validate_git_credentials_rejects_unknown() -> None:
