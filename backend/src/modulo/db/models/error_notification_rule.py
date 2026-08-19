@@ -28,6 +28,7 @@ class ErrorNotificationRule(OrgScoped):
         Index(
             "uq_enr_org_active",
             "organisation_id",
+            "signal",
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
         ),

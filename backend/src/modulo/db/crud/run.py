@@ -49,6 +49,31 @@ CAPACITY_MARKERS = frozenset({ERROR_CODE_ORG_CAPACITY_LIMITED, ERROR_CODE_PIPELI
 # Day-key format used for run-usage bucketing and the --older-than parser.
 _DAY_FORMAT = "%Y-%m-%d"
 
+
+def _is_unique_violation(exc: IntegrityError) -> bool:
+    """Return True if *exc* is a unique-constraint violation (not FK, NOT NULL, etc.).
+
+    Handles PostgreSQL (pgcode 23505), SQLite (UNIQUE constraint failed), and
+    MariaDB/MySQL (IntegrityError: 1062 Duplicate entry). Mirrors the helper used
+    by the trigger engine's dedup path so the two rate-limit conflict paths share
+    identical detection semantics.
+    """
+    orig = getattr(exc, "orig", None)
+    if orig is None:
+        return False
+    pgcode = getattr(orig, "pgcode", None)
+    if pgcode is not None:
+        return str(pgcode) == "23505"
+    msg = str(orig)
+    if "UNIQUE constraint failed" in msg:
+        return True
+    if isinstance(orig, Exception):
+        err_args = getattr(orig, "args", None)
+        if err_args and err_args[0] == 1062:
+            return True
+    return False
+
+
 # The canonical whitelist of run statuses (subset of the ``ck_runs_status``
 # CHECK constraint). ``transition_run`` and ``update_run_status`` refuse any
 # status outside this set (a typo would otherwise silently violate the CHECK
@@ -770,11 +795,25 @@ async def create_run(
         run.error_code = "eval_blocked"
         run.error_detail = guardrail_block_message[:5000]
         run.completed_at = datetime.now(UTC)
-    session.add(run)
     try:
-        await session.flush()
+        # Commit the insert inside a savepoint so that, on the async/Postgres
+        # backend, a concurrent rate-limit conflict aborts only the nested
+        # transaction (not the outer one). Without this the failed flush leaves
+        # the outer transaction in a failed/aborted state, and the caller's
+        # ``except RateLimitConflictError`` handler can no longer write its
+        # rate-limit TriggerEvent (its own flush raises PendingRollbackError).
+        #
+        # ``session.add(run)`` must live INSIDE the savepoint: a savepoint
+        # rollback restores the session's pending-insert queue, so on conflict
+        # the ``run`` row is dropped from the queue and the outer transaction
+        # stays clean. Adding it OUTSIDE would leave the failed run pending,
+        # so the caller's next flush re-inserts it, conflicts *outside* any
+        # savepoint, and aborts the whole transaction (PendingRollbackError).
+        async with session.begin_nested():
+            session.add(run)
+            await session.flush()
     except IntegrityError as exc:
-        if rate_limit_key is not None and "uq_runs_pipeline_rate_limit_key" in str(exc.orig):
+        if rate_limit_key is not None and _is_unique_violation(exc):
             raise RateLimitConflictError(
                 pipeline_id=pipeline_id,
                 rate_limit_key=rate_limit_key,

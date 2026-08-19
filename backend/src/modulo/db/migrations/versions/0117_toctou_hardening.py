@@ -8,10 +8,13 @@ Two check-then-act race windows are closed at the database level:
 
 1. **Error-notification-rule cap (#1376)** — ``error_notification_rules``
    gains a ``deleted_at`` column (nullable, for future soft-delete support)
-   and a partial unique index on ``(organisation_id)`` WHERE
-   ``deleted_at IS NULL``. The application count-then-insert in
-   ``create_notification_rule`` is replaced with an ``INSERT ... ON CONFLICT
-   DO NOTHING`` pattern so concurrent creates cannot exceed the per-org cap.
+   and a partial unique index on ``(organisation_id, signal)`` WHERE
+   ``deleted_at IS NULL``. This enforces ONE active rule per signal per org —
+   the invariant the default-rule seed (``seed_default_alert_rules_for_org``,
+   which inserts one default rule per signal) requires — while still allowing up
+   to ``_MAX_RULES_PER_ORG`` (10) distinct active rules per org. The application
+   still count-then-inserts in ``create_notification_rule`` for the cap; the
+   unique index is the backstop that prevents duplicate default seeds.
 
 2. **Per-pipeline trigger rate limit (#1105)** — the existing plain index on
    ``runs.rate_limit_key`` is replaced with a partial unique index on
@@ -40,7 +43,7 @@ def upgrade() -> None:
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
     )
     op.execute(
-        "CREATE UNIQUE INDEX uq_enr_org_active ON error_notification_rules (organisation_id) WHERE deleted_at IS NULL"
+        "CREATE UNIQUE INDEX uq_enr_org_active ON error_notification_rules (organisation_id, signal) WHERE deleted_at IS NULL"
     )
 
     # ── #1105: per-pipeline trigger rate limit ──────────────────────────
