@@ -452,6 +452,18 @@ class PipelineGraphNode(BaseModel):
     egress_policy: Literal["default", "deny_all", "selected"] | None = None
     egress_allowlist: list[dict[str, Any]] | None = None
     resource_limits: dict[str, Any] | None = None
+    # FAR-212 PR B: sandbox write/egress mediation surface. ``read_only`` mounts
+    # / chmods the workspace read-only at runtime (so writes are impossible for
+    # the agent's non-root user — write_files derives False) and
+    # ``git_credentials`` scopes the provisioned git credential (``scoped`` =
+    # limited to the allowlisted github.com host via an enforced helper;
+    # ``unscoped`` = full access, the default; ``none`` = no git credentials are
+    # provisioned). Both are validated (``_validate_sandbox_read_only_config`` /
+    # ``_validate_sandbox_git_credentials_config``) and ENFORCED (node_runner
+    # applies the sandbox policy step), so the capability derivation can certify
+    # them mechanically. Only sandbox_agent nodes may set them.
+    read_only: bool = False
+    git_credentials: Literal["scoped", "unscoped", "none"] | None = None
     # FAR-296 Phase 4a: wall-clock spend budget (seconds). When set, the
     # node's sandbox is killed by the platform-side runtime killer once the
     # wall-clock elapsed time exceeds this budget — a tighter spend bound than
@@ -531,7 +543,9 @@ class PipelineGraphNode(BaseModel):
             from modulo.core.pipeline_engine.sandbox_mode import (
                 _validate_sandbox_egress_allowlist_config,
                 _validate_sandbox_egress_config,
+                _validate_sandbox_git_credentials_config,
                 _validate_sandbox_mode_config,
+                _validate_sandbox_read_only_config,
                 _validate_sandbox_resource_limits_config,
                 _validate_sandbox_wallclock_budget_config,
             )
@@ -544,6 +558,13 @@ class PipelineGraphNode(BaseModel):
                 str(self.id),
             )
             _validate_sandbox_resource_limits_config(self.model_dump())
+            # FAR-212 PR B: read_only / git_credentials are sandbox-only fields.
+            # Validated here (and by the graph validator / MCP / node runner via
+            # the shared helpers) so a non-boolean read_only or an unrecognised
+            # git_credentials scope can never reach the capability derivation
+            # (which fails CLOSED on an unvalidated key).
+            _validate_sandbox_read_only_config(self.model_dump())
+            _validate_sandbox_git_credentials_config(self.model_dump())
             _validate_sandbox_wallclock_budget_config(
                 self.wallclock_budget_seconds,
                 self.timeout_seconds,
@@ -556,6 +577,16 @@ class PipelineGraphNode(BaseModel):
         elif self.node_type == "agent":
             if self.agent_id is None:
                 raise ValueError("Agent nodes require an agent")
+        # FAR-212 PR B: read_only / git_credentials are sandbox_agent-only fields.
+        # A non-sandbox node that sets them is rejected — the enforcement surface
+        # (read-only workspace, git-credential scope) only exists for sandbox
+        # agents, and a declared-but-unenforced field on another node type would
+        # be a silent no-op.
+        if self.node_type != "sandbox_agent":
+            if self.read_only:
+                raise ValueError("Only sandbox_agent nodes can set read_only=True")
+            if self.git_credentials is not None:
+                raise ValueError("Only sandbox_agent nodes can set git_credentials")
         if self.node_type != "agent" and self.parameter_set_id is not None:
             raise ValueError("Only agent nodes can have parameter_set_id")
         if (

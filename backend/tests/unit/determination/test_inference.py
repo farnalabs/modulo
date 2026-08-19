@@ -177,38 +177,6 @@ def test_planning_stage_from_jira_issues() -> None:
     assert "1 issues in planning statuses" in planning[0].evidence
 
 
-def test_planning_stage_from_linear_issues() -> None:
-    samples = [
-        make_sample(
-            "issues",
-            records=[
-                {"state": {"name": "Todo"}, "title": "Task 1"},
-                {"state": {"name": "Done"}, "title": "Task 2"},
-            ],
-            connector_type=ConnectorType.LINEAR,
-        )
-    ]
-    findings = infer(samples)
-    planning = [f for f in findings if f.category == "stage" and "Planning" in f.finding]
-    assert len(planning) == 1
-
-
-def test_planning_stage_from_linear_plain_string_state() -> None:
-    samples = [
-        make_sample(
-            "issues",
-            records=[
-                {"state": "Todo", "title": "Task 1"},
-                {"state": "Done", "title": "Task 2"},
-            ],
-            connector_type=ConnectorType.LINEAR,
-        )
-    ]
-    findings = infer(samples)
-    planning = [f for f in findings if f.category == "stage" and "Planning" in f.finding]
-    assert len(planning) == 1
-
-
 def test_issue_lifecycle_transition() -> None:
     samples = [
         make_sample(
@@ -253,22 +221,6 @@ def test_each_finding_has_evidence() -> None:
     for f in findings:
         assert f.evidence, f"Finding '{f.finding}' has no evidence"
         assert f.category, "Finding has no category"
-
-
-def test_linear_search_results() -> None:
-    samples = [
-        make_sample(
-            "issues",
-            records=[
-                {"state": {"name": "Todo"}, "title": "Bug fix"},
-                {"state": {"name": "In Progress"}, "title": "Feature work"},
-            ],
-            connector_type=ConnectorType.LINEAR,
-        )
-    ]
-    findings = infer(samples)
-    stages = {f.finding for f in findings if f.category == "stage"}
-    assert any("Planning" in s for s in stages)
 
 
 def test_error_samples_do_not_crash_inference() -> None:

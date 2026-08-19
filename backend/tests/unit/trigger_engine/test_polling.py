@@ -80,7 +80,6 @@ class TestBuildPollingConnector:
                 "GitLabConnector",
                 None,
             ),
-            ("linear", {}, {"api_key": "lin_xxx"}, "LinearConnector", None),
             ("slack", {}, {"bot_token": "xoxb-xxx"}, "SlackConnector", None),
             ("jira", {"instance": "https://acme.atlassian.net"}, {"token": "x"}, "JiraConnector", None),
             ("jira", {}, {"token": "x"}, None, "requires 'instance' or 'base_url'"),
@@ -112,14 +111,12 @@ class TestBuildPollingConnector:
             from modulo.connectors.github import GitHubConnector
             from modulo.connectors.gitlab import GitLabConnector
             from modulo.connectors.jira import JiraConnector
-            from modulo.connectors.linear import LinearConnector
             from modulo.connectors.slack import SlackConnector
 
             cls = {
                 "FilesystemConnector": FilesystemConnector,
                 "GitHubConnector": GitHubConnector,
                 "GitLabConnector": GitLabConnector,
-                "LinearConnector": LinearConnector,
                 "SlackConnector": SlackConnector,
                 "JiraConnector": JiraConnector,
             }[expected_type]

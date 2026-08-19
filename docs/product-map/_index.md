@@ -38,7 +38,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-connectors-gitlab](connectors/gitlab-connector.md) => PRD 8.6
 - [feat-connectors-hub](connectors/connector-hub.md) => PRD 8.6
 - [feat-connectors-jira](connectors/jira-connector.md) => PRD 8.6
-- [feat-connectors-linear](connectors/linear-connector.md) => PRD 8.6
+
 - [feat-connectors-schema-inference](connectors/schema-inference.md) => PRD 8.16
 - [feat-connectors-slack](connectors/slack-connector.md) => PRD 8.6
 - [feat-integration-tiering](connectors/integration-tiering.md) => PRD 8.6

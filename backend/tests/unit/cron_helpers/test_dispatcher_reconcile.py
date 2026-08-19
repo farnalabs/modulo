@@ -1017,3 +1017,100 @@ class TestRunApiKeySweepWiring:
         # The tick completed its bookkeeping despite the sweep failure.
         assert summary["repaired"] == 0
         assert summary["scanned"] == 0
+
+
+class TestRollbackThresholdsWiring:
+    """FAR-296 Phase 5b: the rollback threshold evaluator is wired into the
+    dispatcher_reconcile periodic tick (the FAR-189 lesson: an unwired sweep
+    is dead code, so the wiring is regression-tested here)."""
+
+    @pytest.mark.asyncio
+    async def test_dispatcher_reconcile_invokes_rollback_thresholds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-189 wiring regression test: the real ``dispatcher_reconcile``
+        must invoke the rollback threshold evaluator and fold its counters
+        into the summary.
+
+        Deleting the ``await evaluate_rollback_thresholds(...)`` line from
+        ``cron_helpers._run_reconcile_sweeps`` must leave this test red --
+        the mock is asserted awaited once AND the folded summary keys would be
+        missing from the summary dict.
+        """
+        from modulo.core import rollback_thresholds as rt_module
+
+        threshold_mock = AsyncMock(return_value={"orgs_checked": 2, "anomalies_found": 1, "flagged_orgs": ["org-1"]})
+        _patch_env(monkeypatch)
+        session = _MockSession([_org_result([ORG]), _rows_result([])])
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+        q = _make_queue(redis_client)
+        redis_cls = MagicMock()
+        redis_cls.from_url.return_value = redis_client
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_open_system_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis", redis_cls),
+            patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
+            patch.object(ch, "run_classification_reconcile", new=AsyncMock(return_value={})),
+            patch.object(ch, "enforce_no_delivery_streaks", new=AsyncMock(return_value={})),
+            patch.object(rt_module, "evaluate_rollback_thresholds", new=threshold_mock),
+            patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock, return_value=("enqueued", "new-job-id")),
+            patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock),
+            patch.object(
+                ch,
+                "_awaiting_human_has_committed_decision",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock),
+            patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0),
+        ):
+            summary = await ch.dispatcher_reconcile()
+
+        threshold_mock.assert_awaited_once_with(factory)
+        assert summary["rollback_thresholds_checked"] == 2
+        assert summary["rollback_thresholds_flagged"] == 1
+
+    @pytest.mark.asyncio
+    async def test_rollback_thresholds_failure_does_not_fail_reconcile(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A threshold evaluation exception is caught and logged (never raised
+        through the tick); the reconcile survives and folds the counters to zero."""
+        from modulo.core import rollback_thresholds as rt_module
+
+        threshold_mock = AsyncMock(side_effect=RuntimeError("boom"))
+        _patch_env(monkeypatch)
+        session = _MockSession([_org_result([ORG]), _rows_result([])])
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+        q = _make_queue(redis_client)
+        redis_cls = MagicMock()
+        redis_cls.from_url.return_value = redis_client
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_open_system_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis", redis_cls),
+            patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
+            patch.object(ch, "run_classification_reconcile", new=AsyncMock(return_value={})),
+            patch.object(ch, "enforce_no_delivery_streaks", new=AsyncMock(return_value={})),
+            patch.object(rt_module, "evaluate_rollback_thresholds", new=threshold_mock),
+            patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock, return_value=("enqueued", "new-job-id")),
+            patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock),
+            patch.object(
+                ch,
+                "_awaiting_human_has_committed_decision",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock),
+            patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0),
+        ):
+            summary = await ch.dispatcher_reconcile()
+
+        assert summary["rollback_thresholds_checked"] == 0
+        assert summary["rollback_thresholds_flagged"] == 0
+        # The tick completed its bookkeeping despite the sweep failure.
+        assert summary["repaired"] == 0
+        assert summary["scanned"] == 0

@@ -579,8 +579,9 @@ def _make_session_factory(session: AsyncMock) -> MagicMock:
 def _make_resume_session(snapshot: MagicMock) -> AsyncMock:
     """Session mock whose execute() order matches resume()'s query sequence.
 
-    resume() queries the snapshot FIRST, then the pipeline — the opposite of
-    execute(), so the shared _make_session iterator is not reusable here.
+    resume() queries the snapshot's graph_json FIRST (the atomic sandbox-capacity
+    gate, FAR-1306), then the snapshot itself, then the pipeline — the opposite
+    of execute(), so the shared _make_session iterator is not reusable here.
     """
     pipeline = _make_pipeline()
 
@@ -590,6 +591,9 @@ def _make_resume_session(snapshot: MagicMock) -> AsyncMock:
     snapshot_result = MagicMock()
     snapshot_result.scalar_one.return_value = snapshot
 
+    graph_json_result = MagicMock()
+    graph_json_result.scalar_one_or_none.return_value = snapshot.graph_json
+
     eval_result = MagicMock()
     scalars_mock = MagicMock()
     scalars_mock.all.return_value = []
@@ -598,7 +602,7 @@ def _make_resume_session(snapshot: MagicMock) -> AsyncMock:
     count_result = MagicMock()
     count_result.scalar.return_value = 0
 
-    execute_results = iter([snapshot_result, pipeline_result, eval_result, count_result])
+    execute_results = iter([graph_json_result, snapshot_result, pipeline_result, eval_result, count_result])
 
     async def _execute(*_args: Any, **_kwargs: Any) -> Any:
         try:
@@ -2400,6 +2404,50 @@ async def test_execute_capacity_blocked_returns_pending_without_retry_task():
     assert result is pending_run
     assert result.status == "pending"
     create_task.assert_not_called()
+
+
+async def test_resume_at_org_sandbox_capacity_raises():
+    """The atomic resume() gate (FAR-1306) must raise SandboxCapacityExceededError
+    when the org's active sandbox count already meets the cap — even though the
+    HITL route's fast-fail pre-check was mocked open. Regression for the reviewer
+    finding: no test exercised the executor exception, only the route pre-check."""
+    from modulo.core.pipeline_engine.executor import SandboxCapacityExceededError
+
+    run = _make_run()
+    snapshot = _make_snapshot()
+    snapshot.graph_json = {"nodes": [{"id": "agent-a", "node_type": "sandbox_agent"}]}
+
+    graph_json_result = MagicMock()
+    graph_json_result.scalar_one_or_none.return_value = snapshot.graph_json
+
+    session = AsyncMock(spec=AsyncSession)
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    session.execute = AsyncMock(return_value=graph_json_result)
+
+    @asynccontextmanager
+    async def _ctx():
+        yield session
+
+    executor = PipelineExecutor(MagicMock())
+    executor._session_factory = MagicMock(side_effect=lambda: _ctx())
+
+    org_id = uuid.uuid4()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=2),
+        patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", return_value=2),
+        pytest.raises(SandboxCapacityExceededError),
+    ):
+        await executor.resume(run_id=run.id, org_id=org_id, resume_data={"action": "approved"})
+
+    graph_lock_exec = session.execute.await_args_list[1]
+    assert "pg_advisory_xact_lock" in graph_lock_exec.args[0].text
 
 
 @pytest.mark.parametrize("terminal_status", ["complete", "failed", "cancelled", "eval_failed"])

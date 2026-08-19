@@ -12088,6 +12088,13 @@ export interface components {
             resource_limits?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Read Only
+             * @default false
+             */
+            read_only: boolean;
+            /** Git Credentials */
+            git_credentials?: ("scoped" | "unscoped" | "none") | null;
             /** Wallclock Budget Seconds */
             wallclock_budget_seconds?: number | null;
             /** Delivery Sentinel */
@@ -22515,7 +22522,9 @@ export interface operations {
     };
     validate_schema_endpoint_api_v1_schemas_validate_post: {
         parameters: {
-            query?: never;
+            query?: {
+                _fresh?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -22548,7 +22557,9 @@ export interface operations {
     };
     import_schema_endpoint_api_v1_schemas_import_post: {
         parameters: {
-            query?: never;
+            query?: {
+                _fresh?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;

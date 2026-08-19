@@ -416,8 +416,8 @@ async def test_initialise_ciphertext_fallback_uses_column():
     """When the secrets backend raises KeyError, credentials_ciphertext column is used."""
     ci = _FakeCI(
         id=uuid.uuid4(),
-        connector_type_id="linear",
-        credentials_ciphertext=_encrypt({"api_key": "lin_fallback"}),
+        connector_type_id="monday",
+        credentials_ciphertext=_encrypt({"api_key": "monday_fallback"}),
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with (
@@ -429,7 +429,7 @@ async def test_initialise_ciphertext_fallback_uses_column():
         hub = ConnectorHub(secrets_backend=backend)
         await hub.initialise([ci])
     connector = hub.get(ci.id)
-    assert connector.connector_type == "linear"
+    assert connector.connector_type == "monday"
 
 
 async def test_initialise_ciphertext_fallback_skip_on_bad_key():
@@ -437,8 +437,8 @@ async def test_initialise_ciphertext_fallback_skip_on_bad_key():
     other_key = Fernet.generate_key().decode()
     ci = _FakeCI(
         id=uuid.uuid4(),
-        connector_type_id="linear",
-        credentials_ciphertext=_encrypt({"api_key": "lin_fallback"}),
+        connector_type_id="monday",
+        credentials_ciphertext=_encrypt({"api_key": "monday_fallback"}),
     )
     backend = create_secrets_backend(fernet_key=other_key, backend_name="fernet")
     with (

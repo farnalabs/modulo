@@ -74,7 +74,7 @@ def generate_draft(samples: list[ScanSample], findings: list[Finding]) -> Pipeli
             {
                 "stage": "planning",
                 "suggestion": "Auto-assign issues to team members based on workload and expertise",
-                "connector_type": ("jira" if any(s.connector_type.value == "jira" for s in samples) else "linear"),
+                "connector_type": "jira",
             }
         )
 

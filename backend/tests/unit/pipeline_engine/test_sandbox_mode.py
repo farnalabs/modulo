@@ -79,29 +79,26 @@ def test_egress_unrecognised_is_unknown():
 # ---------------------------------------------------------------------------
 
 
-def test_write_files_always_unknown_read_only_smuggled():
-    """write_files is ALWAYS None (unknown) — even when a ``read_only`` key is
-    smuggled into the node dict. The key is not a real, validated, enforced
-    surface inside and a derivation value would certify an unenforced
-    deny-guarantee (fail-open via the raw workflow-import path)."""
+def test_write_files_false_when_read_only():
+    """PR B: read_only is a real validated + enforced field, so a read-only
+    sandbox derives write_files False (writes impossible)."""
     caps = derive_sandbox_capabilities(_sandbox_node(read_only=True))
-    assert caps[SANDBOX_CAPABILITY_WRITE_FILES] is None
+    assert caps[SANDBOX_CAPABILITY_WRITE_FILES] is False
 
 
-def test_write_files_always_unknown_writable_declared():
+def test_write_files_true_when_writable():
     caps = derive_sandbox_capabilities(_sandbox_node(read_only=False))
-    assert caps[SANDBOX_CAPABILITY_WRITE_FILES] is None
+    assert caps[SANDBOX_CAPABILITY_WRITE_FILES] is True
 
 
-def test_write_files_always_unknown_undeclared():
-    # No read-only surface exists anywhere in the product (PipelineGraphNode
-    # has no such field) — the capability stays unknown so a block guardrail
-    # fails CLOSED rather than assuming the sandbox default is writable.
+def test_write_files_unknown_when_undeclared():
+    # An undeclared read_only cannot be confirmed read-only -> unknown (fail-closed).
     caps = derive_sandbox_capabilities(_sandbox_node())
     assert caps[SANDBOX_CAPABILITY_WRITE_FILES] is None
 
 
-def test_write_files_always_unknown_non_bool():
+def test_write_files_unknown_non_bool():
+    # A non-bool read_only (smuggled) is unvalidated -> unknown (fail-closed).
     caps = derive_sandbox_capabilities(_sandbox_node(read_only="yes"))
     assert caps[SANDBOX_CAPABILITY_WRITE_FILES] is None
 
@@ -111,31 +108,35 @@ def test_write_files_always_unknown_non_bool():
 # ---------------------------------------------------------------------------
 
 
-def test_git_credentials_always_unknown_declared_scoped():
-    """git_credentials is ALWAYS None (unknown) — even when a ``git_credentials``
-    key is smuggled into the node dict. No git-credential scoping exists as a
-    validated, enforced product surface; deriving ``True`` would certify scoped
-    credentials nothing limits (fail-open)."""
+def test_git_credentials_true_when_scoped():
+    """PR B: git_credentials scoped is a real validated + enforced field, so a
+    scoped credential derives git_credentials True (limited to the allowlisted
+    host)."""
     caps = derive_sandbox_capabilities(_sandbox_node(git_credentials="scoped"))
-    assert caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] is None
+    assert caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] is True
 
 
-def test_git_credentials_always_unknown_declared_unscoped():
+def test_git_credentials_false_when_unscoped():
     caps = derive_sandbox_capabilities(_sandbox_node(git_credentials="unscoped"))
-    assert caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] is None
+    assert caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] is False
 
 
-def test_git_credentials_always_unknown_bool():
+def test_git_credentials_false_when_none():
+    caps = derive_sandbox_capabilities(_sandbox_node(git_credentials="none"))
+    assert caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] is False
+
+
+def test_git_credentials_unknown_when_non_str():
     caps = derive_sandbox_capabilities(_sandbox_node(git_credentials=True))
     assert caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] is None
 
 
-def test_git_credentials_always_unknown_undeclared():
+def test_git_credentials_unknown_when_undeclared():
     caps = derive_sandbox_capabilities(_sandbox_node())
     assert caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] is None
 
 
-def test_git_credentials_always_unknown_unrecognised():
+def test_git_credentials_unknown_when_unrecognised():
     caps = derive_sandbox_capabilities(_sandbox_node(git_credentials="weird"))
     assert caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] is None
 
@@ -145,10 +146,11 @@ def test_git_credentials_always_unknown_unrecognised():
 # ---------------------------------------------------------------------------
 
 
-def test_deny_all_profile_egress_false_write_unknown():
+def test_deny_all_profile_egress_false_write_readonly():
     caps = derive_sandbox_capabilities(_sandbox_node(egress_policy="deny_all", read_only=True))
     assert caps[SANDBOX_CAPABILITY_EGRESS] is False
-    assert caps[SANDBOX_CAPABILITY_WRITE_FILES] is None
+    # PR B: read_only is now a real validated + enforced field -> write_files False.
+    assert caps[SANDBOX_CAPABILITY_WRITE_FILES] is False
 
 
 def test_non_sandbox_node_type_contributes_empty_profile():
@@ -169,14 +171,13 @@ def test_missing_node_type_derives_sandbox_surface():
 # ---------------------------------------------------------------------------
 
 
-def test_api_validated_node_round_trip_write_and_git_unknown():
-    """A REAL API-validated node (via PipelineGraphNode) can never carry the
-    phantom ``read_only`` / ``git_credentials`` keys — Pydantic's default
-    ``extra="ignore"`` silently drops them, exactly as the REST/MCP paths
-    behave — so the derivation resolves ``sandbox.write_files`` and
-    ``sandbox.git_credentials`` to unknown (fail-closed block) until the
-    enforcement surface lands. This proves the dead-end the old synthetic
-    node_defs masked: no real pipeline can produce a certified value today.
+def test_api_validated_node_round_trip_write_and_git_certified():
+    """A REAL API-validated node (via PipelineGraphNode) now carries the
+    ``read_only`` / ``git_credentials`` fields (PR B added them as validated +
+    enforced PipelineGraphNode fields), so the derivation mechanically certifies
+    them: read_only -> write_files False, git_credentials scoped -> True. This
+    proves the enforcement surface is real (not a phantom key) and the
+    conformance hard-block can certify writes are impossible.
     """
     from modulo.api.routes.pipelines import PipelineGraphNode
 
@@ -195,11 +196,11 @@ def test_api_validated_node_round_trip_write_and_git_unknown():
     )
     round_tripped = node.model_dump()
 
-    assert round_tripped.get("read_only") is None
-    assert round_tripped.get("git_credentials") is None
+    assert round_tripped.get("read_only") is True
+    assert round_tripped.get("git_credentials") == "scoped"
     assert round_tripped["egress_policy"] == "deny_all"
 
     caps = derive_sandbox_capabilities(round_tripped)
     assert caps[SANDBOX_CAPABILITY_EGRESS] is False
-    assert caps[SANDBOX_CAPABILITY_WRITE_FILES] is None
-    assert caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] is None
+    assert caps[SANDBOX_CAPABILITY_WRITE_FILES] is False
+    assert caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] is True

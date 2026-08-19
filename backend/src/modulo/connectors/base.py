@@ -42,7 +42,6 @@ class ConnectorType(StrEnum):
     GITLAB = "gitlab"
     AZURE_REPOS = "azure_repos"
     JIRA = "jira"
-    LINEAR = "linear"
     TRELLO = "trello"
     ASANA = "asana"
     TICKET_TRACKER = "ticket-tracker"
@@ -125,8 +124,6 @@ class ConnectorType(StrEnum):
             case ConnectorType.AZURE_REPOS:
                 return frozenset({Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR})
             case ConnectorType.JIRA:
-                return frozenset({Capability.TICKET_READ, Capability.TICKET_WRITE, Capability.TICKET_SEARCH})
-            case ConnectorType.LINEAR:
                 return frozenset({Capability.TICKET_READ, Capability.TICKET_WRITE, Capability.TICKET_SEARCH})
             case ConnectorType.TRELLO:
                 return frozenset(
