@@ -3,12 +3,7 @@
     <div class="page-wide">
       <header class="flex items-center justify-between">
         <PageHeader title="Plugins" :subtitle="$t('views.AdminPluginsView.manage_installed_modulo_plugins_and_extensions')" />
-        <Button
-          variant="default"
-           class="border-primary/30 hover:border-primary/60"
-          data-testid="admin-plugins-refresh"
-          @click="loadPlugins"
-        >
+        <Button class="border-primary/30 hover:border-primary/60" data-testid="admin-plugins-refresh" @click="loadPlugins">
           Refresh
         </Button>
       </header>
@@ -173,7 +168,7 @@ import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 
 interface PluginItem {
   PLUGIN_ID: string

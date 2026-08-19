@@ -4,12 +4,7 @@
     <div class="page-wide">
       <header class="flex items-center justify-between">
         <PageHeader :title="$t('views.SettingsSsoView.title')" :subtitle="$t('views.SettingsSsoView.description')" />
-        <Button
-          variant="default"
-           class="border-primary/30 hover:border-primary/60"
-          data-testid="settings-sso-add-provider"
-          @click="openAddForm"
-        >
+        <Button class="border-primary/30 hover:border-primary/60" data-testid="settings-sso-add-provider" @click="openAddForm">
           {{ $t('views.SettingsSsoView.add_provider') }}
         </Button>
       </header>
@@ -127,12 +122,7 @@
               <p class="text-sm font-medium text-destructive">{{ $t('views.SettingsSsoView.delete_confirm', { name: provider.name }) }}</p>
               <p class="mt-1 text-sm text-destructive/80">{{ $t('views.SettingsSsoView.delete_warning') }}</p>
               <div class="mt-3 flex items-center gap-2">
-                <Button
-                  :disabled="deleting"
-                  variant="destructive"
-                  data-testid="settings-sso-delete-confirm"
-                  @click="deleteProvider(provider.id)"
-                >
+                <Button :disabled="deleting" severity="danger" data-testid="settings-sso-delete-confirm" @click="deleteProvider(provider.id)">
                   {{ deleting ? $t('views.SettingsSsoView.deleting') : $t('views.SettingsSsoView.delete') }}
                 </Button>
                 <button
@@ -172,7 +162,7 @@
 <script setup lang="ts">
 import { ref, reactive, onBeforeUnmount } from 'vue'
 import { useDataFetch } from '../composables/useDataFetch'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 import TableActions from '../components/shared/TableActions.vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'

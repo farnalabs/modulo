@@ -1,31 +1,25 @@
 <template>
   <FeatureGate feature-name="saved_views" data-testid="view-toggle-gate" show-disabled>
     <div class="flex items-center gap-2" data-testid="view-toggle">
-      <Select aria-label="Form control" v-model="selectedViewId" @update:model-value="onViewSelect($event as string)">
-        <SelectTrigger class="w-[200px]" data-testid="view-toggle-trigger">
-          <SelectValue :placeholder="$t('components.ViewToggle.select_a_saved_view')" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectGroup>
-            <SelectLabel>{{ $t('components.ViewToggle.saved_views') }}</SelectLabel>
-            <SelectItem
-              v-for="view in views"
-              :key="view.id"
-              :value="view.id"
-              data-testid="view-toggle-item"
-            >
-              {{ view.name }}
-            </SelectItem>
-          </SelectGroup>
-          <div
-            v-if="views.length === 0"
-            class="px-2 py-4 text-center text-sm text-muted-foreground"
-            data-testid="view-toggle-empty"
-          >
-            No saved views
-          </div>
-        </SelectContent>
-      </Select>
+      <Select
+  aria-label="Form control"
+  v-model="selectedViewId"
+  @update:model-value="onViewSelect($event as string)"
+  :placeholder="$t('components.ViewToggle.select_a_saved_view')"
+  data-testid="view-toggle-trigger"
+  class="w-[200px]"
+  :options="views.map(view => ({ value: view.id, label: view.name }))"
+  option-label="label"
+  option-value="value"
+>
+  <template #header
+>
+{{ $t('components.ViewToggle.saved_views') }}
+  </template>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
 
       <button
         v-if="selectedViewId"
@@ -48,7 +42,7 @@
 
       <Badge
         v-if="selectedViewId"
-        :variant="isEnabled ? 'default' : 'secondary'"
+        :severity="isEnabled ? 'info' : 'secondary'"
         class="text-xs"
         data-testid="view-toggle-badge"
       >
@@ -63,16 +57,8 @@ import { ref, onMounted } from "vue";
 import { api } from "@/lib/api/client";
 import { usePlanStore } from "@/stores/planStore";
 import FeatureGate from "./FeatureGate.vue";
-import { Badge } from "./ui/badge";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectTrigger,
-  SelectValue,
-} from "./ui/select";
+import Badge from "primevue/badge";
+import Select from "primevue/select";
 
 interface SavedView {
   id: string;

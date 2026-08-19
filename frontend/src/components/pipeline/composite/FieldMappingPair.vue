@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import type { SchemaField } from '../../../types/pipeline'
-import { Button } from '../../ui/button'
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '../../ui/select'
+import Button from 'primevue/button'
+import Select from 'primevue/select'
 
 const props = defineProps<{
   sourceFields: SchemaField[]
@@ -95,10 +95,10 @@ function removeMapping(sourceKey: string) {
           {{ Object.keys(mappings).length }} field{{ Object.keys(mappings).length !== 1 ? 's' : '' }} mapped
         </span>
         <div class="flex gap-1">
-          <Button variant="outline" size="sm" @click="autoMap">
+          <Button severity="secondary" outlined size="small" @click="autoMap">
             Auto-map
           </Button>
-          <Button v-if="Object.keys(mappings).length > 0" variant="outline" size="sm" @click="clearMapping">
+          <Button v-if="Object.keys(mappings).length > 0" severity="secondary" outlined size="small" @click="clearMapping">
             Clear
           </Button>
         </div>
@@ -134,7 +134,7 @@ function removeMapping(sourceKey: string) {
             {{ unmappedSource.length }} unmapped source,
             {{ unmappedTarget.length }} unmapped target
           </span>
-          <Button variant="secondary" size="sm" @click="showPicker = true">
+          <Button severity="secondary" size="small" @click="showPicker = true">
             Add mapping
           </Button>
         </div>
@@ -143,41 +143,42 @@ function removeMapping(sourceKey: string) {
           <div class="grid grid-cols-2 gap-3">
             <div>
               <label for="fieldmappingpair-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('components.pipeline.composite.FieldMappingPair.source_field') }}</label>
-              <Select aria-label="Source field" v-model="selectedSource">
-                <SelectTrigger class="w-full rounded-md border border-border bg-background px-2 py-1 text-xs" aria-label="Source field">
-                  <SelectValue placeholder="Select source" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem v-for="f in pickerSourceFields" :key="f.name" :value="f.name">
-                    {{ f.name }} ({{ f.type }})
-                  </SelectItem>
-                </SelectContent>
-              </Select>
+              <Select
+  aria-label="Source field"
+  v-model="selectedSource"
+  placeholder="Select source"
+  class="w-full"
+  :options="pickerSourceFields.map(f => ({ value: f.name, label: f.name + '(' + f.type + ')' }))"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
             </div>
             <div>
               <label for="fieldmappingpair-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('components.pipeline.composite.FieldMappingPair.target_field') }}</label>
-              <Select aria-label="Target field" v-model="selectedTarget">
-                <SelectTrigger class="w-full rounded-md border border-border bg-background px-2 py-1 text-xs" aria-label="Target field">
-                  <SelectValue placeholder="Select target" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem v-for="f in pickerTargetFields" :key="f.name" :value="f.name">
-                    {{ f.name }} ({{ f.type }})
-                  </SelectItem>
-                </SelectContent>
-              </Select>
+              <Select
+  aria-label="Target field"
+  v-model="selectedTarget"
+  placeholder="Select target"
+  class="w-full"
+  :options="pickerTargetFields.map(f => ({ value: f.name, label: f.name + '(' + f.type + ')' }))"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
             </div>
           </div>
           <div class="flex justify-end gap-1">
-            <Button variant="outline" size="sm" @click="showPicker = false">
+            <Button severity="secondary" outlined size="small" @click="showPicker = false">
               Cancel
             </Button>
-            <Button
-              variant="default"
-              size="sm"
-              :disabled="!selectedSource || !selectedTarget"
-              @click="addMapping"
-            >
+            <Button size="small" :disabled="!selectedSource || !selectedTarget" @click="addMapping">
               Add
             </Button>
           </div>

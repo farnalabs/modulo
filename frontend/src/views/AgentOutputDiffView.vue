@@ -13,16 +13,20 @@
         <div class="flex flex-col gap-1.5">
           <label for="agentoutputdiffview-field-run-a" class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_a') }}</label>
           <div class="flex gap-2">
-            <Select aria-label="Select run A" v-model="runIdA">
-              <SelectTrigger data-testid="diff-recent-runs-a" aria-label="Select run A" class="w-72 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                <SelectValue :placeholder="loadingRuns ? $t('views.AgentOutputDiffView.loading') : $t('views.AgentOutputDiffView.select_recent_run')" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem v-for="run in recentRuns" :key="run.id" :value="run.id">
-                  {{ run.pipeline_name }} — <span class="capitalize">{{ run.status }}</span> ({{ run.created_at }})
-                </SelectItem>
-              </SelectContent>
-            </Select>
+            <Select
+  aria-label="Select run A"
+  v-model="runIdA"
+  :placeholder="loadingRuns ? $t('views.AgentOutputDiffView.loading') : $t('views.AgentOutputDiffView.select_recent_run')"
+  data-testid="diff-recent-runs-a"
+  class="w-72"
+  :options="recentRuns.map(run => ({ value: run.id, label: run.pipeline_name + '—' + run.status + '(' + run.created_at + ')' }))"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
             <input :aria-label="$t('views.AgentOutputDiffView.paste_run_id')"
               v-model="runIdA"
               id="agentoutputdiffview-field-run-a"
@@ -46,16 +50,20 @@
         <div class="flex flex-col gap-1.5">
           <label for="agentoutputdiffview-field-run-b" class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_b') }}</label>
           <div class="flex gap-2">
-            <Select aria-label="Select run B" v-model="runIdB">
-              <SelectTrigger data-testid="diff-recent-runs-b" aria-label="Select run B" class="w-72 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                <SelectValue :placeholder="loadingRuns ? $t('views.AgentOutputDiffView.loading') : $t('views.AgentOutputDiffView.select_recent_run')" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem v-for="run in recentRuns" :key="run.id" :value="run.id">
-                  {{ run.pipeline_name }} — <span class="capitalize">{{ run.status }}</span> ({{ run.created_at }})
-                </SelectItem>
-              </SelectContent>
-            </Select>
+            <Select
+  aria-label="Select run B"
+  v-model="runIdB"
+  :placeholder="loadingRuns ? $t('views.AgentOutputDiffView.loading') : $t('views.AgentOutputDiffView.select_recent_run')"
+  data-testid="diff-recent-runs-b"
+  class="w-72"
+  :options="recentRuns.map(run => ({ value: run.id, label: run.pipeline_name + '—' + run.status + '(' + run.created_at + ')' }))"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
             <input :aria-label="$t('views.AgentOutputDiffView.paste_run_id')"
               v-model="runIdB"
               id="agentoutputdiffview-field-run-b"
@@ -66,13 +74,7 @@
             />
           </div>
         </div>
-        <Button
-          :disabled="!canCompare || loading"
-          data-testid="diff-compare-btn"
-          variant="default"
-          class="px-5 py-2"
-          @click="handleCompare"
-        >
+        <Button :disabled="!canCompare || loading" data-testid="diff-compare-btn" class="px-5 py-2" @click="handleCompare">
           {{ $t('views.AgentOutputDiffView.compare') }}
         </Button>
       </div>
@@ -170,8 +172,8 @@ import type { components } from '../lib/api/client'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import JsonViewer from '../components/shared/JsonViewer.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
-import { Button } from '@/components/ui/button'
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import Button from 'primevue/button'
+import Select from 'primevue/select'
 
 type NodeOutputDiffResponse = components['schemas']['NodeOutputDiffResponse']
 type NodeOutputDiffLine = components['schemas']['NodeOutputDiffLine']

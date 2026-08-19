@@ -1,14 +1,15 @@
 <template>
-  <Dialog :open="dialogOpen" @update:open="closeForm">
-    <DialogContent class="sm:max-w-lg">
-      <DialogHeader>
-        <DialogTitle>{{ editingId ? "Edit Skill" : "Add Skill" }}</DialogTitle>
-        <DialogDescription>
+  <Dialog :visible="dialogOpen" :modal="true" :dismissable-mask="true" class="sm:max-w-lg" @update:visible="closeForm">
+    <template #header>
+      <div>
+        <div class="text-lg font-semibold">{{ editingId ? "Edit Skill" : "Add Skill" }}</div>
+        <div class="mt-0.5 text-sm text-muted-foreground">
           {{ editingId ? editDescription : createDescription }}
-        </DialogDescription>
-      </DialogHeader>
+        </div>
+      </div>
+    </template>
 
-      <form @submit.prevent="save" class="space-y-4">
+    <form @submit.prevent="save" class="space-y-4">
         <div>
           <label for="remyskilldialog-field-5" class="mb-1 block text-sm font-medium"
             >{{ $t('components.remy.RemySkillDialog.name') }} <span class="text-destructive">*</span></label
@@ -69,7 +70,7 @@
         <div v-if="saveError" class="text-sm text-destructive">
           {{ saveError }}
         </div>
-        <DialogFooter>
+        <div class="flex gap-2 justify-end">
           <button
             type="button"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
@@ -78,64 +79,43 @@
           >
             Cancel
           </button>
-          <Button
-            :disabled="saving || !form.name.trim()"
-            type="submit"
-            variant="default"
-            data-testid="remy-skills-form-submit"
-          >
+          <Button :disabled="saving || !form.name.trim()" type="submit" data-testid="remy-skills-form-submit">
             {{ saving ? "Saving..." : editingId ? "Update" : "Create" }}
           </Button>
-        </DialogFooter>
+        </div>
       </form>
-    </DialogContent>
   </Dialog>
 
-  <Dialog :open="deleteOpen" @update:open="deleteOpen = false">
-    <DialogContent class="sm:max-w-sm">
-      <DialogHeader>
-        <DialogTitle>{{ $t('components.remy.RemySkillDialog.delete_skill') }}</DialogTitle>
-        <DialogDescription>
-          Are you sure you want to delete "{{ deletingName }}"? This action
-          cannot be undone.
-        </DialogDescription>
-      </DialogHeader>
-      <DialogFooter>
-        <button
-          type="button"
-          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
-          data-testid="remy-skills-delete-cancel"
-          @click="deleteOpen = false"
-        >
-          Cancel
-        </button>
-        <Button
-          :disabled="deleting"
-          type="button"
-          variant="destructive"
-          data-testid="remy-skills-delete-confirm"
-          @click="confirmDelete"
-        >
-          {{ deleting ? "Deleting..." : "Delete" }}
-        </Button>
-      </DialogFooter>
-    </DialogContent>
+  <Dialog :visible="deleteOpen" :modal="true" :dismissable-mask="true" class="sm:max-w-sm" @update:visible="deleteOpen = false">
+    <template #header>
+      <div class="text-lg font-semibold">{{ $t('components.remy.RemySkillDialog.delete_skill') }}</div>
+    </template>
+    <p class="text-sm text-muted-foreground">
+      Are you sure you want to delete "{{ deletingName }}"? This action
+      cannot be undone.
+    </p>
+    <div class="flex gap-2 justify-end">
+      <button
+        type="button"
+        class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+        data-testid="remy-skills-delete-cancel"
+        @click="deleteOpen = false"
+      >
+        Cancel
+      </button>
+      <Button :disabled="deleting" type="button" severity="danger" data-testid="remy-skills-delete-confirm" @click="confirmDelete">
+        {{ deleting ? "Deleting..." : "Delete" }}
+      </Button>
+    </div>
   </Dialog>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive } from "vue";
-import { Button } from "@/components/ui/button";
+import Button from 'primevue/button'
+import Dialog from 'primevue/dialog'
 import { api } from "@/lib/api/client";
 import { formatApiError } from "@/lib/api/formatError";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 
 export interface SkillFormItem {
   id: string;

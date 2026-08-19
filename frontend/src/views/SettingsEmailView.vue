@@ -69,12 +69,7 @@
             </div>
 
             <div class="flex items-center gap-3 pt-2">
-              <Button
-                type="button"
-                variant="default"
-                :disabled="saving"
-                @click="saveSettings"
-              >
+              <Button type="button" :disabled="saving" @click="saveSettings">
                 {{ saving ? $t('views.SettingsEmailView.saving') : $t('views.SettingsEmailView.save') }}
               </Button>
               <button
@@ -116,7 +111,7 @@ import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 
 interface EmailForm {
   smtp_host: string

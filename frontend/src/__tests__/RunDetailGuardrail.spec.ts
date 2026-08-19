@@ -104,12 +104,9 @@ function mountView(run: unknown = guardrailBlockedRun()) {
   return mount(RunDetailView, {
     global: {
       stubs: {
-        Dialog: { template: '<div><slot /></div>' },
-        DialogContent: { template: '<div><slot /></div>' },
-        DialogHeader: { template: '<div><slot /></div>' },
-        DialogTitle: { template: '<div><slot /></div>' },
-        DialogDescription: { template: '<div><slot /></div>' },
-        DialogFooter: { template: '<div><slot /></div>' },
+        Dialog: {
+          template: '<div class="p-dialog"><slot name="header" /><slot /><slot name="footer" /></div>',
+        },
         Button: { template: '<button><slot /></button>' },
         JsonViewer: { template: '<div />' },
         RunErrorTag: { template: '<span />' },

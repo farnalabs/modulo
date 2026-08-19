@@ -97,12 +97,7 @@
           />
         </div>
         <div class="flex items-center gap-2">
-          <Button
-            :disabled="!wizardState.resourceType.trim() || inferring"
-            variant="default"
-            data-testid="onboarding-wizard-infer-schema"
-            @click="inferSchema"
-          >
+          <Button :disabled="!wizardState.resourceType.trim() || inferring" data-testid="onboarding-wizard-infer-schema" @click="inferSchema">
             {{ inferring ? $t('views.SchemaInferenceView.inferring') : $t('views.SchemaInferenceView.infer_schema') }}
           </Button>
         </div>
@@ -187,12 +182,7 @@
             </table>
           </div>
           <div class="flex items-center gap-2">
-          <Button
-            :disabled="savingSchema"
-            variant="default"
-            data-testid="onboarding-wizard-confirm-save-schema"
-            @click="saveSchema"
-          >
+          <Button :disabled="savingSchema" data-testid="onboarding-wizard-confirm-save-schema" @click="saveSchema">
             {{ savingSchema ? $t('views.OnboardingWizard.saving') : $t('views.OnboardingWizard.confirm_save_schema') }}
           </Button>
           </div>
@@ -222,17 +212,19 @@
               data-testid="onboarding-wizard-library-search"
               class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
-            <Select :aria-label="$t('views.OnboardingWizard.filter_by_type')" v-model="libraryTypeFilter">
-              <SelectTrigger data-testid="onboarding-wizard-library-type-filter" :aria-label="$t('views.OnboardingWizard.filter_by_type')" class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                <SelectValue :placeholder="$t('views.OnboardingWizard.all_types')" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="pipeline_template">{{ $t('views.OnboardingWizard.pipeline_templates') }}</SelectItem>
-                <SelectItem value="agent">{{ $t('views.OnboardingWizard.agents') }}</SelectItem>
-                <SelectItem value="schema">{{ $t('views.OnboardingWizard.schemas') }}</SelectItem>
-                <SelectItem value="integration">{{ $t('views.OnboardingWizard.integrations') }}</SelectItem>
-              </SelectContent>
-            </Select>
+            <Select
+  :aria-label="$t('views.OnboardingWizard.filter_by_type')"
+  v-model="libraryTypeFilter"
+  :placeholder="$t('views.OnboardingWizard.all_types')"
+  data-testid="onboarding-wizard-library-type-filter"
+  :options="[{ value: 'pipeline_template', label: $t('views.OnboardingWizard.pipeline_templates') }, { value: 'agent', label: $t('views.OnboardingWizard.agents') }, { value: 'schema', label: $t('views.OnboardingWizard.schemas') }, { value: 'integration', label: $t('views.OnboardingWizard.integrations') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
           </div>
           <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
@@ -289,12 +281,7 @@
           <p v-if="selectedLibraryItem.description" class="text-xs text-muted-foreground">{{ selectedLibraryItem.description }}</p>
         </div>
         <div class="flex items-center gap-2">
-          <Button
-            :disabled="!wizardState.pipelineName.trim() || creatingPipeline"
-            variant="default"
-            data-testid="onboarding-wizard-create-pipeline"
-            @click="createPipeline"
-          >
+          <Button :disabled="!wizardState.pipelineName.trim() || creatingPipeline" data-testid="onboarding-wizard-create-pipeline" @click="createPipeline">
             {{ creatingPipeline ? $t('views.OnboardingWizard.creating') : $t('views.OnboardingWizard.create_pipeline') }}
           </Button>
         </div>
@@ -338,13 +325,7 @@
           </li>
         </ul>
         <div class="flex items-center justify-center gap-3 pt-4">
-          <Button
-            v-if="wizardState.createdPipelineId"
-            :disabled="runningPipeline"
-            variant="default"
-            data-testid="onboarding-wizard-run-pipeline-now"
-            @click="runPipeline"
-          >
+          <Button v-if="wizardState.createdPipelineId" :disabled="runningPipeline" data-testid="onboarding-wizard-run-pipeline-now" @click="runPipeline">
             {{ runningPipeline ? $t('views.OnboardingWizard.starting') : $t('views.OnboardingWizard.run_pipeline_now') }}
           </Button>
           <router-link
@@ -385,12 +366,7 @@
         >
           {{ $t('views.OnboardingWizard.skip_to_end') }}
         </button>
-        <Button
-          :disabled="!canProceed"
-          variant="default"
-          data-testid="onboarding-wizard-next"
-          @click="nextStep"
-        >
+        <Button :disabled="!canProceed" data-testid="onboarding-wizard-next" @click="nextStep">
           {{ currentStep === 5 ? $t('views.OnboardingWizard.finish') : $t('views.OnboardingWizard.next') }}
         </Button>
       </div>
@@ -406,8 +382,8 @@ import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
 import { formatApiError } from '../lib/api/formatError'
-import { Button } from '@/components/ui/button'
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import Button from 'primevue/button'
+import Select from 'primevue/select'
 
 type ConnectorItem = components['schemas']['ConnectorResponse']
 

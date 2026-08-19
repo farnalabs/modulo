@@ -104,30 +104,24 @@
         </div>
         <div>
           <label for="adminauditview-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.target_type') }}</label>
-          <Select aria-label="Target Type" v-model="filterTargetType">
-            <SelectTrigger data-testid="admin-audit-target-type" aria-label="Target Type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-              <SelectValue :placeholder="$t('views.AdminAuditView.target_type')" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__all__">{{ $t('views.AdminAuditView.all_targets') }}</SelectItem>
-              <SelectItem value="pipeline">{{ $t('views.AdminAuditView.optgroup_pipeline') }}</SelectItem>
-              <SelectItem value="run">{{ $t('views.AdminAuditView.optgroup_run') }}</SelectItem>
-              <SelectItem value="user">{{ $t('views.AdminAuditView.optgroup_user') }}</SelectItem>
-              <SelectItem value="team">{{ $t('views.AdminAuditView.optgroup_team') }}</SelectItem>
-              <SelectItem value="schema">{{ $t('views.AdminAuditView.optgroup_schema') }}</SelectItem>
-              <SelectItem value="connector">{{ $t('views.AdminAuditView.optgroup_connector') }}</SelectItem>
-              <SelectItem value="model_backend">{{ $t('views.AdminAuditView.optgroup_model_backend') }}</SelectItem>
-              <SelectItem value="sso_provider">{{ $t('views.AdminAuditView.optgroup_sso_provider') }}</SelectItem>
-            </SelectContent>
-          </Select>
+          <Select
+  aria-label="Target Type"
+  v-model="filterTargetType"
+  :placeholder="$t('views.AdminAuditView.target_type')"
+  data-testid="admin-audit-target-type"
+  class="w-full"
+  :options="[{ value: '__all__', label: $t('views.AdminAuditView.all_targets') }, { value: 'pipeline', label: $t('views.AdminAuditView.optgroup_pipeline') }, { value: 'run', label: $t('views.AdminAuditView.optgroup_run') }, { value: 'user', label: $t('views.AdminAuditView.optgroup_user') }, { value: 'team', label: $t('views.AdminAuditView.optgroup_team') }, { value: 'schema', label: $t('views.AdminAuditView.optgroup_schema') }, { value: 'connector', label: $t('views.AdminAuditView.optgroup_connector') }, { value: 'model_backend', label: $t('views.AdminAuditView.optgroup_model_backend') }, { value: 'sso_provider', label: $t('views.AdminAuditView.optgroup_sso_provider') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
         </div>
       </FilterBar>
       <div class="mt-3 flex items-center gap-2">
-        <Button
-          variant="default"
-          data-testid="admin-audit-apply-filters"
-          @click="applyFilters"
-        >
+        <Button data-testid="admin-audit-apply-filters" @click="applyFilters">
           {{ $t('views.AdminAuditView.apply_filters') }}
         </Button>
         <button
@@ -222,14 +216,7 @@
                 </span>
                 <span v-else class="text-muted-foreground/50">&mdash;</span>
               </td>
-              <Tooltip :delay-duration="300">
-                <TooltipTrigger as-child>
-                  <td class="table-cell max-w-xs truncate text-muted-foreground">{{ summarize(event) }}</td>
-                </TooltipTrigger>
-                <TooltipContent side="top" class="max-w-xs">
-                  <p>{{ summarize(event) }}</p>
-                </TooltipContent>
-              </Tooltip>
+              <td class="table-cell max-w-xs truncate text-muted-foreground" v-tooltip.top="{ value: summarize(event), showDelay: 300 }">{{ summarize(event) }}</td>
               <td class="table-cell text-xs text-muted-foreground">
                 <svg
                   class="h-4 w-4 transition-transform"
@@ -254,25 +241,11 @@
                   <div v-if="expandedEvent?.previous_hash" class="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     <div>
                       <h4 class="mb-1 text-xs font-semibold uppercase text-muted-foreground">{{ $t('views.AdminAuditView.previous_hash') }}</h4>
-                      <Tooltip :delay-duration="300">
-                        <TooltipTrigger as-child>
-                          <code class="block truncate rounded bg-background px-2 py-1 text-xs font-mono">{{ shortId(expandedEvent.previous_hash) }}</code>
-                        </TooltipTrigger>
-                        <TooltipContent side="top" class="max-w-xs">
-                          <p class="font-mono text-xs break-all">{{ expandedEvent.previous_hash }}</p>
-                        </TooltipContent>
-                      </Tooltip>
+                      <code class="block truncate rounded bg-background px-2 py-1 text-xs font-mono" v-tooltip.top="expandedEvent.previous_hash">{{ shortId(expandedEvent.previous_hash) }}</code>
                     </div>
                     <div>
                       <h4 class="mb-1 text-xs font-semibold uppercase text-muted-foreground">{{ $t('views.AdminAuditView.event_id') }}</h4>
-                      <Tooltip :delay-duration="300">
-                        <TooltipTrigger as-child>
-                          <code class="block truncate rounded bg-background px-2 py-1 text-xs font-mono">{{ shortId(expandedEvent.id) }}</code>
-                        </TooltipTrigger>
-                        <TooltipContent side="top" class="max-w-xs">
-                          <p class="font-mono text-xs break-all">{{ shortId(expandedEvent.id) }}</p>
-                        </TooltipContent>
-                      </Tooltip>
+                      <code class="block truncate rounded bg-background px-2 py-1 text-xs font-mono" v-tooltip.top="expandedEvent.id">{{ shortId(expandedEvent.id) }}</code>
                     </div>
                   </div>
                   <div v-if="expandedEvent?.request_id">
@@ -326,17 +299,12 @@ import { formatError } from '../lib/utils'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import { formatApiError } from '../lib/api/formatError'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 import { formatDateFilename } from '../lib/formatDate'
 import { shortId } from '../utils/format'
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import Select from 'primevue/select'
 
 const { t } = useI18n()
-import {
-  Tooltip,
-  TooltipTrigger,
-  TooltipContent,
-} from '../components/ui/tooltip'
 
 const planStore = usePlanStore()
 

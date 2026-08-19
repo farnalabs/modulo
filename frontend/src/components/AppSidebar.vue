@@ -135,7 +135,7 @@
             <LogoMark :size="24" transparent />
           </div>
           <h2 class="hidden min-[360px]:inline text-lg font-bold tracking-tight">{{ $t('components.AppLayout.modulo') }}</h2>
-          <Badge v-if="planStore.currentTier" variant="outline" class="hidden min-[380px]:inline-flex text-[10px] px-1.5 py-0 leading-none opacity-70">
+          <Badge v-if="planStore.currentTier" severity="secondary" class="border border-border hidden min-[380px]:inline-flex text-[10px] px-1.5 py-0 leading-none opacity-70">
             {{ planStore.getTierLabel(planStore.currentTier) }}
           </Badge>
         </router-link>
@@ -192,7 +192,7 @@
 import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { usePlanStore } from "../stores/planStore";
-import Badge from "./ui/badge/Badge.vue";
+import Badge from "primevue/badge";
 import LogoMark from "./LogoMark.vue";
 import NotificationBell from "./NotificationBell.vue";
 import SidebarFooter from "./SidebarFooter.vue";

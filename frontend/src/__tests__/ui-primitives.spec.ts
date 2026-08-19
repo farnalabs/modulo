@@ -1,44 +1,38 @@
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
-import Button from '../components/ui/button/Button.vue'
-import Badge from '../components/ui/badge/Badge.vue'
-import Input from '../components/ui/input/Input.vue'
-import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card'
-import { h } from 'vue'
+import Button from 'primevue/button'
+import Badge from 'primevue/badge'
+import InputText from 'primevue/inputtext'
+import Card from 'primevue/card'
 
-describe('shadcn-vue primitives', () => {
+describe('PrimeVue primitives', () => {
   it('renders Button', () => {
     const wrapper = mount(Button, {
-      props: { variant: 'default' },
       slots: { default: 'Click me' },
     })
     expect(wrapper.text()).toContain('Click me')
-    expect(wrapper.attributes('data-variant')).toBe('default')
   })
 
-  it('renders Badge with secondary variant', () => {
+  it('renders Badge with secondary severity', () => {
     const wrapper = mount(Badge, {
-      props: { variant: 'secondary' },
+      props: { severity: 'secondary' },
       slots: { default: 'New' },
     })
     expect(wrapper.text()).toContain('New')
-    expect(wrapper.attributes('data-variant')).toBe('secondary')
   })
 
-  it('renders Input', () => {
-    const wrapper = mount(Input, {
+  it('renders InputText', () => {
+    const wrapper = mount(InputText, {
       props: { placeholder: 'Enter name' },
     })
     expect(wrapper.find('input').attributes('placeholder')).toBe('Enter name')
   })
 
-  it('renders Card with header and content', () => {
+  it('renders Card with title and content', () => {
     const wrapper = mount(Card, {
       slots: {
-        default: [
-          h(CardHeader, () => h(CardTitle, {}, () => 'Card Title')),
-          h(CardContent, () => 'Content body'),
-        ],
+        title: 'Card Title',
+        content: 'Content body',
       },
     })
     expect(wrapper.text()).toContain('Card Title')

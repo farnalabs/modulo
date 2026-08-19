@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
-import { Button } from "../../ui/button";
-import { Input } from "../../ui/input";
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from "../../ui/select";
-import { Badge } from "../../ui/badge";
+import Button from 'primevue/button'
+import InputText from 'primevue/inputtext'
+import Select from 'primevue/select'
+import Badge from 'primevue/badge'
 
 interface EvalConfig {
   id: string;
@@ -85,7 +85,7 @@ const evalCount = computed(() => props.evalDefinitions.length);
   <div class="space-y-4">
     <div class="flex items-center justify-between">
       <span class="text-sm font-medium">{{ $t('components.pipeline.composite.OutputValidationTab.output_validation') }}</span>
-      <Badge variant="outline" class="text-xs">
+      <Badge severity="secondary" class="border border-border text-xs">
         {{ evalCount }} eval{{ evalCount === 1 ? "" : "s" }} configured
       </Badge>
     </div>
@@ -119,53 +119,61 @@ const evalCount = computed(() => props.evalDefinitions.length);
       <div class="grid grid-cols-2 gap-3">
         <div class="space-y-1">
           <span class="text-xs text-muted-foreground">{{ $t('components.pipeline.composite.OutputValidationTab.name') }}</span>
-          <Input
+          <InputText
             :model-value="evalDef.name"
             :placeholder="$t('components.pipeline.composite.OutputValidationTab.eval_name')"
             @update:model-value="
-              (val: string | number) =>
-                updateEval(evalDef.id, { name: String(val) })
+              (val: string | undefined) =>
+                updateEval(evalDef.id, { name: String(val ?? '') })
             "
           />
         </div>
         <div class="space-y-1">
           <span class="text-xs text-muted-foreground">{{ $t('components.pipeline.composite.OutputValidationTab.type') }}</span>
-          <Select aria-label="Eval type" :model-value="evalDef.type" @update:model-value="(val) => updateEval(evalDef.id, {type: val as EvalConfig['type']})">
-            <SelectTrigger class="bg-background border-input focus-visible:border-ring h-8 w-full rounded-lg border px-2.5 py-1 text-sm" aria-label="Eval type">
-              <SelectValue placeholder="Select type" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="regex">{{ $t('components.pipeline.composite.OutputValidationTab.regex') }}</SelectItem>
-              <SelectItem value="json_schema">{{ $t('components.pipeline.composite.OutputValidationTab.json_schema') }}</SelectItem>
-              <SelectItem value="llm_judge">{{ $t('components.pipeline.composite.OutputValidationTab.llm_judge') }}</SelectItem>
-            </SelectContent>
-          </Select>
+          <Select
+  aria-label="Eval type"
+  :model-value="evalDef.type"
+  @update:model-value="(val) => updateEval(evalDef.id, {type: val as EvalConfig['type']})"
+  placeholder="Select type"
+  class="h-8 w-full"
+  :options="[{ value: 'regex', label: $t('components.pipeline.composite.OutputValidationTab.regex') }, { value: 'json_schema', label: $t('components.pipeline.composite.OutputValidationTab.json_schema') }, { value: 'llm_judge', label: $t('components.pipeline.composite.OutputValidationTab.llm_judge') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
         </div>
       </div>
 
       <div class="space-y-1">
         <span class="text-xs text-muted-foreground">{{ $t('components.pipeline.composite.OutputValidationTab.failure_behaviour') }}</span>
-        <Select aria-label="Failure behaviour" :model-value="evalDef.failure_behaviour" @update:model-value="(val) => updateEval(evalDef.id, {failure_behaviour: val as EvalConfig['failure_behaviour']})">
-          <SelectTrigger class="bg-background border-input focus-visible:border-ring h-8 w-full rounded-lg border px-2.5 py-1 text-sm" aria-label="Failure behaviour">
-            <SelectValue placeholder="Select behaviour" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="retry">{{ $t('components.pipeline.composite.OutputValidationTab.retry') }}</SelectItem>
-            <SelectItem value="block">{{ $t('components.pipeline.composite.OutputValidationTab.block') }}</SelectItem>
-            <SelectItem value="warn">{{ $t('components.pipeline.composite.OutputValidationTab.warn') }}</SelectItem>
-          </SelectContent>
-        </Select>
+        <Select
+  aria-label="Failure behaviour"
+  :model-value="evalDef.failure_behaviour"
+  @update:model-value="(val) => updateEval(evalDef.id, {failure_behaviour: val as EvalConfig['failure_behaviour']})"
+  placeholder="Select behaviour"
+  class="h-8 w-full"
+  :options="[{ value: 'retry', label: $t('components.pipeline.composite.OutputValidationTab.retry') }, { value: 'block', label: $t('components.pipeline.composite.OutputValidationTab.block') }, { value: 'warn', label: $t('components.pipeline.composite.OutputValidationTab.warn') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
       </div>
 
       <template v-if="evalDef.type === 'regex'">
         <div class="space-y-1">
           <span class="text-xs text-muted-foreground">{{ $t('components.pipeline.composite.OutputValidationTab.field') }}</span>
-          <Input
+          <InputText
             :model-value="String(evalDef.config.field ?? '')"
             :placeholder="$t('components.pipeline.composite.OutputValidationTab.output_field_name')"
             @update:model-value="
-              (val: string | number) =>
-                updateConfig(evalDef.id, { field: String(val) })
+              (val: string | undefined) =>
+                updateConfig(evalDef.id, { field: String(val ?? '') })
             "
           />
         </div>
@@ -188,12 +196,12 @@ const evalCount = computed(() => props.evalDefinitions.length);
       <template v-else-if="evalDef.type === 'json_schema'">
         <div class="space-y-1">
           <span class="text-xs text-muted-foreground">{{ $t('components.pipeline.composite.OutputValidationTab.field_optional') }}</span>
-          <Input
+          <InputText
             :model-value="String(evalDef.config.field ?? '')"
             placeholder="output field name (leave blank for entire output)"
             @update:model-value="
-              (val: string | number) =>
-                updateConfig(evalDef.id, { field: String(val) })
+              (val: string | undefined) =>
+                updateConfig(evalDef.id, { field: String(val ?? '') })
             "
           />
         </div>
@@ -226,7 +234,7 @@ const evalCount = computed(() => props.evalDefinitions.length);
       </template>
     </div>
 
-    <Button variant="outline" size="sm" class="w-full" @click="addEval">
+    <Button severity="secondary" outlined size="small" class="w-full" @click="addEval">
       + Add Eval Definition
     </Button>
 

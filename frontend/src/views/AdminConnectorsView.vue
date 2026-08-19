@@ -4,12 +4,7 @@
     <div class="page-wide">
     <header class="flex items-center justify-between">
       <PageHeader title="Connectors" subtitle="Manage connector instances for data source integration" />
-      <Button
-        variant="default"
-           class="border-primary/30 hover:border-primary/60"
-        data-testid="admin-connectors-add"
-        @click="openAddForm"
-      >
+      <Button class="border-primary/30 hover:border-primary/60" data-testid="admin-connectors-add" @click="openAddForm">
         Add Connector
       </Button>
     </header>
@@ -35,16 +30,20 @@
             </div>
             <div>
               <label for="adminconnectorsview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.AdminConnectorsView.type') }}</label>
-              <Select aria-label="Type" v-model="formData.connector_type">
-                <SelectTrigger data-testid="admin-connectors-type-select" aria-label="Type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
-                  <SelectValue placeholder="PostgreSQL" />
-                </SelectTrigger>
-                <SelectContent position="popper">
-                  <SelectItem v-for="ct in connectorTypes" :key="ct.id" :value="ct.id">
-                    {{ ct.display_name }}
-                  </SelectItem>
-                </SelectContent>
-              </Select>
+              <Select
+  aria-label="Type"
+  v-model="formData.connector_type"
+  placeholder="PostgreSQL"
+  data-testid="admin-connectors-type-select"
+  class="w-full"
+  :options="connectorTypes.map(ct => ({ value: ct.id, label: ct.display_name }))"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
             </div>
             <div>
               <label for="adminconnectorsview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.AdminConnectorsView.description') }}</label>
@@ -68,12 +67,7 @@
             </div>
             <div v-if="formError" class="text-sm text-destructive">{{ formError }}</div>
             <div class="flex items-center gap-2">
-              <Button
-                :disabled="saving || !formData.name.trim()"
-                type="submit"
-                variant="default"
-                data-testid="admin-connectors-submit"
-              >
+              <Button :disabled="saving || !formData.name.trim()" type="submit" data-testid="admin-connectors-submit">
                 {{ saving ? 'Creating...' : 'Create' }}
               </Button>
               <button
@@ -213,12 +207,7 @@
             </div>
             <div v-if="formError" class="text-sm text-destructive">{{ formError }}</div>
             <div class="flex items-center gap-2">
-              <Button
-                :disabled="saving || !formData.name.trim()"
-                type="submit"
-                variant="default"
-                data-testid="admin-connectors-save"
-              >
+              <Button :disabled="saving || !formData.name.trim()" type="submit" data-testid="admin-connectors-save">
                 {{ saving ? 'Saving...' : 'Save' }}
               </Button>
               <button
@@ -238,12 +227,7 @@
         <p class="text-sm font-medium text-destructive">Delete "{{ deleteConfirmName }}"?</p>
         <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminConnectorsView.this_action_cannot_be_undone') }}</p>
         <div class="mt-3 flex items-center gap-2">
-          <Button
-            :disabled="deleting"
-            variant="destructive"
-            data-testid="admin-connectors-delete-confirm"
-            @click="deleteConnector"
-          >
+          <Button :disabled="deleting" severity="danger" data-testid="admin-connectors-delete-confirm" @click="deleteConnector">
             {{ deleting ? 'Deleting...' : 'Delete' }}
           </Button>
           <button
@@ -272,8 +256,8 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
-import { Button } from '@/components/ui/button'
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import Button from 'primevue/button'
+import Select from 'primevue/select'
 import TableActions from '../components/shared/TableActions.vue'
 
 const planStore = usePlanStore()

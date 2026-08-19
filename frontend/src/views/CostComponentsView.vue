@@ -8,12 +8,7 @@
   <div data-theme="agent" class="page-wide">
     <div class="flex items-center justify-between">
       <PageHeader :title="$t('views.CostComponentsView.cost_components')" :subtitle="$t('views.CostComponentsView.configure_the_named_cost_components_that_make_up_a_runs_cost')" />
-      <Button
-        variant="default"
-        class="border-primary/30 hover:border-primary/60"
-        data-testid="cost-components-add"
-        @click="openCreate"
-      >
+      <Button class="border-primary/30 hover:border-primary/60" data-testid="cost-components-add" @click="openCreate">
         {{ $t('views.CostComponentsView.add_component') }}
       </Button>
     </div>
@@ -32,7 +27,8 @@
         />
 
         <Card v-else>
-          <CardContent class="p-0">
+          <template #content>
+            <div class="-mx-5 -my-5">
             <DataTable
               :columns="[
                 { key: 'display_name', label: $t('views.CostComponentsView.display_name') },
@@ -88,7 +84,8 @@
                 </div>
               </template>
             </DataTable>
-          </CardContent>
+            </div>
+          </template>
         </Card>
 
         <p v-if="formError" class="mt-3 text-sm text-destructive" data-testid="cost-components-form-error">{{ formError }}</p>
@@ -106,11 +103,11 @@
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
                 <label for="costcomponents-name" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.CostComponentsView.name') }}</label>
-                <Input id="costcomponents-name" v-model="form.name" data-testid="cost-components-name" class="font-mono" placeholder="e.g. sandbox_infra" :disabled="editing" />
+                <InputText id="costcomponents-name" v-model="form.name" data-testid="cost-components-name" class="font-mono" placeholder="e.g. sandbox_infra" :disabled="editing" />
               </div>
               <div>
                 <label for="costcomponents-display-name" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.CostComponentsView.display_name') }}</label>
-                <Input id="costcomponents-display-name" v-model="form.display_name" data-testid="cost-components-display-name" placeholder="Sandbox Infra" />
+                <InputText id="costcomponents-display-name" v-model="form.display_name" data-testid="cost-components-display-name" placeholder="Sandbox Infra" />
               </div>
             </div>
 
@@ -132,7 +129,7 @@
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
                 <label for="costcomponents-rate" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.CostComponentsView.rate_usd') }}</label>
-                <Input
+                <InputText
                   id="costcomponents-rate"
                   v-model="form.rate_usd"
                   data-testid="cost-components-rate"
@@ -144,21 +141,29 @@
               </div>
               <div v-if="showRateFallback">
                 <label for="costcomponents-fallback" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.CostComponentsView.env_fallback') }}</label>
-                <Select :aria-label="$t('views.CostComponentsView.env_fallback')" :model-value="form.rate_fallback || undefined" @update:model-value="onFallbackChange">
-                  <SelectTrigger id="costcomponents-fallback" data-testid="cost-components-fallback" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
-                    <SelectValue :placeholder="$t('views.CostComponentsView.select_fallback')" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem v-for="fb in REGISTERED_FALLBACKS" :key="fb" :value="fb">{{ fb }}</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Select
+  :aria-label="$t('views.CostComponentsView.env_fallback')"
+  :model-value="form.rate_fallback || undefined"
+  @update:model-value="onFallbackChange"
+  :placeholder="$t('views.CostComponentsView.select_fallback')"
+  data-testid="cost-components-fallback"
+  id="costcomponents-fallback"
+  class="w-full"
+  :options="REGISTERED_FALLBACKS.map(fb => ({ value: fb, label: fb }))"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
                 <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.CostComponentsView.fallback_resolves_rate_from_settings') }}</p>
               </div>
             </div>
 
             <div v-if="form.kind === 'calculated'">
               <label for="costcomponents-formula" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.CostComponentsView.formula') }}</label>
-              <Input id="costcomponents-formula" v-model="form.formula" data-testid="cost-components-formula" class="font-mono" :placeholder="'wall_clock_hours * rate'" />
+              <InputText id="costcomponents-formula" v-model="form.formula" data-testid="cost-components-formula" class="font-mono" :placeholder="'wall_clock_hours * rate'" />
               <details class="mt-2 rounded-lg border bg-muted/30 p-3">
                 <summary class="cursor-pointer text-xs font-medium text-muted-foreground">{{ $t('views.CostComponentsView.available_params') }}</summary>
                 <table class="mt-2 w-full text-xs">
@@ -182,7 +187,7 @@
 
             <div v-if="form.kind === 'self_reported'">
               <label for="costcomponents-report-key" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.CostComponentsView.report_key') }}</label>
-              <Input id="costcomponents-report-key" v-model="form.report_key" data-testid="cost-components-report-key" class="font-mono" placeholder="model_cost_usd" />
+              <InputText id="costcomponents-report-key" v-model="form.report_key" data-testid="cost-components-report-key" class="font-mono" placeholder="model_cost_usd" />
               <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.CostComponentsView.a_dead_report_key_wastes_a_cap_slot') }}</p>
             </div>
 
@@ -201,10 +206,10 @@
             {{ deleteTarget.kind === 'self_reported' ? $t('views.CostComponentsView.delete_self_reported_warning') : $t('views.CostComponentsView.this_action_cannot_be_undone') }}
           </p>
           <div class="mt-3 flex items-center gap-2">
-            <Button :disabled="deleting" variant="destructive" data-testid="cost-components-delete-confirm" @click="confirmDelete">
+            <Button :disabled="deleting" severity="danger" data-testid="cost-components-delete-confirm" @click="confirmDelete">
               {{ deleting ? $t('views.CostComponentsView.deleting') : $t('views.CostComponentsView.delete') }}
             </Button>
-            <Button variant="outline" data-testid="cost-components-delete-cancel" @click="deleteTarget = null">
+            <Button severity="secondary" outlined data-testid="cost-components-delete-cancel" @click="deleteTarget = null">
               {{ $t('views.CostComponentsView.cancel') }}
             </Button>
           </div>
@@ -228,11 +233,11 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import FormDialog from '../components/shared/FormDialog.vue'
 import TableActions from '../components/shared/TableActions.vue'
-import { Button } from '../components/ui/button'
-import { Card, CardContent } from '../components/ui/card'
-import { Input } from '../components/ui/input'
+import Button from 'primevue/button'
+import Card from 'primevue/card'
+import InputText from 'primevue/inputtext'
 import { DataTable } from '../components/ui/data-table'
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '../components/ui/select'
+import Select from 'primevue/select'
 import PageTabs from '../components/PageTabs.vue'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'

@@ -65,6 +65,7 @@ _STANDARD_TIERS = [
 
 _TIERS_PATCH_TARGET = "modulo.api.routes.admin_tiers.list_tiers"
 
+
 _TIERS_MOCK_ATTR = "_tiers_catalog_mock"
 
 

@@ -42,12 +42,7 @@
     </div>
 
     <div class="border-t p-4">
-      <Button
-        variant="default"
-        class="w-full"
-        data-testid="schema-editor-new"
-        @click="$emit('create')"
-      >
+      <Button class="w-full" data-testid="schema-editor-new" @click="$emit('create')">
         {{ $t('views.SchemaEditorView.new_schema') }}
       </Button>
     </div>
@@ -57,7 +52,7 @@
 <script setup lang="ts">
 import FilterBar from '../shared/FilterBar.vue'
 import LoadingSpinner from '../shared/LoadingSpinner.vue'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 import type { components } from '../../lib/api/client'
 
 export type SchemaItem = components['schemas']['modulo__api__routes__schemas__SchemaResponse']

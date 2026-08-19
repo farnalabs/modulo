@@ -6,14 +6,7 @@
       >
         Skills
       </h3>
-      <Button
-        v-if="!showForm"
-        variant="ghost"
-        size="icon"
-        @click="openCreateForm"
-        :title="$t('components.remy.RemySkillManager.new_skill')"
-        :aria-label="$t('components.remy.new_skill')"
-      >
+      <Button v-if="!showForm" severity="secondary" text icon-only @click="openCreateForm" :title="$t('components.remy.RemySkillManager.new_skill')" :aria-label="$t('components.remy.new_skill')">
         <svg
           xmlns="http://www.w3.org/2000/svg"
           width="14"
@@ -53,8 +46,8 @@
         rows="4"
       />
       <div class="flex gap-2 justify-end">
-        <Button variant="ghost" size="sm" @click="cancelForm">{{ $t('common.cancel') }}</Button>
-        <Button size="sm" :disabled="!form.name.trim() || saving" @click="saveSkill">{{
+        <Button severity="secondary" text size="small" @click="cancelForm">{{ $t('common.cancel') }}</Button>
+        <Button size="small" :disabled="!form.name.trim() || saving" @click="saveSkill">{{
           editingId ? "Update" : "Create"
         }}</Button>
       </div>
@@ -149,7 +142,7 @@
 import { ref, onMounted } from "vue";
 import { api } from "@/lib/api/client";
 import { formatApiError } from "@/lib/api/formatError";
-import { Button } from "@/components/ui/button";
+import Button from 'primevue/button'
 import { useRemyStore } from "@/composables/useRemyStore";
 import type { UserSkill } from "@/types/remy";
 

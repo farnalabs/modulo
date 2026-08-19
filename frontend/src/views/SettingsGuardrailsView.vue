@@ -3,12 +3,7 @@
     <div data-theme="agent" class="page-wide">
       <header class="flex items-center justify-between">
         <PageHeader :title="$t('views.SettingsGuardrailsView.title')" :subtitle="$t('views.SettingsGuardrailsView.subtitle')" />
-        <Button
-          data-testid="settings-guardrails-create"
-          variant="default"
-          class="border-primary/30 hover:border-primary/60"
-          @click="openCreateDialog"
-        >
+        <Button data-testid="settings-guardrails-create" class="border-primary/30 hover:border-primary/60" @click="openCreateDialog">
           {{ $t('views.SettingsGuardrailsView.create_guardrail') }}
         </Button>
       </header>
@@ -100,42 +95,59 @@
 
           <div>
             <label for="settingsguardrailsview-pipeline" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsGuardrailsView.pipeline') }}</label>
-            <Select :aria-label="$t('views.SettingsGuardrailsView.pipeline')" v-model="form.pipeline_id">
-              <SelectTrigger id="settingsguardrailsview-pipeline" class="input-base" :aria-label="$t('views.SettingsGuardrailsView.pipeline')" data-testid="settings-guardrails-form-pipeline">
-                <SelectValue :placeholder="$t('views.SettingsGuardrailsView.select_pipeline')" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</SelectItem>
-              </SelectContent>
-            </Select>
+            <Select
+  :aria-label="$t('views.SettingsGuardrailsView.pipeline')"
+  v-model="form.pipeline_id"
+  :placeholder="$t('views.SettingsGuardrailsView.select_pipeline')"
+  data-testid="settings-guardrails-form-pipeline"
+  id="settingsguardrailsview-pipeline"
+  class="input-base"
+  :options="pipelines.map(p => ({ value: p.id, label: p.name }))"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
           </div>
 
           <div>
             <label for="settingsguardrailsview-action" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsGuardrailsView.action') }}</label>
-            <Select :aria-label="$t('views.SettingsGuardrailsView.action')" v-model="form.action">
-              <SelectTrigger id="settingsguardrailsview-action" class="input-base" :aria-label="$t('views.SettingsGuardrailsView.action')" data-testid="settings-guardrails-form-action">
-                <SelectValue :placeholder="$t('views.SettingsGuardrailsView.select_action')" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="observe">{{ $t('views.SettingsGuardrailsView.action_observe') }}</SelectItem>
-                <SelectItem value="warn">{{ $t('views.SettingsGuardrailsView.action_warn') }}</SelectItem>
-                <SelectItem value="block">{{ $t('views.SettingsGuardrailsView.action_block') }}</SelectItem>
-                <SelectItem value="redact">{{ $t('views.SettingsGuardrailsView.action_redact') }}</SelectItem>
-              </SelectContent>
-            </Select>
+            <Select
+  :aria-label="$t('views.SettingsGuardrailsView.action')"
+  v-model="form.action"
+  :placeholder="$t('views.SettingsGuardrailsView.select_action')"
+  data-testid="settings-guardrails-form-action"
+  id="settingsguardrailsview-action"
+  class="input-base"
+  :options="[{ value: 'observe', label: $t('views.SettingsGuardrailsView.action_observe') }, { value: 'warn', label: $t('views.SettingsGuardrailsView.action_warn') }, { value: 'block', label: $t('views.SettingsGuardrailsView.action_block') }, { value: 'redact', label: $t('views.SettingsGuardrailsView.action_redact') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
           </div>
 
           <div>
             <label for="settingsguardrailsview-detection" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsGuardrailsView.detection_type') }}</label>
-            <Select :aria-label="$t('views.SettingsGuardrailsView.detection_type')" v-model="form.detectionType">
-              <SelectTrigger id="settingsguardrailsview-detection" class="input-base" :aria-label="$t('views.SettingsGuardrailsView.detection_type')" data-testid="settings-guardrails-form-detection">
-                <SelectValue :placeholder="$t('views.SettingsGuardrailsView.select_detection')" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="regex">{{ $t('views.SettingsGuardrailsView.detection_regex') }}</SelectItem>
-                <SelectItem value="json_schema">{{ $t('views.SettingsGuardrailsView.detection_json_schema') }}</SelectItem>
-              </SelectContent>
-            </Select>
+            <Select
+  :aria-label="$t('views.SettingsGuardrailsView.detection_type')"
+  v-model="form.detectionType"
+  :placeholder="$t('views.SettingsGuardrailsView.select_detection')"
+  data-testid="settings-guardrails-form-detection"
+  id="settingsguardrailsview-detection"
+  class="input-base"
+  :options="[{ value: 'regex', label: $t('views.SettingsGuardrailsView.detection_regex') }, { value: 'json_schema', label: $t('views.SettingsGuardrailsView.detection_json_schema') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
           </div>
 
           <div>
@@ -203,7 +215,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
 import { useApi } from '../composables/useApi'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 import { api, getAccessToken } from '../lib/api/client'
 import { decodeJwtPayload } from '../lib/jwt'
 import { formatApiError } from '../lib/api/formatError'
@@ -215,13 +227,7 @@ import FormDialog from '../components/shared/FormDialog.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import { shortId } from '../utils/format'
-import {
-  Select,
-  SelectTrigger,
-  SelectContent,
-  SelectItem,
-  SelectValue,
-} from '@/components/ui/select'
+import Select from 'primevue/select'
 
 const planStore = usePlanStore()
 const { t } = useI18n()

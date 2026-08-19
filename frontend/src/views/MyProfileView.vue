@@ -78,13 +78,7 @@
         </div>
         <p v-if="passError" class="text-sm text-destructive">{{ passError }}</p>
         <p v-if="passSuccess" class="text-sm text-success">{{ passSuccess }}</p>
-        <Button
-          type="submit"
-          :disabled="passSaving"
-          variant="default"
-          class="border border-primary/30"
-          data-testid="my-profile-update-password"
-        >
+        <Button type="submit" :disabled="passSaving" class="border border-primary/30" data-testid="my-profile-update-password">
           {{ passSaving ? $t('common.saving') : $t('views.MyProfileView.update_password') }}
         </Button>
       </form>
@@ -97,7 +91,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import PageHeader from '../components/shared/PageHeader.vue'
 import FeatureGate from '../components/FeatureGate.vue'
-import { Button } from '@/components/ui/button'
+import Button from 'primevue/button'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'

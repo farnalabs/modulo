@@ -145,8 +145,7 @@
           <p class="text-lg font-medium text-muted-foreground">{{ $t('views.AdminFeatureFlagsView.no_results') }}</p>
         </div>
         <template v-else>
-          <TooltipProvider>
-            <div
+          <div
               v-for="section in paginatedGroups"
               :key="section.tier"
               class="card mb-6 overflow-hidden"
@@ -192,19 +191,13 @@
                       </span>
                     </td>
                     <td class="table-cell">
-                      <Tooltip :delay-duration="300">
-                        <TooltipTrigger as-child>
-                          <span class="font-mono text-sm font-medium cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-2">
-                            {{ flag.name }}
-                          </span>
-                        </TooltipTrigger>
-                        <TooltipContent side="top" class="max-w-xs">
-                          <p>{{ flag.description }}</p>
-                          <p v-if="flag.depends_on" class="text-muted-foreground text-[10px]">
-                            Depends on {{ flag.depends_on.join(', ') }}
-                          </p>
-                        </TooltipContent>
-                      </Tooltip>
+                      <span
+                        class="font-mono text-sm font-medium cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-2"
+                        :data-testid="'flag-name-' + flag.name"
+                        v-tooltip.top="flagTooltip(flag)"
+                      >
+                        {{ flag.name }}
+                      </span>
                     </td>
                     <td class="table-cell">
                       <span :class="flag.currently_active ? 'badge badge-status-success' : 'badge badge-status-muted'">
@@ -213,7 +206,7 @@
                     </td>
                     <td class="table-cell text-muted-foreground">{{ flag.description }}</td>
                     <td class="table-cell-numeric">
-                      <Button variant="outline" size="sm" @click.stop="openOverrideDialog(flag)">
+                      <Button severity="secondary" outlined size="small" @click.stop="openOverrideDialog(flag)">
                         {{ getCurrentOverride(flag.name) === null ? $t('views.AdminFeatureFlagsView.default') : (getCurrentOverride(flag.name) ? $t('common.enabled') : $t('common.disabled')) }}
                       </Button>
                     </td>
@@ -224,24 +217,13 @@
                 No flags in this tier.
               </div>
             </div>
-          </TooltipProvider>
           <div v-if="totalPages > 1" class="flex items-center justify-center gap-4 py-4">
             <span class="text-sm text-muted-foreground">{{ $t('views.AdminFeatureFlagsView.page_of', { current: currentPage, total: totalPages }) }}</span>
             <div class="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                :disabled="currentPage <= 1"
-                @click="currentPage = Math.max(1, currentPage - 1)"
-              >
+              <Button severity="secondary" outlined size="small" :disabled="currentPage <= 1" @click="currentPage = Math.max(1, currentPage - 1)">
                 {{ $t('common.previous') }}
               </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                :disabled="currentPage >= totalPages"
-                @click="currentPage = Math.min(totalPages, currentPage + 1)"
-              >
+              <Button severity="secondary" outlined size="small" :disabled="currentPage >= totalPages" @click="currentPage = Math.min(totalPages, currentPage + 1)">
                 {{ $t('common.next') }}
               </Button>
             </div>
@@ -258,16 +240,18 @@
       @confirm="saveOverride"
     >
       <div class="py-4">
-        <Select aria-label="Form control" v-model="overrideDialogValue">
-          <SelectTrigger>
-            <SelectValue :placeholder="$t('views.AdminFeatureFlagsView.select_override')" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="null">{{ $t('views.AdminFeatureFlagsView.system_default') }}</SelectItem>
-            <SelectItem value="true">{{ $t('views.AdminFeatureFlagsView.force_enabled') }}</SelectItem>
-            <SelectItem value="false">{{ $t('views.AdminFeatureFlagsView.force_disabled') }}</SelectItem>
-          </SelectContent>
-        </Select>
+        <Select
+  aria-label="Form control"
+  v-model="overrideDialogValue"
+  :placeholder="$t('views.AdminFeatureFlagsView.select_override')"
+  :options="[{ value: 'null', label: $t('views.AdminFeatureFlagsView.system_default') }, { value: 'true', label: $t('views.AdminFeatureFlagsView.force_enabled') }, { value: 'false', label: $t('views.AdminFeatureFlagsView.force_disabled') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
       </div>
     </FormDialog>
   </div>
@@ -285,21 +269,9 @@ import { useDataFetch } from '../composables/useDataFetch'
 import { usePlanStore } from '../stores/planStore'
 import { formatApiError } from '../lib/api/formatError'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import { Button } from '../components/ui/button'
+import Button from 'primevue/button'
 import FormDialog from '../components/shared/FormDialog.vue'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '../components/ui/select'
-import {
-  TooltipProvider,
-  Tooltip,
-  TooltipTrigger,
-  TooltipContent,
-} from '../components/ui/tooltip'
+import Select from 'primevue/select'
 import { formatDateShort } from '../lib/formatDate'
 
 const planStore = usePlanStore()
@@ -428,6 +400,13 @@ watch(searchQuery, () => {
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr)
   return formatDateShort(d)
+}
+
+function flagTooltip(flag: FlagItem): string {
+  if (flag.depends_on && flag.depends_on.length > 0) {
+    return `${flag.description} Depends on ${flag.depends_on.join(', ')}`
+  }
+  return flag.description
 }
 
 watch(() => flagsResponse.value?.flags, (newFlags) => {

@@ -16,11 +16,11 @@
             <p class="mt-4 text-sm italic text-muted-foreground/60 select-none">no components in pipeline</p>
           </div>
           <div class="flex items-center gap-2 pointer-events-auto">
-            <Button variant="default" size="xs" @click="openRenameDialog">{{ $t('views.PipelineEditorView.rename') }}</Button>
+            <Button size="small" class="text-xs" @click="openRenameDialog">{{ $t('views.PipelineEditorView.rename') }}</Button>
             <button v-if="!pipeline?.archived_at" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleArchive">{{ $t('views.PipelineEditorView.archive') }}</button>
             <button v-else class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
             <button v-if="planStore.featureEnabled('pipeline_delete')" class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1 text-xs font-medium text-destructive hover:bg-destructive/20" @click="showDeleteConfirm = true">{{ $t('common.delete') }}</button>
-            <Button variant="outline" size="xs" @click="addNode">{{ $t('views.PipelineEditorView.add_node') }}</Button>
+            <Button severity="secondary" outlined size="small" class="text-xs" @click="addNode">{{ $t('views.PipelineEditorView.add_node') }}</Button>
           </div>
         </div>
         <!-- Toolbar -->
@@ -52,26 +52,12 @@
             </template>
           </div>
           <span class="mx-2 h-4 w-px bg-border" />
-          <Button
-            variant="default"
-            size="xs"
-            :disabled="savingGraph"
-            @click="saveGraph"
-            data-testid="pipeline-editor-save"
-          >
+          <Button size="small" class="text-xs" :disabled="savingGraph" @click="saveGraph" data-testid="pipeline-editor-save">
             <svg v-if="savingGraph" class="mr-1 h-3 w-3 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
             {{ savingGraph ? $t('views.PipelineEditorView.saving_graph') : $t('views.PipelineEditorView.save') }}
           </Button>
           <span v-if="saveGraphError" class="ml-2 text-xs text-destructive" data-testid="pipeline-editor-save-error">{{ saveGraphError }}</span>
-          <Button
-            variant="default"
-            size="xs"
-            class="border-indigo-300 bg-indigo-600 text-white hover:bg-indigo-500"
-            :disabled="running || flowNodes.length === 0"
-            :title="flowNodes.length === 0 ? $t('views.PipelineEditorView.no_nodes_to_run') : ''"
-            @click="openRunDialog"
-            data-testid="pipeline-editor-run"
-          >
+          <Button size="small" class="text-xs border-indigo-300 bg-indigo-600 text-white hover:bg-indigo-500" :disabled="running || flowNodes.length === 0" :title="flowNodes.length === 0 ? $t('views.PipelineEditorView.no_nodes_to_run') : ''" @click="openRunDialog" data-testid="pipeline-editor-run">
             <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" class="mr-1"><polygon points="5 3 19 12 5 21 5 3"/></svg>
             {{ running ? $t('views.PipelineEditorView.running') : $t('views.PipelineEditorView.run_pipeline') }}
           </Button>
@@ -225,7 +211,6 @@
             Fit View
           </button>
         </div>
-
         <!-- Run dialog modal -->
         <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
           v-if="showRunDialog"
@@ -243,15 +228,12 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
             </div>
-
             <p class="text-sm text-muted-foreground">
               Run <span class="font-medium text-foreground">{{ pipeline?.name }}</span>
             </p>
-
             <div v-if="isWebhookTriggered" class="rounded-lg bg-muted border p-3 text-sm text-muted-foreground">
               {{ $t('views.PipelineEditorView.webhook_triggered_info') }}
             </div>
-
             <div v-else class="space-y-2">
               <label for="pipeline-editor-run-prompt" class="block text-sm font-medium text-foreground">{{ $t('views.PipelineEditorView.prompt') }}</label>
               <textarea id="pipeline-editor-run-prompt"
@@ -262,15 +244,12 @@
                 data-testid="pipeline-editor-run-prompt"
               />
             </div>
-
             <div v-if="runError" class="rounded-lg bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive">
               {{ runError }}
             </div>
-
             <div v-if="emptyRunWarning" class="rounded-lg bg-warning/10 border border-warning/30 p-3 text-sm text-warning">
               {{ emptyRunWarning }}
             </div>
-
             <div class="flex justify-end gap-2 pt-2">
               <button
                 class="px-4 py-2 border border-input bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
@@ -278,14 +257,7 @@
               >
                 {{ $t('views.PipelineEditorView.cancel') }}
               </button>
-              <Button
-                v-if="!isWebhookTriggered"
-                variant="default"
-                class="border-indigo-300 bg-indigo-600 text-white hover:bg-indigo-500"
-                :disabled="running"
-                @click="triggerRun"
-                data-testid="pipeline-editor-run-submit"
-              >
+              <Button v-if="!isWebhookTriggered" class="border-indigo-300 bg-indigo-600 text-white hover:bg-indigo-500" :disabled="running" @click="triggerRun" data-testid="pipeline-editor-run-submit">
                 <svg
                   v-if="running"
                   class="animate-spin h-4 w-4 mr-1"
@@ -301,7 +273,6 @@
             </div>
           </div>
         </div>
-
         <VueFlow
           :key="pipelineId"
           v-model:nodes="flowNodes"
@@ -317,36 +288,14 @@
         >
           <Background :gap="20" :size="1" />
           <Controls :showInteractive="false" />
-          <template #node-manual="nodeProps">
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger as-child>
-                  <div class="rounded-lg border-2 border-warning/60 bg-warning/10 px-4 py-2 shadow-sm">
+          <template #node-manual="nodeProps"><div class="rounded-lg border-2 border-warning/60 bg-warning/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
                     <div class="text-xs font-medium text-warning">MANUAL</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent side="top" v-if="nodeProps.data.description">
-                  <div class="max-w-xs text-xs">{{ nodeProps.data.description }}</div>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          </template>
-          <template #node-agent="nodeProps">
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger as-child>
-                  <div class="rounded-lg border-2 border-primary/60 bg-primary/10 px-4 py-2 shadow-sm">
+                  </div></template>
+          <template #node-agent="nodeProps"><div class="rounded-lg border-2 border-primary/60 bg-primary/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
                     <div class="text-xs font-medium text-primary">AGENT</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent side="top" v-if="nodeProps.data.description">
-                  <div class="max-w-xs text-xs">{{ nodeProps.data.description }}</div>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          </template>
+                  </div></template>
           <template #edge-default="edgeProps">
             <div v-if="edgeProps.data?.hitl_gate_config" class="absolute -translate-y-4 translate-x-2">
               <span class="rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning">HITL</span>
@@ -364,7 +313,6 @@
           </template>
         </VueFlow>
       </div>
-
       <!-- Node Properties Panel -->
       <aside v-if="selectedNodeData && !selectedEdgeData" class="w-96 overflow-y-auto border-l bg-card p-4">
         <h2 class="mb-4 text-base font-semibold">{{ $t('views.PipelineEditorView.node_properties') }}</h2>
@@ -406,7 +354,6 @@
               data-testid="pipeline-editor-node-description"
             />
           </div>
-
           <!-- FAR-295: retry-safety indicator for every node type -->
           <div>
             <dt class="text-muted-foreground text-xs uppercase tracking-wider" data-testid="pipeline-editor-idempotent-label">{{ $t('views.PipelineEditorView.idempotent') }}</dt>
@@ -415,13 +362,11 @@
             </dd>
             <p class="mt-0.5 text-[11px] text-muted-foreground">{{ $t('views.PipelineEditorView.idempotent_description') }}</p>
           </div>
-
           <!-- Manual node: Output Schema -->
           <div v-if="selectedNodeData.node_type === 'manual' && selectedNodeData.output_schema_id">
             <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.output_schema') }}</dt>
             <dd class="font-medium">{{ schemaName(selectedNodeData.output_schema_id) || shortId(selectedNodeData.output_schema_id) }}</dd>
           </div>
-
           <!-- Agent node: Agent details -->
           <template v-if="(selectedNodeData.node_type === 'agent' || selectedNodeData.node_type === 'sandbox_agent') && selectedNodeData.agent_id">
             <div>
@@ -452,7 +397,6 @@
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.connector') }}</dt>
               <dd class="font-medium">{{ connectorName(selectedNodeData.connector_binding) }}</dd>
             </div>
-
             <!-- Parameter Schema + Set -->
             <div v-if="agentParamSchema(selectedNodeData.agent_id)">
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.param_schema') }}</dt>
@@ -552,8 +496,6 @@
               </dd>
             </div>
           </template>
-
-
           <!-- Sandbox Agent: template, command, env, context -->
           <template v-if="selectedNodeData.node_type === 'sandbox_agent'">
             <div v-if="selectedNodeData.template_id">
@@ -612,7 +554,6 @@
               <dd class="text-xs text-muted-foreground italic whitespace-pre-wrap max-h-32 overflow-y-auto">{{ selectedNodeData.agent_prompt.substring(0, 300) }}{{ selectedNodeData.agent_prompt.length > 300 ? '...' : '' }}</dd>
             </div>
           </template>
-
           <!-- Lifecycle maps -->
           <div v-if="linkedLifecycleMaps.length > 0">
             <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.lifecycle_maps') }}</dt>
@@ -625,15 +566,8 @@
             </dd>
           </div>
         </dl>
-
         <div class="mt-6 space-y-2">
-          <Button
-            v-if="selectedNodeData.node_type === 'manual'"
-            variant="default"
-            class="w-full"
-            data-testid="pipeline-editor-convert-to-agent"
-            @click="openAgentPicker"
-          >
+          <Button v-if="selectedNodeData.node_type === 'manual'" class="w-full" data-testid="pipeline-editor-convert-to-agent" @click="openAgentPicker">
             Convert to Agent
           </Button>
           <button
@@ -646,7 +580,6 @@
           </button>
         </div>
       </aside>
-
       <!-- Edge Properties Panel (with HITL gate config) -->
       <aside v-if="selectedEdgeData" class="w-96 overflow-y-auto border-l bg-card p-4">
         <h2 class="mb-4 text-base font-semibold">{{ $t('views.PipelineEditorView.edge_properties') }}</h2>
@@ -662,18 +595,19 @@
           <div>
             <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.type_label') }}</dt>
             <dd>
-              <Select aria-label="Edge type" v-model="edgeForm.edge_type">
-                <SelectTrigger aria-label="Edge type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
-                  <SelectValue placeholder="Normal" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="normal">{{ $t('views.PipelineEditorView.normal') }}</SelectItem>
-                  <SelectItem value="reject">{{ $t('views.PipelineEditorView.reject') }}</SelectItem>
-                  <SelectItem value="conditional">{{ $t('views.PipelineEditorView.conditional') }}</SelectItem>
-                  <SelectItem value="loop">{{ $t('views.PipelineEditorView.loop') }}</SelectItem>
-                  <SelectItem value="llm">{{ $t('views.PipelineEditorView.llm_routing') }}</SelectItem>
-                </SelectContent>
-              </Select>
+              <Select
+  aria-label="Edge type"
+  v-model="edgeForm.edge_type"
+  placeholder="Normal"
+  class="w-full"
+  :options="[{ value: 'normal', label: $t('views.PipelineEditorView.normal') }, { value: 'reject', label: $t('views.PipelineEditorView.reject') }, { value: 'conditional', label: $t('views.PipelineEditorView.conditional') }, { value: 'loop', label: $t('views.PipelineEditorView.loop') }, { value: 'llm', label: $t('views.PipelineEditorView.llm_routing') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
             </dd>
           </div>
           <div>
@@ -713,9 +647,7 @@
             </dd>
           </div>
         </dl>
-
         <hr class="my-4 border-t" />
-
         <div class="flex items-center justify-between">
           <h3 class="text-sm font-semibold">HITL Gate</h3>
           <label for="pipelineeditorview-field-15" class="inline-flex cursor-pointer items-center">
@@ -727,7 +659,6 @@
             <span class="ml-2 text-xs text-muted-foreground">{{ $t('views.PipelineEditorView.enabled') }}</span>
           </label>
         </div>
-
         <div v-if="edgeForm.hitl_enabled" class="mt-4 space-y-4">
           <div>
             <label for="pipelineeditorview-field-14" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.label') }}</label>
@@ -764,23 +695,23 @@
             />
             <span class="text-xs text-muted-foreground">{{ $t('views.PipelineEditorView.human_only_block_llm_auto_approval') }}</span>
           </div>
-
           <hr class="border-t" />
-
           <div>
             <label for="pipelineeditorview-field-11" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.condition_type') }}</label>
-            <Select aria-label="Condition type" v-model="edgeForm.condition_type">
-              <SelectTrigger aria-label="Condition type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
-                <SelectValue placeholder="None (always gate)" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">{{ $t('views.PipelineEditorView.none_always_gate') }}</SelectItem>
-                <SelectItem value="jmespath">{{ $t('views.PipelineEditorView.jmespath_expression') }}</SelectItem>
-                <SelectItem value="eval">{{ $t('views.PipelineEditorView.eval_reference') }}</SelectItem>
-              </SelectContent>
-            </Select>
+            <Select
+  aria-label="Condition type"
+  v-model="edgeForm.condition_type"
+  placeholder="None (always gate)"
+  class="w-full"
+  :options="[{ value: 'none', label: $t('views.PipelineEditorView.none_always_gate') }, { value: 'jmespath', label: $t('views.PipelineEditorView.jmespath_expression') }, { value: 'eval', label: $t('views.PipelineEditorView.eval_reference') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
           </div>
-
           <div v-if="edgeForm.condition_type === 'jmespath'">
             <label for="pipelineeditorview-field-10" class="mb-1 block text-xs font-medium text-muted-foreground">JMESPath Condition</label>
             <input id="pipelineeditorview-field-10"
@@ -792,7 +723,6 @@
               Evaluated against pipeline state. If truthy, gate activates.
             </p>
           </div>
-
           <div v-if="edgeForm.condition_type === 'eval'" class="space-y-3">
             <div>
               <label for="pipelineeditorview-field-9" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.eval_name') }}</label>
@@ -816,33 +746,27 @@
               </div>
               <div class="flex-1">
                 <label for="pipelineeditorview-field-7" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.operator') }}</label>
-                <Select aria-label="Operator" v-model="edgeForm.eval_operator">
-                  <SelectTrigger aria-label="Operator" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
-                    <SelectValue placeholder="lt (score &lt; threshold)" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="lt">lt (score &lt; threshold)</SelectItem>
-                    <SelectItem value="gt">gt (score &gt; threshold)</SelectItem>
-                    <SelectItem value="lte">lte (score &le; threshold)</SelectItem>
-                    <SelectItem value="gte">gte (score &ge; threshold)</SelectItem>
-                    <SelectItem value="eq">eq (score == threshold)</SelectItem>
-                    <SelectItem value="neq">neq (score != threshold)</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Select
+  aria-label="Operator"
+  v-model="edgeForm.eval_operator"
+  placeholder="lt (score &lt; threshold)"
+  class="w-full"
+  :options="[{ value: 'lt', label: 'lt (score < threshold)' }, { value: 'gt', label: 'gt (score > threshold)' }, { value: 'lte', label: 'lte (score ≤ threshold)' }, { value: 'gte', label: 'gte (score ≥ threshold)' }, { value: 'eq', label: 'eq (score == threshold)' }, { value: 'neq', label: 'neq (score != threshold)' }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
               </div>
             </div>
             <p class="mt-1 text-[10px] text-muted-foreground">
               If condition is true, gate fires. If false, gate is skipped.
             </p>
           </div>
-
           <div class="flex gap-2 pt-2">
-            <Button
-              data-testid="pipeline-editor-save-edge"
-              class="flex-1"
-              :disabled="savingEdge"
-              @click="saveEdgeConfig"
-            >
+            <Button data-testid="pipeline-editor-save-edge" class="flex-1" :disabled="savingEdge" @click="saveEdgeConfig">
               {{ savingEdge ? 'Saving...' : 'Save Edge' }}
             </Button>
             <button
@@ -858,7 +782,6 @@
         </div>
       </aside>
     </template>
-
     <FormDialog
       :open="showAgentPicker"
       @update:open="showAgentPicker = false"
@@ -870,27 +793,38 @@
       <div class="space-y-4">
           <div>
             <label for="pipelineeditorview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.agent') }}</label>
-            <Select aria-label="Agent" v-model="pickerAgentId" @update:model-value="onAgentChange">
-              <SelectTrigger data-testid="pipeline-editor-agent-select" aria-label="Agent" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
-                <SelectValue :placeholder="$t('views.PipelineEditorView.select_agent_placeholder')" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__all__">{{ $t('common.none') }}</SelectItem>
-                <SelectItem v-for="a in agents" :key="a.id" :value="a.id">{{ a.name }}</SelectItem>
-              </SelectContent>
-            </Select>
+            <Select
+  aria-label="Agent"
+  v-model="pickerAgentId"
+  @update:model-value="onAgentChange"
+  :placeholder="$t('views.PipelineEditorView.select_agent_placeholder')"
+  data-testid="pipeline-editor-agent-select"
+  class="w-full"
+  :options="[{ value: '__all__', label: $t('common.none') }, ...agents.map(a => ({ value: a.id, label: a.name }))]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
           </div>
           <div v-if="selectedAgent">
             <label for="pipelineeditorview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.connector') }}</label>
-            <Select aria-label="Connector" v-model="pickerConnectorId">
-              <SelectTrigger data-testid="pipeline-editor-connector-select" aria-label="Connector" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
-                <SelectValue :placeholder="$t('views.PipelineEditorView.select_connector_placeholder')" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__all__">{{ $t('common.none') }}</SelectItem>
-                <SelectItem v-for="c in eligibleConnectors" :key="c.id" :value="c.id">{{ c.name }} ({{ c.connector_type_id }})</SelectItem>
-              </SelectContent>
-            </Select>
+            <Select
+  aria-label="Connector"
+  v-model="pickerConnectorId"
+  :placeholder="$t('views.PipelineEditorView.select_connector_placeholder')"
+  data-testid="pipeline-editor-connector-select"
+  class="w-full"
+  :options="[{ value: '__all__', label: $t('common.none') }, ...eligibleConnectors.map(c => ({ value: c.id, label: c.name + '(' + c.connector_type_id + ')' }))]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
           </div>
           <div v-if="selectedAgent">
             <span class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.model_backend_label') }}</span>
@@ -903,14 +837,11 @@
             <p class="mt-0.5 font-medium">Input: {{ agentSchemaName(selectedAgent, 'input') }}</p>
             <p class="font-medium">Output: {{ agentSchemaName(selectedAgent, 'output') }}</p>
           </div>
-
           <div v-if="convertError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
             {{ convertError }}
           </div>
-
       </div>
     </FormDialog>
-
     <FormDialog
       :open="showRevertDialog"
       @update:open="showRevertDialog = false"
@@ -928,29 +859,26 @@
         </p>
         <div>
           <label for="pipelineeditorview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.snapshot_label') }}</label>
-          <Select aria-label="Snapshot" v-model="revertSnapshotId">
-            <SelectTrigger data-testid="pipeline-editor-snapshot-select" aria-label="Snapshot" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
-              <SelectValue :placeholder="$t('views.PipelineEditorView.select_snapshot_placeholder')" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__all__">{{ $t('common.none') }}</SelectItem>
-              <SelectItem
-                v-for="s in snapshots"
-                :key="s.id"
-                :value="s.id"
-              >
-                v{{ s.snapshot_version }}{{ s.tag ? ` — ${s.tag}` : '' }}
-              </SelectItem>
-            </SelectContent>
-          </Select>
+          <Select
+  aria-label="Snapshot"
+  v-model="revertSnapshotId"
+  :placeholder="$t('views.PipelineEditorView.select_snapshot_placeholder')"
+  data-testid="pipeline-editor-snapshot-select"
+  class="w-full"
+  :options="[{ value: '__all__', label: $t('common.none') }, ...snapshots.map(s => ({ value: s.id, label: 'v' + s.snapshot_version + (s.tag ? ` — ${s.tag}` : '') }))]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
         </div>
-
         <div v-if="revertError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
           {{ revertError }}
         </div>
       </div>
     </FormDialog>
-
     <FormDialog
       :open="showSaveAsComposite"
       @update:open="showSaveAsComposite = false"
@@ -1005,7 +933,6 @@
         </div>
       </div>
     </FormDialog>
-
     <FormDialog
       :open="showRenameDialog"
       @update:open="showRenameDialog = false"
@@ -1030,7 +957,6 @@
         </div>
       </div>
     </FormDialog>
-
     <FormDialog
       :open="showDeleteConfirm"
       @update:open="showDeleteConfirm = false"
@@ -1047,7 +973,6 @@
     </FormDialog>
   </div>
 </template>
-
 <script setup lang="ts">
 import { ref, computed, reactive, watch, nextTick, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -1065,9 +990,8 @@ import FormDialog from '../components/shared/FormDialog.vue'
 import { shortId } from '../utils/format'
 import { api } from '../lib/api/client'
 import { useApi } from '../composables/useApi'
-import { Button } from '@/components/ui/button'
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import Button from 'primevue/button'
+import Select from 'primevue/select'
 
 function withTimeout<T>(factory: (signal: AbortSignal) => Promise<T>, ms = 15000): Promise<T> {
   const ctrl = new AbortController()

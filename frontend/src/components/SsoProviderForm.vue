@@ -219,25 +219,26 @@
 
     <div>
       <label for="ssoproviderform-field-1" class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.default_role') }}</label>
-      <Select :aria-label="$t('components.SsoProviderForm.default_role')" :model-value="data.default_role" @update:model-value="(val) => emitUpdate({...data, default_role: val as string})">
-        <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" :aria-label="$t('components.SsoProviderForm.default_role')">
-          <SelectValue :placeholder="$t('components.SsoProviderForm.default_role')" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="runner">{{ $t('components.SsoProviderForm.role_runner') }}</SelectItem>
-          <SelectItem value="operator">{{ $t('components.SsoProviderForm.role_operator') }}</SelectItem>
-        </SelectContent>
-      </Select>
+      <Select
+  :aria-label="$t('components.SsoProviderForm.default_role')"
+  :model-value="data.default_role"
+  @update:model-value="(val) => emitUpdate({...data, default_role: val as string})"
+  :placeholder="$t('components.SsoProviderForm.default_role')"
+  class="w-full"
+  :options="[{ value: 'runner', label: $t('components.SsoProviderForm.role_runner') }, { value: 'operator', label: $t('components.SsoProviderForm.role_operator') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
     </div>
 
     <div v-if="error" class="text-sm text-destructive">{{ error }}</div>
 
     <div class="flex items-center gap-2">
-      <Button
-        :disabled="!data.name.trim() || saving"
-        variant="default"
-        @click="$emit('submit')"
-      >
+      <Button :disabled="!data.name.trim() || saving" @click="$emit('submit')">
         {{ saving ? savingLabel : submitLabel }}
       </Button>
       <button
@@ -251,8 +252,8 @@
 </template>
 
 <script setup lang="ts">
-import { Button } from '@/components/ui/button'
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import Button from 'primevue/button'
+import Select from 'primevue/select'
 
 interface SsoFormState {
   provider_type: string;

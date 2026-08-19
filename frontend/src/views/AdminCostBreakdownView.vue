@@ -17,37 +17,29 @@
       <template v-else>
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <Card>
-            <CardHeader>
-              <CardTitle class="text-sm font-medium text-muted-foreground">{{ $t('views.AdminCostBreakdownView.total_spend_this_month') }}</CardTitle>
-            </CardHeader>
-            <CardContent>
+            <template #title><span class="text-sm font-medium text-muted-foreground">{{ $t('views.AdminCostBreakdownView.total_spend_this_month') }}</span></template>
+            <template #content>
               <p class="text-2xl font-semibold tabular-nums" data-testid="cost-total-spend">{{ formatMoney(totalSpend, currencyCode) }}</p>
-            </CardContent>
+            </template>
           </Card>
           <Card>
-            <CardHeader>
-              <CardTitle class="text-sm font-medium text-muted-foreground">{{ $t('views.AdminCostBreakdownView.avg_cost_per_run') }}</CardTitle>
-            </CardHeader>
-            <CardContent>
+            <template #title><span class="text-sm font-medium text-muted-foreground">{{ $t('views.AdminCostBreakdownView.avg_cost_per_run') }}</span></template>
+            <template #content>
               <p class="text-2xl font-semibold tabular-nums" data-testid="cost-avg-per-run">{{ formatMoney(avgCostPerRun, currencyCode) }}</p>
-            </CardContent>
+            </template>
           </Card>
           <Card>
-            <CardHeader>
-              <CardTitle class="text-sm font-medium text-muted-foreground">{{ $t('views.AdminCostBreakdownView.total_runs') }}</CardTitle>
-            </CardHeader>
-            <CardContent>
+            <template #title><span class="text-sm font-medium text-muted-foreground">{{ $t('views.AdminCostBreakdownView.total_runs') }}</span></template>
+            <template #content>
               <p class="text-2xl font-semibold tabular-nums" data-testid="cost-total-runs">{{ totalRuns }}</p>
-            </CardContent>
+            </template>
           </Card>
         </div>
 
         <Card>
-          <CardHeader>
-            <CardTitle>{{ $t('views.AdminCostBreakdownView.per_team_cost_breakdown') }}</CardTitle>
-            <CardDescription>{{ $t('views.AdminCostBreakdownView.monthly_spend_run_count_and_avg_by_team') }}</CardDescription>
-          </CardHeader>
-          <CardContent>
+          <template #title>{{ $t('views.AdminCostBreakdownView.per_team_cost_breakdown') }}</template>
+          <template #subtitle>{{ $t('views.AdminCostBreakdownView.monthly_spend_run_count_and_avg_by_team') }}</template>
+          <template #content>
             <div v-if="items.length === 0" class="py-4 text-center text-sm text-muted-foreground">
               {{ $t('views.AdminCostBreakdownView.no_team_cost_data_available') }}
             </div>
@@ -81,15 +73,13 @@
                 </template>
               </DataTable>
             </div>
-          </CardContent>
+          </template>
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle>{{ $t('views.AdminCostBreakdownView.cost_anomaly_alerts') }}</CardTitle>
-            <CardDescription>{{ $t('views.AdminCostBreakdownView.days_where_spend_exceeded_2x_avg') }}</CardDescription>
-          </CardHeader>
-          <CardContent>
+          <template #title>{{ $t('views.AdminCostBreakdownView.cost_anomaly_alerts') }}</template>
+          <template #subtitle>{{ $t('views.AdminCostBreakdownView.days_where_spend_exceeded_2x_avg') }}</template>
+          <template #content>
             <LoadingSpinner v-if="anomaliesLoading" />
             <div v-else-if="anomaliesError" class="text-sm text-destructive">{{ anomaliesError }}</div>
             <div v-else-if="anomalies.length === 0" class="py-4 text-center text-sm text-muted-foreground">
@@ -110,7 +100,7 @@
                     {{ anomaly.percent_above > 0 ? '+' : '' }}{{ anomaly.percent_above.toFixed(0) }}% above)
                   </p>
                 </div>
-                <Button size="sm" variant="outline" :disabled="dismissLoading[anomaly.id]" :data-testid="'cost-anomaly-dismiss-' + anomaly.id" @click="dismissAnomaly(anomaly.id)">
+                <Button size="small" severity="secondary" outlined :disabled="dismissLoading[anomaly.id]" :data-testid="'cost-anomaly-dismiss-' + anomaly.id" @click="dismissAnomaly(anomaly.id)">
                   {{ dismissLoading[anomaly.id] ? '...' : $t('views.AdminCostBreakdownView.dismiss') }}
                 </Button>
               </div>
@@ -118,7 +108,7 @@
                 {{ dismissedAnomalies.length }} dismissed anomaly{{ dismissedAnomalies.length === 1 ? '' : 'ies' }}
               </p>
             </div>
-          </CardContent>
+          </template>
         </Card>
       </template>
       </div>
@@ -136,8 +126,8 @@ import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card'
-import { Button } from '../components/ui/button'
+import Card from 'primevue/card'
+import Button from 'primevue/button'
 import { DataTable } from '../components/ui/data-table'
 import PageTabs from "../components/PageTabs.vue"
 import { formatMoney } from '../lib/money'

@@ -18,28 +18,27 @@
       />
     </div>
     <Select
-      :aria-label="filter.label"
-      v-for="filter in selectFilters"
-      :key="filter.key"
-      :model-value="(filterValues[filter.key] ?? '') || '__all__'"
-      @update:model-value="(val) => $emit('update:filter', filter.key, val === '__all__' ? '' : String(val))"
-    >
-      <SelectTrigger
-        class="w-auto min-w-[140px]"
-        :aria-label="filter.label"
-        :data-testid="`filter-bar-${filter.key}`"
-      >
-        <SelectValue :placeholder="filter.label" />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectLabel v-if="showLabel(filter)">{{ filter.label }}</SelectLabel>
-        <SelectItem value="__all__">{{ allLabel(filter) }}</SelectItem>
-        <SelectSeparator v-if="filter.options.length" />
-        <SelectItem v-for="opt in filter.options" :key="opt.value" :value="opt.value">
-          {{ opt.label }}
-        </SelectItem>
-      </SelectContent>
-    </Select>
+  :aria-label="filter.label"
+  v-for="filter in selectFilters"
+  :key="filter.key"
+  :model-value="(filterValues[filter.key] ?? '') || '__all__'"
+  @update:model-value="(val) => $emit('update:filter', filter.key, val === '__all__' ? '' : String(val))"
+  :placeholder="filter.label"
+  :data-testid="`filter-bar-${filter.key}`"
+  class="w-auto min-w-[140px]"
+  :options="[{ value: '__all__', label: allLabel(filter) }, ...filter.options.map(opt => ({ value: opt.value, label: opt.label }))]"
+  option-label="label"
+  option-value="value"
+>
+  <template #header
+ v-if="showLabel(filter)"
+>
+{{ filter.label }}
+  </template>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
     <slot name="after" />
   </div>
 </template>
@@ -47,7 +46,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Select, SelectContent, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select'
+import Select from 'primevue/select'
 
 const props = defineProps<{
   search?: { placeholder?: string }

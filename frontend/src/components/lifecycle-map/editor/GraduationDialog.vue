@@ -1,79 +1,88 @@
 <template>
-  <Dialog :open="open" @update:open="$emit('close')">
-    <DialogContent class="sm:max-w-lg">
-      <DialogHeader>
-        <DialogTitle>{{ $t('components.lifecycle-map.editor.GraduationDialog.graduate_stage') }}</DialogTitle>
-        <DialogDescription>
+  <Dialog :visible="open" :modal="true" :dismissable-mask="true" class="sm:max-w-lg" @update:visible="$emit('close')">
+    <template #header>
+      <div>
+        <div class="text-lg font-semibold">{{ $t('components.lifecycle-map.editor.GraduationDialog.graduate_stage') }}</div>
+        <div class="mt-0.5 text-sm text-muted-foreground">
           {{ $t('components.lifecycle-map.editor.GraduationDialog.graduating_stage_prefix') }} <strong>{{ stageName }}</strong> {{ $t('components.lifecycle-map.editor.GraduationDialog.graduating_stage_suffix') }}
-        </DialogDescription>
-      </DialogHeader>
-
-      <div class="space-y-4 py-2">
-        <div v-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-          {{ error }}
-        </div>
-
-        <div>
-          <label for="graduationdialog-field-2" class="mb-2 flex items-center gap-2 text-sm font-medium">
-            <input id="graduationdialog-field-2"
-              v-model="mode"
-              type="radio"
-              value="existing"
-              class="h-4 w-4 accent-primary"
-            />
-            Link to existing pipeline
-          </label>
-          <Select aria-label="Select pipeline" v-if="mode === 'existing'" v-model="selectedPipelineId">
-            <SelectTrigger class="ml-6 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Select pipeline">
-              <SelectValue placeholder="Select a pipeline..." />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div>
-          <label for="graduationdialog-field-1" class="mb-2 flex items-center gap-2 text-sm font-medium">
-            <input id="graduationdialog-field-1"
-              v-model="mode"
-              type="radio"
-              value="new"
-              class="h-4 w-4 accent-primary"
-            />
-            Create new pipeline from template
-          </label>
-          <Select aria-label="Select template" v-if="mode === 'new'" v-model="selectedTemplateId">
-            <SelectTrigger class="ml-6 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Select template">
-              <SelectValue placeholder="Select a template..." />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="simple-sequential">{{ $t('components.lifecycle-map.editor.GraduationDialog.simple_sequential') }}</SelectItem>
-              <SelectItem value="hierarchical">{{ $t('components.lifecycle-map.editor.GraduationDialog.hierarchical_agent') }}</SelectItem>
-              <SelectItem value="parallel">{{ $t('components.lifecycle-map.editor.GraduationDialog.parallel_processing') }}</SelectItem>
-            </SelectContent>
-          </Select>
         </div>
       </div>
+    </template>
 
-      <DialogFooter>
-        <Button variant="outline" @click="$emit('close')">{{ $t('common.cancel') }}</Button>
-        <Button
-          :disabled="!canGraduate || graduating"
-          @click="handleGraduate"
-        >
+    <div class="space-y-4 py-2">
+      <div v-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+        {{ error }}
+      </div>
+
+      <div>
+        <label for="graduationdialog-field-2" class="mb-2 flex items-center gap-2 text-sm font-medium">
+          <input id="graduationdialog-field-2"
+            v-model="mode"
+            type="radio"
+            value="existing"
+            class="h-4 w-4 accent-primary"
+          />
+          Link to existing pipeline
+        </label>
+        <Select
+  aria-label="Select pipeline"
+  v-if="mode === 'existing'"
+  v-model="selectedPipelineId"
+  placeholder="Select a pipeline..."
+  class="ml-6 w-full"
+  :options="pipelines.map(p => ({ value: p.id, label: p.name }))"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
+      </div>
+
+      <div>
+        <label for="graduationdialog-field-1" class="mb-2 flex items-center gap-2 text-sm font-medium">
+          <input id="graduationdialog-field-1"
+            v-model="mode"
+            type="radio"
+            value="new"
+            class="h-4 w-4 accent-primary"
+          />
+          Create new pipeline from template
+        </label>
+        <Select
+  aria-label="Select template"
+  v-if="mode === 'new'"
+  v-model="selectedTemplateId"
+  placeholder="Select a template..."
+  class="ml-6 w-full"
+  :options="[{ value: 'simple-sequential', label: $t('components.lifecycle-map.editor.GraduationDialog.simple_sequential') }, { value: 'hierarchical', label: $t('components.lifecycle-map.editor.GraduationDialog.hierarchical_agent') }, { value: 'parallel', label: $t('components.lifecycle-map.editor.GraduationDialog.parallel_processing') }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
+      </div>
+    </div>
+
+    <template #footer>
+      <div class="flex gap-2 justify-end">
+        <Button severity="secondary" outlined @click="$emit('close')">{{ $t('common.cancel') }}</Button>
+        <Button :disabled="!canGraduate || graduating" @click="handleGraduate">
           {{ graduating ? 'Graduating...' : 'Graduate Stage' }}
         </Button>
-      </DialogFooter>
-    </DialogContent>
+      </div>
+    </template>
   </Dialog>
 </template>
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Button } from '@/components/ui/button'
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import Dialog from 'primevue/dialog'
+import Button from 'primevue/button'
+import Select from 'primevue/select'
 import type { PipelineSummary } from '../../../types/lifecycleMap'
 
 const props = defineProps<{

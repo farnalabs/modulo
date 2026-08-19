@@ -4,12 +4,7 @@
 
       <header class="flex items-center justify-between">
         <PageHeader title="Environment Profiles" subtitle="Manage sandbox environment profiles for code execution" />
-        <Button
-          variant="default"
-           class="border-primary/30 hover:border-primary/60"
-          data-testid="admin-envprofiles-add"
-          @click="openAddForm"
-        >
+        <Button class="border-primary/30 hover:border-primary/60" data-testid="admin-envprofiles-add" @click="openAddForm">
           Create Profile
         </Button>
       </header>
@@ -45,16 +40,20 @@
               </div>
               <div>
                 <label for="adminenvironmentprofilesview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.AdminEnvironmentProfilesView.provider_type') }}</label>
-                <Select aria-label="Provider type" v-model="formData.provider_type">
-                  <SelectTrigger data-testid="admin-envprofiles-provider-select" aria-label="Provider type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
-                    <SelectValue placeholder="E2B" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="e2b">E2B</SelectItem>
-                    <SelectItem value="docker">{{ $t('views.AdminEnvironmentProfilesView.docker') }}</SelectItem>
-                    <SelectItem value="custom">Custom / None</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Select
+  aria-label="Provider type"
+  v-model="formData.provider_type"
+  placeholder="E2B"
+  data-testid="admin-envprofiles-provider-select"
+  class="w-full"
+  :options="[{ value: 'e2b', label: 'E2B' }, { value: 'docker', label: $t('views.AdminEnvironmentProfilesView.docker') }, { value: 'custom', label: 'Custom / None' }]"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
               </div>
               <div v-if="formData.provider_type === 'custom'">
                 <label for="adminenvironmentprofilesview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.AdminEnvironmentProfilesView.image_reference') }}</label>
@@ -148,12 +147,7 @@
               </div>
               <div v-if="formError" class="text-sm text-destructive">{{ formError }}</div>
               <div class="flex items-center gap-2">
-              <Button
-                :disabled="saving || !formData.name.trim()"
-                type="submit"
-                variant="default"
-                :data-testid="`admin-envprofiles-${formMode === 'add' ? 'submit' : 'save'}`"
-              >
+              <Button :disabled="saving || !formData.name.trim()" type="submit" :data-testid="`admin-envprofiles-${formMode === 'add' ? 'submit' : 'save'}`">
                 {{ saving ? 'Saving...' : (formMode === 'add' ? 'Create' : 'Save') }}
               </Button>
                 <button
@@ -258,12 +252,7 @@
           <p class="text-sm font-medium text-destructive">Delete "{{ deleteConfirmName }}"?</p>
           <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminEnvironmentProfilesView.this_action_cannot_be_undone') }}</p>
           <div class="mt-3 flex items-center gap-2">
-          <Button
-            :disabled="deleting"
-            variant="destructive"
-            data-testid="admin-envprofiles-delete-confirm"
-            @click="deleteProfile"
-          >
+          <Button :disabled="deleting" severity="danger" data-testid="admin-envprofiles-delete-confirm" @click="deleteProfile">
             {{ deleting ? 'Deleting...' : 'Delete' }}
           </Button>
             <button
@@ -291,8 +280,8 @@ import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
-import { Button } from '@/components/ui/button'
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import Button from 'primevue/button'
+import Select from 'primevue/select'
 import TableActions from '../components/shared/TableActions.vue'
 import { formatDateShort } from '../lib/formatDate'
 
