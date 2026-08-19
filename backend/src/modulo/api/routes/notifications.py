@@ -26,7 +26,7 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
 _CODE_NOTIFICATION_VIEW = "notification.view"
-_CODE_NOTIFICATION_MANAGE = "notification.endpoint.manage"
+_CODE_NOTIFICATION_MANAGE = "notification.manage"
 _CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING = "notifications.endpoint_table_missing"
 _MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN = (
     "Notifications are not available. Run database migrations to enable this feature."

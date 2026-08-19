@@ -102,6 +102,33 @@ def free_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
+@pytest.fixture
+def viewer_client() -> Generator[TestClient, None, None]:
+    """Client with a viewer role — observability config manage is operator-gated."""
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = lambda: _make_settings()
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="viewer",
+        organisation_id=_ORG_UUID,
+        account_id=_USER_UUID,
+        org_role="viewer",
+    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="viewer", organisation_id=_ORG_UUID, account_id=_USER_UUID, org_role="viewer"
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
 class TestObservabilityCache:
     def test_cache_returns_copy_not_reference(self) -> None:
         config = {"otlp_endpoint": "http://collector:4318"}
@@ -321,6 +348,14 @@ class TestObservabilityPreviewEndpoint:
 
 class TestObservabilityPutEndpoint:
     """Test PUT endpoint re-raises TimeoutError and generic errors."""
+
+    def test_put_viewer_gets_403(self, viewer_client: TestClient) -> None:
+        """A viewer cannot update observability config (observability.manage floor)."""
+        resp = viewer_client.put(
+            "/api/v1/settings/observability",
+            json={"otlp_endpoint": "http://e:4318"},
+        )
+        assert resp.status_code == 403
 
     def test_put_returns_501_on_programming_error(self, free_client: TestClient) -> None:
         with (

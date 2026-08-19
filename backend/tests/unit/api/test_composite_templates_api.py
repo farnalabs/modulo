@@ -97,6 +97,35 @@ def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
+@pytest.fixture
+def viewer_client() -> Generator[TestClient, None, None]:
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="viewer",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="viewer",
+    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="viewer",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="viewer",
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
 class TestListCompositeTemplates:
     def test_returns_200(self, client: TestClient) -> None:
         page_result = MagicMock(items=[_make_template()], total=1, page=1, page_size=20)
@@ -295,3 +324,37 @@ class TestDeleteCompositeTemplate:
         ):
             resp = client.delete(f"/api/v1/composite-templates/{uuid.uuid4()}")
         assert resp.status_code == 404
+
+
+class TestCompositeOperatorFloor:
+    """SECURITY #1461 — composite-template CRUD + editor + publish are operator+ only."""
+
+    def test_create_viewer_gets_403(self, viewer_client: TestClient) -> None:
+        resp = viewer_client.post(
+            "/api/v1/composite-templates",
+            json={
+                "name": "Test",
+                "sub_pipeline_graph_json": {"nodes": [], "edges": []},
+                "parameter_ports_json": [],
+            },
+        )
+        assert resp.status_code == 403
+
+    def test_update_viewer_gets_403(self, viewer_client: TestClient) -> None:
+        resp = viewer_client.patch(f"/api/v1/composite-templates/{_TEMPLATE_ID}", json={"name": "x"})
+        assert resp.status_code == 403
+
+    def test_delete_viewer_gets_403(self, viewer_client: TestClient) -> None:
+        resp = viewer_client.delete(f"/api/v1/composite-templates/{_TEMPLATE_ID}")
+        assert resp.status_code == 403
+
+    def test_restore_viewer_gets_403(self, viewer_client: TestClient) -> None:
+        resp = viewer_client.post(f"/api/v1/composite-templates/{_TEMPLATE_ID}/restore")
+        assert resp.status_code == 403
+
+    def test_publish_viewer_gets_403(self, viewer_client: TestClient) -> None:
+        resp = viewer_client.post(
+            f"/api/v1/composite-templates/{_TEMPLATE_ID}/publish",
+            json={},
+        )
+        assert resp.status_code == 403

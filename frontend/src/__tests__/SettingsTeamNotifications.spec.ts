@@ -2,6 +2,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
+function adminJwt(): string {
+  const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))
+  const payload = btoa(
+    JSON.stringify({
+      sub: 'test@example.com',
+      org_id: '00000000-0000-0000-0000-000000000001',
+      org_role: 'admin',
+    }),
+  )
+  return `${header}.${payload}.signature`
+}
+
 const mockEndpoints = [
   {
     id: 'ep-1',
@@ -44,7 +56,7 @@ vi.mock('../lib/api/client', () => ({
     PUT: vi.fn().mockResolvedValue({ data: null, error: undefined }),
     DELETE: vi.fn().mockResolvedValue({ response: { status: 204, ok: true }, error: undefined }),
   },
-  getAccessToken: vi.fn().mockReturnValue('mock-token'),
+  getAccessToken: vi.fn().mockReturnValue(adminJwt()),
 }))
 
 import TeamNotificationEndpoints from '../components/TeamNotificationEndpoints.vue'

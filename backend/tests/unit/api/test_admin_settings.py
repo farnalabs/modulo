@@ -269,6 +269,9 @@ class TestUserUpdate:
         fake_account.active = True
         fake_account.is_break_glass = False
 
+        fake_membership = MagicMock()
+        fake_membership.role = "runner"
+
         with (
             patch(
                 "modulo.api.routes.admin.get_account_by_id",
@@ -277,6 +280,10 @@ class TestUserUpdate:
             patch(
                 "modulo.api.routes.admin.assert_not_last_admin",
                 AsyncMock(),
+            ),
+            patch(
+                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                AsyncMock(return_value=fake_membership),
             ),
         ):
             resp = client.put(f"{self.URL}/{self.TARGET_ID}", json={"org_role": "operator"})
@@ -393,7 +400,7 @@ class TestUserReactivate:
                 AsyncMock(return_value=fake_account),
             ),
             patch(
-                "modulo.db.crud.org_membership.get_membership_by_account_and_org",
+                "modulo.api.routes.admin.get_membership_by_account_and_org",
                 AsyncMock(return_value=fake_membership),
             ),
             patch(

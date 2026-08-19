@@ -88,6 +88,28 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
+@pytest.fixture
+def viewer_client() -> Generator[TestClient, None, None]:
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="viewer", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
+    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="viewer", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
 def test_list_endpoints_returns_200(client: TestClient) -> None:
     ep = _make_mock_endpoint()
     with (
@@ -446,3 +468,34 @@ def test_notifications_unauthenticated_returns_4xx(client: TestClient) -> None:
         username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
     )
     assert resp.status_code in (401, 403)
+
+
+# ---------------------------------------------------------------------------
+# SECURITY #1462 — notification.* CRUD requires notification.manage (operator)
+# ---------------------------------------------------------------------------
+
+
+def test_create_endpoint_viewer_gets_403(viewer_client: TestClient) -> None:
+    resp = viewer_client.post(
+        "/api/v1/notifications",
+        json={"url": "https://hooks.example.com/notify", "events": ["hitl.review_required"]},
+    )
+    assert resp.status_code == 403
+
+
+def test_update_endpoint_viewer_gets_403(viewer_client: TestClient) -> None:
+    resp = viewer_client.put(
+        f"/api/v1/notifications/{_ENDPOINT_ID}",
+        json={"url": "https://updated.example.com/hook"},
+    )
+    assert resp.status_code == 403
+
+
+def test_delete_endpoint_viewer_gets_403(viewer_client: TestClient) -> None:
+    resp = viewer_client.delete(f"/api/v1/notifications/{_ENDPOINT_ID}")
+    assert resp.status_code == 403
+
+
+def test_restore_endpoint_viewer_gets_403(viewer_client: TestClient) -> None:
+    resp = viewer_client.post(f"/api/v1/notifications/{_ENDPOINT_ID}/restore")
+    assert resp.status_code == 403

@@ -391,6 +391,7 @@ async def get_notification_detail(
                 session=session,
                 org_id=principal.organisation_id,
                 notification_id=notification_id,
+                user_id=principal.account_id,
             )
             if n is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found")

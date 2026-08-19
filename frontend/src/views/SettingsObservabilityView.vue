@@ -37,7 +37,7 @@
         <div class="rounded-lg border bg-card p-6 shadow-sm">
           <div class="mb-4 flex items-center justify-between">
             <h2 class="text-base font-semibold">{{ $t('views.SettingsObservabilityView.otlp_headers') }}</h2>
-            <Button size="small" type="button" data-testid="settings-observability-add-header" @click="addHeader">
+            <Button v-if="canManage" size="small" type="button" data-testid="settings-observability-add-header" @click="addHeader">
               {{ $t('views.SettingsObservabilityView.add_header') }}
             </Button>
           </div>
@@ -62,6 +62,7 @@
               :placeholder="$t('views.SettingsObservabilityView.header_value')"
             />
             <button
+              v-if="canManage"
               type="button"
               class="rounded p-1 text-destructive hover:bg-destructive/10"
               data-testid="settings-observability-remove-header"
@@ -156,7 +157,7 @@
           <p class="mt-1">{{ testResult.message }}</p>
         </div>
 
-        <div class="flex items-center gap-3 pt-2">
+        <div v-if="canManage" class="flex items-center gap-3 pt-2">
           <button
             type="button"
             :disabled="testing"
@@ -179,16 +180,20 @@
             {{ saving ? $t('views.SettingsObservabilityView.saving') : $t('views.SettingsObservabilityView.save') }}
           </Button>
         </div>
+        <p v-else data-testid="settings-observability-readonly" class="pt-2 text-sm text-muted-foreground">
+          {{ $t('views.SettingsObservabilityView.viewer_readonly_note') }}
+        </p>
       </form>
     </FeatureGate>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useDataFetch } from '../composables/useDataFetch'
 import { useI18n } from 'vue-i18n'
-import { api } from '../lib/api/client'
+import { api, getAccessToken } from '../lib/api/client'
+import { decodeJwtPayload } from '../lib/jwt'
 import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
 import { usePlanStore } from '../stores/planStore'
@@ -244,6 +249,16 @@ const formSuccess = ref<string | null>(null)
 
 const testing = ref(false)
 const testResult = ref<TestSpanResult | null>(null)
+
+function readJwtPayload(): Record<string, unknown> | null {
+  return decodeJwtPayload(getAccessToken())
+}
+
+// observability.manage resolves to operator; only operator+ can update config.
+const canManage = computed(() => {
+  const role = readJwtPayload()?.org_role
+  return role === 'operator' || role === 'admin'
+})
 let observabilityFormTimeout: ReturnType<typeof setTimeout> | null = null
 let observabilityTestTimeout: ReturnType<typeof setTimeout> | null = null
 
@@ -284,6 +299,7 @@ function removeHeader(index: number) {
 }
 
 async function saveSettings() {
+  if (!canManage.value) return
   saving.value = true
   formError.value = null
   formSuccess.value = null

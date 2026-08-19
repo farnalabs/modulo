@@ -230,9 +230,10 @@ PERMISSIONS: dict[str, str] = {
     "registry.publisher.manage": "operator",
     # observability / notifications
     "observability.view": "viewer",
+    "observability.manage": "operator",
     "notification.view": "viewer",
+    "notification.manage": "operator",
     "notification.self": "viewer",
-    "notification.endpoint.manage": "viewer",
     # dashboard
     "dashboard.summary": "viewer",
     "dashboard.trends": "viewer",

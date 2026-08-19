@@ -92,6 +92,30 @@ def unauth_client() -> Generator[TestClient, None, None]:
 
 
 @pytest.fixture
+def runner_client() -> Generator[TestClient, None, None]:
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="runneruser",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="runner",
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    with patch("modulo.api.routes.api_keys.resolve_role_from_membership", new=AsyncMock(return_value="runner")):
+        yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
 def operator_client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 
@@ -318,6 +342,13 @@ def test_mcp_config_returns_url_and_snippet(client: TestClient) -> None:
 def test_list_api_keys_unauthenticated_returns_4xx(unauth_client: TestClient) -> None:
     resp = unauth_client.get("/api/v1/api-keys")
     assert resp.status_code in (401, 403)
+
+
+def test_list_api_keys_runner_gets_403(runner_client: TestClient) -> None:
+    """Runner (who holds api_key.update) must be denied listing org keys (floor raised to operator)."""
+    resp = runner_client.get("/api/v1/api-keys")
+    assert resp.status_code == 403
+    assert "Only admin or operator users can list API keys" in resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

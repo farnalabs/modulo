@@ -987,7 +987,7 @@ async def get_pipeline_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            pipeline = await get_pipeline(session, pipeline_id)
+            pipeline = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
     except ProgrammingError:
         logger.exception(_CODE_ROUTES_PIPELINES)
 
@@ -1862,6 +1862,7 @@ async def list_snapshot_endpoint(
     page_size: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_PIPELINE_LIST),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> SnapshotListResponse:
     try:
         async with session.begin():
@@ -1892,6 +1893,7 @@ async def get_snapshot_detail_endpoint(
     snapshot_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_PIPELINE_LIST),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> SnapshotDetailResponse:
     try:
         async with session.begin():
@@ -1924,6 +1926,7 @@ async def tag_snapshot_endpoint(
     req: SnapshotTagUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> SnapshotResponse:
     try:
         async with session.begin():
@@ -1950,6 +1953,7 @@ async def rollback_snapshot_endpoint(
     snapshot_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_PIPELINE_GRAPH_UPDATE),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> SnapshotResponse:
     # Route layer carries the operator baseline ("pipeline.graph.update") for
     # defense-in-depth breadth; actual gate-weakening enforcement is the
@@ -2008,6 +2012,7 @@ async def delete_snapshot_endpoint(
     snapshot_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("pipeline.delete"),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> None:
     if principal.org_role != "admin":
         raise HTTPException(
@@ -2049,6 +2054,7 @@ async def diff_snapshot_endpoint(
     req: SnapshotDiffQuery,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_PIPELINE_LIST),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> SnapshotDiffResponse:
     try:
         async with session.begin():
