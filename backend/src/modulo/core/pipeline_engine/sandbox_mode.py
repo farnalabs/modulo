@@ -22,6 +22,16 @@ import jinja2
 _SANDBOX_MODES = frozenset({"llm", "script"})
 _SANDBOX_EGRESS_POLICIES = frozenset({"default", "deny_all", "selected"})
 _SANDBOX_EGRESS_ALLOWLIST_KEYS = frozenset({"host", "port"})
+# FAR-212 PR B: git-credential scope surface. ``scoped`` = the provisioned git
+# credential is limited to a single allowlisted host (github.com — see
+# ``_SANDBOX_GIT_CREDENTIAL_ALLOWED_HOST``) via a credential helper that refuses
+# every other host; ``unscoped`` = full-access credential (the default); ``none``
+# = no git credentials are provisioned at all. These are VALIDATED
+# (``_validate_sandbox_git_credentials_config``) and ENFORCED (node_runner's
+# sandbox policy step), so the capability derivation can mechanically certify
+# scoped credentials.
+_SANDBOX_GIT_CREDENTIAL_SCOPES = frozenset({"scoped", "unscoped", "none"})
+_SANDBOX_GIT_CREDENTIAL_ALLOWED_HOST = "github.com"
 _SANDBOX_RESOURCE_LIMIT_KEYS = frozenset(
     {
         # Informational / metadata-only (the e2b SDK exposes no enforcement
@@ -52,58 +62,64 @@ SANDBOX_CAPABILITY_WRITE_FILES = "sandbox.write_files"
 SANDBOX_CAPABILITY_EGRESS = "sandbox.egress"
 SANDBOX_CAPABILITY_GIT_CREDENTIALS = "sandbox.git_credentials"
 
-# NOTE (FAR-212 PR A review): ``sandbox.write_files`` and
-# ``sandbox.git_credentials`` derive UNKNOWN (None) until the PR B enforcement
-# surface lands. The ``read_only`` / ``git_credentials`` dict keys do NOT exist
-# on ``PipelineGraphNode`` (Pydantic ``extra="ignore"`` silently drops them on
-# the REST/MCP paths) and node_runner/e2b never enforce read-only mounts or
-# git-credential scope, so deriving anything from those keys would CERTIFY a
-# deny-guarantee nothing enforces. They must never certify from unvalidated /
-# unenforced keys; ``derive_sandbox_capabilities`` always returns None for both
-# (fail-closed block) until read-only mounts + git-credential scope land in PR B
-# together with the PipelineGraphNode / GraphValidator / node_runner surface.
+# FAR-212 PR B: ``sandbox.write_files`` and ``sandbox.git_credentials`` are now
+# MECHANICALLY DERIVABLE from validated + enforced node config:
+#   - ``read_only`` is a real ``PipelineGraphNode`` field (PR B), validated by
+#     ``_validate_sandbox_read_only_config`` and ENFORCED at runtime (node_runner
+#     applies a sandbox-policy step that chmods the workspace read-only), so
+#     ``write_files=False`` certifies writes are genuinely impossible.
+#   - ``git_credentials`` is a real ``PipelineGraphNode`` field (PR B), validated
+#     by ``_validate_sandbox_git_credentials_config`` and ENFORCED at runtime
+#     (node_runner provisions a scoped credential helper that refuses any host
+#     but the allowlisted one, or omits git credentials entirely for "none"), so
+#     ``git_credentials=True`` (scoped) certifies scoped credentials genuinely
+#     limited to the target host.
+# The derivation reads the VALIDATED node config (from PipelineGraphNode), never
+# raw unvalidated dict keys, so a block guardrail never certifies a
+# deny-guarantee nothing enforces.
 
 
 def derive_sandbox_capabilities(node_def: dict[str, Any]) -> dict[str, bool | None]:
     """Mechanically derive a sandbox_agent node's capability profile.
 
-    Reads the node's ACTUAL configuration — currently only the FAR-296 Phase 3
-    egress surface (``egress_policy``), which is a real validated field on
-    ``PipelineGraphNode`` and is enforced at runtime (node_runner maps it to
-    ``allow_internet_access``). Returns ``{capability: bool | None}`` with the
-    RAW mechanical polarity:
+    Reads the node's ACTUAL configuration — the FAR-296 Phase 3 egress surface
+    (``egress_policy``) and the FAR-212 PR B read-only-workspace + git-credential
+    scope surfaces (``read_only`` / ``git_credentials``), all of which are real
+    validated ``PipelineGraphNode`` fields and are ENFORCED at runtime
+    (node_runner maps ``egress_policy`` to ``allow_internet_access`` and applies
+    a sandbox-policy step for read-only chmod + git-credential scoping). Returns
+    ``{capability: bool | None}`` with the RAW mechanical polarity:
 
       ``sandbox.egress``
           False when ``egress_policy`` is ``"deny_all"`` or ``"selected"`` —
-          node_runner maps both to ``allow_internet_access=False`` (FAR-296
-          Phase 3); True when the policy is absent (default) or ``"default"``;
-          None when the declared value is unrecognised.
+          node_runner maps both to ``allow_internet_access=False``; True when
+          the policy is absent (default) or ``"default"``; None when the
+          declared value is unrecognised.
       ``sandbox.write_files``
-          ALWAYS None (unknown). The read-only-workspace surface is NOT a real
-          product configuration yet: ``PipelineGraphNode`` declares no
-          ``read_only`` field (Pydantic ``extra="ignore"`` silently drops it on
-          the REST/MCP paths) and node_runner / e2b have no enforcement point
-          for it. Deriving a value here would certify a deny-guarantee nothing
-          enforces — a smuggled key in a raw workflow import would reach this
-          derivation at run time and FAIL OPEN. Until read-only mounts land
-          (FAR-212 PR B), this capability must stay unknown so a block
-          guardrail fails CLOSED. Never read unvalidated/unenforced keys.
+          False when ``read_only`` is truthy (the read-only workspace is
+          enforced — chmod makes writes impossible); True when ``read_only`` is
+          False (the sandbox workspace is writable); None when the value is
+          unrecognised or absent (unknown — fail-closed). Only a VALIDATED
+          ``read_only`` boolean is read; any other value resolves None so a
+          smuggled non-boolean key can never certify a deny-guarantee.
       ``sandbox.git_credentials``
-          ALWAYS None (unknown). Same reason as ``sandbox.write_files``: no
-          ``git_credentials`` field exists on ``PipelineGraphNode`` and no
-          git-credential scoping is enforced by node_runner / e2b. Deriving a
-          value would certify scoped credentials that nothing limits (fail
-          open through the raw import path). Unknown (fail-closed) until the
-          git-credential scope surface lands (FAR-212 PR B).
+          True when ``git_credentials`` is ``"scoped"`` (the enforced
+          credential-helper scope genuinely limits the token to the allowlisted
+          host); False when ``"unscoped"`` or ``"none"`` (full-access or absent
+          credentials are not a scoped guarantee); None when the value is
+          unrecognised or absent (unknown — fail-closed).
 
-    The derivation is MECHANICAL — it reads the node's actual configuration,
-    never a declared claim — so a conformance hard-block can CERTIFY what is
-    genuinely enforced (egress) and fails CLOSED (unknown) for anything not yet
-    a real, validated, enforced surface. The polarity here is raw (True =
-    present / risked); the conformance manifest reader inverts it
+    The derivation is MECHANICAL — it reads the node's actual validated
+    configuration, never a declared claim — so a conformance hard-block can
+    CERTIFY what is genuinely enforced (egress, read-only workspace, scoped git
+    credentials) and fails CLOSED (unknown) for anything not yet a real,
+    validated, enforced surface. The polarity here is raw (True = present /
+    risked for egress and write_files; True = the scoped guarantee holds for
+    git_credentials); the conformance manifest reader inverts the deny-pair
     (``conformance._add_sandbox_surface``) because a block guardrail's
-    ``required_capabilities`` on the sandbox surface is a deny/negative
-    guarantee. Non-sandbox nodes contribute an empty profile.
+    ``required_capabilities`` on the write/egress surface is a deny/negative
+    guarantee, while ``sandbox.git_credentials`` is a positive guarantee and is
+    stamped as-is. Non-sandbox nodes contribute an empty profile.
     """
     node_type = node_def.get("node_type")
     if node_type is not None and node_type != "sandbox_agent":
@@ -119,16 +135,25 @@ def derive_sandbox_capabilities(node_def: dict[str, Any]) -> dict[str, bool | No
     else:
         caps[SANDBOX_CAPABILITY_EGRESS] = None
 
-    # sandbox.write_files and sandbox.git_credentials are NOT derivable until
-    # their enforcement surfaces exist (read-only mounts, git-credential scope
-    # — FAR-212 PR B). The config keys a derivation would read
-    # (``read_only`` / ``git_credentials``) exist NOWHERE in the product:
-    # PipelineGraphNode declares no such fields and node_runner/e2b never read
-    # or enforce them, so any value would certify an unenforced deny-guarantee
-    # (fail-open through the raw import path). Always derive None (unknown) so
-    # a block guardrail fails CLOSED.
-    caps[SANDBOX_CAPABILITY_WRITE_FILES] = None
-    caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] = None
+    # FAR-212 PR B: read_only is a REAL validated + enforced PipelineGraphNode
+    # field. Only a genuine bool is read; any other value (smuggled non-bool,
+    # absent) resolves None (unknown) so a block guardrail fails CLOSED and can
+    # never certify a deny-guarantee from an unvalidated key.
+    read_only = node_def.get("read_only")
+    if isinstance(read_only, bool):
+        caps[SANDBOX_CAPABILITY_WRITE_FILES] = not read_only
+    else:
+        caps[SANDBOX_CAPABILITY_WRITE_FILES] = None
+
+    # FAR-212 PR B: git_credentials is a REAL validated + enforced
+    # PipelineGraphNode field. Only the recognised scopes are read; anything
+    # else (smuggled value, absent) resolves None (unknown) so a block
+    # guardrail can never certify scoped credentials from an unvalidated key.
+    git_credentials = node_def.get("git_credentials")
+    if isinstance(git_credentials, str) and git_credentials in _SANDBOX_GIT_CREDENTIAL_SCOPES:
+        caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] = git_credentials == "scoped"
+    else:
+        caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] = None
 
     return caps
 
@@ -317,6 +342,46 @@ def _validate_sandbox_egress_allowlist_config(egress_policy: str | None, egress_
                 f"sandbox_agent node '{node_id}' egress_allowlist[{index}] 'port' must "
                 f"be an int in [1, 65535], got {port!r}"
             )
+
+
+def _validate_sandbox_read_only_config(node_def: dict[str, Any]) -> None:
+    """Validate a sandbox_agent node's ``read_only`` flag (FAR-212 PR B).
+
+    ``read_only`` is a boolean: when True the sandbox workspace is mounted /
+    chmodded read-only at runtime (node_runner applies the enforcement policy),
+    so ``sandbox.write_files`` derives False. Only a genuine boolean is
+    accepted — a non-bool (e.g. a smuggled string) raises ``ValueError`` so the
+    fail-closed derivation never reads an unvalidated key. Absent (None) is
+    valid (writable sandbox default).
+    """
+    node_id = node_def.get("id")
+    read_only = node_def.get("read_only")
+    if read_only is None:
+        return
+    if not isinstance(read_only, bool):
+        raise ValueError(f"sandbox_agent node '{node_id}' read_only must be a boolean, got {read_only!r}")
+
+
+def _validate_sandbox_git_credentials_config(node_def: dict[str, Any]) -> None:
+    """Validate a sandbox_agent node's ``git_credentials`` scope (FAR-212 PR B).
+
+    Allowed values: ``None`` (default → full-access credential, equivalent to
+    ``"unscoped"``), ``"scoped"`` (credential limited to the allowlisted
+    ``github.com`` host via an enforced helper), ``"unscoped"`` (full access),
+    ``"none"`` (no git credentials provisioned). Any other value raises
+    ``ValueError`` — this is the single shared gate so save-time (Pydantic,
+    GraphValidator, MCP) and run-time (node runner) agree on what a git-credential
+    scope means, and the capability derivation only reads a recognised scope.
+    """
+    node_id = node_def.get("id")
+    git_credentials = node_def.get("git_credentials")
+    if git_credentials is None:
+        return
+    if not isinstance(git_credentials, str) or git_credentials not in _SANDBOX_GIT_CREDENTIAL_SCOPES:
+        raise ValueError(
+            f"sandbox_agent node '{node_id}' has invalid git_credentials {git_credentials!r} "
+            "— expected None, 'scoped', 'unscoped' or 'none'"
+        )
 
 
 def _validate_sandbox_resource_limits_config(node_def: dict[str, Any]) -> None:

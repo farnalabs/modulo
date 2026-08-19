@@ -20,11 +20,13 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.notifier import endpoint_events_to_list
+from modulo.core.ssrf import validate_outbound_url, validate_outbound_url_async
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
 _CODE_NOTIFICATION_VIEW = "notification.view"
+_CODE_NOTIFICATION_MANAGE = "notification.manage"
 _CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING = "notifications.endpoint_table_missing"
 _MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN = (
     "Notifications are not available. Run database migrations to enable this feature."
@@ -46,9 +48,10 @@ class NotificationEndpointCreate(BaseModel):
 
     @field_validator("url")
     @classmethod
-    def _url_must_be_http(cls, v: str) -> str:
+    def _url_must_be_safe(cls, v: str) -> str:
         if not v.startswith(("http://", "https://")):
             raise ValueError("url must start with http:// or https://")
+        validate_outbound_url(v)
         return v
 
     @field_validator("team_id")
@@ -130,7 +133,7 @@ async def list_endpoints(
 async def create_endpoint(
     req: NotificationEndpointCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_VIEW),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_MANAGE),
     settings: Settings = Depends(get_settings),
 ) -> NotificationEndpointResponse:
     from cryptography.fernet import Fernet
@@ -242,7 +245,7 @@ async def update_endpoint(
     endpoint_id: uuid.UUID,
     req: NotificationEndpointUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_VIEW),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_MANAGE),
     settings: Settings = Depends(get_settings),
 ) -> NotificationEndpointResponse:
     from cryptography.fernet import Fernet
@@ -269,6 +272,7 @@ async def update_endpoint(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ENDPOINT_NOT_FOUND)
 
             if req.url is not None:
+                await validate_outbound_url_async(req.url)
                 ep.url = req.url
             if req.secret is not None:
                 fernet = Fernet(settings.fernet_key.encode())
@@ -310,7 +314,7 @@ async def update_endpoint(
 async def delete_endpoint(
     endpoint_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_VIEW),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_MANAGE),
 ) -> None:
     try:
         async with session.begin():
@@ -358,7 +362,7 @@ async def delete_endpoint(
 async def restore_endpoint(
     endpoint_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_VIEW),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_MANAGE),
 ) -> NotificationEndpointResponse:
     try:
         async with session.begin():

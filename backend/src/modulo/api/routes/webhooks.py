@@ -230,6 +230,13 @@ async def receive_webhook(
                 ts = verify_timestamp(modulo_timestamp)
                 if not verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
                     raise HmacValidationError()
+            else:
+                _log.warning(
+                    "webhooks.receive_webhook: unauthenticated delivery accepted "
+                    "(no hmac_secret configured) — trigger %s org %s",
+                    trigger_id,
+                    org_id,
+                )
 
             try:
                 # Pause pre-check BEFORE the snapshot and dedup work — a paused

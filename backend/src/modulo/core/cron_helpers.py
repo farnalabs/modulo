@@ -219,6 +219,8 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     "run_api_key_scanned": 0,
     "run_api_key_revoked": 0,
     "run_api_key_errors": 0,
+    "rollback_thresholds_checked": 0,
+    "rollback_thresholds_flagged": 0,
 }
 
 
@@ -247,6 +249,8 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["run_api_key_scanned"] = stats.get("run_api_key_scanned", 0)
     _dispatcher_reconcile_stats["run_api_key_revoked"] = stats.get("run_api_key_revoked", 0)
     _dispatcher_reconcile_stats["run_api_key_errors"] = stats.get("run_api_key_errors", 0)
+    _dispatcher_reconcile_stats["rollback_thresholds_checked"] = stats.get("rollback_thresholds_checked", 0)
+    _dispatcher_reconcile_stats["rollback_thresholds_flagged"] = stats.get("rollback_thresholds_flagged", 0)
 
 
 # Shared Redis key for dispatcher_reconcile outcome stats (cross-process).
@@ -313,6 +317,7 @@ def _cron_liveness_key(function: str) -> str:
 
 
 _ENGINE: AsyncEngine | None = None
+_SYSTEM_ENGINE: AsyncEngine | None = None
 _ENGINE_LOCK = threading.Lock()
 
 
@@ -330,8 +335,35 @@ def _get_engine() -> AsyncEngine:
     return _ENGINE
 
 
+def _get_system_engine() -> AsyncEngine:
+    """Engine for cross-org system crons using the modulo_system role.
+
+    Falls back to the regular engine when MODULO_SYSTEM_DATABASE_URL is not set,
+    so deployments that haven't provisioned the system role still work (system
+    crons run as modulo_app with BYPASSRLS — the pre-PR-1634 posture).
+    """
+    global _SYSTEM_ENGINE
+    if _SYSTEM_ENGINE is None:
+        settings = get_settings()
+        if settings.modulo_system_database_url:
+            from sqlalchemy.ext.asyncio import create_async_engine
+
+            _SYSTEM_ENGINE = create_async_engine(
+                settings.modulo_system_database_url,
+                pool_pre_ping=True,
+            )
+        else:
+            _SYSTEM_ENGINE = _get_engine()
+    return _SYSTEM_ENGINE
+
+
 def _open_factory() -> async_sessionmaker[AsyncSession]:
     return async_sessionmaker(_get_engine(), expire_on_commit=False, autobegin=False)
+
+
+def _open_system_factory() -> async_sessionmaker[AsyncSession]:
+    """Session factory for cross-org system crons (modulo_system role)."""
+    return async_sessionmaker(_get_system_engine(), expire_on_commit=False, autobegin=False)
 
 
 # ---------------------------------------------------------------------------
@@ -3257,15 +3289,15 @@ async def run_classification_reconcile() -> dict[str, int]:
     without this their ``run_classification`` stays NULL forever and the
     FAR-190 streak walk loses the infra failures this feature exists to count.
 
-    Runs system-scoped (no ``set_rls_org`` — the BYPASSRLS worker precedent,
-    matching the other system crons): the sweep itself processes each org under
-    its own RLS context. Bounded + idempotent, so an every-60s tick simply
-    drains whatever backlog remains. Best-effort and never raises: a sweep
-    failure is logged by the caller and must never fail the reconcile tick.
+    Runs system-scoped (modulo_system role, LOGIN, BYPASSRLS): the sweep itself
+    processes each org under its own RLS context. Bounded + idempotent, so an
+    every-60s tick simply drains whatever backlog remains. Best-effort and never
+    raises: a sweep failure is logged by the caller and must never fail the
+    reconcile tick.
     """
     from modulo.core.pipeline_engine.classify import reconcile_missing_classifications
 
-    return await reconcile_missing_classifications(_open_factory())
+    return await reconcile_missing_classifications(_open_system_factory())
 
 
 async def dispatcher_reconcile() -> dict[str, Any]:
@@ -3370,7 +3402,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     capacity_redispatch_seconds = CAPACITY_REDISPATCH_SECONDS
     max_age_minutes = _MID_GRAPH_WEDGE_MAX_AGE_MINUTES
     claim_cap = _saq_run_claim_cap()
-    factory = _open_factory()
+    factory = _open_system_factory()
     summary: dict[str, Any] = {
         "scanned": 0,
         "repaired": 0,
@@ -3561,7 +3593,7 @@ async def _run_reconcile_sweeps(redis_client: AsyncRedis, summary: dict[str, Any
     try:
         from modulo.auth.api_key import revoke_run_api_key_sweep
 
-        revoked_keys = await revoke_run_api_key_sweep(_open_factory())
+        revoked_keys = await revoke_run_api_key_sweep(_open_system_factory())
         summary["run_api_key_scanned"] = revoked_keys.get("scanned", 0)
         summary["run_api_key_revoked"] = revoked_keys.get("revoked", 0)
         summary["run_api_key_errors"] = revoked_keys.get("errors", 0)
@@ -3578,6 +3610,18 @@ async def _run_reconcile_sweeps(redis_client: AsyncRedis, summary: dict[str, Any
         raise
     except Exception:
         _log.warning("dispatcher_reconcile.run_api_key_sweep_failed", exc_info=True)
+    try:
+        from modulo.core.rollback_thresholds import evaluate_rollback_thresholds
+
+        threshold_result = await evaluate_rollback_thresholds(_open_factory())
+        summary["rollback_thresholds_checked"] = threshold_result.get("orgs_checked", 0)
+        summary["rollback_thresholds_flagged"] = len(threshold_result.get("flagged_orgs", []))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        summary["rollback_thresholds_checked"] = 0
+        summary["rollback_thresholds_flagged"] = 0
+        _log.warning("dispatcher_reconcile.rollback_thresholds_failed", exc_info=True)
 
 
 async def _update_reconcile_telemetry(summary: dict[str, Any]) -> None:
@@ -3591,8 +3635,8 @@ async def _update_reconcile_telemetry(summary: dict[str, Any]) -> None:
             sample_run_runtime_metrics,
         )
 
-        await sample_run_runtime_metrics(_open_factory())
-        await sample_error_group_metrics(_open_factory())
+        await sample_run_runtime_metrics(_open_system_factory())
+        await sample_error_group_metrics(_open_system_factory())
         if summary["nodeless_failed"]:
             record_stall_reason("executor_stalled", summary["nodeless_failed"])
         if summary["claim_cap_terminalized"]:

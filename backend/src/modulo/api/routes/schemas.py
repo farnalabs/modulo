@@ -1431,6 +1431,7 @@ def _find_json_location(raw: str, instance: dict[str, Any], error_path: str) -> 
 @handle_db_errors("schemas.validate_schema_endpoint")
 async def validate_schema_endpoint(
     req: SchemaValidateRequest,
+    _: TenantPrincipal = require_permission(_CODE_SCHEMA_LIST),
 ) -> SchemaValidateResponse:
     """Validate a JSON Schema against JSON Schema Draft 2020-12.
 
@@ -1485,6 +1486,7 @@ class SchemaImportResponse(BaseModel):
 @handle_db_errors("schemas.import_schema_endpoint")
 async def import_schema_endpoint(
     req: SchemaImportRequest,
+    _: TenantPrincipal = require_permission(_CODE_SCHEMA_LIST),
 ) -> SchemaImportResponse:
     """Parse raw JSON Schema content and extract fields for the schema builder.
 

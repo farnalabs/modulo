@@ -56,6 +56,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.auth.secret_storage import decode_stored_secret
 from modulo.connectors.base import ConnectorQuery
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys as _uuid_to_lock_keys
+from modulo.core.exceptions import RateLimitConflictError
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.run import create_run
 from modulo.db.lifecycle_refs import _RESERVED_INPUT_PAYLOAD_KEYS
@@ -65,6 +66,7 @@ from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.models.webhook import WebhookDedupHash, WebhookPayload
 from modulo.db.settings_resolver import ensure_triggers_resumable
+from modulo.db.unique_violation import is_unique_violation
 
 _log = logging.getLogger(__name__)
 
@@ -109,7 +111,7 @@ class ConcurrentRunLimitError(RuntimeError):
 
 
 class PipelineRateLimitError(RuntimeError):
-    def __init__(self, pipeline_id: uuid.UUID, key: str, max_triggers: int, window_seconds: int) -> None:
+    def __init__(self, pipeline_id: uuid.UUID, key: str | None, max_triggers: int, window_seconds: int) -> None:
         super().__init__(
             f"Pipeline {pipeline_id} rate limit exceeded: {max_triggers} triggers per {window_seconds}s for key {key}"
         )
@@ -161,33 +163,13 @@ def sha256_hex(data: bytes | None) -> str:
 _sha256_hex = sha256_hex
 
 
+# Unique-violation detection lives in the neutral low-level module
+# (modulo.db.unique_violation) so this dedup path and create_run's admission
+# path share identical semantics. Legacy underscore name kept for
+# backward-compatible imports.
 def _is_unique_violation(exc: IntegrityError) -> bool:
-    """Return True if *exc* is a unique-constraint violation (not FK, NOT NULL, etc.).
-
-    Handles PostgreSQL (pgcode 23505), SQLite (UNIQUE constraint failed), and
-    MariaDB/MySQL (IntegrityError: 1062 Duplicate entry).
-    """
-    orig = getattr(exc, "orig", None)
-    if orig is None:
-        return False
-
-    # PostgreSQL - asyncpg raises with pgcode attribute
-    pgcode = getattr(orig, "pgcode", None)
-    if pgcode is not None:
-        return str(pgcode) == "23505"
-
-    # SQLite - aiosqlite wraps the message as a string
-    msg = str(orig)
-    if "UNIQUE constraint failed" in msg:
-        return True
-
-    # MariaDB / MySQL DBAPI errors expose the numeric code in args[0].
-    if isinstance(orig, Exception):
-        err_args = getattr(orig, "args", None)
-        if err_args and err_args[0] == 1062:
-            return True
-
-    return False
+    """Return True if *exc* is a unique-constraint violation (not FK, NOT NULL, etc.)."""
+    return is_unique_violation(exc)
 
 
 def verify_timestamp(modulo_timestamp: str | None) -> int:
@@ -574,17 +556,37 @@ class TriggerEngine:
 
             # Create run
             refs = _extract_work_item_refs(input_payload, cfg.get("work_item_ref_paths"))
-            run = await create_run(
-                session,
-                org_id=org_id,
-                pipeline_id=trigger.pipeline_id,
-                snapshot_id=snapshot_id,
-                trigger_type="webhook",
-                input_payload=input_payload,
-                trigger_id=trigger_id,
-                rate_limit_key=rate_limit_key,
-                work_item_refs=refs,
-            )
+            try:
+                run = await create_run(
+                    session,
+                    org_id=org_id,
+                    pipeline_id=trigger.pipeline_id,
+                    snapshot_id=snapshot_id,
+                    trigger_type="webhook",
+                    input_payload=input_payload,
+                    trigger_id=trigger_id,
+                    rate_limit_key=rate_limit_key,
+                    work_item_refs=refs,
+                )
+            except RateLimitConflictError as exc:
+                _log.warning(
+                    "Rate limit conflict for pipeline %s: %s",
+                    trigger.pipeline_id,
+                    exc.rate_limit_key,
+                )
+                await self._log_event(
+                    session,
+                    trigger=trigger,
+                    org_id=org_id,
+                    payload_hash=dedup_hash,
+                    result="rate_limited",
+                )
+                raise PipelineRateLimitError(
+                    trigger.pipeline_id,
+                    exc.rate_limit_key,
+                    max_triggers,
+                    window_seconds,
+                ) from exc
 
             # Audit log
             trigger_event = await self._log_event(
@@ -818,18 +820,38 @@ class TriggerEngine:
             # Create run (a replay is flagged via is_replay so downstream
             # consumers can distinguish re-fires from original deliveries).
             refs = _extract_work_item_refs(input_payload, cfg.get("work_item_ref_paths"))
-            run = await create_run(
-                session,
-                org_id=org_id,
-                pipeline_id=trigger.pipeline_id,
-                snapshot_id=snapshot_id,
-                trigger_type="webhook",
-                input_payload=input_payload,
-                trigger_id=trigger.id,
-                rate_limit_key=rate_limit_key,
-                work_item_refs=refs,
-                is_replay=True,
-            )
+            try:
+                run = await create_run(
+                    session,
+                    org_id=org_id,
+                    pipeline_id=trigger.pipeline_id,
+                    snapshot_id=snapshot_id,
+                    trigger_type="webhook",
+                    input_payload=input_payload,
+                    trigger_id=trigger.id,
+                    rate_limit_key=rate_limit_key,
+                    work_item_refs=refs,
+                    is_replay=True,
+                )
+            except RateLimitConflictError as exc:
+                _log.warning(
+                    "Rate limit conflict for pipeline %s: %s",
+                    trigger.pipeline_id,
+                    exc.rate_limit_key,
+                )
+                await self._log_event(
+                    session,
+                    trigger=trigger,
+                    org_id=org_id,
+                    payload_hash=payload_hash,
+                    result="rate_limited",
+                )
+                raise PipelineRateLimitError(
+                    trigger.pipeline_id,
+                    exc.rate_limit_key,
+                    max_triggers,
+                    window_seconds,
+                ) from exc
 
             trigger_event = await self._log_event(
                 session,

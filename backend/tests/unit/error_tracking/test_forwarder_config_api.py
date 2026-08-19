@@ -179,6 +179,54 @@ class TestTestConnection:
         assert resp.status_code == 404
 
 
+class TestTestConnectionSsrfGuard:
+    def test_sentry_dsn_to_private_host_rejected(self):
+        from fastapi.testclient import TestClient
+
+        app = _make_app()
+        client = TestClient(app)
+
+        with patch(
+            "modulo.api.routes.error_forwarder_config.get_forwarder",
+        ) as mock_get:
+            fwd_instance = AsyncMock()
+            mock_get.return_value = fwd_instance
+
+            resp = client.post(
+                "/api/v1/errors/forwarders/sentry/test",
+                json={"config_json": {"dsn": "https://key@127.0.0.1/123"}},
+            )
+
+        assert resp.status_code == 422
+        assert "SSRF check failed" in resp.json()["detail"]
+        fwd_instance.forward.assert_not_awaited()
+
+    def test_datadog_site_rejected_when_guard_fails(self):
+        from fastapi.testclient import TestClient
+
+        app = _make_app()
+        client = TestClient(app)
+
+        with (
+            patch("modulo.api.routes.error_forwarder_config.get_forwarder") as mock_get,
+            patch(
+                "modulo.api.routes.error_forwarder_config.validate_outbound_url_async",
+                new=AsyncMock(side_effect=ValueError("targets a private/internal network address")),
+            ),
+        ):
+            fwd_instance = AsyncMock()
+            mock_get.return_value = fwd_instance
+
+            resp = client.post(
+                "/api/v1/errors/forwarders/datadog/test",
+                json={"config_json": {"api_key": "key", "site": "datadoghq.com"}},
+            )
+
+        assert resp.status_code == 422
+        assert "SSRF check failed" in resp.json()["detail"]
+        fwd_instance.forward.assert_not_awaited()
+
+
 class TestConfigSummaryMasking:
     def test_sensitive_keys_are_masked(self):
         from fastapi.testclient import TestClient

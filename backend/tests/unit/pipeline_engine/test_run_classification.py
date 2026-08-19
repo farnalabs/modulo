@@ -1066,7 +1066,7 @@ class TestSweep:
             # the 60s dispatcher_reconcile sweep exists to close.
             assert await _read_classification(eng, run_id) is None
 
-            with patch.object(cron_helpers, "_open_factory", return_value=maker):
+            with patch.object(cron_helpers, "_open_system_factory", return_value=maker):
                 summary = await cron_helpers.run_classification_reconcile()
             assert summary["classified"] == 1
             record = await _read_classification(eng, run_id)
@@ -1186,7 +1186,7 @@ class TestPeriodicWiring:
                 "reconcile_missing_classifications",
                 new=AsyncMock(return_value={"scanned": 0, "classified": 0, "unclassified": 0, "errors": 0}),
             ) as sweep_mock,
-            patch.object(cron_helpers, "_open_factory"),
+            patch.object(cron_helpers, "_open_system_factory"),
         ):
             summary = await cron_helpers.run_classification_reconcile()
         assert sweep_mock.await_count == 1
@@ -1216,7 +1216,7 @@ class TestPeriodicWiring:
         redis_cls.from_url.return_value = redis_client
 
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_open_system_factory", return_value=factory),
             patch.object(ch, "get_settings", return_value=_settings()),
             patch.object(ch, "AsyncRedis", redis_cls),
             patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
@@ -1255,7 +1255,7 @@ class TestPeriodicWiring:
         async with maker() as s, s.begin():
             await _seed_run(s, run_id, status="failed", error_code="task_failure")
 
-        with patch.object(cron_helpers, "_open_factory", return_value=maker):
+        with patch.object(cron_helpers, "_open_system_factory", return_value=maker):
             summary = await cron_helpers.run_classification_reconcile()
         assert summary["scanned"] >= 1
         assert summary["classified"] == 1

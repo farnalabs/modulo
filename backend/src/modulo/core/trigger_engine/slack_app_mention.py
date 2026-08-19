@@ -43,6 +43,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.secret_storage import decode_stored_secret
+from modulo.core.exceptions import RateLimitConflictError
 from modulo.core.trigger_engine import (
     DuplicateWebhookError,
     PipelineRateLimitError,
@@ -400,17 +401,37 @@ async def handle_app_mention(
 
         # Create run
         refs = _extract_work_item_refs(input_payload, cfg.get("work_item_ref_paths"))
-        run = await create_run(
-            session,
-            org_id=org_id,
-            pipeline_id=trigger.pipeline_id,
-            snapshot_id=snapshot_id,
-            trigger_type="slack_app_mention",
-            input_payload=input_payload,
-            trigger_id=trigger_id,
-            rate_limit_key=rate_limit_key,
-            work_item_refs=refs,
-        )
+        try:
+            run = await create_run(
+                session,
+                org_id=org_id,
+                pipeline_id=trigger.pipeline_id,
+                snapshot_id=snapshot_id,
+                trigger_type="slack_app_mention",
+                input_payload=input_payload,
+                trigger_id=trigger_id,
+                rate_limit_key=rate_limit_key,
+                work_item_refs=refs,
+            )
+        except RateLimitConflictError as exc:
+            _log.warning(
+                "Rate limit conflict for pipeline %s: %s",
+                trigger.pipeline_id,
+                exc.rate_limit_key,
+            )
+            await engine._log_event(
+                session,
+                trigger=trigger,
+                org_id=org_id,
+                payload_hash=dedup_hash,
+                result="rate_limited",
+            )
+            raise PipelineRateLimitError(
+                trigger.pipeline_id,
+                exc.rate_limit_key,
+                max_triggers,
+                window_seconds,
+            ) from exc
 
         # Audit log
         trigger_event = await engine._log_event(

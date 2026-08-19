@@ -46,7 +46,6 @@ def _build_polling_connector(type_id: str, config: dict[str, Any], creds: dict[s
     from modulo.connectors.github import GitHubConnector
     from modulo.connectors.gitlab import GitLabConnector
     from modulo.connectors.jira import JiraConnector
-    from modulo.connectors.linear import LinearConnector
     from modulo.connectors.slack import SlackConnector
 
     match type_id:
@@ -60,8 +59,6 @@ def _build_polling_connector(type_id: str, config: dict[str, Any], creds: dict[s
         case "gitlab":
             base_url = config.get("base_url", "https://gitlab.com/api/v4")
             return GitLabConnector(token=creds["token"], base_url=base_url)
-        case "linear":
-            return LinearConnector(api_key=creds["api_key"])
         case "jira":
             instance = config.get("instance", "")
             base_url = config.get("base_url")

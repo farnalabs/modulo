@@ -16,11 +16,11 @@ from operator import attrgetter
 from typing import Any
 
 from sqlalchemy import Date, bindparam, case, cast, delete, func, select, text, update
-from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from modulo.core.exceptions import OrgDeletedError
+from modulo.core.exceptions import OrgDeletedError, RateLimitConflictError
 from modulo.db.crud.base import PageResult
 from modulo.db.crud.organisation import get_organisation
 from modulo.db.crud.pagination import CursorPaginator
@@ -33,6 +33,7 @@ from modulo.db.lifecycle_refs import (
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES, Run
+from modulo.db.unique_violation import is_unique_violation
 
 _log = logging.getLogger(__name__)
 
@@ -48,6 +49,10 @@ CAPACITY_MARKERS = frozenset({ERROR_CODE_ORG_CAPACITY_LIMITED, ERROR_CODE_PIPELI
 
 # Day-key format used for run-usage bucketing and the --older-than parser.
 _DAY_FORMAT = "%Y-%m-%d"
+
+# Legacy underscore alias for the neutral helper (see modulo.db.unique_violation).
+_is_unique_violation = is_unique_violation
+
 
 # The canonical whitelist of run statuses (subset of the ``ck_runs_status``
 # CHECK constraint). ``transition_run`` and ``update_run_status`` refuse any
@@ -770,8 +775,30 @@ async def create_run(
         run.error_code = "eval_blocked"
         run.error_detail = guardrail_block_message[:5000]
         run.completed_at = datetime.now(UTC)
-    session.add(run)
-    await session.flush()
+    try:
+        # Commit the insert inside a savepoint so that, on the async/Postgres
+        # backend, a concurrent rate-limit conflict aborts only the nested
+        # transaction (not the outer one). Without this the failed flush leaves
+        # the outer transaction in a failed/aborted state, and the caller's
+        # ``except RateLimitConflictError`` handler can no longer write its
+        # rate-limit TriggerEvent (its own flush raises PendingRollbackError).
+        #
+        # ``session.add(run)`` must live INSIDE the savepoint: a savepoint
+        # rollback restores the session's pending-insert queue, so on conflict
+        # the ``run`` row is dropped from the queue and the outer transaction
+        # stays clean. Adding it OUTSIDE would leave the failed run pending,
+        # so the caller's next flush re-inserts it, conflicts *outside* any
+        # savepoint, and aborts the whole transaction (PendingRollbackError).
+        async with session.begin_nested():
+            session.add(run)
+            await session.flush()
+    except IntegrityError as exc:
+        if rate_limit_key is not None and _is_unique_violation(exc):
+            raise RateLimitConflictError(
+                pipeline_id=pipeline_id,
+                rate_limit_key=rate_limit_key,
+            ) from exc
+        raise
 
     # Persist guardrail eval results (evidence deltas vs the pre-act base).
     # detail is count-only / pattern-descriptive — never raw payload (item 7
@@ -850,14 +877,25 @@ async def update_run_outputs(
     return run
 
 
-async def get_run(session: AsyncSession, run_id: uuid.UUID) -> Run | None:
-    result = await session.execute(select(Run).where(Run.id == run_id))
+async def get_run(session: AsyncSession, run_id: uuid.UUID, *, organisation_id: uuid.UUID | None = None) -> Run | None:
+    """Fetch a single run by ID.
+
+    Defence-in-depth: when *organisation_id* is provided, the query also
+    filters on ``organisation_id`` so cross-tenant access is impossible even
+    if RLS is misconfigured. RLS-based callers (routes that already call
+    ``set_rls_org``) may omit it, but API-facing callers SHOULD pass it.
+    """
+    stmt = select(Run).where(Run.id == run_id)
+    if organisation_id is not None:
+        stmt = stmt.where(Run.organisation_id == organisation_id)
+    result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
 
 async def list_runs(
     session: AsyncSession,
     *,
+    organisation_id: uuid.UUID | None = None,
     pipeline_id: uuid.UUID | None = None,
     status: str | None = None,
     trigger_type: str | None = None,
@@ -867,6 +905,12 @@ async def list_runs(
     cursor: str | None = None,
     team_id: uuid.UUID | None = None,
 ) -> PageResult[Run]:
+    """List runs with optional org-scoped filtering.
+
+    Defence-in-depth: when *organisation_id* is provided, the query also
+    filters on ``organisation_id`` so cross-tenant access is impossible even
+    if RLS is misconfigured.
+    """
     q = (
         select(Run)
         .options(selectinload(Run.pipeline))
@@ -879,6 +923,9 @@ async def list_runs(
         .join(Pipeline, Run.pipeline_id == Pipeline.id, isouter=False)
         .where(Pipeline.deleted_at.is_(None))
     )
+    if organisation_id is not None:
+        q = q.where(Run.organisation_id == organisation_id)
+        count_q = count_q.where(Run.organisation_id == organisation_id)
     if team_id is not None:
         # A team-scoped caller sees runs for its own team's pipelines plus
         # org-level pipelines (no owner team) — the same boundary the MCP

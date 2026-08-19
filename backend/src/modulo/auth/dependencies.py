@@ -8,6 +8,7 @@ from jwt import InvalidTokenError as JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal, decode_principal
+from modulo.auth.permissions import _clamp_role
 from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
@@ -205,6 +206,16 @@ async def get_current_tenant_user_or_api_key(
             async with factory() as session, session.begin():
                 await set_rls_org(session, org_id)
                 key = await validate_api_key(session, token, org_id=org_id)
+
+                # ADR 017 live-role re-read: clamp the minted role to the
+                # account's current membership role, matching the MCP auth
+                # path (api/mcp_server.py:770-790). A demoted or removed
+                # member's key must not retain elevated privileges.
+                live_role = await resolve_role_from_membership(
+                    session,
+                    str(key.account_id),
+                    str(key.organisation_id),
+                )
         except ApiKeyInvalidError:
             raise InvalidToken() from None
         except SQLAlchemyError:
@@ -213,13 +224,31 @@ async def get_current_tenant_user_or_api_key(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Database temporarily unavailable.",
             ) from None
-        # Role is guaranteed to be "runner"/"operator" by the
-        # ck_org_api_keys_role DB constraint; no runtime check needed.
+        # Clamp: if the account has no active membership, reject.
+        # If the live role is lower than the minted role, use the live role.
+        if live_role is None:
+            _log.warning(
+                "auth.api_key_membership_not_found",
+                extra={"account_id": str(key.account_id), "org_id": str(key.organisation_id)},
+            )
+            raise OrganisationMembershipNotFound()
+        clamped_role = _clamp_role(key.role, live_role)
+        if not clamped_role:
+            _log.warning(
+                "auth.api_key_clamp_failed",
+                extra={
+                    "account_id": str(key.account_id),
+                    "org_id": str(key.organisation_id),
+                    "minted_role": key.role,
+                    "live_role": live_role,
+                },
+            )
+            raise OrganisationMembershipNotFound()
         return TenantPrincipal(
             username=key.name,
             organisation_id=key.organisation_id,
             account_id=key.account_id,
-            org_role=key.role,
+            org_role=clamped_role,
             is_system_admin=False,
         )
 

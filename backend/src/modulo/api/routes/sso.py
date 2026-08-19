@@ -36,9 +36,9 @@ def _frontend_url(settings: Settings) -> str:
 
 
 def _redirect_to_frontend(tokens: dict[str, str], settings: Settings) -> RedirectResponse:
-    """Redirect the browser to the frontend callback URL with tokens."""
+    """Redirect the browser to the frontend callback URL with tokens in fragment."""
     base = _frontend_url(settings)
-    url = f"{base}/auth/callback?access_token={tokens['access_token']}&refresh_token={tokens['refresh_token']}"
+    url = f"{base}/auth/callback#access_token={tokens['access_token']}&refresh_token={tokens['refresh_token']}"
     return RedirectResponse(url=url)
 
 

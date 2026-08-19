@@ -54,6 +54,7 @@ async def get_connector_instance(session: AsyncSession, connector_id: uuid.UUID)
 async def list_connector_instances(
     session: AsyncSession,
     *,
+    organisation_id: uuid.UUID | None = None,
     page: int = 1,
     page_size: int = 20,
     cursor: str | None = None,
@@ -62,8 +63,12 @@ async def list_connector_instances(
     if excluded_tiers is None:
         excluded_tiers = ["in_dev"]
 
+    org_filter = ConnectorInstance.organisation_id == organisation_id if organisation_id else None
+
     if cursor is not None:
         stmt = select(ConnectorInstance)
+        if org_filter is not None:
+            stmt = stmt.where(org_filter)
         if excluded_tiers:
             stmt = stmt.where(~ConnectorInstance.tier.in_(excluded_tiers))
         paginator = CursorPaginator()
@@ -86,6 +91,8 @@ async def list_connector_instances(
 
     offset = (page - 1) * page_size
     total_query = select(func.count()).select_from(ConnectorInstance)
+    if org_filter is not None:
+        total_query = total_query.where(org_filter)
     if excluded_tiers:
         total_query = total_query.where(~ConnectorInstance.tier.in_(excluded_tiers))
     try:
@@ -96,6 +103,8 @@ async def list_connector_instances(
         items_stmt = (
             select(ConnectorInstance).order_by(ConnectorInstance.created_at.desc()).offset(offset).limit(page_size)
         )
+        if org_filter is not None:
+            items_stmt = items_stmt.where(org_filter)
         if excluded_tiers:
             items_stmt = items_stmt.where(~ConnectorInstance.tier.in_(excluded_tiers))
         items = list((await session.execute(items_stmt)).scalars())

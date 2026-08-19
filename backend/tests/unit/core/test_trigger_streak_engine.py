@@ -299,7 +299,7 @@ class TestMigrationBackfillGrace:
         assert 'ADD COLUMN IF NOT EXISTS "streak_epoch" timestamp with time zone DEFAULT CURRENT_TIMESTAMP' in source
         assert "ix_runs_unclassified_terminal" in source
         heads = ScriptDirectory(str(versions_dir.parent)).get_heads()
-        assert heads == ["0116_guardrail_trust_pr_b"], f"expected a single head, got {heads}"
+        assert heads == ["0117_toctou_hardening"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------
@@ -1315,7 +1315,7 @@ class TestDispatcherWiring:
         redis_cls = MagicMock()
         redis_cls.from_url.return_value = redis_client
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_open_system_factory", return_value=factory),
             patch.object(
                 ch,
                 "get_settings",
@@ -1362,7 +1362,7 @@ class TestDispatcherWiring:
         redis_cls = MagicMock()
         redis_cls.from_url.return_value = redis_client
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_open_system_factory", return_value=factory),
             patch.object(
                 ch,
                 "get_settings",

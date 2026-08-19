@@ -50,6 +50,7 @@ import logging
 import math
 import os
 import re as _re
+import socket
 import time
 import urllib.request
 import uuid
@@ -313,6 +314,57 @@ _SANDBOX_BUDGET_POLL_INTERVAL_TICKS = 6
 # tick forever; the shield keeps SDK internal tasks alive).
 _SANDBOX_METRICS_POLL_TIMEOUT = 10.0
 _SANDBOX_KILL_TIMEOUT = 15.0
+# FAR-212 PR B: per-host DNS resolution bound for the selected-mode egress
+# allowlist (the iptables rules bind concrete IPs, never DNS names).
+_SANDBOX_EGRESS_RESOLVE_TIMEOUT = 5.0
+
+
+async def _resolve_egress_allowlist(
+    egress_allowlist: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
+    """Pre-resolve selected-mode egress allowlist hostnames to IPv4 addresses.
+
+    iptables rules can only match numeric addresses, not DNS names, so node_runner
+    resolves each allowlisted host before the policy step builds the rules. The
+    resolution is BEST-EFFORT and FAIL-CLOSED: a host that cannot be resolved is
+    simply left without a ``_resolved_ip`` key, and the resulting iptables rule
+    for it falls through to the raw hostname (which iptables cannot match, so the
+    host stays denied). Combined with the ``allow_internet_access=False`` sandbox
+    flag, an unresolved host is unreachable — never accidentally opened. Hosts
+    that are already numeric are passed through untouched. Entries carry the
+    resolved address under ``_resolved_ip`` (never a secret — just a public IP).
+    """
+    if not egress_allowlist:
+        return egress_allowlist
+
+    async def _resolve_one(entry: dict[str, Any]) -> dict[str, Any]:
+        host = entry.get("host")
+        if not isinstance(host, str) or not host:
+            return entry
+        if _re.match(r"^[0-9.]+$", host) or ":" in host:
+            return entry
+        try:
+            infos = await asyncio.wait_for(
+                asyncio.to_thread(
+                    socket.getaddrinfo,
+                    host,
+                    None,
+                    socket.AF_INET,
+                    socket.SOCK_STREAM,
+                ),
+                timeout=_SANDBOX_EGRESS_RESOLVE_TIMEOUT,
+            )
+        except Exception:
+            # Unresolvable host -> no rule -> host stays denied (fail-closed).
+            return entry
+        if infos:
+            ip = infos[0][4][0]
+            return {**entry, "_resolved_ip": ip}
+        return entry
+
+    return [await _resolve_one(e) for e in egress_allowlist]
+
+
 # FAR-296 Phase 4a: E2B concurrent-sandbox rate-limit (429 / resource exhausted)
 # retry. ``AsyncSandbox.create`` can be rate-limited by the E2B provisioner; a
 # 429 is TRANSIENT. Retry with exponential backoff, bounded by the create-timeout
@@ -2407,8 +2459,9 @@ async def _sandbox_resolve_secret_ref(
 
     The org vault (per-org encrypted secrets table) is consulted first
     so pipelines resolve against the tenant's stored secrets and honour
-    rotation on every run. Falls back to the process environment when
-    the key is not in the vault.
+    rotation on every run. Returns None if the key is not in the vault
+    (does NOT fall back to the process environment to prevent secret
+    exfiltration via pipeline references).
     """
     if session_factory is not None:
         org_uuid: uuid.UUID | None = None
@@ -2429,11 +2482,10 @@ async def _sandbox_resolve_secret_ref(
                     backend = create_secrets_backend(fernet_key=get_settings().fernet_key, session=session)
                     return await backend.get_secret(secret_key)
             except KeyError:
-                pass  # not in vault -> fall back
+                pass  # not in vault -> return None
             except Exception:
                 _log.exception("env_var.secret_resolve_error", extra={"secret_key": secret_key})
-    # Fall back to process environment.
-    return os.environ.get(secret_key)
+    return None
 
 
 async def _sandbox_acquire_dispatch_marker(
@@ -2728,6 +2780,18 @@ async def _sandbox_clear_dispatch_marker(
             ),
             {"rid": run_id, "oid": str(org_uuid), "tok": claim_lease},
         )
+
+
+def _emit_script_span_event(name: str, attrs: dict[str, Any]) -> None:
+    """Emit an OTel span event for script-mode milestones (FAR-296 Phase 5a)."""
+    try:
+        from opentelemetry import trace as _otel_trace
+
+        _span = _otel_trace.get_current_span()
+        if _span.is_recording():
+            _span.add_event(name, {k: str(v)[:_MAX_OTEL_LOG_ATTR] for k, v in attrs.items()})
+    except Exception:  # noqa: S110 -- never fail on observability
+        pass
 
 
 class _SandboxWatchdog:
@@ -3086,6 +3150,15 @@ class _SandboxWatchdog:
             "sandbox_agent.budget_killed",
             extra={"node_id": node_id, "run_id": self._run_id, "reason": reason},
         )
+        _emit_script_span_event(
+            "script.budget_killed",
+            {
+                "run_id": self._run_id,
+                "node_id": node_id,
+                "reason": reason,
+                "elapsed_seconds": round(time.monotonic() - self._start_time, 1),
+            },
+        )
         try:
             await asyncio.wait_for(
                 asyncio.shield(self._sandbox.kill(request_timeout=10)),
@@ -3160,6 +3233,8 @@ async def _sandbox_agent_impl(
     egress_policy: str | None,
     egress_allowlist: list[dict[str, Any]] | None,
     resource_limits: dict[str, Any] | None,
+    read_only: bool,
+    git_credentials: str | None,
     wallclock_budget_seconds: int | None,
     output_schema_json: dict[str, Any] | None,
     sandbox_timeout: int,
@@ -3567,6 +3642,13 @@ async def _sandbox_agent_impl(
                         "backoff_seconds": _backoff,
                     },
                 )
+                _emit_script_span_event(
+                    "script.rate_limited_retry",
+                    {
+                        "attempt": _rate_limit_attempt,
+                        "backoff_seconds": _backoff,
+                    },
+                )
                 try:
                     await asyncio.wait_for(
                         asyncio.sleep(_backoff),
@@ -3577,6 +3659,14 @@ async def _sandbox_agent_impl(
         if sandbox is None:
             raise RuntimeError("Sandbox was not created before use")
         _sandbox_id = getattr(sandbox, "sandbox_id", None) or None
+        _emit_script_span_event(
+            "script.provisioned",
+            {
+                "sandbox_id": _sandbox_id,
+                "template": template_id,
+                "mode": sandbox_mode,
+            },
+        )
         # Persist the real sandbox id so the heartbeat-lost path
         # (run_executor_with_watchdog) can kill the sandbox by id.
         await _store_dispatch_marker_sandbox(_sandbox_id)
@@ -3613,6 +3703,26 @@ async def _sandbox_agent_impl(
                 org_id=org_id,
             ),
         )
+
+        # FAR-212 PR B: apply the enforced sandbox policy AFTER the Modulo-owned
+        # context files / prompt / input are written but BEFORE the agent/script
+        # command executes. Any policy field set on the node invokes the policy
+        # step (read-only workspace chmod, git-credential scope helper, or
+        # selected-mode egress allowlist). Selected-mode allowlist hostnames are
+        # pre-resolved to concrete IPs so the iptables rules bind real addresses
+        # (an unresolvable host stays denied — fail-closed). The policy is
+        # best-effort at the command level (each step is itself fail-closed) and
+        # never wedges the dispatch.
+        if read_only or git_credentials in ("scoped", "none") or (egress_policy == "selected" and egress_allowlist):
+            from modulo.core.pipeline_engine.sandbox_policy import apply_sandbox_policy
+
+            await apply_sandbox_policy(
+                sandbox,
+                read_only=read_only,
+                git_credentials=git_credentials,
+                egress_policy=egress_policy,
+                egress_allowlist=await _resolve_egress_allowlist(egress_allowlist),
+            )
 
         try:
             # FAR-306: per-channel stall detector. The heartbeat channel
@@ -3756,6 +3866,13 @@ async def _sandbox_agent_impl(
             if sandbox_mode == "script":
                 await _store_script_lease()
                 _script_lease_claimed = True
+                _emit_script_span_event(
+                    "script.lease_claimed",
+                    {
+                        "run_id": run_id,
+                        "node_id": node_id,
+                    },
+                )
                 # FAR-296 Phase 3b: mint a short-TTL runner-role API key so
                 # the script can authenticate to the Modulo API with a
                 # restricted identity. The key is per-run, revoked at run
@@ -3857,6 +3974,14 @@ async def _sandbox_agent_impl(
                 ),
                 timeout=min(sandbox_timeout, 120),
             )
+            _emit_script_span_event(
+                "script.command_started",
+                {
+                    "run_id": run_id,
+                    "node_id": node_id,
+                    "command": rendered_agent_command[:200] if sandbox_mode == "script" else "llm",
+                },
+            )
             cmd_result, stall_reason = await _wait_command_with_idle_watchdog(
                 cmd_handle,
                 total_timeout=sandbox_timeout,
@@ -3910,8 +4035,8 @@ async def _sandbox_agent_impl(
         agent_stderr_raw: str = getattr(cmd_result, "stderr", "") or ""
         _stdout_len = len(agent_stdout_raw)
         _stderr_len = len(agent_stderr_raw)
-        agent_stdout = agent_stdout_raw[:_MAX_ARTIFACT_LOG]
-        agent_stderr = agent_stderr_raw[:_MAX_ARTIFACT_LOG]
+        agent_stdout = _redact_raw_output(agent_stdout_raw[:_MAX_ARTIFACT_LOG])
+        agent_stderr = _redact_raw_output(agent_stderr_raw[:_MAX_ARTIFACT_LOG])
 
         # A timed-out command leaves ``cmd_result`` as None: the run timed
         # out (1800s node timeout) with COMPLETELY EMPTY stdout/stderr and
@@ -4117,6 +4242,18 @@ async def _sandbox_agent_impl(
                 stdout_length=_stdout_len,
                 stderr_length=_stderr_len,
                 delivery_sentinel=delivery_sentinel,
+            )
+
+        if sandbox_mode == "script":
+            _emit_script_span_event(
+                "script.finalized",
+                {
+                    "run_id": run_id,
+                    "node_id": node_id,
+                    "elapsed_seconds": round(time.monotonic() - start_time, 1),
+                    "budget_killed": watchdog.budget_killed,
+                    "exit_code": exit_code if cmd_result is not None else None,
+                },
             )
 
         _span = _otel_trace.get_current_span()
@@ -4625,29 +4762,47 @@ def make_sandbox_agent_fn(
     egress_policy: str | None = node_def.get("egress_policy")
     egress_allowlist: list[dict[str, Any]] | None = node_def.get("egress_allowlist")
     resource_limits: dict[str, Any] | None = node_def.get("resource_limits")
+    # FAR-212 PR B: read-only-workspace + git-credential scope surface. The
+    # shared validators (sandbox_mode) have already rejected any invalid
+    # read_only / git_credentials keys at save-time (Pydantic, GraphValidator,
+    # MCP) AND here at run-time; the values are read defensively so a smuggled
+    # raw-import value can never trigger a policy step that does not match what
+    # the capability derivation certified (read_only is only enforced when it is
+    # the genuine boolean True; git_credentials only when it is a recognised
+    # scope).
+    read_only: bool = node_def.get("read_only") is True
+    git_credentials: str | None = node_def.get("git_credentials")
+    git_credentials = git_credentials if git_credentials in ("scoped", "unscoped", "none") else None
     # FAR-296 Phase 4a: wall-clock spend budget (seconds). When set, the sandbox
     # is killed once the wall-clock elapsed time exceeds this budget — a tighter
     # spend bound than the node timeout. Validated (positive int) at save-time
     # and here; a None value disables the wall-clock killer.
     wallclock_budget_seconds: int | None = node_def.get("wallclock_budget_seconds")
-    # FAR-296 Phase 3: script mode that REQUIRES enforcement (egress denial or
-    # resource limits) requires a REMOTE E2B provider (the E2B API key) because
-    # local providers have no egress/resource enforcement point — deny_all /
-    # selected (allowlist) / resource_limits would silently no-op. Fail closed
-    # ONLY when enforcement is actually requested; a plain script-mode node with
-    # no egress/resource config runs fine on any provider (there is nothing to
-    # enforce). This keeps the refusal scoped to exactly the security concern it
-    # guards.
+    # FAR-296 Phase 3: script mode that REQUIRES enforcement (egress denial,
+    # resource limits, read-only workspace, or git-credential scope) requires a
+    # REMOTE E2B provider (the E2B API key) because local providers have no
+    # egress/resource/enforcement point — deny_all / selected (allowlist) /
+    # resource_limits / read_only / git-credential scoping would silently no-op.
+    # Fail closed ONLY when enforcement is actually requested; a plain script-mode
+    # node with no enforcement config runs fine on any provider (there is nothing
+    # to enforce). This keeps the refusal scoped to exactly the security concern
+    # it guards.
     if (
         sandbox_mode == "script"
-        and (egress_policy in ("deny_all", "selected") or resource_limits)
+        and (
+            egress_policy in ("deny_all", "selected")
+            or resource_limits
+            or read_only
+            or git_credentials in ("scoped", "none")
+        )
         and not (os.environ.get("MODULO_E2B_API_KEY") or os.environ.get("E2B_API_KEY"))
     ):
         raise ValueError(
-            f"sandbox_agent node '{node_id}' mode='script' requests egress/resource "
-            "enforcement (egress_policy='deny_all'/'selected' or resource_limits) which requires a "
+            f"sandbox_agent node '{node_id}' mode='script' requests egress/resource/"
+            "sandbox-policy enforcement (egress_policy='deny_all'/'selected', resource_limits, "
+            "read_only, or git_credentials scoped/none) which requires a "
             "remote E2B provider (set MODULO_E2B_API_KEY or E2B_API_KEY) — local "
-            "providers have no egress or resource-limit enforcement point for script mode"
+            "providers have no egress, resource-limit, or sandbox-policy enforcement point for script mode"
         )
     output_schema_json: dict[str, Any] | None = node_def.get("output_schema_json")
     sandbox_timeout: int = node_def.get("timeout_seconds", 1200)
@@ -4716,6 +4871,8 @@ def make_sandbox_agent_fn(
             egress_policy=egress_policy,
             egress_allowlist=egress_allowlist,
             resource_limits=resource_limits,
+            read_only=read_only,
+            git_credentials=git_credentials,
             wallclock_budget_seconds=wallclock_budget_seconds,
             output_schema_json=output_schema_json,
             sandbox_timeout=sandbox_timeout,

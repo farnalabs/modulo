@@ -3,7 +3,7 @@
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from cryptography.fernet import Fernet
@@ -76,10 +76,11 @@ def client() -> Generator[TestClient, None, None]:
         account_id=_USER,
         org_role="operator",
     )
-    test_client = TestClient(app)
-    test_client.cookies.set("XSRF-TOKEN", "test-csrf-token")
-    test_client.headers["X-CSRF-Token"] = "test-csrf-token"
-    yield test_client
+    with patch("modulo.api.routes.notifications.validate_outbound_url"):
+        test_client = TestClient(app)
+        test_client.cookies.set("XSRF-TOKEN", "test-csrf-token")
+        test_client.headers["X-CSRF-Token"] = "test-csrf-token"
+        yield test_client
     app.dependency_overrides.clear()
 
 

@@ -83,6 +83,11 @@ class Settings(BaseSettings):
     # Dedicated modulo_breakglass LOGIN engine URL (the CLI connects as this
     # role — never the app database_url).
     modulo_break_glass_database_url: str = Field(default="")
+    # Dedicated modulo_system LOGIN engine URL for cross-org system cron jobs
+    # (analytics_facts_maintenance, journey_reconcile, retention_cleanup,
+    # dispatcher_reconcile). When set, system crons use this URL to connect as
+    # the modulo_system role (LOGIN, BYPASSRLS) instead of modulo_app.
+    modulo_system_database_url: str = Field(default="")
     # warn|fail — the URL/secret-presence boot checks are warn-in-warn-mode;
     # the allow-list/role-posture assertions (bootstrap_role.py) are FATAL in
     # both modes and are enforced separately at their call site.

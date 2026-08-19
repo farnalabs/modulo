@@ -1366,7 +1366,7 @@ class TestReconcileF6aRecovery:
         redis_cls.from_url.return_value = redis_client
 
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_open_system_factory", return_value=factory),
             patch.object(ch, "get_settings", return_value=_make_settings()),
             patch.object(ch, "AsyncRedis", redis_cls),
             patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
@@ -1413,7 +1413,7 @@ class TestReconcileF6aRecovery:
         redis_cls.from_url.return_value = redis_client
 
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_open_system_factory", return_value=factory),
             patch.object(ch, "get_settings", return_value=_make_settings()),
             patch.object(ch, "AsyncRedis", redis_cls),
             patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
@@ -1460,7 +1460,7 @@ class TestReconcileF6aRecovery:
         redis_cls.from_url.return_value = redis_client
 
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_open_system_factory", return_value=factory),
             patch.object(ch, "get_settings", return_value=_make_settings()),
             patch.object(ch, "AsyncRedis", redis_cls),
             patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
@@ -1507,7 +1507,7 @@ class TestReconcileF6aRecovery:
         redis_cls.from_url.return_value = redis_client
 
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_open_system_factory", return_value=factory),
             patch.object(ch, "get_settings", return_value=_make_settings()),
             patch.object(ch, "AsyncRedis", redis_cls),
             patch.object(ch, "RedisQueue", MagicMock(return_value=q)),

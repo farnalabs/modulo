@@ -20,7 +20,7 @@ from modulo.api.routes import runs as runs_module
 from modulo.api.routes.runs import RunNotFoundError, _validate_run_input_basics
 from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.exceptions import OrgDeletedError
+from modulo.core.exceptions import OrgDeletedError, RateLimitConflictError
 from modulo.core.pipeline_engine.recovery import (
     GuardrailOverrideError,
     GuardrailOverrideRejectedError,
@@ -351,6 +351,36 @@ def test_trigger_run_missing_org_returns_404(client: TestClient) -> None:
         )
 
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/runs — rate-limit conflict (migration 0117 / #1105)
+# ---------------------------------------------------------------------------
+
+
+def test_trigger_run_rate_limit_conflict_returns_429(client: TestClient) -> None:
+    """create_run raising RateLimitConflictError must surface as HTTP 429."""
+    pipeline = _make_pipeline()
+
+    with (
+        patch("modulo.api.routes.runs.get_pipeline", return_value=pipeline),
+        patch(
+            "modulo.api.routes.runs.create_snapshot_from_live_graph",
+            return_value=_make_snapshot(),
+        ),
+        patch(
+            "modulo.api.routes.runs.create_run",
+            side_effect=RateLimitConflictError(pipeline_id=_PIPELINE_ID, rate_limit_key="key:abc"),
+        ),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.post(
+            "/api/v1/runs",
+            json={"pipeline_id": str(_PIPELINE_ID), "input_payload": {"k": "v"}},
+        )
+
+    assert resp.status_code == 429
+    assert resp.json()["detail"] == "Rate limit exceeded for this pipeline"
 
 
 # ---------------------------------------------------------------------------

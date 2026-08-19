@@ -877,6 +877,9 @@ export default {
       "queued": "queued",
       "ago": "{s}s ago",
     },
+    "AuthCallbackView": {
+      "signing_in": "Signing you in..."
+    },
     "AnalyticsView": {
       "analytics": "Analytics",
       "subtitle": "Run volume, cost, token, duration and success trends for your pipelines",
@@ -1246,7 +1249,8 @@ export default {
       "saving": "Saving\u2026",
       "toggle_langsmith": "Toggle LangSmith",
       "save_failed": "Save failed:",
-      "failed_to_load_settings": "Failed to load settings:"
+      "failed_to_load_settings": "Failed to load settings:",
+      "viewer_readonly_note": "You have view-only access to observability settings. An operator or admin can make changes."
     },
     "AdminCostBreakdownView": {
       "cost_breakdown": "Cost Breakdown",

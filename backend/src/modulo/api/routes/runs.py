@@ -30,7 +30,7 @@ from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitiv
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.dispatch import dispatch_run
-from modulo.core.exceptions import OrgDeletedError
+from modulo.core.exceptions import OrgDeletedError, RateLimitConflictError
 from modulo.core.guardrails import GuardrailSummary
 from modulo.core.line_diff import iter_line_diffs
 from modulo.core.node_output_split import node_return, node_telemetry
@@ -155,7 +155,11 @@ async def _do_get_run(
 
         from modulo.db.models.run import Run
 
-        stmt = select(Run).options(selectinload(Run.pipeline)).where(Run.id == run_id)
+        stmt = (
+            select(Run)
+            .options(selectinload(Run.pipeline))
+            .where(Run.id == run_id, Run.organisation_id == principal.organisation_id)
+        )
         run = (await session.execute(stmt)).scalar_one_or_none()
         if run is None:
             raise RunNotFoundError(run_id)
@@ -748,7 +752,7 @@ async def trigger_run(
     try:
         async with session.begin():
             await set_rls_org(session, org_id)
-            pipeline = await get_pipeline(session, req.pipeline_id)
+            pipeline = await get_pipeline(session, req.pipeline_id, organisation_id=org_id)
             if pipeline is None:
                 raise HTTPException(status_code=404, detail=f"Pipeline {req.pipeline_id} not found")
             snapshot = await create_snapshot_from_live_graph(
@@ -795,6 +799,12 @@ async def trigger_run(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except RateLimitConflictError as exc:
+        _log.warning("runs.trigger_run rate_limit_conflict: %s", exc.rate_limit_key)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded for this pipeline",
         ) from None
     except ProgrammingError:
         _log.exception(_CODE_RUNS_TRIGGER_RUN)
@@ -985,7 +995,7 @@ async def cancel_run(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            run = await get_run(session, run_id)
+            run = await get_run(session, run_id, organisation_id=principal.organisation_id)
 
             if run is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
@@ -1978,7 +1988,8 @@ def _mask_prompt_text(text: str) -> str:
     """Mask sensitive credential-like values in prompt text.
 
     Replaces values following sensitive keys (token, secret, api_key,
-    password, key, credential) with bullet characters.
+    password, key, credential) with bullet characters. Also redacts
+    Authorization/Bearer headers and JWT-like tokens regardless of key name.
     """
     import re
 
@@ -1990,6 +2001,13 @@ def _mask_prompt_text(text: str) -> str:
         (r'(password["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
         (r'(credential["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
         (r'(passwd["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
+        # Redact Authorization headers (Bearer tokens, Basic auth, etc.)
+        # Captures the full "Authorization: <value>" or "authorization: <value>"
+        (r'(Authorization["\']?\s*[:=]\s*["\']?)\s*(?:Bearer\s+)?[^\s"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
+        # Redact standalone Bearer tokens (value may contain spaces)
+        (r'(Bearer\s+)[^\n"\'}]+', r"\1" + _MASKED_PLACEHOLDER),
+        # Redact JWT-like tokens (three base64 segments separated by dots)
+        (r"eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", _MASKED_PLACEHOLDER),
     ]
     for pattern, replacement in patterns:
         masked = re.sub(pattern, replacement, masked, flags=re.IGNORECASE)

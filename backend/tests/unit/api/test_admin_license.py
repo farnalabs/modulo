@@ -111,6 +111,7 @@ def client() -> Generator[TestClient, None, None]:
         organisation_id=_TEST_ORG_ID,
         account_id=_TEST_ACCOUNT_ID,
         org_role="admin",
+        is_system_admin=True,
     )
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
@@ -357,10 +358,12 @@ class TestUploadLicense:
         resp = operator_client.post(self.URL, json={"license_key": "dGVzdA==.dGVzdA=="})
         assert resp.status_code == 403
 
-    def test_requires_organisation_membership(self, tenantless_admin_client: TestClient) -> None:
+    def test_requires_system_admin(self, tenantless_admin_client: TestClient) -> None:
+        # Under the require_system_permission("system.config.manage") gate the
+        # 403 now comes from the system-admin check (tenantless_admin_client
+        # has no is_system_admin=True), not from an org-membership check.
         resp = tenantless_admin_client.post(self.URL, json={"license_key": "dGVzdA==.dGVzdA=="})
         assert resp.status_code == 403
-        assert resp.json()["detail"] == "Organisation membership required"
 
 
 class TestIssueLicense:
@@ -388,6 +391,7 @@ class TestIssueLicense:
             organisation_id=_TEST_ORG_ID,
             account_id=_TEST_ACCOUNT_ID,
             org_role="admin",
+            is_system_admin=True,
         )
         mock_plan = MagicMock()
         mock_plan.feature_enabled.return_value = True

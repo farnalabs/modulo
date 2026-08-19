@@ -43,6 +43,7 @@ from sqlalchemy import Boolean, Uuid, bindparam, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.audit_logger import append_audit_event
+from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 from modulo.core.cost_controller.finalize import derive_node_type_map, finalize_cost
 from modulo.core.eval_engine import (
     EvalBlockedError,
@@ -369,6 +370,16 @@ class RunNotFoundError(KeyError):
     def __init__(self, run_id: uuid.UUID) -> None:
         super().__init__(str(run_id))
         self.run_id = run_id
+
+
+class SandboxCapacityExceededError(Exception):
+    """Raised when the org sandbox concurrency cap blocks a resume."""
+
+    def __init__(self, org_id: uuid.UUID) -> None:
+        self.org_id = org_id
+        super().__init__(
+            f"Sandbox concurrency limit reached for org {org_id}; gate left undecided. Retry when capacity frees up."
+        )
 
 
 async def _teardown_hub(hub: Any) -> None:
@@ -1889,6 +1900,7 @@ class PipelineExecutor:
         org_id: uuid.UUID,
         resume_data: dict[str, Any],
         claim_token: str | None = None,
+        check_sandbox_capacity: bool = True,
     ) -> Run:
         """Resume a run that was interrupted for HITL review.
 
@@ -1904,6 +1916,37 @@ class PipelineExecutor:
             if run is None:
                 raise RunNotFoundError(run_id)
             await update_run_status(session, run_id, "running", claimed_by=_WORKER_ID)
+
+            # Atomic sandbox-capacity enforcement (FAR-1306 TOCTOU fix).
+            # The pre-check in the HITL route is a fast-fail optimisation;
+            # THIS is the real gate — serialised per-org via advisory lock so
+            # two concurrent approvals cannot both pass.
+            # Skipped for reject/terminate paths (check_sandbox_capacity=False)
+            # because those routes do not resume sandbox execution.
+            if check_sandbox_capacity and _graph_contains_sandbox_agent(
+                (
+                    await session.execute(
+                        select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == run.snapshot_id)
+                    )
+                ).scalar_one_or_none()
+            ):
+                cap = await get_sandbox_concurrency_limit(session, org_id)
+                if cap is not None:
+                    # pg_advisory_xact_lock(k1, k2) — the two int4 keys are derived
+                    # from a deterministic md5 of the org UUID (same pattern as the
+                    # break-glass migration), so all workers/machines for the same
+                    # org hash to the SAME key (unlike hash(str(org_id)), which
+                    # PYTHONHASHSEED salts per-process). xact-scoped, so it is
+                    # released automatically exactly at this transaction's commit /
+                    # rollback — never leaked onto a pooled connection.
+                    k1, k2 = _uuid_to_lock_keys(org_id)
+                    await session.execute(
+                        text("SELECT pg_advisory_xact_lock(:k1, :k2)"),
+                        {"k1": k1, "k2": k2},
+                    )
+                    active = await count_active_sandbox_runs_for_org(session, org_id, exclude_run_id=run_id)
+                    if active >= cap:
+                        raise SandboxCapacityExceededError(org_id)
 
             snapshot_result = await session.execute(
                 select(PipelineSnapshot).where(PipelineSnapshot.id == run.snapshot_id)

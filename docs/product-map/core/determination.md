@@ -14,20 +14,20 @@ unit-tests:
   - backend/tests/unit/determination/test_inference.py
   - backend/tests/unit/determination/test_scanner.py
   - backend/tests/unit/api/test_determination_endpoint.py
-depends-on: [feat-connectors-hub, feat-connectors-github, feat-connectors-gitlab, feat-connectors-jira, feat-connectors-linear]
+depends-on: [feat-connectors-hub, feat-connectors-github, feat-connectors-gitlab, feat-connectors-jira]
 status: partial
 ---
 
 # SDLC Assessment and Pipeline Draft Generation
 
-The determination endpoint scans a team's connected tools (GitHub, GitLab, Jira, Linear) to infer SDLC maturity and generate editable pipeline drafts.
+The determination endpoint scans a team's connected tools (GitHub, GitLab, Jira) to infer SDLC maturity and generate editable pipeline drafts.
 
 ## Behaviours
 
 - [x] GET /api/v1/determination — scan + infer SDLC maturity
 - [x] POST /api/v1/determination/draft — scan + generate editable pipeline draft
 - [x] Integration with GitHub/GitLab connectors for code activity analysis
-- [x] Integration with Jira/Linear connectors for issue tracking analysis
+- [x] Integration with Jira connectors for issue tracking analysis
 - [x] Pipeline draft generation from inferred workflow
 - [x] Both routes require operator role (403 for non-operators) via `require_permission("determination.scan")`
 - [x] Endpoint-level unit tests exist for both route handlers (`test_determination_endpoint.py`, 15 tests)

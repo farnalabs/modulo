@@ -44,7 +44,6 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("DELETE", "/scim/v2/Groups/{group_id}"): "SCIM shared-secret channel",
     # Error telemetry: HMAC-signed ingestion + public ingestion + session key.
     ("POST", "/api/v1/errors/ingest/public"): "public error ingestion (telemetry)",
-    ("POST", "/api/v1/errors/forwarders/{forwarder_type}/test"): "forwarder test (telemetry)",
     # Onboarding: creation-only + user onboarding actions (ADR creation-only rule).
     ("POST", "/api/v1/onboarding/actions/{action_id}/complete"): "onboarding user action",
     ("POST", "/api/v1/onboarding/actions/{action_id}/skip"): "onboarding user action",
@@ -74,7 +73,6 @@ EXEMPT: dict[tuple[str, str], str] = {
     # Libraries: creation-only + user content + community (ADR creation-only rule).
     ("POST", "/api/v1/libraries/{primitive_id}/ratings"): "user content",
     ("POST", "/api/v1/libraries/{primitive_id}/ratings/abuse"): "user content",
-    ("POST", "/api/v1/libraries/{primitive_id}/create-pipeline"): "creation-only (ADR 3.6)",
     ("POST", "/api/v1/libraries/community/contribute"): "community creation",
     (
         "POST",
@@ -93,18 +91,10 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/auth/refresh"): "auth (no principal)",
     ("POST", "/api/v1/auth/logout"): "auth (refresh-token auth)",
     ("POST", "/api/v1/auth/saml/acs"): "SAML ACS (IdP session)",
-    # Composite templates: creation-only, ADR 3.6 (no real HITL write path).
+    # Composite templates: creation/update/delete/publish routes are now
+    # permission-tagged (pipeline.*); only stateless detect-params remains exempt.
     ("POST", "/api/v1/pipelines/{pipeline_id}/save-as-composite"): "composite creation-only (ADR 3.6)",
-    ("POST", "/api/v1/composite-templates"): "composite creation-only (ADR 3.6)",
-    ("PATCH", "/api/v1/composite-templates/{template_id}"): "composite creation-only (ADR 3.6)",
-    ("DELETE", "/api/v1/composite-templates/{template_id}"): "composite creation-only (ADR 3.6)",
-    ("POST", "/api/v1/composite-templates/{template_id}/restore"): "composite creation-only (ADR 3.6)",
-    ("PUT", "/api/v1/composite-templates/{template_id}/editor"): "composite creation-only (ADR 3.6)",
     ("POST", "/api/v1/composite-templates/detect-params"): "composite creation-only (ADR 3.6)",
-    ("POST", "/api/v1/composite-templates/{template_id}/publish"): "composite creation-only (ADR 3.6)",
-    # Schemas: stateless POSTs with no principal (validation/inference helpers).
-    ("POST", "/api/v1/schemas/validate"): "stateless schema helper",
-    ("POST", "/api/v1/schemas/import"): "stateless schema helper",
     # Runs: node observe/recover carry inline admin/operator checks in the handler.
     ("POST", "/api/v1/runs/{run_id}/nodes/{node_id}/observe"): "inline admin/operator check in handler",
     ("POST", "/api/v1/runs/{run_id}/nodes/{node_id}/recover"): "inline admin/operator check in handler",

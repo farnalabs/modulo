@@ -207,6 +207,18 @@ async def create_eval_definition(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            pipeline = (
+                await session.execute(
+                    select(Pipeline).where(
+                        Pipeline.id == req.pipeline_id,
+                        Pipeline.organisation_id == principal.organisation_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if pipeline is None:
+                raise HTTPException(status_code=404, detail="Pipeline not found")
+
             eval_def = EvalDefinition(
                 organisation_id=principal.organisation_id,
                 pipeline_id=req.pipeline_id,
@@ -365,6 +377,7 @@ async def eval_coverage(
                     await session.execute(
                         select(EvalDefinition).where(
                             EvalDefinition.pipeline_id == pipeline_id,
+                            EvalDefinition.organisation_id == principal.organisation_id,
                             EvalDefinition.node_id.in_([uuid.UUID(nid) for nid in node_ids if nid]),
                         )
                     )
@@ -1008,6 +1021,17 @@ async def create_eval_from_run(
             ).scalar_one_or_none()
             if run is None:
                 raise HTTPException(status_code=404, detail="Run not found")
+
+            pipeline = (
+                await session.execute(
+                    select(Pipeline).where(
+                        Pipeline.id == run.pipeline_id,
+                        Pipeline.organisation_id == principal.organisation_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if pipeline is None:
+                raise HTTPException(status_code=404, detail="Pipeline not found")
 
             outputs = run.outputs_json or {}
             node_output = (
