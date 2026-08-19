@@ -81,8 +81,9 @@ selectors (like `:root:not(.light)`) with the default `:root,:host` inner
 selector, producing invalid nested CSS
 (`:root:not(.light){:root,:host{color-scheme:dark}}`). Simple class selectors
 like `.dark` work correctly: `.dark{color-scheme:dark}`. Dark mode is the
-default (`class="dark"` on `<html>`); toggling to light mode removes the
-class. The `[data-theme="agent"]` theme is **not** wired in Phase 0 — that is
+default (`class="dark"` on `<html>`); toggling to light mode adds `.light` and
+removes `.dark` (mutually exclusive — the two classes are never both present).
+The `[data-theme="agent"]` theme is **not** wired in Phase 0 — that is
 a Phase 1 concern; Phase 0 only requires standard light/dark to work.
 
 ## Decision 4 — Single source-of-truth token bridge + guard test

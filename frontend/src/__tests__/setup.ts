@@ -80,8 +80,8 @@ config.global.plugins = [
   i18n,
   isolatedVueQueryPlugin,
   // PrimeVue plugin so tests can mount PrimeVue components (Phase 0 / FAR-317
-  // groundwork). darkModeSelector matches main.ts — dark by default, light via
-  // the `html.light` class.
+  // groundwork). darkModeSelector matches main.ts — dark by default
+  // (`class="dark"` on <html>), light by adding `.light` and removing `.dark`.
   [PrimeVue, { theme: { preset: Aura, options: { darkModeSelector: '.dark' } } }],
 ]
 
