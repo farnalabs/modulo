@@ -112,3 +112,18 @@ class TestScheduledReportsSurface:
         source = _source(_MIGRATION_0008)
         assert "scheduled_reports ENABLE ROW LEVEL SECURITY" in source
         assert "CREATE POLICY rls_org_isolation ON public.scheduled_reports" in source
+
+
+class TestOrgFkHardeningMigration:
+    def test_uses_cascade_not_restrict(self) -> None:
+        source = _source(_HEAD_MIGRATION)
+        assert "ON DELETE CASCADE" in source
+        assert "ON DELETE RESTRICT" not in source
+
+    def test_upgrade_is_postgres_guarded(self) -> None:
+        source = _source(_HEAD_MIGRATION)
+        assert 'op.get_context().dialect.name == "postgresql"' in source
+
+    def test_is_child_of_0119(self) -> None:
+        source = _source(_HEAD_MIGRATION)
+        assert 'down_revision = "0119_analytics_batch_id"' in source

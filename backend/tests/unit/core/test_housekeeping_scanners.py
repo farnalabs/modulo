@@ -1006,3 +1006,32 @@ class TestUnusedSchemas:
         # snapshot schema pin, "system-schema" is system-owned, and
         # "other-org" is out of scope.
         assert _candidate_names(candidates) == ["unused"]
+
+
+class TestUnusedSchemasNullHandling:
+    async def test_null_agent_schema_id_does_not_suppress_valid_usage(self, session: AsyncSession) -> None:
+        used = Schema(id=uuid.uuid4(), organisation_id=_ORG_A, name="used", account_id=_ACCOUNT)
+        unused = Schema(id=uuid.uuid4(), organisation_id=_ORG_A, name="unused", account_id=_ACCOUNT)
+        session.add_all([used, unused])
+        # An agent with a NULL input_schema_id must not poison the NOT IN
+        # subquery: previously the NULL made it evaluate to UNKNOWN for every
+        # schema, suppressing all usage detection.
+        session.add(
+            _agent(organisation_id=_ORG_A, name="null-input", model_backend_id=uuid.uuid4(), input_schema_id=None)
+        )
+        # A separate agent genuinely references "used" via a non-null input pin.
+        session.add(
+            _agent(
+                organisation_id=_ORG_A,
+                name="uses-schema",
+                model_backend_id=uuid.uuid4(),
+                input_schema_id=used.id,
+            )
+        )
+        await session.commit()
+
+        candidates = await _scan_unused_schemas(session, _ORG_A)
+
+        # Only the truly-unused schema is flagged; "used" stays shielded by the
+        # non-null agent reference despite the NULL-input agent in the same org.
+        assert _candidate_names(candidates) == ["unused"]

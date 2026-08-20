@@ -122,6 +122,12 @@ _CATEGORY_TO_ENTITY: dict[str, str] = {
     "empty_lifecycle_maps": "lifecycle_map",
 }
 
+# Categories that are detection-only (surfaced for triage, never auto-deleted).
+# Submitting a candidate from one of these to the cleanup endpoint returns a
+# clear triage message instead of a misleading "Unknown entity type" error.
+NON_DELETABLE_ENTITY_TYPES: frozenset[str] = frozenset({"invalid_org_fk"})
+
+
 _CATEGORY_DESCRIPTIONS: dict[str, str] = {
     "orphan_secrets": "Secrets whose key is not referenced by any connector config or agent connector_type_refs",
     "unbound_connectors": "Connector instances not bound to any pipeline snapshot",
