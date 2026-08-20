@@ -1,109 +1,123 @@
 <template>
   <div
-    ref="containerRef"
-    class="relative"
+    class="relative flex h-full w-full items-stretch"
     data-testid="sparkline"
-    @pointermove="onPointerMove"
-    @pointerleave="onPointerLeave"
   >
-    <svg
-      :viewBox="`0 0 ${adjustedWidth} ${height}`"
-      class="h-full w-full overflow-hidden"
-      preserveAspectRatio="none"
-      role="img"
-      :aria-label="accessibleLabel"
-    >
-      <defs>
-        <linearGradient :id="gradientId" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" :stop-color="color" stop-opacity="0.35" />
-          <stop offset="100%" :stop-color="color" stop-opacity="0" />
-        </linearGradient>
-      </defs>
-      <template v-if="hasData">
-        <polygon :fill="`url(#${gradientId})`" :points="areaPoints" />
-        <polyline
-          fill="none"
-          :stroke="color"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          :points="linePoints"
-        />
-        <circle
-          data-testid="sparkline-endpoint"
-          :cx="xFor(chartData.length - 1)"
-          :cy="yFor(chartData[chartData.length - 1])"
-          r="2.5"
-          :fill="color"
-        />
-        <!-- Y-axis labels -->
-        <template v-if="showYAxis">
-          <text
-            v-for="(val, ti) in yTickValues"
-            :key="'ytick-' + ti"
-            x="0"
-            :y="yFor(val)"
-            font-size="9"
-            :fill="color"
-            fill-opacity="0.85"
-            dominant-baseline="middle"
-            class="sparkline-y-label"
-          >{{ formatValue(val) }}</text>
-        </template>
-        <!-- X-axis ticks -->
-        <template v-if="showXTicks">
-          <line
-            v-for="ti in xTickIndices"
-            :key="'xtick-' + ti"
-            class="sparkline-x-tick"
-            :x1="xFor(ti)"
-            :y1="height - padding"
-            :x2="xFor(ti)"
-            :y2="height - padding - 2"
-            :stroke="color"
-            stroke-opacity="0.5"
-            stroke-width="1"
-          />
-        </template>
-      </template>
-      <!-- Muted placeholder when there are fewer than two real data points — a
-           fabricated line would read as a misleading zero/flat trend. -->
-      <template v-else>
-        <line
-          :x1="adjustedPadding"
-          :y1="height / 2"
-          :x2="adjustedWidth - padding"
-          :y2="height / 2"
-          :stroke="color"
-          stroke-opacity="0.25"
-          stroke-dasharray="3 3"
-        />
-        <text
-          :x="adjustedWidth / 2"
-          :y="height / 2"
-          text-anchor="middle"
-          dominant-baseline="middle"
-          font-size="10"
-          :fill="color"
-          fill-opacity="0.5"
-          class="sparkline-no-data"
-        >
-          {{ t('components.Sparkline.no_data') }}
-        </text>
-      </template>
-    </svg>
-
-    <!-- Hover tooltip: the accessible label on the svg already carries the full
-         series, so the tooltip is supplementary and hidden from AT to avoid
-         double-announcement. -->
+    <!-- Y-axis labels: rendered as plain HTML, NOT inside the svg below. The
+         svg uses preserveAspectRatio="none" so its polyline/area can fill an
+         arbitrary card box, but that means everything inside the svg's
+         coordinate system is scaled non-uniformly (X and Y scale factors
+         differ). That's fine for the line/fill but silently squashes and
+         stretches text glyphs into unreadable garbage. HTML text outside the
+         svg always renders 1:1 regardless of the chart's internal scale. -->
     <div
-      v-if="tooltipVisible"
-      class="pointer-events-none absolute z-10 rounded-md border bg-background px-2 py-1 text-xs shadow"
-      :style="tooltipStyle"
-      data-testid="sparkline-tooltip"
-      aria-hidden="true"
+      v-if="showYAxis && hasData"
+      class="flex shrink-0 flex-col justify-between pr-1.5 text-right"
+      style="width: 34px"
     >
-      {{ tooltipText }}
+      <span
+        v-for="(val, ti) in yTickValuesDesc"
+        :key="'ytick-' + ti"
+        class="sparkline-y-label text-[9px] leading-none"
+        :style="{ color: color, opacity: 0.85 }"
+        >{{ formatValue(val) }}</span
+      >
+    </div>
+
+    <div
+      ref="containerRef"
+      class="relative min-w-0 flex-1"
+      data-testid="sparkline-plot"
+      @pointermove="onPointerMove"
+      @pointerleave="onPointerLeave"
+    >
+      <svg
+        :viewBox="`0 0 ${width} ${height}`"
+        class="h-full w-full overflow-hidden"
+        preserveAspectRatio="none"
+        role="img"
+        :aria-label="accessibleLabel"
+      >
+        <defs>
+          <linearGradient :id="gradientId" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" :stop-color="color" stop-opacity="0.35" />
+            <stop offset="100%" :stop-color="color" stop-opacity="0" />
+          </linearGradient>
+        </defs>
+        <template v-if="hasData">
+          <polygon :fill="`url(#${gradientId})`" :points="areaPoints" />
+          <polyline
+            fill="none"
+            :stroke="color"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            :points="linePoints"
+          />
+          <circle
+            data-testid="sparkline-endpoint"
+            :cx="xFor(chartData.length - 1)"
+            :cy="yFor(chartData[chartData.length - 1])"
+            r="2.5"
+            :fill="color"
+          />
+          <!-- X-axis ticks: plain vertical lines, no text — a squashed short
+               line still reads fine as a tick mark, so it's safe to leave
+               inside the non-uniformly-scaled svg. -->
+          <template v-if="showXTicks">
+            <line
+              v-for="ti in xTickIndices"
+              :key="'xtick-' + ti"
+              class="sparkline-x-tick"
+              :x1="xFor(ti)"
+              :y1="height - padding"
+              :x2="xFor(ti)"
+              :y2="height - padding - 2"
+              :stroke="color"
+              stroke-opacity="0.5"
+              stroke-width="1"
+            />
+          </template>
+        </template>
+        <!-- Muted placeholder when there are fewer than two real data points — a
+             fabricated line would read as a misleading zero/flat trend. -->
+        <template v-else>
+          <line
+            :x1="padding"
+            :y1="height / 2"
+            :x2="width - padding"
+            :y2="height / 2"
+            :stroke="color"
+            stroke-opacity="0.25"
+            stroke-dasharray="3 3"
+          />
+          <text
+            :x="width / 2"
+            :y="height / 2"
+            text-anchor="middle"
+            dominant-baseline="middle"
+            font-size="10"
+            :fill="color"
+            fill-opacity="0.5"
+            class="sparkline-no-data"
+          >
+            {{ t('components.Sparkline.no_data') }}
+          </text>
+        </template>
+      </svg>
+
+      <!-- Hover tooltip: the accessible label on the svg already carries the full
+           series, so the tooltip is supplementary and hidden from AT to avoid
+           double-announcement. -->
+      <div
+        v-if="tooltipVisible"
+        class="pointer-events-none absolute z-10 rounded-md border bg-background px-2 py-1 text-xs shadow"
+        :style="tooltipStyle"
+        data-testid="sparkline-tooltip"
+        aria-hidden="true"
+      >
+        {{ tooltipText }}
+      </div>
     </div>
   </div>
 </template>
@@ -191,7 +205,7 @@ const stepX = computed(
 );
 
 function xFor(i: number): number {
-  return clamp(adjustedPadding.value + i * stepX.value, adjustedPadding.value, adjustedWidth.value - padding);
+  return clamp(padding + i * stepX.value, padding, props.width - padding);
 }
 
 function yFor(v: number): number {
@@ -220,18 +234,16 @@ const areaPoints = computed(() => {
 });
 
 // --- Axis labels / ticks ----------------------------------------------------
-const yAxisLabelWidth = computed(() => (props.showYAxis ? 40 : 0));
-
-const adjustedWidth = computed(() => props.width + yAxisLabelWidth.value);
-
-const adjustedPadding = computed(() => padding + yAxisLabelWidth.value);
-
 const yTickValues = computed(() => {
   if (!props.showYAxis || !hasData.value) return [];
   const n = Math.max(2, props.tickCount);
   const step = range.value > 0 ? range.value / (n - 1) : 0;
   return Array.from({ length: n }, (_, i) => min.value + step * i);
 });
+
+// The y-axis label column lays out top-to-bottom via flexbox `justify-between`,
+// so the highest value must come first in DOM order (yTickValues is ascending).
+const yTickValuesDesc = computed(() => [...yTickValues.value].reverse());
 
 const xTickIndices = computed(() => {
   if (!props.showXTicks || !hasData.value) return [];
@@ -255,11 +267,11 @@ function onPointerMove(e: PointerEvent): void {
   const rect = el.getBoundingClientRect();
   // jsdom reports 0-sized rects; fall back to the viewBox width so the nearest
   // index still resolves in unit tests.
-  const denom = rect.width || adjustedWidth.value;
+  const denom = rect.width || props.width;
   const x = clamp(e.clientX - rect.left, 0, denom);
-  const viewboxX = (x / denom) * adjustedWidth.value;
+  const viewboxX = (x / denom) * props.width;
   const idx = clamp(
-    Math.round((viewboxX - adjustedPadding.value) / stepX.value),
+    Math.round((viewboxX - padding) / stepX.value),
     0,
     chartData.value.length - 1,
   );

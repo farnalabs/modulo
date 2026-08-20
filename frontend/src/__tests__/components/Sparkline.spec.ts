@@ -8,16 +8,23 @@ type Wrapper = ReturnType<typeof mount>
 // jsdom exposes clientX/clientY as getter-only on MouseEvent, so @vue/test-utils
 // trigger() cannot set them. Dispatch a real event with the coords defined and
 // await the reactive DOM update.
+// pointermove/pointerleave listeners live on the inner plot div (wrapping just
+// the svg + tooltip), not the component root — the root also contains the
+// y-axis label column, which must not affect pointer/tooltip math.
+function plotElement(wrapper: Wrapper): Element {
+  return wrapper.get('[data-testid="sparkline-plot"]').element
+}
+
 async function movePointer(wrapper: Wrapper, clientX: number, clientY: number) {
   const event = new Event('pointermove', { bubbles: true, cancelable: true })
   Object.defineProperty(event, 'clientX', { value: clientX, configurable: true })
   Object.defineProperty(event, 'clientY', { value: clientY, configurable: true })
-  wrapper.element.dispatchEvent(event)
+  plotElement(wrapper).dispatchEvent(event)
   await nextTick()
 }
 
 async function leavePointer(wrapper: Wrapper) {
-  wrapper.element.dispatchEvent(new Event('pointerleave', { bubbles: true }))
+  plotElement(wrapper).dispatchEvent(new Event('pointerleave', { bubbles: true }))
   await nextTick()
 }
 
@@ -119,12 +126,12 @@ describe('Sparkline', () => {
     // Label text spans min..max from the tick value computation.
     const texts = labels.map(l => l.text()).sort()
     expect(texts).toEqual(['1', '4.5', '8'])
-    // Labels must sit inside the plot area (2..58 for a 60-tall viewBox).
-    const ys = labels.map(l => Number(l.attributes('y')))
-    ys.forEach(y => {
-      expect(y).toBeGreaterThanOrEqual(2)
-      expect(y).toBeLessThanOrEqual(58)
-    })
+    // Labels are plain HTML <span> elements outside the svg (never subject to
+    // its non-uniform preserveAspectRatio="none" scale), laid out top-to-bottom
+    // via flexbox — the highest value renders first.
+    labels.forEach(l => expect(l.element.tagName).toBe('SPAN'))
+    expect(labels[0]!.text()).toBe('8')
+    expect(labels[labels.length - 1]!.text()).toBe('1')
 
     const withoutAxis = mount(Sparkline, { props: { data: [1, 4, 2, 8] } })
     expect(withoutAxis.findAll('.sparkline-y-label')).toHaveLength(0)
@@ -167,15 +174,12 @@ describe('Sparkline', () => {
     const wrapper = mount(Sparkline, {
       props: { data, labels, width: 200, unit: 'runs', showYAxis: true },
     })
-    // With showYAxis the plot starts at adjustedPadding (42) instead of padding (2)
-    // and spans adjustedWidth (240) instead of width (200). Hovering the exact
-    // viewBox x of the first point must resolve to index 0 (it resolves to ~6 in
-    // the pre-fix mapping, which used padding/width).
-    await movePointer(wrapper, 42, 10)
+    // The y-axis label column lives outside the svg/plot div entirely (a
+    // sibling flex item), so pointer math inside the plot always uses plain
+    // width/padding regardless of showYAxis — no adjustment needed.
+    await movePointer(wrapper, 2, 10)
     expect(wrapper.find('[data-testid="sparkline-tooltip"]').text()).toContain('day0')
-    // And the last point (clamped to adjustedWidth - padding = 238) must resolve
-    // to the final index.
-    await movePointer(wrapper, 238, 10)
+    await movePointer(wrapper, 198, 10)
     expect(wrapper.find('[data-testid="sparkline-tooltip"]').text()).toContain('day29')
   })
 
