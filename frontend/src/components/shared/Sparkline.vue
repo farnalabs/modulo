@@ -15,8 +15,8 @@
     >
       <defs>
         <linearGradient :id="gradientId" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" :stop-color="color" stop-opacity="0.2" />
-          <stop offset="100%" :stop-color="color" stop-opacity="0.02" />
+          <stop offset="0%" :stop-color="color" stop-opacity="0.35" />
+          <stop offset="100%" :stop-color="color" stop-opacity="0" />
         </linearGradient>
       </defs>
       <template v-if="hasData">
@@ -24,10 +24,17 @@
         <polyline
           fill="none"
           :stroke="color"
-          stroke-width="1.5"
+          stroke-width="2"
           stroke-linecap="round"
           stroke-linejoin="round"
           :points="linePoints"
+        />
+        <circle
+          data-testid="sparkline-endpoint"
+          :cx="xFor(chartData.length - 1)"
+          :cy="yFor(chartData[chartData.length - 1])"
+          r="2.5"
+          :fill="color"
         />
         <!-- Y-axis labels -->
         <template v-if="showYAxis">
@@ -38,7 +45,7 @@
             :y="yFor(val)"
             font-size="9"
             :fill="color"
-            fill-opacity="0.6"
+            fill-opacity="0.85"
             dominant-baseline="middle"
             class="sparkline-y-label"
           >{{ formatValue(val) }}</text>
@@ -54,7 +61,7 @@
             :x2="xFor(ti)"
             :y2="height - padding - 2"
             :stroke="color"
-            stroke-opacity="0.3"
+            stroke-opacity="0.5"
             stroke-width="1"
           />
         </template>

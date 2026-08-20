@@ -76,7 +76,7 @@
               </span>
               <span class="text-xs text-muted-foreground">{{ summary.eval_pass_rate.total_evals }} {{ $t('views.DashboardView.total_evals') }}</span>
             </div>
-            <Sparkline class="mt-2 h-12 w-full" :data="evalSparklineData" :labels="summaryTrendLabels" unit="%" color="var(--color-primary)" :show-y-axis="true" />
+            <Sparkline class="mt-2 h-12 w-full" :data="evalSparklineData" :labels="summaryTrendLabels" unit="%" color="hsl(var(--primary))" :show-y-axis="true" />
           </div>
           <div v-else class="flex items-center justify-center py-6 text-sm text-muted-foreground">{{ $t('views.DashboardView.no_eval_data_yet') }}</div>
         </router-link>
@@ -90,7 +90,7 @@
             </span>
           </div>
           <p class="text-xs text-muted-foreground mt-1">{{ spendTrackedDays }} {{ $t('views.DashboardView.days_tracked') }}</p>
-          <Sparkline class="mt-2 h-12 w-full" :data="spendSparklineData" :labels="summaryTrendLabels" unit="$" color="var(--color-warning)" :show-y-axis="true" />
+          <Sparkline class="mt-2 h-12 w-full" :data="spendSparklineData" :labels="summaryTrendLabels" unit="$" color="hsl(var(--warning))" :show-y-axis="true" />
         </router-link>
       </div>
       <!-- Team breakdown (Team only) -->
@@ -152,15 +152,15 @@
         <div v-if="trendData.length > 1" class="space-y-4">
           <div>
             <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.run_count') }}</p>
-            <Sparkline class="h-16 w-full" :data="trendRunCounts" :labels="trendLabels" :unit="$t('views.DashboardView.runs')" color="var(--color-primary)" :show-y-axis="true" :show-x-ticks="true" />
+            <Sparkline class="h-16 w-full" :data="trendRunCounts" :labels="trendLabels" :unit="$t('views.DashboardView.runs')" color="hsl(var(--primary))" :show-y-axis="true" :show-x-ticks="true" />
           </div>
           <div>
             <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.eval_pass_rate_label') }}</p>
-            <Sparkline class="h-16 w-full" :data="trendEvalRates" :labels="trendLabels" unit="%" color="var(--color-success)" :show-y-axis="true" :show-x-ticks="true" />
+            <Sparkline class="h-16 w-full" :data="trendEvalRates" :labels="trendLabels" unit="%" color="hsl(var(--success))" :show-y-axis="true" :show-x-ticks="true" />
           </div>
           <div>
             <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.token_spend') }}</p>
-            <Sparkline class="h-16 w-full" :data="trendSpendData" :labels="trendLabels" unit="$" color="var(--color-warning)" :show-y-axis="true" :show-x-ticks="true" />
+            <Sparkline class="h-16 w-full" :data="trendSpendData" :labels="trendLabels" unit="$" color="hsl(var(--warning))" :show-y-axis="true" :show-x-ticks="true" />
           </div>
         </div>
         <div v-else class="flex items-center justify-center py-12">
