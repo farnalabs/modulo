@@ -1302,6 +1302,60 @@ class TestBatchCompare:
         # secrets) and must be masked exactly like added/changed.
         assert diff["removed"]["api_key"] != "sk-base-secret"
 
+    async def test_masks_nested_sensitive_override_values(self) -> None:
+        """A secret nested under a non-sensitive key is masked at any depth.
+
+        The compare response must mask consistently with ``merged_payload``:
+        ``run_context_overrides`` and each ``override_diff`` part recurse into
+        nested dicts so a value under a non-sensitive parent (e.g. ``config``)
+        never leaks in plaintext.
+        """
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        batch_id = uuid.uuid4()
+
+        nested_secret = {"config": {"api_key": "sk-nested-secret", "temperature": 0.7}}
+        entries = [
+            self._entry(
+                run_context_overrides=nested_secret,
+                override_diff={
+                    "added": {"config": {"api_key": "sk-nested-added"}},
+                    "removed": {"config": {"api_key": "sk-nested-removed"}},
+                    "changed": {"config": {"api_key": "sk-nested-changed"}},
+                },
+            )
+        ]
+        mock_run = MagicMock()
+        mock_run.pipeline_id = uuid.uuid4()
+
+        with (
+            patch(
+                "modulo.api.routes.variants.get_batch_compare",
+                new_callable=AsyncMock,
+                return_value=entries,
+            ),
+            patch(
+                "modulo.api.routes.variants.get_run",
+                new_callable=AsyncMock,
+                return_value=mock_run,
+            ),
+            patch(
+                "modulo.api.routes.variants.has_pipeline_default_evals",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            result = await batch_compare(batch_id, mock_session, principal)
+
+        masked = result["runs"][0]["run_context_overrides"]
+        assert masked["config"]["api_key"] != "sk-nested-secret"
+        # non-sensitive siblings at depth are preserved
+        assert masked["config"]["temperature"] == 0.7
+        diff = result["runs"][0]["override_diff"]
+        assert diff["added"]["config"]["api_key"] != "sk-nested-added"
+        assert diff["removed"]["config"]["api_key"] != "sk-nested-removed"
+        assert diff["changed"]["config"]["api_key"] != "sk-nested-changed"
+
     async def test_returns_404_for_cross_org_batch(self) -> None:
         """Cross-org IDOR: another org's batch_id resolves to no org-owned runs."""
         principal = make_mock_principal()

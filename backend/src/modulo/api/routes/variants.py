@@ -12,7 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_RESOURCE_ALREADY_EXISTS
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
-from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitive_value
 from modulo.api.routes.runs import _mask_output_value
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.run import get_run
@@ -839,12 +838,12 @@ async def batch_compare(
         )
 
     # Sensitive masking (FAR-332 3i): frozen run_context_overrides may hold
-    # secrets; never surface them in plaintext on the compare surface.
-    def _mask_overrides(overrides: dict[str, Any]) -> dict[str, Any]:
-        return {k: (mask_sensitive_value(str(v)) if is_sensitive_key(k) else v) for k, v in overrides.items()}
-
+    # secrets; never surface them in plaintext on the compare surface. Use the
+    # same RECURSIVE util as the runs response (merged_payload) so a secret
+    # nested under a non-sensitive key is masked at any depth — a shallow
+    # top-level-key match would leak it verbatim.
     for entry in entries:
-        entry["run_context_overrides"] = _mask_overrides(entry.get("run_context_overrides", {}))
+        entry["run_context_overrides"] = _mask_output_value(entry.get("run_context_overrides", {}))
         diff = entry.get("override_diff", {})
         if isinstance(diff, dict):
             # ``removed`` carries the base run's frozen override values — which
@@ -852,6 +851,6 @@ async def batch_compare(
             for part in ("added", "changed", "removed"):
                 raw = diff.get(part, {})
                 if isinstance(raw, dict):
-                    diff[part] = _mask_overrides(raw)
+                    diff[part] = _mask_output_value(raw)
 
     return {"batch_id": batch_id, "has_evals": has_evals, "runs": entries}
