@@ -101,6 +101,21 @@ async def _insert_run(
     return run_id
 
 
+async def _insert_test_org(db_engine: AsyncEngine, org_id: uuid.UUID) -> None:
+    """Seed a real ``organisations`` row so foreign-org FKs are satisfiable."""
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)",
+            ),
+            {
+                "id": str(org_id),
+                "name": "Variant Foreign Org",
+                "slug": f"variant-foreign-{org_id.hex[:8]}",
+            },
+        )
+
+
 async def _create_test_pipeline(db_engine: AsyncEngine, org_id: uuid.UUID, test_user: uuid.UUID) -> uuid.UUID:
     pipeline_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
@@ -461,6 +476,7 @@ async def test_cross_org_batch_returns_empty(
 ) -> None:
     """FAR-332 3d/3f: another org's batch_id resolves to no org-owned runs (IDOR backstop)."""
     foreign_org = uuid.uuid4()
+    await _insert_test_org(db_engine, foreign_org)
     foreign_pipeline = await _create_test_pipeline(db_engine, foreign_org, test_user)
     foreign_snapshot = await _insert_test_snapshot(db_engine, foreign_org, foreign_pipeline)
     foreign_batch = uuid.uuid4()

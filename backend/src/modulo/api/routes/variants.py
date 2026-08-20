@@ -13,6 +13,7 @@ from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_RESOURCE_ALREADY
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitive_value
+from modulo.api.routes.runs import _mask_output_value
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.run import get_run
 from modulo.db.crud.variant_group import (
@@ -163,6 +164,51 @@ def _mint_variant_ids(variants: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _collect_snapshot_ids(variants: list[Any]) -> list[uuid.UUID]:
+    """Collect the ``snapshot_id`` of every variant that carries one.
+
+    Variants that are not dicts or that lack a snapshot_id are skipped — they
+    cannot be cross-org referenced and contribute nothing to the ownership set.
+    """
+    out: list[uuid.UUID] = []
+    for v in variants:
+        if not isinstance(v, dict):
+            continue
+        raw = v.get("snapshot_id")
+        if raw is None:
+            continue
+        if isinstance(raw, uuid.UUID):
+            out.append(raw)
+        else:
+            out.append(uuid.UUID(str(raw)))
+    return out
+
+
+async def _assert_variant_ownership(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    snapshot_ids: list[uuid.UUID],
+) -> None:
+    """Reject a cross-org pipeline/snapshot reference with a 403 (fail closed).
+
+    Runs the same ownership check the batch path uses so a group referencing a
+    pipeline or snapshot outside the org is rejected at the write source (and
+    on the single-run path) instead of leaking existence via a generic error.
+    """
+    if not await validate_batch_ownership(
+        session,
+        org_id=org_id,
+        pipeline_id=pipeline_id,
+        snapshot_ids=snapshot_ids,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Variant group references a pipeline or snapshot outside your organisation.",
+        ) from None
+
+
 def _variant_to_response(group: Any) -> dict[str, Any]:
     return {
         "id": group.id,
@@ -189,6 +235,12 @@ async def create_group(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await _assert_variant_ownership(
+                session,
+                org_id=principal.organisation_id,
+                pipeline_id=req.pipeline_id,
+                snapshot_ids=_collect_snapshot_ids([v.model_dump() for v in req.variants]),
+            )
             group = await create_variant_group(
                 session,
                 org_id=principal.organisation_id,
@@ -325,6 +377,12 @@ async def update_group(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await _assert_variant_ownership(
+                session,
+                org_id=principal.organisation_id,
+                pipeline_id=req.pipeline_id,
+                snapshot_ids=_collect_snapshot_ids([v.model_dump() for v in req.variants]),
+            )
             group = await update_variant_group(
                 session,
                 group_id,
@@ -473,6 +531,16 @@ async def run_variant(
                     detail="Variant group has no variants configured",
                 )
 
+            # Server-side ownership validation (FAR-332 3f): fail closed with a
+            # 403 when the group references a pipeline or snapshot outside the
+            # org, mirroring the batch path.
+            await _assert_variant_ownership(
+                session,
+                org_id=principal.organisation_id,
+                pipeline_id=group.pipeline_id,
+                snapshot_ids=_collect_snapshot_ids(group.variants),
+            )
+
             if not await check_pipeline_run_quota(session, group):
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -522,7 +590,7 @@ async def run_variant(
     return {
         "run_id": result["run_id"],
         "variant_name": result["variant"].get("name", "unknown"),
-        "merged_payload": result["merged_payload"],
+        "merged_payload": _mask_output_value(result["merged_payload"]),
     }
 
 
@@ -554,23 +622,12 @@ async def run_batch(
             # Server-side ownership validation (FAR-332 3f): every variant's
             # snapshot must belong to the org, not just the group. Fail closed
             # with a 403 (never leak existence).
-            snapshot_ids = [
-                uuid.UUID(str(v["snapshot_id"]))
-                if not isinstance(v.get("snapshot_id"), uuid.UUID)
-                else v["snapshot_id"]
-                for v in group.variants
-                if isinstance(v, dict) and v.get("snapshot_id") is not None
-            ]
-            if not await validate_batch_ownership(
+            await _assert_variant_ownership(
                 session,
                 org_id=principal.organisation_id,
                 pipeline_id=group.pipeline_id,
-                snapshot_ids=snapshot_ids,
-            ):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Variant group references a pipeline or snapshot outside your organisation.",
-                ) from None
+                snapshot_ids=_collect_snapshot_ids(group.variants),
+            )
 
             results = await run_variant_batch(
                 session,
@@ -618,7 +675,7 @@ async def run_batch(
         {
             "run_id": r["run_id"],
             "variant_name": r["variant"].get("name", "unknown"),
-            "merged_payload": r["merged_payload"],
+            "merged_payload": _mask_output_value(r["merged_payload"]),
         }
         for r in results
     ]
@@ -790,7 +847,9 @@ async def batch_compare(
         entry["run_context_overrides"] = _mask_overrides(entry.get("run_context_overrides", {}))
         diff = entry.get("override_diff", {})
         if isinstance(diff, dict):
-            for part in ("added", "changed"):
+            # ``removed`` carries the base run's frozen override values — which
+            # may hold secrets — so it must be masked like added/changed.
+            for part in ("added", "changed", "removed"):
                 raw = diff.get(part, {})
                 if isinstance(raw, dict):
                     diff[part] = _mask_overrides(raw)

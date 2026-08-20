@@ -203,6 +203,41 @@ def pick_variant_weighted(
     return clean[-1]
 
 
+async def _lock_variant_group(session: AsyncSession, group: VariantGroup) -> VariantGroup | None:
+    """Row-lock the group to prevent concurrent quota races (PRD 8.19)."""
+    result = await session.execute(select(VariantGroup).where(VariantGroup.id == group.id).with_for_update())
+    locked = result.scalar_one_or_none()
+    return locked if locked is not None else None
+
+
+def _coerce_snapshot_id(raw: Any) -> uuid.UUID | None:
+    """Normalise a variant's ``snapshot_id`` to a UUID (or ``None``)."""
+    if raw is None:
+        return None
+    return uuid.UUID(str(raw)) if isinstance(raw, str) else raw
+
+
+def _merge_variant_payload(
+    variant: dict[str, Any],
+    base_payload: dict[str, Any],
+    *,
+    degraded_evals: bool,
+) -> dict[str, Any]:
+    """Merge a variant's ``run_context_overrides`` into the base payload.
+
+    Returns a NEW dict; neither *base_payload* nor *variant* is mutated. When
+    ``degraded_evals`` is set the ``_degraded_evals`` marker is applied last so
+    the group setting always wins over any override.
+    """
+    payload = dict(base_payload)
+    overrides = variant.get("run_context_overrides", {})
+    if isinstance(overrides, dict):
+        payload.update(overrides)
+    if degraded_evals:
+        payload["_degraded_evals"] = True
+    return payload
+
+
 async def run_variant_weighted(
     session: AsyncSession,
     *,
@@ -217,8 +252,7 @@ async def run_variant_weighted(
     Returns dict with run_id, variant, merged_payload, or None if quota exceeded.
     Locks the variant group row to prevent concurrent quota races.
     """
-    result = await session.execute(select(VariantGroup).where(VariantGroup.id == group.id).with_for_update())
-    locked = result.scalar_one_or_none()
+    locked = await _lock_variant_group(session, group)
     if locked is None:
         return None
     group = locked
@@ -230,18 +264,11 @@ async def run_variant_weighted(
     if variant is None:
         return None
 
-    merged_payload = dict(input_payload or {})
-    overrides = variant.get("run_context_overrides", {})
-    if isinstance(overrides, dict):
-        merged_payload.update(overrides)
+    merged_payload = _merge_variant_payload(variant, input_payload or {}, degraded_evals=group.degraded_evals)
 
-    if group.degraded_evals:
-        merged_payload["_degraded_evals"] = True
-
-    raw_sid = variant.get("snapshot_id")
-    if raw_sid is None:
+    snapshot_id = _coerce_snapshot_id(variant.get("snapshot_id"))
+    if snapshot_id is None:
         return None
-    snapshot_id = uuid.UUID(str(raw_sid)) if isinstance(raw_sid, str) else raw_sid
 
     run = await create_run(
         session,
@@ -286,8 +313,7 @@ async def run_variant_batch(
     Returns a list of ``{run_id, variant, merged_payload}`` in variant insertion
     order, or ``None`` when the group cannot fire.
     """
-    result = await session.execute(select(VariantGroup).where(VariantGroup.id == group.id).with_for_update())
-    locked = result.scalar_one_or_none()
+    locked = await _lock_variant_group(session, group)
     if locked is None:
         return None
     group = locked
@@ -304,25 +330,20 @@ async def run_variant_batch(
     if not await check_pipeline_run_quota_for_batch(session, group, batch_size):
         return None
 
-    merged_payload = dict(input_payload or {})
-    if group.degraded_evals:
-        merged_payload["_degraded_evals"] = True
-
     # FAR-332 3c — one batch = one batch_id. Every run created below is stamped
     # with the same value so the compare route can load the batch purely by it.
     batch_id = uuid.uuid4()
 
     results: list[dict[str, Any]] = []
     for variant in variants:
-        payload = dict(merged_payload)
         overrides = variant.get("run_context_overrides", {})
-        if isinstance(overrides, dict):
-            payload.update(overrides)
+        if not isinstance(overrides, dict):
+            overrides = {}
+        payload = _merge_variant_payload(variant, input_payload or {}, degraded_evals=group.degraded_evals)
 
-        raw_sid = variant.get("snapshot_id")
-        if raw_sid is None:
+        snapshot_id = _coerce_snapshot_id(variant.get("snapshot_id"))
+        if snapshot_id is None:
             return None  # defensive — the pre-flight loop above already guarantees this
-        snapshot_id = uuid.UUID(str(raw_sid)) if isinstance(raw_sid, str) else raw_sid
 
         # Frozen snapshot/override capture at fire time — the single source of
         # truth for "which input this variant ran with". The compare view reads
