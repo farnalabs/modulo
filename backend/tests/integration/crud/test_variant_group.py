@@ -55,6 +55,7 @@ async def _insert_test_snapshot(
     db_engine: AsyncEngine,
     org_id: uuid.UUID,
     pipeline_id: uuid.UUID,
+    snapshot_version: int = 1,
 ) -> uuid.UUID:
     snapshot_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
@@ -63,10 +64,15 @@ async def _insert_test_snapshot(
                 "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, "
                 "snapshot_version, graph_json, connector_bindings_json, schema_pins_json, "
                 "prompt_pins_json, model_backend_pins_json, run_context_defaults, config_json) "
-                "VALUES (:id, :pid, :oid, 1, '{}'::json, '[]'::json, "
+                "VALUES (:id, :pid, :oid, :ver, '{}'::json, '[]'::json, "
                 "'[]'::json, '[]'::json, '[]'::json, '{}'::json, '{}'::json)",
             ),
-            {"id": str(snapshot_id), "pid": str(pipeline_id), "oid": str(org_id)},
+            {
+                "id": str(snapshot_id),
+                "pid": str(pipeline_id),
+                "oid": str(org_id),
+                "ver": snapshot_version,
+            },
         )
     return snapshot_id
 
@@ -513,8 +519,8 @@ async def test_validate_batch_ownership_allows_owned_pipeline_and_snapshots(
 ) -> None:
     """FAR-332 3f: owned pipeline + owned snapshots passes the fail-closed guard (real DB)."""
     pipeline_id = await _create_test_pipeline(db_engine, test_org, test_user)
-    snap_a = await _insert_test_snapshot(db_engine, test_org, pipeline_id)
-    snap_b = await _insert_test_snapshot(db_engine, test_org, pipeline_id)
+    snap_a = await _insert_test_snapshot(db_engine, test_org, pipeline_id, snapshot_version=1)
+    snap_b = await _insert_test_snapshot(db_engine, test_org, pipeline_id, snapshot_version=2)
 
     assert (
         await validate_batch_ownership(
