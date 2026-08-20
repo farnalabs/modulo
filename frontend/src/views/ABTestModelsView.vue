@@ -1,3 +1,15 @@
+// Generalised variant comparison creator (FAR-332).
+//
+// Builds a set of self-contained variant rows against a single pipeline, then
+// fires them all at once as one all-or-nothing batch. Each row carries:
+//   - a stable per-row id (crypto.randomUUID)
+//   - a unique, non-blank label
+//   - a snapshot picker (defaults to the pipeline's current snapshot)
+//   - first-class concrete pickers for the common override dimensions
+//     (model backend, prompt version) that translate into the underlying
+//     run_context_overrides keys
+//   - unknown override keys are rejected (no abstract key/value editor in v1)
+
 <template>
   <PageTabs :tabs="[
     { label: 'Evals', to: '/evals/editor' },
@@ -9,343 +21,302 @@
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" />
     <template v-else>
-      <PageHeader :title="$t('views.ABTestModelsView.ab_test_models')" subtitle="Compare model backends side by side with weighted A/B testing — eval scores, costs, and token usage" />
+      <PageHeader
+        :title="$t('views.variantCreator.title')"
+        :subtitle="$t('views.variantCreator.subtitle')"
+      />
 
-      <div class="flex flex-wrap items-center gap-4">
+      <div class="mb-6 flex flex-wrap items-center gap-4">
         <label class="flex items-center gap-2 text-sm">
-          <span class="text-muted-foreground">{{ $t('views.ABTestModelsView.pipeline') }}</span>
+          <span class="text-muted-foreground">{{ $t('views.variantCreator.pipeline') }}</span>
           <Select
-  v-model="selectedPipelineId"
-  :placeholder="$t('views.ABTestModelsView.select_a_pipeline')"
-  data-testid="ab-test-models-pipeline-select"
-  aria-label="Pipeline"
-  class="min-w-[280px]"
-  :options="pipelines.map(p => ({ value: p.id, label: p.name }))"
-  option-label="label"
-  option-value="value"
->
-  <template #option="{ option }">
-    <span :data-value="option.value">{{ option.label }}</span>
-  </template>
-</Select>
+            v-model="selectedPipelineId"
+            :placeholder="$t('views.variantCreator.select_a_pipeline')"
+            data-testid="variant-builder-pipeline-select"
+            aria-label="Pipeline"
+            class="min-w-[280px]"
+            :options="pipelines.map(p => ({ value: p.id, label: p.name }))"
+            option-label="label"
+            option-value="value"
+          >
+            <template #option="{ option }">
+              <span :data-value="option.value">{{ option.label }}</span>
+            </template>
+          </Select>
         </label>
 
         <label class="flex items-center gap-2 text-sm">
-          <span class="text-muted-foreground">{{ $t('views.ABTestModelsView.existing_group') }}</span>
-          <Select
-  v-model="selectedGroupId"
-  :placeholder="$t('views.ABTestModelsView.new_group')"
-  data-testid="ab-test-models-group-select"
-  aria-label="Existing group"
-  class="min-w-[200px]"
-  :options="[{ value: '__all__', label: $t('views.ABTestModelsView.new_variant_group') }, ...filteredGroups.map(g => ({ value: g.id, label: g.name }))]"
-  option-label="label"
-  option-value="value"
->
-  <template #option="{ option }">
-    <span :data-value="option.value">{{ option.label }}</span>
-  </template>
-</Select>
+          <span class="text-muted-foreground">{{ $t('views.variantCreator.comparison_name') }}</span>
+          <input
+            v-model="comparisonName"
+            data-testid="variant-builder-name"
+            type="text"
+            :placeholder="$t('views.variantCreator.comparison_name_placeholder')"
+            class="w-72 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
         </label>
       </div>
 
       <template v-if="selectedPipelineId">
-        <section class="space-y-4 rounded-lg border bg-card p-6">
-          <h2 class="text-base font-semibold tracking-tight">
-            {{ $t(selectedGroupId && selectedGroupId !== '__all__' ? 'views.ABTestModelsView.edit_variant_group' : 'views.ABTestModelsView.new_variant_group') }}
-          </h2>
-          <div class="grid gap-4 sm:grid-cols-2">
-            <div>
-              <label for="abtestmodelsview-field-5" class="mb-1 block text-sm font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.group_name') }}</label>
-              <input id="abtestmodelsview-field-5"
-                v-model="groupName"
-                data-testid="ab-test-models-group-name"
-                type="text"
-                :placeholder="$t('views.ABTestModelsView.eg_claude_vs_gpt4o')"
-                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              />
-            </div>
-            <div>
-              <label for="abtestmodelsview-field-4" class="mb-1 block text-sm font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.description') }}</label>
-              <input id="abtestmodelsview-field-4"
-                v-model="groupDescription"
-                data-testid="ab-test-models-group-description"
-                type="text"
-                :placeholder="$t('views.ABTestModelsView.compare_accuracy_and_cost_across_model_providers')"
-                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              />
-            </div>
-          </div>
+        <EmptyState
+          v-if="snapshots.length === 0"
+          :title="$t('views.variantCreator.no_snapshots')"
+          :description="$t('views.variantCreator.no_snapshots_hint')"
+        >
+          <Button
+            as="router-link"
+            :to="`/pipelines/${selectedPipelineId}/editor`"
+            data-testid="variant-builder-create-snapshot"
+          >
+            {{ $t('views.variantCreator.create_snapshot') }}
+          </Button>
+        </EmptyState>
 
-          <div v-if="(selectedGroupId === '__all__') && availableSnapshotId" class="text-xs text-muted-foreground">
-            {{ $t('views.ABTestModelsView.using_snapshot') }} <code class="rounded bg-muted px-1.5 py-0.5 font-mono">v{{ snapshotVersion || shortId(availableSnapshotId) }}</code>
-            <span v-if="availableSnapshotTag" class="ml-1">({{ availableSnapshotTag }})</span>
-          </div>
-
-          <div class="space-y-3">
-            <div class="flex items-center justify-between">
-              <h3 class="text-sm font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.variants_title') }}</h3>
-              <Button :disabled="modelBackends.length === 0" data-testid="ab-test-models-add-variant" size="small" class="px-3 py-1.5" @click="addVariant">
-                + Add Variant
+        <section v-else class="space-y-4 rounded-lg border bg-card p-6">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <h2 class="text-base font-semibold tracking-tight">
+              {{ $t('views.variantCreator.variants_title') }}
+            </h2>
+            <div class="flex items-center gap-3">
+              <span
+                role="status"
+                data-testid="variant-builder-headroom"
+                class="text-xs text-muted-foreground"
+              >
+                {{ $t('views.variantCreator.headroom', { used: variants.length, max: MAX_VARIANTS }) }}
+              </span>
+              <Button
+                :disabled="variants.length >= MAX_VARIANTS"
+                size="small"
+                data-testid="variant-builder-add"
+                class="px-3 py-1.5"
+                @click="addVariant"
+              >
+                {{ $t('views.variantCreator.add_variant') }}
               </Button>
             </div>
-
-            <p v-if="variants.length === 0" class="py-4 text-center text-sm text-muted-foreground">
-              Add at least two variants to run an A/B test.
-            </p>
-
-            <div
-              v-for="(v, i) in variants"
-              :key="v.id"
-              class="rounded-lg border bg-muted p-4"
-            >
-              <div class="mb-3 flex items-center justify-between">
-                <span class="text-xs font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.variant_prefix') }} {{ i + 1 }}</span>
-                <button
-                  :data-testid="`ab-test-models-remove-variant-${i}`"
-                  class="text-xs text-destructive hover:underline"
-                  @click="removeVariant(i)"
-                >
-                  {{ $t('views.ABTestModelsView.remove') }}
-                </button>
-              </div>
-              <div class="grid gap-3 sm:grid-cols-3">
-                <div>
-                  <label for="abtestmodelsview-field-3" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.name_label') }}</label>
-                  <input id="abtestmodelsview-field-3"
-                    v-model="v.name"
-                    :data-testid="`ab-test-models-variant-name-${i}`"
-                    type="text"
-                    :placeholder="$t('views.ABTestModelsView.variant_a')"
-                    class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  />
-                </div>
-                <div>
-                  <label for="abtestmodelsview-field-4" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.model_backend') }}</label>
-                  <Select
-  aria-label="Model backend"
-  v-model="v.modelBackendId"
-  :placeholder="$t('views.ABTestModelsView.select_model')"
-  :data-testid="`ab-test-models-model-backend-${i}`"
-  id="abtestmodelsview-field-4"
-  class="w-full"
-  :options="modelBackends.map(mb => ({ value: mb.id, label: mb.display_name + '(' + mb.provider + ')' }))"
-  option-label="label"
-  option-value="value"
->
-  <template #option="{ option }">
-    <span :data-value="option.value">{{ option.label }}</span>
-  </template>
-</Select>
-                </div>
-                <div>
-                  <label for="abtestmodelsview-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">
-                    Weight: <span class="font-mono tabular-nums">{{ v.weight }}%</span>
-                  </label>
-                    <input id="abtestmodelsview-field-1"
-                        v-model.number="v.weight"
-                        :data-testid="`ab-test-models-weight-${i}`"
-                        type="range"
-                        min="0"
-                        max="100"
-                        step="1"
-                        class="w-full accent-primary"
-                        aria-label="Weight"
-                      />
-                </div>
-              </div>
-            </div>
           </div>
 
-          <div class="flex flex-wrap gap-3 pt-2">
-            <Button :disabled="!canRun" data-testid="ab-test-models-run-ab-test" class="px-5 py-2" @click="saveAndRun">
-              <span v-if="running" class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-              {{ running ? $t('views.ABTestModelsView.running') : $t('views.ABTestModelsView.run_ab_test') }}
-            </Button>
-            <button
-              data-testid="ab-test-models-save-group"
-              class="inline-flex items-center gap-2 rounded-lg border border-input bg-background px-5 py-2 text-sm font-medium hover:bg-muted/50"
-              @click="saveGroup"
-            >
-              {{ $t('views.ABTestModelsView.save_group') }}
-            </button>
-          </div>
-        </section>
-
-        <section v-if="runEntries.size > 0" class="space-y-4">
-          <h2 class="text-base font-semibold">{{ $t('views.ABTestModelsView.results_title') }}</h2>
-
-          <div class="table-wrapper">
+          <div class="overflow-x-auto">
             <table class="w-full text-left text-sm">
               <thead>
-                <tr>
-                  <th class="table-header">{{ $t('views.ABTestModelsView.metric') }}</th>
-                  <th
-                    v-for="s in summaryByVariant"
-                    :key="s.name"
-                    class="table-header min-w-[180px]"
-                  >
-                    <div class="flex flex-col gap-0.5">
-                      <span>{{ s.name }}</span>
-                      <span v-if="s.modelBackendName" class="text-xs font-normal text-muted-foreground">
-                        {{ s.modelBackendName }}
-                      </span>
-                    </div>
-                  </th>
+                <tr class="border-b text-xs uppercase text-muted-foreground">
+                  <th class="py-2 pr-3 font-medium">{{ $t('views.variantCreator.label') }}</th>
+                  <th class="py-2 pr-3 font-medium">{{ $t('views.variantCreator.snapshot') }}</th>
+                  <th class="py-2 pr-3 font-medium">{{ $t('views.variantCreator.model_backend') }}</th>
+                  <th class="py-2 pr-3 font-medium">{{ $t('views.variantCreator.prompt_version') }}</th>
+                  <th class="py-2 font-medium text-right">{{ $t('views.variantCreator.actions') }}</th>
                 </tr>
               </thead>
               <tbody>
-                <tr class="border-b hover:bg-muted/30">
-                  <td class="table-cell font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.eval_pass_rate') }}</td>
-                  <td
-                    v-for="s in summaryByVariant"
-                    :key="`pass-${s.name}`"
-                    class="table-cell"
-                  >
-                    <span
-                      v-if="s.passRate !== null"
-                      class="inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium"
-                      :class="passRateClass(s.passRate)"
+                <tr
+                  v-for="(v, i) in variants"
+                  :key="v.id"
+                  class="border-b align-top hover:bg-muted/30"
+                >
+                  <td class="py-2 pr-3">
+                    <input
+                      v-model="v.label"
+                      :data-testid="`variant-builder-label-${i}`"
+                      type="text"
+                      :placeholder="$t('views.variantCreator.label_placeholder')"
+                      class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    />
+                    <p v-if="rowError(i)" class="mt-1 text-xs text-destructive" role="alert">
+                      {{ rowError(i) }}
+                    </p>
+                  </td>
+                  <td class="py-2 pr-3">
+                    <Select
+                      v-model="v.snapshotId"
+                      :placeholder="$t('views.variantCreator.select_snapshot')"
+                      :data-testid="`variant-builder-snapshot-${i}`"
+                      aria-label="Snapshot"
+                      class="w-full"
+                      :options="snapshotOptions"
+                      option-label="label"
+                      option-value="value"
                     >
-                      <span
-                        class="h-1.5 w-1.5 rounded-full"
-                        :class="s.passRate >= 80 ? 'bg-success' : s.passRate >= 40 ? 'bg-warning' : 'bg-destructive'"
-                      />
-                      {{ s.passRate.toFixed(0) }}%
-                      <span class="font-normal opacity-70">({{ s.passedCount }}/{{ s.totalEvals }})</span>
-                    </span>
-                    <span v-else class="text-xs text-muted-foreground">—</span>
+                      <template #option="{ option }">
+                        <span :data-value="option.value">{{ option.label }}</span>
+                      </template>
+                    </Select>
                   </td>
-                </tr>
-                <tr class="border-b hover:bg-muted/30">
-                  <td class="table-cell font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.cost') }}</td>
-                  <td
-                    v-for="s in summaryByVariant"
-                    :key="`cost-${s.name}`"
-                    class="table-cell table-cell-numeric font-mono text-xs"
-                  >
-                    <span v-if="s.totalCost !== null">{{ formatMoney(Number(s.totalCost), currencyCode, 6) }}</span>
-                    <span v-else class="text-muted-foreground">—</span>
+                  <td class="py-2 pr-3">
+                    <Select
+                      v-model="v.modelBackendId"
+                      :placeholder="$t('views.variantCreator.select_model')"
+                      :data-testid="`variant-builder-model-${i}`"
+                      aria-label="Model backend"
+                      class="w-full"
+                      :options="modelBackendOptions"
+                      option-label="label"
+                      option-value="value"
+                    >
+                      <template #option="{ option }">
+                        <span :data-value="option.value">{{ option.label }}</span>
+                      </template>
+                    </Select>
                   </td>
-                </tr>
-                <tr class="hover:bg-muted/30">
-                  <td class="table-cell font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.tokens') }}</td>
-                  <td
-                    v-for="s in summaryByVariant"
-                    :key="`tokens-${s.name}`"
-                    class="table-cell table-cell-numeric font-mono text-xs"
-                  >
-                    <span v-if="s.tokenTotal !== null">{{ s.tokenTotal.toLocaleString() }}</span>
-                    <span v-else class="text-muted-foreground">—</span>
+                  <td class="py-2 pr-3">
+                    <Select
+                      v-model="v.promptVersion"
+                      :placeholder="$t('views.variantCreator.select_prompt_version')"
+                      :data-testid="`variant-builder-prompt-${i}`"
+                      aria-label="Prompt version"
+                      class="w-full"
+                      :options="promptVersionOptions"
+                      option-label="label"
+                      option-value="value"
+                    >
+                      <template #option="{ option }">
+                        <span :data-value="option.value">{{ option.label }}</span>
+                      </template>
+                    </Select>
+                  </td>
+                  <td class="py-2 text-right whitespace-nowrap">
+                    <button
+                      :data-testid="`variant-builder-duplicate-${i}`"
+                      class="mr-2 text-xs text-muted-foreground hover:text-foreground"
+                      :aria-label="$t('views.variantCreator.duplicate')"
+                      @click="duplicateVariant(i)"
+                    >
+                      {{ $t('views.variantCreator.duplicate') }}
+                    </button>
+                    <button
+                      :data-testid="`variant-builder-remove-${i}`"
+                      class="text-xs text-destructive hover:underline"
+                      :aria-label="$t('views.variantCreator.remove')"
+                      @click="removeVariant(i)"
+                    >
+                      {{ $t('views.variantCreator.remove') }}
+                    </button>
                   </td>
                 </tr>
               </tbody>
             </table>
           </div>
 
-          <div
-            v-if="hasTerminalRuns"
-            class="flex flex-wrap gap-3"
+          <p
+            v-if="variants.length < 2"
+            role="status"
+            data-testid="variant-builder-min-two"
+            class="text-sm text-muted-foreground"
           >
-            <button
-              v-for="s in summaryByVariant"
-              :key="`promote-${s.name}`"
-              :data-testid="`ab-test-models-promote-${s.name}`"
-              :disabled="promotingName === s.name"
-              class="inline-flex items-center gap-2 rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-muted/50 disabled:opacity-50"
-              @click="promoteWinner(s.name)"
+            {{ $t('views.variantCreator.min_two_hint') }}
+          </p>
+
+          <div class="flex flex-wrap items-center gap-3 pt-2">
+            <Button
+              :disabled="!canFire || firing"
+              data-testid="variant-builder-fire"
+              class="px-5 py-2"
+              @click="openFireDialog"
             >
-              <span v-if="promotingName === s.name" class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-              {{ $t('views.ABTestModelsView.promote_as_default', { name: s.name }) }}
-            </button>
+              <span v-if="firing" class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+              {{ firing ? $t('views.variantCreator.firing') : $t('views.variantCreator.fire_comparison') }}
+            </Button>
+            <span v-if="canFire" class="text-xs text-muted-foreground">
+              {{ $t('views.variantCreator.fires_n_runs', { count: variants.length }) }}
+            </span>
           </div>
         </section>
-
       </template>
 
       <EmptyState
         v-else-if="!loading && pipelines.length === 0"
-        title="No Pipelines Found"
-        description="Create a pipeline first, then return here to set up A/B testing between model backends."
+        :title="$t('views.variantCreator.no_pipelines')"
+        :description="$t('views.variantCreator.no_pipelines_hint')"
       />
     </template>
   </div>
+
+  <Dialog
+    v-if="showFireDialog"
+    :visible="showFireDialog"
+    :modal="true"
+    :dismissable-mask="true"
+    data-testid="variant-builder-confirm"
+    @update:visible="showFireDialog = false"
+  >
+    <template #header>
+      <div class="text-lg font-semibold">{{ $t('views.variantCreator.confirm_title') }}</div>
+    </template>
+    <p class="text-sm text-muted-foreground">
+      {{ $t('views.variantCreator.confirm_body', { count: variants.length }) }}
+    </p>
+    <template #footer>
+      <div class="flex justify-end gap-3">
+        <Button
+          severity="secondary"
+          outlined
+          :disabled="firing"
+          data-testid="variant-builder-cancel"
+          @click="showFireDialog = false"
+        >
+          {{ $t('views.variantCreator.cancel') }}
+        </Button>
+        <Button
+          severity="primary"
+          :disabled="firing"
+          data-testid="variant-builder-confirm-fire"
+          @click="fireBatch"
+        >
+          <span v-if="firing" class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+          {{ firing ? $t('views.variantCreator.firing') : $t('views.variantCreator.confirm_fire') }}
+        </Button>
+      </div>
+    </template>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import PageTabs from "../components/PageTabs.vue"
+import PageTabs from '../components/PageTabs.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import Button from 'primevue/button'
 import EmptyState from '../components/shared/EmptyState.vue'
-import { shortId } from '../utils/format'
-import { formatApiError } from '../lib/api/formatError'
+import Dialog from 'primevue/dialog'
 import Select from 'primevue/select'
-import { formatMoney } from '../lib/money'
-import { useOrgCurrency } from '../composables/useOrgCurrency'
-import { TERMINAL_STATUSES } from '../constants/runStatuses'
+import { formatApiError } from '../lib/api/formatError'
 
-const { currencyCode, loadCurrency } = useOrgCurrency()
+const { t } = useI18n()
+const route = useRoute()
+const router = useRouter()
+
+const MAX_VARIANTS = 10
 
 type PipelineItem = components['schemas']['PipelineResponse']
-type VariantGroup = components['schemas']['VariantGroupResponse']
 type ModelBackend = components['schemas']['ModelBackendResponse']
-type RunResponse = components['schemas']['RunResponse']
-type RunIOResponse = components['schemas']['RunIOResponse']
-interface RunEvalItem {
-  eval_id: string
-  node_id: string
-  passed: boolean
-  score: number | null
-  detail?: string | null
-}
-
-interface RunEvalListResponse { items?: RunEvalItem[] }
 
 interface VariantForm {
   id: string
-  name: string
+  label: string
+  snapshotId: string | null
   modelBackendId: string | null
-  weight: number
-}
-
-interface RunEntry {
-  runId: string
-  variantName: string
-  modelBackendName: string
-  runStatus: string
-  totalCostUsd: number | null
-  tokenConsumption: Record<string, unknown> | null
-  nodeOutputs: Record<string, unknown> | null
-  evalResults: RunEvalItem[]
+  promptVersion: string | null
 }
 
 const pipelines = ref<PipelineItem[]>([])
-const variantGroups = ref<VariantGroup[]>([])
 const modelBackends = ref<ModelBackend[]>([])
 const selectedPipelineId = ref<string>('')
-const selectedGroupId = ref<string>('__all__')
-const groupName = ref('')
-const groupDescription = ref('')
+const comparisonName = ref('')
 const variants = ref<VariantForm[]>([])
+const snapshots = ref<Array<{ id: string; snapshot_version: number; tag: string | null }>>([])
+const promptVersionOptions = ref<Array<{ value: string; label: string }>>([])
 const error = ref<string | null>(null)
-const isUnmounted = ref(false)
-const running = ref(false)
-const savedGroupId = ref<string | null>(null)
-const promotingName = ref<string | null>(null)
+const firing = ref(false)
+const showFireDialog = ref(false)
 
-const runEntries = ref<Map<string, RunEntry>>(new Map())
 const { loading: pipelinesLoading, data: pipelinesData } = useDataFetch(
   () => api.GET('/api/v1/pipelines'),
-  { immediate: true }
-)
-const { loading: groupsLoading, data: groupsData, load: loadGroups } = useDataFetch(
-  () => api.GET('/api/v1/variant-groups'),
   { immediate: true }
 )
 const { loading: backendsLoading, data: backendsData } = useDataFetch(
@@ -353,455 +324,225 @@ const { loading: backendsLoading, data: backendsData } = useDataFetch(
   { immediate: true }
 )
 
-const loading = computed(() => pipelinesLoading.value || groupsLoading.value || backendsLoading.value)
-
-watch(() => pipelinesData.value, (data) => {
-  if (data) {
-    const listResp = data as unknown as { items: PipelineItem[]; total: number; page: number; page_size: number }
-    pipelines.value = listResp.items ?? []
-    if (listResp.items.length > 0 && !selectedPipelineId.value) {
-      selectedPipelineId.value = listResp.items[0].id
-    }
-  }
-})
-
-watch(() => groupsData.value, (data) => {
-  if (data) {
-    variantGroups.value = (Array.isArray(data) ? data : (data as any)?.items ?? []) as unknown as VariantGroup[]
-  }
-})
-
 watch(() => backendsData.value, (data) => {
   if (data) {
-    const resp = data as unknown as { items: ModelBackend[]; total: number; page: number; page_size: number }
+    const resp = data as unknown as { items: ModelBackend[] }
     modelBackends.value = resp.items ?? []
   }
 })
 
-const terminalStatuses: Set<string> = new Set(TERMINAL_STATUSES)
+const loading = computed(() => pipelinesLoading.value || backendsLoading.value)
 
-const filteredGroups = computed(() =>
-  variantGroups.value.filter(g => g.pipeline_id === selectedPipelineId.value)
+const modelBackendOptions = computed(() =>
+  modelBackends.value.map(mb => ({ value: mb.id, label: `${mb.display_name} (${mb.provider})` }))
 )
 
-const availableSnapshotId = computed(() => {
-  return snapshotId.value || undefined
-})
+const snapshotOptions = computed(() =>
+  snapshots.value.map(s => ({
+    value: s.id,
+    label: s.tag ? `v${s.snapshot_version} (${s.tag})` : `v${s.snapshot_version}`,
+  }))
+)
 
-const snapshotId = ref<string | null>(null)
-const snapshotTag = ref<string | null>(null)
-const snapshotVersion = ref<number | null>(null)
-
-const availableSnapshotTag = computed(() => {
-  return snapshotTag.value
-})
-
-const modelBackendMap = computed(() => {
-  const map = new Map<string, ModelBackend>()
-  for (const mb of modelBackends.value) {
-    map.set(mb.id, mb)
-  }
-  return map
-})
-
-const canRun = computed(() => {
-  if (!selectedPipelineId.value || !groupName.value.trim()) return false
+const canFire = computed(() => {
+  if (!selectedPipelineId.value) return false
   if (variants.value.length < 2) return false
-  return variants.value.every(v => v.name.trim() && v.modelBackendId)
+  return variants.value.every(v => v.label.trim() && v.snapshotId)
 })
 
-const hasTerminalRuns = computed(() => {
-  for (const entry of runEntries.value.values()) {
-    if (terminalStatuses.has(entry.runStatus)) return true
+const labels = computed(() => variants.value.map(v => v.label.trim().toLowerCase()))
+
+function rowError(index: number): string | null {
+  const v = variants.value[index]
+  if (!v) return null
+  if (!v.label.trim()) return t('views.variantCreator.error_blank_label')
+  if (labels.value.indexOf(v.label.trim().toLowerCase()) !== labels.value.lastIndexOf(v.label.trim().toLowerCase())) {
+    return t('views.variantCreator.error_duplicate_label')
   }
-  return false
-})
+  if (!v.snapshotId) return t('views.variantCreator.error_need_snapshot')
+  return null
+}
 
-const summaryByVariant = computed(() => {
-  const result: Array<{
-    name: string
-    modelBackendName: string
-    passRate: number | null
-    passedCount: number
-    totalEvals: number
-    totalCost: number | null
-    tokenTotal: number | null
-  }> = []
-
-  for (const entry of runEntries.value.values()) {
-    const passCount = entry.evalResults.filter(r => r.passed).length
-    const totalCount = entry.evalResults.length
-    const tc = entry.tokenConsumption as { total_tokens?: number } | null
-    result.push({
-      name: entry.variantName,
-      modelBackendName: entry.modelBackendName,
-      passRate: totalCount > 0 ? (passCount / totalCount) * 100 : null,
-      passedCount: passCount,
-      totalEvals: totalCount,
-      totalCost: entry.totalCostUsd,
-      tokenTotal: tc?.total_tokens ?? null,
-    })
-  }
-
-  return result
-})
-
-function passRateClass(rate: number): string {
-  if (rate >= 80) return 'badge badge-status-success'
-  if (rate >= 40) return 'badge badge-status-warning'
-  return 'badge badge-status-destructive'
+function defaultSnapshotId(): string | null {
+  return snapshots.value[0]?.id ?? null
 }
 
 function addVariant() {
-  const usedIds = new Set(modelBackends.value.filter(mb =>
-    variants.value.some(v => v.modelBackendId === mb.id)
-  ).map(mb => mb.id))
-
-  const available = modelBackends.value.find(mb => !usedIds.has(mb.id))
+  if (variants.value.length >= MAX_VARIANTS) return
   variants.value.push({
     id: crypto.randomUUID(),
-    name: `Variant ${variants.value.length + 1}`,
-    modelBackendId: available?.id ?? null,
-    weight: Math.round(100 / (variants.value.length + 1)),
+    label: `${t('views.variantCreator.variant_prefix')} ${variants.value.length + 1}`,
+    snapshotId: defaultSnapshotId(),
+    modelBackendId: null,
+    promptVersion: null,
   })
-  normalizeWeights()
+}
+
+function nextUniqueLabel(base: string): string {
+  const root = base.trim()
+  const existing = new Set(variants.value.map(v => v.label.trim().toLowerCase()))
+  if (!existing.has(root.toLowerCase())) return root
+  let n = 2
+  while (existing.has(`${root} (${n})`.toLowerCase())) n += 1
+  return `${root} (${n})`
+}
+
+function duplicateVariant(index: number) {
+  const src = variants.value[index]
+  if (!src) return
+  variants.value.push({
+    id: crypto.randomUUID(),
+    label: nextUniqueLabel(`${src.label.trim()} (copy)`),
+    snapshotId: src.snapshotId,
+    modelBackendId: src.modelBackendId,
+    promptVersion: src.promptVersion,
+  })
 }
 
 function removeVariant(index: number) {
   variants.value.splice(index, 1)
-  normalizeWeights()
 }
 
-function normalizeWeights() {
-  if (variants.value.length === 0) return
-  const total = variants.value.reduce((sum, v) => sum + v.weight, 0)
-  if (total === 0) {
-    const equal = Math.floor(100 / variants.value.length)
-    variants.value.forEach((v, i) => {
-      v.weight = i < variants.value.length - 1 ? equal : 100 - equal * (variants.value.length - 1)
-    })
+function buildOverrides(v: VariantForm): Record<string, unknown> {
+  const o: Record<string, unknown> = {}
+  if (v.modelBackendId) o.model_backend_id = v.modelBackendId
+  if (v.promptVersion) o.prompt_version = v.promptVersion
+  return o
+}
+
+function preflight(): boolean {
+  for (let i = 0; i < variants.value.length; i += 1) {
+    if (rowError(i)) return false
+  }
+  return true
+}
+
+function openFireDialog() {
+  if (!preflight()) return
+  showFireDialog.value = true
+}
+
+async function fireBatch() {
+  if (!preflight()) {
+    showFireDialog.value = false
     return
   }
-  const remaining = 100
-  let allocated = 0
-  variants.value.forEach((v, i) => {
-    if (i === variants.value.length - 1) {
-      v.weight = remaining - allocated
-    } else {
-      v.weight = Math.round((v.weight / total) * remaining)
-      allocated += v.weight
-    }
-  })
-}
-
-async function saveGroup() {
-  if (!selectedPipelineId.value || !groupName.value.trim()) return
-  error.value = null
-
-  const snapshot = snapshotId.value || ''
-  const variantDefs = variants.value.map(v => ({
-    snapshot_id: snapshot,
-    name: v.name.trim(),
-    weight: v.weight / 100,
-    run_context_overrides: {
-      model_backend_id: v.modelBackendId,
-    },
-    eval_definition_ids: [],
-  }))
-
-  try {
-    if (selectedGroupId.value && selectedGroupId.value !== '__all__') {
-      const { data, error: err } = await api.PUT('/api/v1/variant-groups/{group_id}', {
-        params: { path: { group_id: selectedGroupId.value } },
-        body: {
-          pipeline_id: selectedPipelineId.value,
-          name: groupName.value.trim(),
-          description: groupDescription.value || null,
-          variants: variantDefs as unknown as components['schemas']['VariantDef'][],
-          selection_strategy: 'weighted',
-          max_concurrent_runs: 10,
-          degraded_evals: false,
-        },
-      })
-      if (err) {
-        error.value = `Failed to update group: ${JSON.stringify(err)}`
-        return
-      }
-      if (data) {
-        savedGroupId.value = (data as unknown as VariantGroup).id
-      }
-    } else {
-      const { data, error: err } = await api.POST('/api/v1/variant-groups', {
-        body: {
-          pipeline_id: selectedPipelineId.value,
-          name: groupName.value.trim(),
-          description: groupDescription.value || null,
-          variants: variantDefs as unknown as components['schemas']['VariantDef'][],
-          selection_strategy: 'weighted',
-          max_concurrent_runs: 10,
-          degraded_evals: false,
-        },
-      })
-      if (err) {
-        error.value = `Failed to create group: ${JSON.stringify(err)}`
-        return
-      }
-      if (data) {
-        const group = data as unknown as VariantGroup
-        savedGroupId.value = group.id
-        selectedGroupId.value = group.id
-        await loadGroups()
-      }
-    }
-  } catch (e: unknown) {
-    error.value = `Failed to save group: ${formatApiError(e)}`
-  }
-}
-
-async function saveAndRun() {
-  await saveGroup()
-  if (!savedGroupId.value) return
-  await runTest(savedGroupId.value)
-}
-
-async function runTest(groupId: string) {
-  running.value = true
-  error.value = null
-  runEntries.value.clear()
-
-  try {
-    const { data, error: err } = await api.POST('/api/v1/variant-groups/{group_id}/run', {
-      params: { path: { group_id: groupId } },
-      body: {},
-    })
-
-    if (err) {
-      error.value = `Run failed: ${JSON.stringify(err)}`
-      return
-    }
-
-    if (!data) return
-
-    const { run_id, variant_name } = data as unknown as {
-      run_id: string
-      variant_name: string
-    }
-
-    const mbId = variants.value.find(v => v.name === variant_name)?.modelBackendId
-    const mb = mbId ? modelBackendMap.value.get(mbId) : undefined
-
-    const entry: RunEntry = {
-      runId: run_id,
-      variantName: variant_name,
-      modelBackendName: mb?.display_name || variant_name,
-      runStatus: 'pending',
-      totalCostUsd: null,
-      tokenConsumption: null,
-      nodeOutputs: null,
-      evalResults: [],
-    }
-    runEntries.value.set(variant_name, entry)
-
-    await pollRunStatus(run_id, variant_name)
-  } catch (e: unknown) {
-    error.value = `Failed to run A/B test: ${formatApiError(e)}`
-  } finally {
-    running.value = false
-  }
-}
-
-async function pollRunStatus(runId: string, variantName: string) {
-  let status = 'pending'
-
-  while (!isUnmounted.value && !terminalStatuses.has(status)) {
-    await delay(2000)
-
-    try {
-      const { data } = await api.GET('/api/v1/runs/{run_id}', {
-        params: { path: { run_id: runId } },
-      })
-
-      if (data) {
-        const runResp = data as unknown as RunResponse
-        status = runResp.status
-
-        const existing = runEntries.value.get(variantName)
-        if (existing) {
-          runEntries.value.set(variantName, {
-            ...existing,
-            runStatus: status,
-            totalCostUsd: runResp.total_cost_usd == null ? null : Number(runResp.total_cost_usd),
-            tokenConsumption: runResp.token_consumption ?? null,
-          })
-        }
-
-        if (terminalStatuses.has(status)) {
-          if (status === 'complete') {
-            await Promise.all([
-              fetchRunIO(runId, variantName),
-              fetchRunEvals(runId, variantName),
-            ])
-          } else {
-            error.value = `Run failed with status: ${status}`
-          }
-          break
-        }
-      }
-    } catch (e) {
-      console.warn('Failed to fetch run data for variant', e)
-    }
-  }
-}
-
-async function fetchRunIO(runId: string, variantName: string) {
-  try {
-    const { data } = await api.GET('/api/v1/runs/{run_id}/io', {
-      params: { path: { run_id: runId } },
-    })
-    if (data) {
-      const ioResp = data as unknown as RunIOResponse
-      const existing = runEntries.value.get(variantName)
-      if (existing) {
-        runEntries.value.set(variantName, {
-          ...existing,
-          nodeOutputs: ioResp.outputs_json ?? null,
-        })
-      }
-    }
-  } catch (e) {
-    console.warn('Failed to fetch run IO', e)
-  }
-}
-
-async function fetchRunEvals(runId: string, variantName: string) {
-  try {
-    const { data } = await api.GET('/api/v1/runs/{run_id}/evals', {
-      params: { path: { run_id: runId } },
-    })
-    if (data) {
-      const evalResp = data as unknown as RunEvalListResponse
-      const existing = runEntries.value.get(variantName)
-      if (existing) {
-        runEntries.value.set(variantName, {
-          ...existing,
-          evalResults: evalResp.items ?? [],
-        })
-      }
-    }
-  } catch (e) {
-    console.warn('Failed to fetch run evals', e)
-  }
-}
-
-async function promoteWinner(variantName: string) {
-  if (!savedGroupId.value) return
-  promotingName.value = variantName
-  error.value = null
-
-  const variant = variants.value.find(v => v.name === variantName)
-  if (!variant) {
-    promotingName.value = null
+  if (variants.value.length < 2) {
+    error.value = t('views.variantCreator.min_two_hint')
+    showFireDialog.value = false
     return
   }
-
+  firing.value = true
+  error.value = null
   try {
-    const snapshot = snapshotId.value || ''
-    const variantDef = {
-      snapshot_id: snapshot,
-      name: variant.name.trim(),
+    const variantDefs = variants.value.map(v => ({
+      snapshot_id: v.snapshotId as string,
+      name: v.label.trim(),
       weight: 1.0,
-      run_context_overrides: {
-        model_backend_id: variant.modelBackendId,
-      },
-      eval_definition_ids: [] as string[],
-    }
+      run_context_overrides: buildOverrides(v),
+      eval_definition_ids: [],
+    }))
 
-    const { error: err } = await api.PUT('/api/v1/variant-groups/{group_id}', {
-      params: { path: { group_id: savedGroupId.value } },
+    const { data: groupData, error: createErr } = await api.POST('/api/v1/variant-groups', {
       body: {
         pipeline_id: selectedPipelineId.value,
-        name: `${groupName.value.trim()} (default: ${variantName})`,
-        description: groupDescription.value || null,
-        variants: [variantDef] as unknown as components['schemas']['VariantDef'][],
+        name: comparisonName.value.trim() || `${t('views.variantCreator.comparison_name_placeholder')} ${new Date().toISOString()}`,
+        description: null,
+        variants: variantDefs as unknown as components['schemas']['VariantDef'][],
         selection_strategy: 'weighted',
         max_concurrent_runs: 10,
         degraded_evals: false,
       },
     })
-
-    if (err) {
-      error.value = `Failed to promote variant: ${JSON.stringify(err)}`
+    if (createErr) {
+      error.value = `${t('views.variantCreator.failed_to_create_group')} ${JSON.stringify(createErr)}`
+      return
     }
+    if (!groupData) return
+
+    const groupId = (groupData as unknown as { id: string }).id
+
+    const { error: runErr } = await api.POST('/api/v1/variant-groups/{group_id}/batch-run', {
+      params: { path: { group_id: groupId } },
+      body: {},
+    })
+    if (runErr) {
+      error.value = `${t('views.variantCreator.failed_to_run')} ${JSON.stringify(runErr)}`
+      return
+    }
+
+    showFireDialog.value = false
+    router.push({ name: 'variant-compare-detail', params: { batchId: groupId } })
   } catch (e: unknown) {
-    error.value = `Failed to promote variant: ${formatApiError(e)}`
+    error.value = `${t('views.variantCreator.failed_to_run')} ${formatApiError(e)}`
   } finally {
-    promotingName.value = null
+    firing.value = false
   }
 }
 
-onBeforeUnmount(() => {
-  isUnmounted.value = true
-})
-
-watch(selectedPipelineId, async (id) => {
-  if (id) {
-    selectedGroupId.value = ''
-    groupName.value = ''
-    groupDescription.value = ''
-    variants.value = []
-    runEntries.value.clear()
-    savedGroupId.value = null
-    await fetchSnapshotForPipeline(id)
-  }
-})
-
-watch(selectedGroupId, async (id) => {
-  if (id && id !== '__all__') {
-    const group = variantGroups.value.find(g => g.id === id)
-    if (group) {
-      groupName.value = group.name
-      groupDescription.value = group.description || ''
-      const formVariants: VariantForm[] = group.variants.map((v: unknown) => {
-        const vd = v as { name: string; weight: number; run_context_overrides?: Record<string, unknown> }
-        return {
-          id: crypto.randomUUID(),
-          name: vd.name,
-          modelBackendId: ((vd.run_context_overrides || {}) as Record<string, string>)['model_backend_id'] ?? null,
-          weight: Math.round((vd.weight || 0) * 100),
-        }
-      })
-      variants.value = formVariants
-      savedGroupId.value = group.id
-    }
-  } else {
-    groupName.value = ''
-    groupDescription.value = ''
-    variants.value = []
-    savedGroupId.value = null
-  }
-})
-
-async function fetchSnapshotForPipeline(pipelineId: string) {
+async function fetchSnapshots(pipelineId: string) {
+  snapshots.value = []
+  promptVersionOptions.value = []
   try {
     const { data } = await api.GET('/api/v1/pipelines/{pipeline_id}/snapshots', {
       params: { path: { pipeline_id: pipelineId } },
     })
     if (data) {
-      const resp = data as unknown as { items: Array<{ id: string; tag: string | null; snapshot_version: number }>; total: number }
-      if (resp.items.length > 0) {
-        snapshotId.value = resp.items[0].id
-        snapshotTag.value = resp.items[0].tag
-        snapshotVersion.value = resp.items[0].snapshot_version
-      }
+      const resp = data as unknown as { items: Array<{ id: string; snapshot_version: number; tag: string | null }> }
+      snapshots.value = resp.items ?? []
     }
   } catch (e) {
-    console.warn('Failed to fetch snapshot', e)
+    console.warn('Failed to fetch snapshots', e)
+  }
+  void fetchPromptVersions(pipelineId)
+}
+
+async function fetchPromptVersions(pipelineId: string) {
+  try {
+    const { data } = await api.GET('/api/v1/pipelines/{pipeline_id}/graph', {
+      params: { path: { pipeline_id: pipelineId } },
+    })
+    const nodes = (data as unknown as { nodes?: Array<{ agent_id?: string | null }> })?.nodes ?? []
+    const agentIds = [...new Set(nodes.map(n => n.agent_id).filter((a): a is string => Boolean(a)))]
+
+    const options: Array<{ value: string; label: string }> = []
+    for (const agentId of agentIds) {
+      const { data: prompts } = await api.GET('/api/v1/agents/{agent_id}/prompts', {
+        params: { path: { agent_id: agentId } },
+      })
+      const list = (prompts as unknown as Array<{ version: string }> | null) ?? []
+      for (const p of list) {
+        if (!options.some(o => o.value === p.version)) {
+          options.push({ value: p.version, label: p.version })
+        }
+      }
+    }
+    promptVersionOptions.value = options
+  } catch (e) {
+    console.warn('Failed to fetch prompt versions', e)
   }
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms))
-}
+watch(() => pipelinesData.value, (data) => {
+  if (data) {
+    const listResp = data as unknown as { items: PipelineItem[] }
+    pipelines.value = listResp.items ?? []
 
-loadCurrency()
+    const queryPipeline = typeof route.query.pipeline_id === 'string' ? route.query.pipeline_id : ''
+    const deepLinked = queryPipeline && pipelines.value.some(p => p.id === queryPipeline)
+    if (deepLinked) {
+      selectedPipelineId.value = queryPipeline
+    } else if (!selectedPipelineId.value && pipelines.value.length > 0) {
+      selectedPipelineId.value = pipelines.value[0].id
+    }
+  }
+})
+
+watch(selectedPipelineId, async (id) => {
+  if (id) {
+    comparisonName.value = ''
+    variants.value = []
+    await fetchSnapshots(id)
+  }
+})
 </script>

@@ -290,6 +290,12 @@ const router = createRouter({
       component: VariantCompareView,
     },
     {
+      path: '/variants/compare/:batchId',
+      name: 'variant-compare-detail',
+      component: VariantCompareView,
+      meta: { breadcrumb: 'Variant Comparison', parent: 'variant-compare' },
+    },
+    {
       path: '/variants/ab-test',
       name: 'ab-test-models',
       component: ABTestModelsView,
