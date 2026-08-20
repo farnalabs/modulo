@@ -251,11 +251,12 @@ describe('VariantBatchCompareView', () => {
     expect(routerMocks.replace).toHaveBeenCalledWith('/variants/compare/b9')
   })
 
-  it('re-enables the Re-fire button after a re-fire that produces a new batch id', async () => {
-    batchMocks.reFireVariantBatch.mockResolvedValue({
-      data: mockBatch({ batch_id: 'b9', name: 'Rebuilt comparison' }),
-      error: undefined,
-    })
+  it('re-enables the Re-fire button when the route moves on before the re-fire response returns', async () => {
+    // Control the re-fire request so we can move the route mid-flight.
+    let resolveReFire: (value: unknown) => void = () => {}
+    batchMocks.reFireVariantBatch.mockImplementationOnce(
+      () => new Promise((res) => { resolveReFire = res }),
+    )
 
     const wrapper = mount(VariantBatchCompareView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
@@ -265,13 +266,26 @@ describe('VariantBatchCompareView', () => {
 
     const refire = () => wrapper.find('[data-testid="variant-batch-refire"]')
 
+    // Fire the re-fire; the request is in flight and the button is disabled.
     await refire().trigger('click')
     await flushPromises()
     await nextTick()
+    expect(refire().attributes('disabled')).toBeDefined()
 
-    // The re-fire navigated to a NEW batch id (b9), so the old id-guard no longer
-    // matches — the in-flight button flag must still be cleared.
-    expect(routerMocks.replace).toHaveBeenCalledWith('/variants/compare/b9')
+    // The route moves on to a different batch (b2) before the response returns.
+    ;(routeHolder.route as { params: { batchId: string } }).params.batchId = 'b2'
+    await nextTick()
+
+    // The response arrives for a brand-new batch id (b9). Because the route has
+    // already moved on, the id-guard short-circuits and the new batch is NOT
+    // adopted. The real bug (pre-fix) was that the finally-guard
+    // `if (thisId === batchId.value) refiring.value = false` then skipped the
+    // reset, leaving the CURRENT batch's Re-fire button permanently disabled.
+    // The fix makes the finally reset unconditional, so the button re-enables.
+    resolveReFire({ data: mockBatch({ batch_id: 'b9', name: 'Rebuilt comparison' }), error: undefined })
+    await flushPromises()
+    await nextTick()
+
     expect(refire().attributes('disabled')).toBeUndefined()
   })
 
