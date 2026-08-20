@@ -310,6 +310,8 @@ async def _do_list_runs(
     search: str | None,
     page: int,
     page_size: int,
+    variant_group_id: uuid.UUID | None = None,
+    batch_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     async with factory() as session, session.begin():
         await set_rls_org(session, user.organisation_id)
@@ -321,6 +323,8 @@ async def _do_list_runs(
             search=search,
             page=page,
             page_size=page_size,
+            variant_group_id=variant_group_id,
+            batch_id=batch_id,
         )
         # Child-run cost rollup: ONE GROUP BY query for the whole page, joined
         # in Python — never a per-row aggregate (avoids N+1).
@@ -408,12 +412,25 @@ async def list_runs_endpoint(
     search: str | None = Query(None, max_length=200),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    variant_group_id: uuid.UUID | None = Query(None),
+    batch_id: uuid.UUID | None = Query(None),
     factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
     user: TenantPrincipal = require_permission(_CODE_RUN_LIST),
 ) -> dict[str, Any]:
     try:
         return await _run_with_retry(
-            lambda: _do_list_runs(factory, user, pipeline_id, run_status, trigger_type, search, page, page_size)
+            lambda: _do_list_runs(
+                factory,
+                user,
+                pipeline_id,
+                run_status,
+                trigger_type,
+                search,
+                page,
+                page_size,
+                variant_group_id,
+                batch_id,
+            )
         )
     except IntegrityError:
         _log.exception("runs.list_runs_endpoint")
