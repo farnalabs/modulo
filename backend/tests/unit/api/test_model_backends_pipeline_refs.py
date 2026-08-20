@@ -117,7 +117,7 @@ def test_pipeline_references_empty_state(client: TestClient) -> None:
         resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}/pipeline-references")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["items"] == []
+    assert not body["items"]
     assert body["total"] == 0
 
 

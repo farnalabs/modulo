@@ -108,7 +108,7 @@ async def test_no_references_returns_empty(session: AsyncSession) -> None:
     backend = await _seed_backend(session)
     await _seed_pipeline(session, graph_nodes=[{"id": "n1"}])
     result = await list_pipeline_references_for_backend(session, org_id=_ORG_A, backend_id=backend.id)
-    assert result.items == []
+    assert not result.items
     assert result.total == 0
 
 
