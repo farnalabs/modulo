@@ -518,6 +518,26 @@ class TestPerformHousekeepingErrors(AuthContext):
         assert result["deleted_count"] == 0
         assert result["errors"] == [{"entity_type": "bogus_type", "error": "Unknown entity type: bogus_type"}]
 
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server._delete_housekeeping_group", new_callable=AsyncMock)
+    async def test_invalid_org_fk_is_triage_only(
+        self,
+        mock_delete_group: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        mock_session.return_value = make_session_context(AsyncMock())
+
+        result = await perform_housekeeping(items=[{"id": "abc123", "entity_type": "invalid_org_fk"}])
+
+        assert result["deleted_count"] == 0
+        assert result["errors"] == [
+            {"entity_type": "invalid_org_fk", "error": "Surfaced for triage only — not auto-deleted."}
+        ]
+        # Detection-only category must never reach the destructive delete path.
+        mock_delete_group.assert_not_awaited()
+
 
 class TestPerformHousekeepingSuccess(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
