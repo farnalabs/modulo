@@ -1468,19 +1468,24 @@ def make_node_fn(
         # never read from a bare top-level ``model_backend_id`` in user-supplied
         # input, which is DATA and could silently reroute model routing.
         #
-        # FAR-342: a prompt_template override (resolved from the variant's
+        # FAR-342: a prompt_templates override (resolved from the variant's
         # prompt_version picker at run creation) likewise takes precedence over
         # the snapshot-embedded node_def prompt, so every variant renders with
-        # its own prompt version.
+        # its own prompt version. The override is a PER-AGENT map, so each node
+        # reads ONLY the template for its own agent — one agent's template never
+        # clobbers another's in a multi-agent snapshot. When the node's agent is
+        # absent from the map, fall back to the node_def prompt.
         _input = run_context.get("input") or {}
         if isinstance(_input, dict):
             _run_overrides = _input.get("_run_overrides")
             if isinstance(_run_overrides, dict):
                 if _run_overrides.get("model_backend_id"):
                     model_backend_id_str = str(_run_overrides["model_backend_id"])
-                override_prompt = _run_overrides.get("prompt_template")
-                if isinstance(override_prompt, str) and override_prompt:
-                    prompt_template = override_prompt
+                prompt_templates = _run_overrides.get("prompt_templates")
+                if isinstance(prompt_templates, dict) and agent_id is not None:
+                    per_agent_prompt = prompt_templates.get(str(agent_id))
+                    if isinstance(per_agent_prompt, str) and per_agent_prompt:
+                        prompt_template = per_agent_prompt
 
         # If no model_backend_id, fall back to stub behavior
         # (connector_binding nodes, manual nodes routed through wrong path, etc.).

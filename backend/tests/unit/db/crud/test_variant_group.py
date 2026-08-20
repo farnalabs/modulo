@@ -288,14 +288,17 @@ class TestRunVariantBatch:
         assert results[0]["merged_payload"]["shared"] == "payload"
 
     async def test_prompt_version_override_resolved_to_template(self) -> None:
-        """A prompt_version override resolves to its template (FAR-342).
+        """A prompt_version override resolves to its per-agent templates (FAR-342).
 
-        The batch runner resolves the version label via the agent's
-        ``prompt_version_history`` and stores the template alongside the version
-        under ``_run_overrides`` so the node runner can render it.
+        The batch runner resolves the version label via each agent's
+        ``prompt_version_history`` and stores the per-agent template map
+        alongside the version under ``_run_overrides`` so the node runner can
+        render the right template for each node. The map contains ONLY the
+        matching agent.
         """
         session = AsyncMock()
         org_id = uuid.uuid4()
+        agent_a = str(uuid.uuid4())
         group = self._make_group()
         group.variants = [
             {
@@ -325,7 +328,7 @@ class TestRunVariantBatch:
             patch(
                 "modulo.db.crud.variant_group._resolve_prompt_template_override",
                 new_callable=AsyncMock,
-                return_value="You are v3.",
+                return_value={agent_a: "You are v3."},
             ),
         ):
             results = await run_variant_batch(
@@ -338,10 +341,10 @@ class TestRunVariantBatch:
         assert results is not None
         overrides = results[0]["merged_payload"]["_run_overrides"]
         assert overrides["prompt_version"] == "v3"
-        assert overrides["prompt_template"] == "You are v3."
+        assert overrides["prompt_templates"] == {agent_a: "You are v3."}
 
     async def test_prompt_version_override_unresolved_leaves_template_unset(self) -> None:
-        """An unresolvable prompt_version leaves ``_run_overrides["prompt_template"]`` unset.
+        """An unresolvable prompt_version leaves ``_run_overrides["prompt_templates"]`` unset.
 
         The node runner then falls back to its snapshot-embedded prompt.
         """
@@ -376,7 +379,7 @@ class TestRunVariantBatch:
             patch(
                 "modulo.db.crud.variant_group._resolve_prompt_template_override",
                 new_callable=AsyncMock,
-                return_value=None,
+                return_value={},
             ),
         ):
             results = await run_variant_batch(
@@ -389,7 +392,7 @@ class TestRunVariantBatch:
         assert results is not None
         overrides = results[0]["merged_payload"]["_run_overrides"]
         assert overrides["prompt_version"] == "v9"
-        assert "prompt_template" not in overrides
+        assert "prompt_templates" not in overrides
 
     async def test_returns_none_when_quota_exceeded_for_batch(self) -> None:
         session = AsyncMock()
