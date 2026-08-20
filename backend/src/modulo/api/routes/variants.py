@@ -747,7 +747,7 @@ async def batch_compare(
                 # Eval-coverage signal is per-pipeline: derive from the batch's
                 # first run's pipeline (all runs in one batch share it).
                 first_run = await get_run(session, entries[0]["run_id"], organisation_id=principal.organisation_id)
-                has_evals = bool(first_run) and await has_pipeline_default_evals(session, first_run.pipeline_id)
+                has_evals = first_run is not None and await has_pipeline_default_evals(session, first_run.pipeline_id)
     except IntegrityError:
         _log.exception(_CODE_VARIANTS_BATCH_COMPARE)
         raise HTTPException(
