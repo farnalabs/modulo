@@ -238,6 +238,7 @@ def batch_run_triggered(ctx: dict[str, Any]) -> None:
             "variant_name": r["variant"]["name"],
             "variant": r["variant"],
             "merged_payload": r["merged_payload"],
+            "variant_config_snapshot": r.get("frozen_snapshot") or {},
         }
         for r in result
     ]
@@ -352,8 +353,10 @@ def check_batch_run_overrides_merged(ctx: dict[str, Any]) -> None:
         overrides = variant.get("run_context_overrides", {})
         if isinstance(overrides, dict):
             merged = entry["merged_payload"]
+            snapshot = entry.get("variant_config_snapshot") or {}
+            run_overrides = snapshot.get("_run_overrides", {}) if isinstance(snapshot, dict) else {}
             for key, value in overrides.items():
-                actual = merged.get("_run_overrides", {}).get(key) if key in _CONTROL_OVERRIDE_KEYS else merged.get(key)
+                actual = run_overrides.get(key) if key in _CONTROL_OVERRIDE_KEYS else merged.get(key)
                 assert actual == value, f"Run for variant {variant['name']!r} missing override {key!r}={value!r}"
 
 
