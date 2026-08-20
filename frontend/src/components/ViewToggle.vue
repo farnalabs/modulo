@@ -1,5 +1,5 @@
 <template>
-  <FeatureGate feature-name="saved_views" data-testid="view-toggle-gate" show-disabled>
+  <div v-if="planStore.featureEnabled('saved_views')" data-testid="view-toggle-gate">
     <div class="flex items-center gap-2" data-testid="view-toggle">
       <Select
   aria-label="Form control"
@@ -49,14 +49,13 @@
         {{ isEnabled ? "Active" : "Inactive" }}
       </Badge>
     </div>
-  </FeatureGate>
+  </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
 import { api } from "@/lib/api/client";
 import { usePlanStore } from "@/stores/planStore";
-import FeatureGate from "./FeatureGate.vue";
 import Badge from "primevue/badge";
 import Select from "primevue/select";
 
