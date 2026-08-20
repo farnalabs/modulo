@@ -219,7 +219,11 @@ describe('ABTestModelsView variant comparison creator', () => {
     await nextTick()
     await new Promise(r => setTimeout(r, 0))
 
-    expect(pushMock).toHaveBeenCalledWith({ name: 'variant-compare-detail', params: { batchId: 'g-batch' } })
+    expect(pushMock).toHaveBeenCalledWith({
+      name: 'variant-compare-detail',
+      params: { batchId: 'g-batch' },
+      state: { firedRuns: [{ run_id: 'r1' }, { run_id: 'r2' }] },
+    })
   })
 
   it('pre-selects the pipeline from the pipeline_id deep-link query', async () => {

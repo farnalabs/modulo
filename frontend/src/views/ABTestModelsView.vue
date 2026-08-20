@@ -73,10 +73,13 @@
         </EmptyState>
 
         <section v-else class="space-y-4 rounded-lg border bg-card p-6">
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <h2 class="text-base font-semibold tracking-tight">
-              {{ $t('views.variantCreator.variants_title') }}
-            </h2>
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <h2 class="text-base font-semibold tracking-tight">
+                {{ $t('views.variantCreator.variants_title') }}
+              </h2>
+              <p class="text-xs text-muted-foreground">
+                {{ $t('views.variantCreator.advanced_overrides_note') }}
+              </p>
             <div class="flex items-center gap-3">
               <span
                 role="status"
@@ -120,6 +123,7 @@
                       :data-testid="`variant-builder-label-${i}`"
                       type="text"
                       :placeholder="$t('views.variantCreator.label_placeholder')"
+                      :aria-label="`${t('views.variantCreator.label')} ${i + 1}`"
                       class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     />
                     <p v-if="rowError(i)" class="mt-1 text-xs text-destructive" role="alert">
@@ -458,7 +462,7 @@ async function fireBatch() {
     const { data: groupData, error: createErr } = await api.POST('/api/v1/variant-groups', {
       body: {
         pipeline_id: selectedPipelineId.value,
-        name: comparisonName.value.trim() || `${t('views.variantCreator.comparison_name_placeholder')} ${new Date().toISOString()}`,
+        name: comparisonName.value.trim() || `${t('views.variantCreator.comparison_name_auto')} ${new Date().toISOString()}`,
         description: null,
         variants: variantDefs as unknown as components['schemas']['VariantDef'][],
         selection_strategy: 'weighted',
@@ -470,11 +474,14 @@ async function fireBatch() {
       fireError.value = `${t('views.variantCreator.failed_to_create_group')} ${JSON.stringify(createErr)}`
       return
     }
-    if (!groupData) return
+    if (!groupData) {
+      fireError.value = t('views.variantCreator.error_unexpected')
+      return
+    }
 
     const groupId = (groupData as unknown as { id: string }).id
 
-    const { error: runErr } = await api.POST('/api/v1/variant-groups/{group_id}/batch-run', {
+    const { data: batchData, error: runErr } = await api.POST('/api/v1/variant-groups/{group_id}/batch-run', {
       params: { path: { group_id: groupId } },
       body: {},
     })
@@ -482,9 +489,19 @@ async function fireBatch() {
       fireError.value = `${t('views.variantCreator.failed_to_run')} ${JSON.stringify(runErr)}`
       return
     }
+    if (!batchData) {
+      fireError.value = t('views.variantCreator.error_unexpected')
+      return
+    }
+
+    const firedRuns = (batchData as unknown as { runs: Array<{ run_id: string; variant_name: string }> }).runs ?? []
 
     showFireDialog.value = false
-    router.push({ name: 'variant-compare-detail', params: { batchId: groupId } })
+    router.push({
+      name: 'variant-compare-detail',
+      params: { batchId: groupId },
+      state: { firedRuns },
+    })
   } catch (e: unknown) {
     fireError.value = `${t('views.variantCreator.failed_to_run')} ${formatApiError(e)}`
   } finally {
