@@ -145,7 +145,7 @@
         </table>
       </div>
       <!-- Trend chart section -->
-      <div class="card p-4">
+      <div v-if="planStore.featureEnabled('dashboard_charts')" class="card p-4">
         <div class="flex items-center justify-between mb-4">
           <h2 class="text-base font-semibold">{{ $t('views.DashboardView.run_activity') }}</h2>
         </div>
