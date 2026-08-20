@@ -33,7 +33,7 @@
             v-model="selectedPipelineId"
             :placeholder="$t('views.variantCreator.select_a_pipeline')"
             data-testid="variant-builder-pipeline-select"
-            aria-label="Pipeline"
+            :aria-label="$t('views.variantCreator.aria_pipeline')"
             class="min-w-[280px]"
             :options="pipelines.map(p => ({ value: p.id, label: p.name }))"
             option-label="label"
@@ -131,7 +131,7 @@
                       v-model="v.snapshotId"
                       :placeholder="$t('views.variantCreator.select_snapshot')"
                       :data-testid="`variant-builder-snapshot-${i}`"
-                      aria-label="Snapshot"
+                      :aria-label="$t('views.variantCreator.aria_snapshot')"
                       class="w-full"
                       :options="snapshotOptions"
                       option-label="label"
@@ -147,7 +147,7 @@
                       v-model="v.modelBackendId"
                       :placeholder="$t('views.variantCreator.select_model')"
                       :data-testid="`variant-builder-model-${i}`"
-                      aria-label="Model backend"
+                      :aria-label="$t('views.variantCreator.aria_model_backend')"
                       class="w-full"
                       :options="modelBackendOptions"
                       option-label="label"
@@ -163,7 +163,7 @@
                       v-model="v.promptVersion"
                       :placeholder="$t('views.variantCreator.select_prompt_version')"
                       :data-testid="`variant-builder-prompt-${i}`"
-                      aria-label="Prompt version"
+                      :aria-label="$t('views.variantCreator.aria_prompt_version')"
                       class="w-full"
                       :options="promptVersionOptions"
                       option-label="label"
@@ -177,7 +177,8 @@
                   <td class="py-2 text-right whitespace-nowrap">
                     <button
                       :data-testid="`variant-builder-duplicate-${i}`"
-                      class="mr-2 text-xs text-muted-foreground hover:text-foreground"
+                      :disabled="variants.length >= MAX_VARIANTS"
+                      class="mr-2 text-xs text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                       :aria-label="$t('views.variantCreator.duplicate')"
                       @click="duplicateVariant(i)"
                     >
@@ -205,6 +206,13 @@
           >
             {{ $t('views.variantCreator.min_two_hint') }}
           </p>
+
+          <ErrorAlert
+            v-if="fireError"
+            :message="fireError"
+            data-testid="variant-builder-fire-error"
+            class="mb-3"
+          />
 
           <div class="flex flex-wrap items-center gap-3 pt-2">
             <Button
@@ -245,6 +253,7 @@
     <p class="text-sm text-muted-foreground">
       {{ $t('views.variantCreator.confirm_body', { count: variants.length }) }}
     </p>
+    <ErrorAlert v-if="fireError" :message="fireError" class="mt-3" />
     <template #footer>
       <div class="flex justify-end gap-3">
         <Button
@@ -312,6 +321,7 @@ const variants = ref<VariantForm[]>([])
 const snapshots = ref<Array<{ id: string; snapshot_version: number; tag: string | null }>>([])
 const promptVersionOptions = ref<Array<{ value: string; label: string }>>([])
 const error = ref<string | null>(null)
+const fireError = ref<string | null>(null)
 const firing = ref(false)
 const showFireDialog = ref(false)
 
@@ -388,6 +398,7 @@ function nextUniqueLabel(base: string): string {
 }
 
 function duplicateVariant(index: number) {
+  if (variants.value.length >= MAX_VARIANTS) return
   const src = variants.value[index]
   if (!src) return
   variants.value.push({
@@ -419,6 +430,7 @@ function preflight(): boolean {
 
 function openFireDialog() {
   if (!preflight()) return
+  fireError.value = null
   showFireDialog.value = true
 }
 
@@ -428,12 +440,12 @@ async function fireBatch() {
     return
   }
   if (variants.value.length < 2) {
-    error.value = t('views.variantCreator.min_two_hint')
+    fireError.value = t('views.variantCreator.min_two_hint')
     showFireDialog.value = false
     return
   }
   firing.value = true
-  error.value = null
+  fireError.value = null
   try {
     const variantDefs = variants.value.map(v => ({
       snapshot_id: v.snapshotId as string,
@@ -455,7 +467,7 @@ async function fireBatch() {
       },
     })
     if (createErr) {
-      error.value = `${t('views.variantCreator.failed_to_create_group')} ${JSON.stringify(createErr)}`
+      fireError.value = `${t('views.variantCreator.failed_to_create_group')} ${JSON.stringify(createErr)}`
       return
     }
     if (!groupData) return
@@ -467,14 +479,14 @@ async function fireBatch() {
       body: {},
     })
     if (runErr) {
-      error.value = `${t('views.variantCreator.failed_to_run')} ${JSON.stringify(runErr)}`
+      fireError.value = `${t('views.variantCreator.failed_to_run')} ${JSON.stringify(runErr)}`
       return
     }
 
     showFireDialog.value = false
     router.push({ name: 'variant-compare-detail', params: { batchId: groupId } })
   } catch (e: unknown) {
-    error.value = `${t('views.variantCreator.failed_to_run')} ${formatApiError(e)}`
+    fireError.value = `${t('views.variantCreator.failed_to_run')} ${formatApiError(e)}`
   } finally {
     firing.value = false
   }

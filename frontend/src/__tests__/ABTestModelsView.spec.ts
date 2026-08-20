@@ -141,6 +141,21 @@ describe('ABTestModelsView variant comparison creator', () => {
     expect(wrapper.find('[data-testid="variant-builder-add"]').attributes('disabled')).toBeDefined()
   })
 
+  it('duplicate respects the row cap of 10 and disables at the limit', async () => {
+    const wrapper = await mountView()
+    const vm = wrapper.vm as unknown as { variants: unknown[] }
+    for (let i = 0; i < 10; i += 1) {
+      await wrapper.find('[data-testid="variant-builder-add"]').trigger('click')
+    }
+    await nextTick()
+
+    await wrapper.find('[data-testid="variant-builder-duplicate-0"]').trigger('click')
+    await nextTick()
+
+    expect(vm.variants.length).toBe(10)
+    expect(wrapper.find('[data-testid="variant-builder-duplicate-0"]').attributes('disabled')).toBeDefined()
+  })
+
   it('first-class pickers translate into run_context_overrides keys on fire', async () => {
     const wrapper = await mountView()
     await wrapper.find('[data-testid="variant-builder-add"]').trigger('click')
