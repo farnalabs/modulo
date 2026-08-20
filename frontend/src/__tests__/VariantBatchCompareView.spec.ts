@@ -1,27 +1,38 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { nextTick } from 'vue'
+import { nextTick, reactive } from 'vue'
 
 const routerMocks = vi.hoisted(() => ({
   push: vi.fn().mockResolvedValue(undefined),
+  replace: vi.fn().mockResolvedValue(undefined),
 }))
 
+const routeHolder = vi.hoisted(() => ({
+  route: null as unknown,
+}))
+
+const makeRoute = (batchId: string) => ({
+  get path() {
+    return `/variants/compare/${batchId}`
+  },
+  get fullPath() {
+    return `/variants/compare/${batchId}`
+  },
+  params: { batchId },
+  query: {},
+  hash: '',
+  matched: [],
+  name: 'variant-batch-compare',
+  redirectedFrom: undefined,
+  meta: {},
+})
+
 vi.mock('vue-router', () => ({
-  useRoute: vi.fn(() => ({
-    path: '/variants/compare/b1',
-    fullPath: '/variants/compare/b1',
-    params: { batchId: 'b1' },
-    query: {},
-    hash: '',
-    matched: [],
-    name: 'variant-batch-compare',
-    redirectedFrom: undefined,
-    meta: {},
-  })),
+  useRoute: vi.fn(() => routeHolder.route),
   useRouter: vi.fn(() => ({
     push: routerMocks.push,
-    replace: vi.fn(),
+    replace: routerMocks.replace,
     resolve: vi.fn(),
     go: vi.fn(),
     back: vi.fn(),
@@ -97,6 +108,7 @@ describe('VariantBatchCompareView', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+    routeHolder.route = reactive(makeRoute('b1'))
     batchMocks.fetchVariantBatch.mockResolvedValue({ data: mockBatch(), error: undefined })
     batchMocks.fetchVariantBatches.mockResolvedValue({ data: mockComparisons(), error: undefined })
     batchMocks.softDeleteVariantBatch.mockResolvedValue({})
@@ -219,6 +231,45 @@ describe('VariantBatchCompareView', () => {
     expect(wrapper.text()).toContain('Running')
   })
 
+  it('navigates the route to the new batch id after a successful re-fire', async () => {
+    batchMocks.reFireVariantBatch.mockResolvedValue({
+      data: mockBatch({ batch_id: 'b9', name: 'Rebuilt comparison' }),
+      error: undefined,
+    })
+
+    const wrapper = mount(VariantBatchCompareView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="variant-batch-refire"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(routerMocks.replace).toHaveBeenCalledWith('/variants/compare/b9')
+  })
+
+  it('drops a stale loadBatch response that resolves after the route moved on', async () => {
+    let resolveSlow: (value: unknown) => void = () => {}
+    batchMocks.fetchVariantBatch.mockImplementationOnce(() => new Promise((res) => { resolveSlow = res }))
+    batchMocks.fetchVariantBatch.mockResolvedValue({ data: mockBatch({ name: 'latest' }), error: undefined })
+
+    const wrapper = mount(VariantBatchCompareView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    // Route moves on to a different batch while the first request is still in flight.
+    ;(routeHolder.route as { params: { batchId: string } }).params.batchId = 'b2'
+    resolveSlow({ data: mockBatch({ name: 'stale' }), error: undefined })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.text()).not.toContain('stale')
+  })
+
   it('lists My comparisons with soft-delete', async () => {
     const wrapper = mount(VariantBatchCompareView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
@@ -238,5 +289,27 @@ describe('VariantBatchCompareView', () => {
     expect(batchMocks.softDeleteVariantBatch).toHaveBeenCalledWith('b2')
     // list reloaded after delete
     expect(batchMocks.fetchVariantBatches).toHaveBeenCalledTimes(2)
+  })
+
+  it('renders a partial batch status with its translated label, not raw lowercase', async () => {
+    batchMocks.fetchVariantBatches.mockResolvedValue({
+      data: {
+        items: [
+          { batch_id: 'b1', name: 'Sonnet vs Opus', pipeline_name: 'Summarizer', status: 'complete', run_count: 2, created_at: '2026-01-01T00:00:00Z' },
+          { batch_id: 'b3', name: 'partial batch', pipeline_name: 'Summarizer', status: 'partial', run_count: 1, created_at: '2026-01-02T00:00:00Z' },
+        ],
+        total: 2,
+      },
+      error: undefined,
+    })
+
+    const wrapper = mount(VariantBatchCompareView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Partial — some variants incomplete')
+    expect(wrapper.text()).not.toContain('>partial<')
   })
 })

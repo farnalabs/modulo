@@ -2273,6 +2273,8 @@ export default {
       "failedToLoadBatch": "Failed to load variant batch:",
       "failedToDelete": "Failed to delete comparison:",
       "refireFailed": "Failed to re-fire batch:",
+      "pass": "PASS",
+      "fail": "FAIL",
       "status": {
         "pending": "Pending",
         "running": "Running",
@@ -2280,6 +2282,7 @@ export default {
         "claimed": "Claimed",
         "complete": "Complete",
         "failed": "Failed",
+        "partial": "Partial",
         "cancelled": "Cancelled",
         "eval_failed": "Eval Failed",
         "stalled": "Stalled",

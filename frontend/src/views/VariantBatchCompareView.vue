@@ -133,7 +133,7 @@
                   :class="er.passed ? 'text-success' : 'text-destructive'"
                   :title="er.detail ?? undefined"
                 >
-                  {{ er.node_id }}: {{ er.score !== null ? er.score.toFixed(2) : '-' }} {{ er.passed ? 'PASS' : 'FAIL' }}
+                  {{ er.node_id }}: {{ er.score !== null ? er.score.toFixed(2) : '-' }} {{ $t(er.passed ? 'views.variantBatch.pass' : 'views.variantBatch.fail') }}
                 </span>
               </div>
             </div>
@@ -184,9 +184,9 @@
                 </router-link>
               </td>
               <td class="px-4 py-3">
-                <span :class="statusBadgeClass({ run_status: cmp.status } as VariantBatchRun)">
-                  {{ statusLabel({ run_status: cmp.status } as VariantBatchRun) }}
-                </span>
+                  <span :class="batchStatusBadgeClass(cmp.status)">
+                    {{ batchStatusLabel(cmp.status) }}
+                  </span>
               </td>
               <td class="px-4 py-3 tabular-nums text-muted-foreground">{{ cmp.run_count }}</td>
               <td class="px-4 py-3 text-right">
@@ -302,6 +302,20 @@ function statusLabel(run: VariantBatchRun): string {
   return translated === key ? run.run_status : translated
 }
 
+function batchStatusBadgeClass(status: string): string {
+  if (status === 'complete') return 'badge badge-status-success capitalize'
+  if (status === 'failed') return 'badge badge-status-destructive capitalize'
+  if (status === 'partial' || status === 'cancelled') return 'badge badge-status-warning capitalize'
+  if (status === 'running' || status === 'pending') return 'badge badge-status-info capitalize'
+  return 'badge badge-status-muted capitalize'
+}
+
+function batchStatusLabel(status: string): string {
+  const key = `views.variantBatch.batchStatus.${status}`
+  const translated = t(key)
+  return translated === key ? status : translated
+}
+
 function passRateClass(rate: number): string {
   if (rate >= 80) return 'badge badge-status-success'
   if (rate >= 40) return 'badge badge-status-warning'
@@ -316,16 +330,19 @@ function toggleExpand(runId: string) {
 }
 
 async function loadBatch(id: string) {
+  const thisId = id
   loading.value = true
   error.value = null
   try {
     const { data, error: err } = await fetchVariantBatch(id)
+    if (thisId !== batchId.value) return
     if (err) {
       error.value = `${t('views.variantBatch.failedToLoadBatch')} ${err}`
       return
     }
     batch.value = data ?? null
   } catch (e: unknown) {
+    if (thisId !== batchId.value) return
     error.value = `${t('views.variantBatch.failedToLoadBatch')} ${formatApiError(e)}`
   } finally {
     loading.value = false
@@ -368,18 +385,24 @@ async function handleSoftDelete(batch: VariantBatchSummary) {
 
 async function handleReFire() {
   if (!batchId.value) return
+  const thisId = batchId.value
   refiring.value = true
   error.value = null
   try {
-    const { data, error: err } = await reFireVariantBatch(batchId.value)
+    const { data, error: err } = await reFireVariantBatch(thisId)
+    if (thisId !== batchId.value) return
     if (err) {
       error.value = `${t('views.variantBatch.refireFailed')} ${err}`
       return
     }
-    batch.value = data ?? null
+    if (data) {
+      batch.value = data
+      await router.replace(`/variants/compare/${data.batch_id}`)
+    }
     expandedRunIds.value = new Set()
     await loadComparisons()
   } catch (e: unknown) {
+    if (thisId !== batchId.value) return
     error.value = `${t('views.variantBatch.refireFailed')} ${formatApiError(e)}`
   } finally {
     refiring.value = false
