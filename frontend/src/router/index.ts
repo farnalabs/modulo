@@ -63,6 +63,7 @@ const FeedbackInboxView = () => import('../views/FeedbackInboxView.vue')
 const EvalEditorView = () => import('../views/EvalEditorView.vue')
 const EvalProposalsQueueView = () => import('../views/EvalProposalsQueueView.vue')
 const VariantCompareView = () => import('../views/VariantCompareView.vue')
+const VariantBatchCompareView = () => import('../views/VariantBatchCompareView.vue')
 const ABTestModelsView = () => import('../views/ABTestModelsView.vue')
 const RunsListView = () => import('../views/RunsListView.vue')
 const RunDetailView = () => import('../views/RunDetailView.vue')
@@ -288,6 +289,13 @@ const router = createRouter({
       path: '/variants/compare',
       name: 'variant-compare',
       component: VariantCompareView,
+    },
+    {
+      path: '/variants/compare/:batchId',
+      name: 'variant-batch-compare',
+      component: VariantBatchCompareView,
+      props: true,
+      meta: { breadcrumb: 'Variant Batch Compare', parent: 'variant-compare', testid: 'variant-batch-compare' },
     },
     {
       path: '/variants/ab-test',
@@ -606,6 +614,20 @@ router.beforeEach(async (to) => {
             return { name: 'dashboard' }
           }
         }
+      }
+    }
+
+    // Generalised variant comparison workflow (FAR-332): when the
+    // `variant_batch_compare` feature flag is ON, the legacy model-only
+    // AB Test Models view is HARD-REPLACED by the batch-scoped compare flow.
+    // The legacy view stays reachable only while the flag is OFF.
+    if (to.name === 'ab-test-models') {
+      const planStore = usePlanStore()
+      if (!planStore.loaded) {
+        await planStore.fetchPlan()
+      }
+      if (planStore.featureEnabled('variant_batch_compare')) {
+        return { name: 'variant-compare' }
       }
     }
   } catch (err) {

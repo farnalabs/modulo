@@ -1940,6 +1940,21 @@ If the two variants produce different outputs but identical eval scores, the com
 
 **Prompt version comparison**: variant groups are not limited to model backend differences. An operator can also compare prompt versions by creating variants that differ in `run_context_overrides` containing `{prompt_version: "v3"}` vs `{prompt_version: "v4"}`, with agents configured to read `run_context.prompt_version` to select their prompt template. This requires agents to declare multiple prompt template versions and select by the context key — a pattern documented in the library's "prompt versioning" guide.
 
+#### Generalised variant comparison workflow (batch-scoped)
+
+Variant comparison is generalised from a single group firing into a **batch** model. A *variant batch* is a frozen firing of a variant group: every variant runs against the same pipeline snapshot with its own `run_context_overrides`, fired together as one batch. The batch is the durable, referenceable unit of comparison and is scoped by `batch_id` — never by a live group.
+
+- **Frozen snapshot + overrides**: each batch captures the pipeline snapshot and each variant's `run_context_overrides` at fire time. The batch can be rebuilt later from its frozen definition, so re-runs are reproducible even if the source group, snapshot, or pipeline has since changed.
+- **Batch firing**: firing a batch creates one run per variant against the shared snapshot. All runs share the same input payload and are compared as a unit.
+- **Batch-scoped compare**: the compare view loads runs purely by `batch_id` (server-side), independent of any live group. Soft-deleting the source group does not break an existing compare URL or its run links. Fixed columns: label, snapshot/input (which frozen snapshot/override diff each variant ran with), status, pass rate, cost.
+- **Status vocabulary**: per-variant status badges map to the canonical RUN_STATUS set (`pending`, `running`, `awaiting_human`, `claimed`, `complete`, `failed`, `cancelled`, `eval_failed`, `stalled`, `budget_exceeded`).
+- **Partial results**: if some variants fail while others complete, the compare view shows partial results for the completed variants and a completion signal indicating the batch is incomplete. The server computes the batch status (`pending` / `running` / `partial` / `complete` / `failed` / `cancelled`).
+- **Deep detail**: each variant row can expand to reveal the per-node output diff and eval results, plus a link to the underlying run.
+- **Re-fire**: a "re-fire the batch" action rebuilds the batch from its frozen snapshot + overrides, producing a fresh batch. This is the recovery path when some variants fail or the data goes stale.
+- **My comparisons**: the compare surface lists the user's variant batches ("My comparisons"). A batch can be soft-deleted, which hides it from the list while keeping the compare URL and run links working.
+
+The legacy model-only AB Test Models view (single model-backend comparison) is sunset in favour of this batch-scoped workflow. While the `variant_batch_compare` feature flag is OFF the legacy view remains reachable; when the flag is ON the legacy view is hard-replaced by the batch-scoped compare flow.
+
 ---
 
 ### 8.20 Feedback System (v1)
