@@ -407,7 +407,7 @@ async function handleReFire() {
     if (thisId !== batchId.value) return
     error.value = `${t('views.variantBatch.refireFailed')} ${formatApiError(e)}`
   } finally {
-    if (thisId === batchId.value) refiring.value = false
+    refiring.value = false
   }
 }
 
