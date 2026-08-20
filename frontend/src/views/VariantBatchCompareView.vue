@@ -316,6 +316,7 @@ function batchStatusLabel(status: string): string {
   return translated === key ? status : translated
 }
 
+
 function passRateClass(rate: number): string {
   if (rate >= 80) return 'badge badge-status-success'
   if (rate >= 40) return 'badge badge-status-warning'
@@ -406,7 +407,7 @@ async function handleReFire() {
     if (thisId !== batchId.value) return
     error.value = `${t('views.variantBatch.refireFailed')} ${formatApiError(e)}`
   } finally {
-    refiring.value = false
+    if (thisId === batchId.value) refiring.value = false
   }
 }
 
