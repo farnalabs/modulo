@@ -1350,7 +1350,7 @@ class TestBatchCompare:
         masked = result["runs"][0]["run_context_overrides"]
         assert masked["config"]["api_key"] != "sk-nested-secret"
         # non-sensitive siblings at depth are preserved
-        assert masked["config"]["temperature"] == 0.7
+        assert masked["config"]["temperature"] == pytest.approx(0.7)
         diff = result["runs"][0]["override_diff"]
         assert diff["added"]["config"]["api_key"] != "sk-nested-added"
         assert diff["removed"]["config"]["api_key"] != "sk-nested-removed"
