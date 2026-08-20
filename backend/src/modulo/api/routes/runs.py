@@ -15,6 +15,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.exc import TimeoutError as SA_TimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.orm import selectinload
 from tenacity import before_sleep_log, retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from modulo.api.constants import MSG_RESOURCE_ALREADY_EXISTS, MSG_UNEXPECTED_ERROR
@@ -150,11 +151,6 @@ async def _do_get_run(
 ) -> Run:
     async with factory() as session, session.begin():
         await set_rls_org(session, principal.organisation_id)
-        from sqlalchemy import select
-        from sqlalchemy.orm import selectinload
-
-        from modulo.db.models.run import Run
-
         stmt = (
             select(Run)
             .options(selectinload(Run.pipeline))

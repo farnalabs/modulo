@@ -76,10 +76,17 @@ class TestCreateGroup:
         principal = make_mock_principal()
         mock_session = make_session_mock()
 
-        with patch(
-            "modulo.api.routes.variants.create_variant_group",
-            new_callable=AsyncMock,
-        ) as mock_create:
+        with (
+            patch(
+                "modulo.api.routes.variants.create_variant_group",
+                new_callable=AsyncMock,
+            ) as mock_create,
+            patch(
+                "modulo.api.routes.variants.validate_batch_ownership",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
             mock_group = MagicMock()
             mock_group.id = uuid.uuid4()
             mock_group.pipeline_id = uuid.uuid4()
@@ -171,6 +178,11 @@ class TestRunVariant:
                 new_callable=AsyncMock,
             ) as mock_get,
             patch(
+                "modulo.api.routes.variants.validate_batch_ownership",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
                 "modulo.api.routes.variants.check_pipeline_run_quota",
                 new_callable=AsyncMock,
             ) as mock_quota,
@@ -206,6 +218,11 @@ class TestRunVariant:
                 new_callable=AsyncMock,
             ) as mock_get,
             patch(
+                "modulo.api.routes.variants.validate_batch_ownership",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
                 "modulo.api.routes.variants.check_pipeline_run_quota",
                 new_callable=AsyncMock,
             ) as mock_quota,
@@ -217,6 +234,81 @@ class TestRunVariant:
             with pytest.raises(HTTPException) as exc:
                 await run_variant(group_id, body, mock_session, principal)
             assert exc.value.status_code == 429
+
+    async def test_masks_secret_in_merged_payload(self) -> None:
+        """A secret inside the merged payload must not be returned in plaintext."""
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        group_id = uuid.uuid4()
+        body = MagicMock()
+        body.input_payload = {"api_key": "sk-super-secret", "model": "gpt-4"}
+
+        with (
+            patch(
+                "modulo.api.routes.variants.get_variant_group",
+                new_callable=AsyncMock,
+            ) as mock_get,
+            patch(
+                "modulo.api.routes.variants.validate_batch_ownership",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.api.routes.variants.check_pipeline_run_quota",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.api.routes.variants.run_variant_weighted",
+                new_callable=AsyncMock,
+            ) as mock_run,
+        ):
+            mock_group = MagicMock()
+            mock_get.return_value = mock_group
+            mock_run.return_value = {
+                "run_id": uuid.uuid4(),
+                "variant": {"name": "control"},
+                "merged_payload": {"api_key": "sk-super-secret", "model": "gpt-4"},
+            }
+
+            result = await run_variant(group_id, body, mock_session, principal)
+
+        merged = result["merged_payload"]
+        assert merged["api_key"] != "sk-super-secret"
+        assert merged["model"] == "gpt-4"
+
+    async def test_rejects_cross_org_reference_with_403(self) -> None:
+        """Single-run path must fail closed on a cross-org pipeline/snapshot."""
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        group_id = uuid.uuid4()
+        body = MagicMock()
+        body.input_payload = {}
+
+        with (
+            patch(
+                "modulo.api.routes.variants.get_variant_group",
+                new_callable=AsyncMock,
+            ) as mock_get,
+            patch(
+                "modulo.api.routes.variants.validate_batch_ownership",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "modulo.api.routes.variants.run_variant_weighted",
+                new_callable=AsyncMock,
+            ) as mock_run,
+        ):
+            mock_group = MagicMock()
+            mock_group.pipeline_id = uuid.uuid4()
+            mock_group.variants = [{"name": "v", "snapshot_id": str(uuid.uuid4())}]
+            mock_get.return_value = mock_group
+
+            with pytest.raises(HTTPException) as exc:
+                await run_variant(group_id, body, mock_session, principal)
+            assert exc.value.status_code == 403
+            mock_run.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -376,6 +468,51 @@ class TestRunVariantBatch:
                 await run_batch(uuid.uuid4(), body, mock_session, principal)
             assert exc.value.status_code == 500
 
+    async def test_masks_secret_in_merged_payload(self) -> None:
+        """Each batch run's merged_payload must have secrets masked in the response."""
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        group_id = uuid.uuid4()
+        body = MagicMock()
+        body.input_payload = {"api_key": "sk-batch-secret", "model": "gpt-4"}
+
+        with (
+            patch(
+                "modulo.api.routes.variants.get_variant_group",
+                new_callable=AsyncMock,
+            ) as mock_get,
+            patch(
+                "modulo.api.routes.variants.validate_batch_ownership",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.api.routes.variants.run_variant_batch",
+                new_callable=AsyncMock,
+            ) as mock_run,
+            patch(
+                "modulo.api.routes.variants.has_pipeline_default_evals",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            batch_id = uuid.uuid4()
+            mock_get.return_value = self._make_group()
+            mock_run.return_value = [
+                {
+                    "run_id": uuid.uuid4(),
+                    "batch_id": batch_id,
+                    "variant": {"name": "control"},
+                    "merged_payload": {"api_key": "sk-batch-secret", "model": "gpt-4"},
+                }
+            ]
+
+            result = await run_batch(group_id, body, mock_session, principal)
+
+        merged = result["runs"][0]["merged_payload"]
+        assert merged["api_key"] != "sk-batch-secret"
+        assert merged["model"] == "gpt-4"
+
 
 @pytest.mark.asyncio
 class TestCoverageGaps:
@@ -467,10 +604,17 @@ class TestUpdateGroup:
         mock_session = make_session_mock()
         group_id = uuid.uuid4()
 
-        with patch(
-            "modulo.api.routes.variants.update_variant_group",
-            new_callable=AsyncMock,
-        ) as mock_update:
+        with (
+            patch(
+                "modulo.api.routes.variants.update_variant_group",
+                new_callable=AsyncMock,
+            ) as mock_update,
+            patch(
+                "modulo.api.routes.variants.validate_batch_ownership",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
             mock_group = MagicMock()
             mock_group.id = group_id
             mock_group.pipeline_id = uuid.uuid4()
@@ -504,10 +648,17 @@ class TestUpdateGroup:
         principal = make_mock_principal()
         mock_session = make_session_mock()
 
-        with patch(
-            "modulo.api.routes.variants.update_variant_group",
-            new_callable=AsyncMock,
-            return_value=None,
+        with (
+            patch(
+                "modulo.api.routes.variants.update_variant_group",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "modulo.api.routes.variants.validate_batch_ownership",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
         ):
             body = MagicMock()
             body.name = "test"
@@ -646,10 +797,17 @@ class TestCreateGroupProgrammingError:
         principal = make_mock_principal()
         mock_session = make_session_mock()
 
-        with patch(
-            "modulo.api.routes.variants.create_variant_group",
-            new_callable=AsyncMock,
-            side_effect=ProgrammingError("mock", "mock", "mock"),
+        with (
+            patch(
+                "modulo.api.routes.variants.create_variant_group",
+                new_callable=AsyncMock,
+                side_effect=ProgrammingError("mock", "mock", "mock"),
+            ),
+            patch(
+                "modulo.api.routes.variants.validate_batch_ownership",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
         ):
             body = MagicMock()
             body.pipeline_id = uuid.uuid4()
@@ -688,10 +846,17 @@ class TestCreateGroupSQLAlchemyError:
         principal = make_mock_principal()
         mock_session = make_session_mock()
 
-        with patch(
-            "modulo.api.routes.variants.create_variant_group",
-            new_callable=AsyncMock,
-            side_effect=SQLAlchemyError("mock", "mock", "mock"),
+        with (
+            patch(
+                "modulo.api.routes.variants.create_variant_group",
+                new_callable=AsyncMock,
+                side_effect=SQLAlchemyError("mock", "mock", "mock"),
+            ),
+            patch(
+                "modulo.api.routes.variants.validate_batch_ownership",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
         ):
             body = MagicMock()
             body.pipeline_id = uuid.uuid4()
@@ -714,10 +879,17 @@ class TestCreateGroupIntegrityError:
         principal = make_mock_principal()
         mock_session = make_session_mock()
 
-        with patch(
-            "modulo.api.routes.variants.create_variant_group",
-            new_callable=AsyncMock,
-            side_effect=IntegrityError("mock", "mock", "mock"),
+        with (
+            patch(
+                "modulo.api.routes.variants.create_variant_group",
+                new_callable=AsyncMock,
+                side_effect=IntegrityError("mock", "mock", "mock"),
+            ),
+            patch(
+                "modulo.api.routes.variants.validate_batch_ownership",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
         ):
             body = MagicMock()
             body.pipeline_id = uuid.uuid4()
@@ -850,10 +1022,17 @@ class TestCreateGroupException:
         principal = make_mock_principal()
         mock_session = make_session_mock()
 
-        with patch(
-            "modulo.api.routes.variants.create_variant_group",
-            new_callable=AsyncMock,
-            side_effect=ValueError("unexpected"),
+        with (
+            patch(
+                "modulo.api.routes.variants.create_variant_group",
+                new_callable=AsyncMock,
+                side_effect=ValueError("unexpected"),
+            ),
+            patch(
+                "modulo.api.routes.variants.validate_batch_ownership",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
         ):
             body = MagicMock()
             body.pipeline_id = uuid.uuid4()
@@ -914,10 +1093,17 @@ class TestUpdateGroupException:
         principal = make_mock_principal()
         mock_session = make_session_mock()
 
-        with patch(
-            "modulo.api.routes.variants.update_variant_group",
-            new_callable=AsyncMock,
-            side_effect=ValueError("unexpected"),
+        with (
+            patch(
+                "modulo.api.routes.variants.update_variant_group",
+                new_callable=AsyncMock,
+                side_effect=ValueError("unexpected"),
+            ),
+            patch(
+                "modulo.api.routes.variants.validate_batch_ownership",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
         ):
             body = MagicMock()
             body.name = "test"
@@ -1078,7 +1264,11 @@ class TestBatchCompare:
         entries = [
             self._entry(
                 run_context_overrides={"api_key": "sk-abc", "model": "gpt-4"},
-                override_diff={"added": {"api_key": "sk-abc"}, "removed": {}, "changed": {}},
+                override_diff={
+                    "added": {"api_key": "sk-abc"},
+                    "removed": {"api_key": "sk-base-secret"},
+                    "changed": {"model": "gpt-4o"},
+                },
             )
         ]
         mock_run = MagicMock()
@@ -1106,7 +1296,11 @@ class TestBatchCompare:
         masked = result["runs"][0]["run_context_overrides"]
         assert masked["api_key"] != "sk-abc"
         assert masked["model"] == "gpt-4"
-        assert result["runs"][0]["override_diff"]["added"]["api_key"] != "sk-abc"
+        diff = result["runs"][0]["override_diff"]
+        assert diff["added"]["api_key"] != "sk-abc"
+        # ``removed`` carries the base run's frozen override values (potentially
+        # secrets) and must be masked exactly like added/changed.
+        assert diff["removed"]["api_key"] != "sk-base-secret"
 
     async def test_returns_404_for_cross_org_batch(self) -> None:
         """Cross-org IDOR: another org's batch_id resolves to no org-owned runs."""
@@ -1276,3 +1470,60 @@ class TestCreateVariantGroupRequestValidation:
             variants=[self._valid_variant(weight=0.0)],
         )
         assert req.variants[0].weight == 0.0
+
+
+@pytest.mark.asyncio
+class TestGroupOwnershipRejection:
+    """Cross-org pipeline/snapshot references are rejected at write time (403)."""
+
+    def _body(self) -> MagicMock:
+        body = MagicMock()
+        body.pipeline_id = uuid.uuid4()
+        body.name = "test"
+        body.description = None
+        body.variants = []
+        body.selection_strategy = "weighted"
+        body.max_concurrent_runs = 5
+        body.degraded_evals = False
+        body.model_dump.return_value = {}
+        return body
+
+    async def test_create_rejects_cross_org_pipeline(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+
+        with (
+            patch(
+                "modulo.api.routes.variants.validate_batch_ownership",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "modulo.api.routes.variants.create_variant_group",
+                new_callable=AsyncMock,
+            ) as mock_create,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await create_group(self._body(), mock_session, principal)
+            assert exc.value.status_code == 403
+            mock_create.assert_not_called()
+
+    async def test_update_rejects_cross_org_pipeline(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+
+        with (
+            patch(
+                "modulo.api.routes.variants.validate_batch_ownership",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "modulo.api.routes.variants.update_variant_group",
+                new_callable=AsyncMock,
+            ) as mock_update,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await update_group(uuid.uuid4(), self._body(), mock_session, principal)
+            assert exc.value.status_code == 403
+            mock_update.assert_not_called()
