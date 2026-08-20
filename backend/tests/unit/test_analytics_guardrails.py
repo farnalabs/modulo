@@ -145,7 +145,7 @@ class TestRate:
         assert gr._rate(5, None) is None
 
     def test_rounds_to_4dp(self) -> None:
-        assert gr._rate(1, 3) == 0.3333
+        assert gr._rate(1, 3) == pytest.approx(0.3333)
 
     def test_zero_numerator_returns_zero(self) -> None:
         assert gr._rate(0, 10) == 0.0
@@ -232,7 +232,7 @@ class TestAssembleScorecard:
         # first-try-pass: 2 clean runs of 4 guarded = 0.5
         assert rates["first_try_pass_rate"] == 0.5
         # corrected-pass: 6 converged of 10 corrections = 0.6
-        assert corrections["corrected_pass_rate"] == 0.6
+        assert corrections["corrected_pass_rate"] == pytest.approx(0.6)
         # They are DIFFERENT numbers in SEPARATE objects — no combined figure.
         assert "corrected_pass_rate" not in rates
         assert "first_try_pass_rate" not in corrections
@@ -307,7 +307,7 @@ class TestAssembleScorecard:
         assert corrections["budget_exhausted"] == 2
         assert corrections["dismissed"] == 1
         assert corrections["in_flight"] == 0
-        assert corrections["corrected_pass_rate"] == 0.6
+        assert corrections["corrected_pass_rate"] == pytest.approx(0.6)
 
     def test_no_gating_fields_anywhere(self) -> None:
         """Advisory contract: no gate/block/decision surface on any object."""
@@ -455,7 +455,7 @@ class TestRunGuardrailScorecard:
         assert result["advisory_only"] is True
         assert result["scope"]["runs_with_guardrail"] == 4
         assert result["rates"]["first_try_pass_rate"] == 0.5
-        assert result["self_correction"]["corrected_pass_rate"] == 0.6
+        assert result["self_correction"]["corrected_pass_rate"] == pytest.approx(0.6)
         assert result["self_correction"]["budget_exhausted"] == 2
         assert result["evasion_band_drift"]["baseline_window_days"] == 6
         mock_rls.assert_awaited_once()
