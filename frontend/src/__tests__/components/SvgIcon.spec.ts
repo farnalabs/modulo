@@ -10,6 +10,7 @@ describe('SvgIcon', () => {
   })
 
   it('registers every icon referenced by manifest navigation', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const iconNames = new Set(
       getNavGroups().flatMap((group) => group.items.map((item) => item.icon)),
     )
@@ -18,7 +19,7 @@ describe('SvgIcon', () => {
       mount(SvgIcon, { props: { name } }).unmount()
     }
 
-    // expect(warn).not.toHaveBeenCalled()  // disabled - needs icon registry audit
+    expect(warnSpy).not.toHaveBeenCalled()
   })
 
   it('renders the canonical Lucide circle-play icon for runs', () => {

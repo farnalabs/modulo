@@ -2727,6 +2727,7 @@ export default {
       "item_observability": "Observability",
       "item_email_settings": "Email",
       "item_error_forwarders": "Error Forwarders",
+      "item_settings_guardrails": "Guardrails",
       "item_browser_monitoring": "Browser Monitoring",
       "item_users": "Users",
       "item_org_settings": "Org Settings",

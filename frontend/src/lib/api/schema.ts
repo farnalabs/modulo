@@ -6403,6 +6403,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/variant-groups/batches/{batch_id}/compare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Batch Compare
+         * @description Batch-scoped variant comparison (FAR-332 3d).
+         *
+         *     Loads a batch's runs purely by ``batch_id`` — never by a live variant group,
+         *     so soft-deleting the group does not break comparison. Org-scoped (RLS +
+         *     explicit organisation_id predicate) so another org's batch_id returns 404.
+         *     Each run carries its canonical status, eval pass rate, cost, tokens, and the
+         *     frozen snapshot/override diff captured at fire time.
+         */
+        get: operations["batch_compare_api_v1_variant_groups_batches__batch_id__compare_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{run_id}/feedback": {
         parameters: {
             query?: never;
@@ -8254,10 +8280,66 @@ export interface components {
             /** Custom Types */
             custom_types: components["schemas"]["AvailableProviderInfo"][];
         };
+        /** BatchCompareResponse */
+        BatchCompareResponse: {
+            /**
+             * Batch Id
+             * Format: uuid
+             */
+            batch_id: string;
+            /**
+             * Has Evals
+             * @default true
+             */
+            has_evals: boolean;
+            /** Runs */
+            runs?: components["schemas"]["BatchRunCompare"][];
+        };
         /** BatchDetailRequest */
         BatchDetailRequest: {
             /** Event Ids */
             event_ids: string[];
+        };
+        /** BatchRunCompare */
+        BatchRunCompare: {
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Run Number */
+            run_number: number;
+            /** Status */
+            status: string;
+            /** Variant Id */
+            variant_id?: string | null;
+            /** Variant Name */
+            variant_name: string;
+            /** Snapshot Id */
+            snapshot_id?: string | null;
+            /** Run Context Overrides */
+            run_context_overrides?: {
+                [key: string]: unknown;
+            };
+            /** Eval Pass Rate */
+            eval_pass_rate?: number | null;
+            /**
+             * Eval Count
+             * @default 0
+             */
+            eval_count: number;
+            /** Total Cost Usd */
+            total_cost_usd?: unknown;
+            /** Total Tokens */
+            total_tokens?: number | null;
+            /** Created At */
+            created_at?: unknown;
+            /** Completed At */
+            completed_at?: unknown;
+            /** Override Diff */
+            override_diff?: {
+                [key: string]: unknown;
+            };
         };
         /** BillingOverviewResponse */
         BillingOverviewResponse: {
@@ -13330,6 +13412,16 @@ export interface components {
             runs: components["schemas"]["RunVariantResponse"][];
             /** Count */
             count: number;
+            /**
+             * Batch Id
+             * Format: uuid
+             */
+            batch_id: string;
+            /**
+             * Has Evals
+             * @default true
+             */
+            has_evals: boolean;
         };
         /** RunVariantRequest */
         RunVariantRequest: {
@@ -14786,6 +14878,8 @@ export interface components {
         };
         /** VariantDef */
         VariantDef: {
+            /** Id */
+            id?: string | null;
             /** Snapshot Id */
             snapshot_id: string;
             /** Name */
@@ -23966,6 +24060,8 @@ export interface operations {
                 search?: string | null;
                 page?: number;
                 page_size?: number;
+                variant_group_id?: string | null;
+                batch_id?: string | null;
                 _fresh?: boolean;
             };
             header?: never;
@@ -30710,6 +30806,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PromptDiffEntry"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    batch_compare_api_v1_variant_groups_batches__batch_id__compare_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                batch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BatchCompareResponse"];
                 };
             };
             /** @description Validation Error */
