@@ -4,15 +4,17 @@ Tests RLS enforcement and system admin cross-tenant operations
 through the HTTP API layer using a real Postgres via Testcontainers.
 """
 
+import json
 import os
 import uuid
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.auth.jwt import create_access_token
 from modulo.core.feature_flags import LicenseData, LicenseKeyTier
@@ -28,6 +30,26 @@ _VALID_32 = "a" * 32
 # ---------------------------------------------------------------------------
 # DB seed helpers
 # ---------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def _bypass_triggers(conn: AsyncConnection) -> AsyncGenerator[None, None]:
+    """Temporarily disable tenant-enforcement triggers for one seed transaction.
+
+    Several tests intentionally seed *referentially non-compliant* cross-org
+    rows (e.g. a pipeline snapshot owned by org A referencing org B's pipeline)
+    to model the pre-hardening state and prove the IDOR deny paths. The
+    ``enforce_same_organisation`` triggers (migration 0110) legitimately reject
+    such rows, so seeding must run with ``session_replication_role = replica``
+    (which disables triggers) and restore ``origin`` before the transaction
+    commits. This mirrors how production backfills cross-org rows with a
+    BYPASSRLS/maintenance role.
+    """
+    await conn.execute(text("SET LOCAL session_replication_role = replica"))
+    try:
+        yield
+    finally:
+        await conn.execute(text("SET LOCAL session_replication_role = origin"))
 
 
 async def _seed_org(db_engine: AsyncEngine, name: str) -> uuid.UUID:
@@ -134,7 +156,7 @@ async def _seed_pipeline_snapshot(
     pipeline_id: uuid.UUID,
 ) -> uuid.UUID:
     snapshot_id = uuid.uuid4()
-    async with db_engine.connect() as conn, conn.begin():
+    async with db_engine.connect() as conn, conn.begin(), _bypass_triggers(conn):
         await conn.execute(
             text(
                 "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, "
@@ -188,7 +210,7 @@ async def _seed_eval_definition(
     node_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
     eval_id = uuid.uuid4()
-    async with db_engine.connect() as conn, conn.begin():
+    async with db_engine.connect() as conn, conn.begin(), _bypass_triggers(conn):
         await conn.execute(
             text(
                 "INSERT INTO eval_definitions (id, organisation_id, pipeline_id, "
@@ -241,7 +263,7 @@ async def _seed_pipeline_with_nodes(
         await conn.execute(
             text("UPDATE pipelines SET graph_nodes_json = :nodes WHERE id = :pid"),
             {
-                "nodes": str([{"id": str(node_id), "name": "eval-node"}]),
+                "nodes": json.dumps([{"id": str(node_id), "name": "eval-node"}]),
                 "pid": str(pipeline_id),
             },
         )
