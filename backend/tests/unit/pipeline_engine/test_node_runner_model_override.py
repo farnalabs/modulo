@@ -44,6 +44,7 @@ async def _run_node(state: dict[str, Any]) -> tuple[dict[str, Any], _RecordingHu
 
     node_def = {
         "id": "agent-1",
+        "agent_id": "22222222-2222-2222-2222-222222222222",
         "prompt_template": "Summarise the input.",
         "model_backend_id": "11111111-1111-1111-1111-111111111111",
     }
@@ -108,19 +109,20 @@ async def test_override_ignored_when_not_a_dict_input() -> None:
 
 @pytest.mark.asyncio
 async def test_prompt_template_override_wins_over_node_def() -> None:
-    """A namespaced ``_run_overrides`` prompt_template is used, not the node_def's.
+    """A namespaced ``_run_overrides`` prompt_templates map is used for THIS node's agent.
 
     FAR-342: the variant comparison's prompt_version picker resolves a version
-    label to a template at run creation and stores it under
-    ``_run_overrides["prompt_template"]``; the node runner must render that
-    template instead of the snapshot-embedded node_def prompt.
+    label to a per-agent template map at run creation and stores it under
+    ``_run_overrides["prompt_templates"]`` keyed by agent_id; the node runner
+    must render the template for the node's OWN agent instead of the
+    snapshot-embedded node_def prompt.
     """
     override_prompt = "Render THIS prompt version instead."
     state = {
         "run_context": {
             "input": {
                 "task": "classify",
-                "_run_overrides": {"prompt_template": override_prompt},
+                "_run_overrides": {"prompt_templates": {"22222222-2222-2222-2222-222222222222": override_prompt}},
             }
         },
         "artifacts": [],
@@ -131,8 +133,31 @@ async def test_prompt_template_override_wins_over_node_def() -> None:
 
 
 @pytest.mark.asyncio
+async def test_other_agent_prompt_override_does_not_clobber_this_node() -> None:
+    """A prompt_templates override for a DIFFERENT agent must not apply here.
+
+    FAR-342: in a multi-agent snapshot one agent's template must never clobber
+    another's. This node's agent has no entry in the map, so it falls back to
+    the node_def prompt.
+    """
+    other_agent_prompt = "This belongs to another agent."
+    state = {
+        "run_context": {
+            "input": {
+                "task": "classify",
+                "_run_overrides": {"prompt_templates": {"99999999-9999-9999-9999-999999999999": other_agent_prompt}},
+            }
+        },
+        "artifacts": [],
+    }
+    result, hub = await _run_node(state)
+    assert hub.prompts == ["Summarise the input."]
+    assert result["artifacts"][0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
 async def test_node_def_prompt_used_when_no_prompt_override() -> None:
-    """Without a prompt_template override, the node_def prompt is rendered."""
+    """Without a prompt_templates override, the node_def prompt is rendered."""
     state = {"run_context": {"input": {"task": "classify"}}, "artifacts": []}
     result, hub = await _run_node(state)
     assert hub.prompts == ["Summarise the input."]
