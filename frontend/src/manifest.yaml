@@ -206,7 +206,7 @@ routes:
         exact: true
 
     /variants/compare/:batchId:
-        name: variant-batch-compare
+        name: variant-compare-detail
         breadcrumb: Variant Batch Compare
         parent: /variants/compare
         product_map:
