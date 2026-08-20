@@ -22,6 +22,7 @@ from modulo.db.crud.variant_group import (
     list_variant_groups,
     soft_delete_variant_group,
     update_variant_group,
+    validate_batch_ownership,
 )
 from modulo.db.models.run import Run
 from modulo.db.models.variant_group import VariantGroup
@@ -502,3 +503,154 @@ async def test_cross_org_batch_returns_empty(
     runs = await get_batch_runs(rls_session, org_id=test_org, batch_id=foreign_batch)
     assert runs == []
     assert not (await get_batch_compare(rls_session, org_id=test_org, batch_id=foreign_batch))
+
+
+async def test_validate_batch_ownership_allows_owned_pipeline_and_snapshots(
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+    db_engine: AsyncEngine,
+) -> None:
+    """FAR-332 3f: owned pipeline + owned snapshots passes the fail-closed guard (real DB)."""
+    pipeline_id = await _create_test_pipeline(db_engine, test_org, test_user)
+    snap_a = await _insert_test_snapshot(db_engine, test_org, pipeline_id)
+    snap_b = await _insert_test_snapshot(db_engine, test_org, pipeline_id)
+
+    assert (
+        await validate_batch_ownership(
+            rls_session,
+            org_id=test_org,
+            pipeline_id=pipeline_id,
+            snapshot_ids=[snap_a, snap_b],
+        )
+        is True
+    )
+
+
+async def test_validate_batch_ownership_rejects_foreign_org_snapshot(
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+    db_engine: AsyncEngine,
+) -> None:
+    """FAR-332 3f: a cross-org snapshot reference fails the guard (real DB)."""
+    pipeline_id = await _create_test_pipeline(db_engine, test_org, test_user)
+    owned_snap = await _insert_test_snapshot(db_engine, test_org, pipeline_id)
+
+    foreign_org = uuid.uuid4()
+    await _insert_test_org(db_engine, foreign_org)
+    foreign_pipeline = await _create_test_pipeline(db_engine, foreign_org, test_user)
+    foreign_snap = await _insert_test_snapshot(db_engine, foreign_org, foreign_pipeline)
+
+    # Owned pipeline but one snapshot belongs to a different org -> must reject.
+    assert (
+        await validate_batch_ownership(
+            rls_session,
+            org_id=test_org,
+            pipeline_id=pipeline_id,
+            snapshot_ids=[owned_snap, foreign_snap],
+        )
+        is False
+    )
+
+
+async def test_validate_batch_ownership_rejects_foreign_org_pipeline(
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+    db_engine: AsyncEngine,
+) -> None:
+    """FAR-332 3f: a cross-org pipeline reference fails the guard (real DB)."""
+    owned_pipeline = await _create_test_pipeline(db_engine, test_org, test_user)
+    owned_snap = await _insert_test_snapshot(db_engine, test_org, owned_pipeline)
+
+    foreign_org = uuid.uuid4()
+    await _insert_test_org(db_engine, foreign_org)
+    foreign_pipeline = await _create_test_pipeline(db_engine, foreign_org, test_user)
+
+    # Pipeline belongs to a different org (snapshots are owned) -> must reject.
+    assert (
+        await validate_batch_ownership(
+            rls_session,
+            org_id=test_org,
+            pipeline_id=foreign_pipeline,
+            snapshot_ids=[owned_snap],
+        )
+        is False
+    )
+
+
+async def test_validate_batch_ownership_allows_empty_snapshot_list(
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+    db_engine: AsyncEngine,
+) -> None:
+    """FAR-332 3f: an owned pipeline with no snapshots is allowed (real DB)."""
+    pipeline_id = await _create_test_pipeline(db_engine, test_org, test_user)
+
+    assert (
+        await validate_batch_ownership(
+            rls_session,
+            org_id=test_org,
+            pipeline_id=pipeline_id,
+            snapshot_ids=[],
+        )
+        is True
+    )
+
+
+async def test_create_group_persists_minted_variant_ids(
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+    db_engine: AsyncEngine,
+) -> None:
+    """FAR-332 3b: variants supplied without an id persist with a minted id (round-trip)."""
+    from modulo.api.routes.variants import _mint_variant_ids
+
+    pipeline_id = await _create_test_pipeline(db_engine, test_org, test_user)
+    pre_minted_id = str(uuid.uuid4())
+    raw_variants = [
+        {
+            "id": pre_minted_id,
+            "snapshot_id": str(uuid.uuid4()),
+            "name": "control",
+            "weight": 1.0,
+            "run_context_overrides": {},
+            "eval_definition_ids": [],
+        },
+        {
+            # No id -> route mints one before persisting.
+            "snapshot_id": str(uuid.uuid4()),
+            "name": "variant_a",
+            "weight": 0.5,
+            "run_context_overrides": {"model": "gpt-4"},
+            "eval_definition_ids": [],
+        },
+    ]
+
+    minted = _mint_variant_ids(raw_variants)
+    assert minted[0]["id"] == pre_minted_id
+    assert minted[1]["id"] is not None
+    uuid.UUID(minted[1]["id"])  # must be a valid UUID
+
+    group = await create_variant_group(
+        rls_session,
+        org_id=test_org,
+        pipeline_id=pipeline_id,
+        name="Mint Round Trip",
+        variants=minted,
+    )
+    await rls_session.flush()
+
+    fetched = await get_variant_group(rls_session, group.id)
+    assert fetched is not None
+    stored = fetched.variants
+    assert len(stored) == 2
+    ids = {v["id"] for v in stored}
+    assert pre_minted_id in ids
+    # The legacy variant with no id now carries a persisted, valid uuid.
+    stored_unknown = next(v for v in stored if v["name"] == "variant_a")
+    assert stored_unknown["id"] is not None
+    uuid.UUID(stored_unknown["id"])
