@@ -156,19 +156,18 @@ async def _seed_pipeline_snapshot(
     pipeline_id: uuid.UUID,
 ) -> uuid.UUID:
     snapshot_id = uuid.uuid4()
-    async with db_engine.connect() as conn, conn.begin():
-        async with _bypass_triggers(conn):
-            await conn.execute(
-                text(
-                    "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, "
-                    "snapshot_version, graph_json, connector_bindings_json, "
-                    "schema_pins_json, prompt_pins_json, model_backend_pins_json, "
-                    "run_context_defaults, config_json) "
-                    "VALUES (:id, :pid, :oid, 1, '{}'::json, '[]'::json, "
-                    "'[]'::json, '[]'::json, '[]'::json, '{}'::json, '{}'::json)",
-                ),
-                {"id": str(snapshot_id), "pid": str(pipeline_id), "oid": str(org_id)},
-            )
+    async with db_engine.connect() as conn, conn.begin(), _bypass_triggers(conn):
+        await conn.execute(
+            text(
+                "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, "
+                "snapshot_version, graph_json, connector_bindings_json, "
+                "schema_pins_json, prompt_pins_json, model_backend_pins_json, "
+                "run_context_defaults, config_json) "
+                "VALUES (:id, :pid, :oid, 1, '{}'::json, '[]'::json, "
+                "'[]'::json, '[]'::json, '[]'::json, '{}'::json, '{}'::json)",
+            ),
+            {"id": str(snapshot_id), "pid": str(pipeline_id), "oid": str(org_id)},
+        )
     return snapshot_id
 
 
@@ -211,25 +210,24 @@ async def _seed_eval_definition(
     node_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
     eval_id = uuid.uuid4()
-    async with db_engine.connect() as conn, conn.begin():
-        async with _bypass_triggers(conn):
-            await conn.execute(
-                text(
-                    "INSERT INTO eval_definitions (id, organisation_id, pipeline_id, "
-                    "node_id, name, eval_type, config_json, failure_behaviour, "
-                    "suite_id, account_id) "
-                    "VALUES (:id, :oid, :pid, :nid, :name, 'regex', '{}'::json, "
-                    "'warn', NULL, :uid)",
-                ),
-                {
-                    "id": str(eval_id),
-                    "oid": str(org_id),
-                    "pid": str(pipeline_id),
-                    "nid": str(node_id) if node_id else None,
-                    "name": name,
-                    "uid": str(user_id),
-                },
-            )
+    async with db_engine.connect() as conn, conn.begin(), _bypass_triggers(conn):
+        await conn.execute(
+            text(
+                "INSERT INTO eval_definitions (id, organisation_id, pipeline_id, "
+                "node_id, name, eval_type, config_json, failure_behaviour, "
+                "suite_id, account_id) "
+                "VALUES (:id, :oid, :pid, :nid, :name, 'regex', '{}'::json, "
+                "'warn', NULL, :uid)",
+            ),
+            {
+                "id": str(eval_id),
+                "oid": str(org_id),
+                "pid": str(pipeline_id),
+                "nid": str(node_id) if node_id else None,
+                "name": name,
+                "uid": str(user_id),
+            },
+        )
     return eval_id
 
 
