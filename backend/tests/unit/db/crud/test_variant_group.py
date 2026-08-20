@@ -474,6 +474,157 @@ class TestRunVariantBatch:
         assert results[0]["variant"]["name"] == "valid"
         mock_inc.assert_awaited_once_with(session, group.id, delta=1)
 
+    async def test_stamps_same_batch_id_across_all_runs(self) -> None:
+        """FAR-332 3c/3i: one fire stamps N runs with the SAME batch_id."""
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+        group = self._make_group()
+        group.variants = self._make_variants(["control", "experiment", "variant_c"])
+
+        locked = self._make_locked(group)
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = locked
+        session.execute.return_value = exec_result
+
+        mock_run = MagicMock()
+        mock_run.id = uuid.uuid4()
+
+        with (
+            patch(
+                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.db.crud.variant_group.create_run",
+                new_callable=AsyncMock,
+                return_value=mock_run,
+            ) as mock_create,
+            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
+        ):
+            results = await run_variant_batch(session, org_id=org_id, group=group)
+
+        assert results is not None
+        assert len(results) == 3
+        batch_ids = {r["batch_id"] for r in results}
+        assert len(batch_ids) == 1
+        batch_id = batch_ids.pop()
+        assert batch_id is not None
+        # Every create_run in this batch was stamped with the same batch_id.
+        for call in mock_create.await_args_list:
+            kwargs = call.kwargs
+            assert kwargs["batch_id"] == batch_id
+            assert kwargs["variant_group_id"] == group.id
+
+    async def test_second_fire_yields_different_batch_id(self) -> None:
+        """FAR-332 3i: two fires produce DIFFERENT batch_ids."""
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+        group = self._make_group()
+        group.variants = self._make_variants(["control", "experiment"])
+
+        locked = self._make_locked(group)
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = locked
+        session.execute.return_value = exec_result
+
+        mock_run = MagicMock()
+        mock_run.id = uuid.uuid4()
+
+        # First fire.
+        with (
+            patch(
+                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
+            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
+        ):
+            first = await run_variant_batch(session, org_id=org_id, group=group)
+        # Second fire.
+        with (
+            patch(
+                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
+            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
+        ):
+            second = await run_variant_batch(session, org_id=org_id, group=group)
+
+        assert first is not None
+        assert second is not None
+        first_batch = {r["batch_id"] for r in first}
+        second_batch = {r["batch_id"] for r in second}
+        assert len(first_batch) == 1
+        assert len(second_batch) == 1
+        assert first_batch != second_batch
+
+    async def test_freezes_snapshot_and_overrides_onto_each_run(self) -> None:
+        """FAR-332 3c/3i: each run carries a frozen snapshot + override config."""
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+        group = self._make_group()
+        snap_a = str(uuid.uuid4())
+        snap_b = str(uuid.uuid4())
+        group.variants = [
+            {
+                "id": "variant-control",
+                "name": "control",
+                "snapshot_id": snap_a,
+                "weight": 1.0,
+                "run_context_overrides": {"model_backend_id": "backend-control"},
+            },
+            {
+                "id": "variant-experiment",
+                "name": "experiment",
+                "snapshot_id": snap_b,
+                "weight": 1.0,
+                "run_context_overrides": {"model_backend_id": "backend-experiment"},
+            },
+        ]
+
+        locked = self._make_locked(group)
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = locked
+        session.execute.return_value = exec_result
+
+        mock_run = MagicMock()
+        mock_run.id = uuid.uuid4()
+
+        with (
+            patch(
+                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.db.crud.variant_group.create_run",
+                new_callable=AsyncMock,
+                return_value=mock_run,
+            ) as mock_create,
+            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
+        ):
+            results = await run_variant_batch(session, org_id=org_id, group=group)
+
+        assert results is not None
+        assert len(results) == 2
+        # Result dict carries the frozen snapshot.
+        assert results[0]["frozen_snapshot"]["snapshot_id"] == snap_a
+        assert results[1]["frozen_snapshot"]["snapshot_id"] == snap_b
+        assert results[0]["frozen_snapshot"]["variant_id"] == "variant-control"
+        # create_run was handed the frozen config per variant.
+        call_snaps = [call.kwargs["variant_config_snapshot"]["snapshot_id"] for call in mock_create.await_args_list]
+        assert set(call_snaps) == {snap_a, snap_b}
+        assert mock_create.await_args_list[0].kwargs["variant_config_snapshot"]["run_context_overrides"] == {
+            "model_backend_id": "backend-control"
+        }
+        assert mock_create.await_args_list[1].kwargs["variant_config_snapshot"]["run_context_overrides"] == {
+            "model_backend_id": "backend-experiment"
+        }
+
 
 @pytest.mark.asyncio
 class TestRunVariantWeighted:

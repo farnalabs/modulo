@@ -1276,6 +1276,17 @@ def create_variant_group(client, request: pytest.FixtureRequest, patches: list[A
     patcher.start()
     patches.append(patcher)
 
+    # The route now enforces server-side ownership (FAR-332 3f) at the write
+    # source. That guard is exercised by the unit/integration suites; here the
+    # create path is mocked, so patch the guard to pass for the happy path.
+    patcher = patch(
+        "modulo.api.routes.variants.validate_batch_ownership",
+        new_callable=AsyncMock,
+        return_value=True,
+    )
+    patcher.start()
+    patches.append(patcher)
+
     resp = client.post(
         "/api/v1/variant-groups",
         json={

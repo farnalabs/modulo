@@ -58,3 +58,17 @@ Feature: Variant Groups — Weighted Multi-Run, Comparison, and Eval Coverage
     And the group has max_concurrent_runs set to 0
     When a batch run is triggered on the variant group
     Then the batch is rejected with a quota_exceeded error
+
+  Scenario: A batch fire stamps every run with one shared batch_id
+    Given a variant group "batch-stamp" configured for pipeline "deploy-service"
+    And the group has weighted variants "control" (70) and "experiment" (30)
+    When a batch run is triggered on the variant group
+    Then 2 runs are created across the variants
+    And every run created in the batch shares the same batch_id
+
+  Scenario: Batch comparison returns the frozen snapshot and override diff
+    Given the batch has runs with frozen snapshot and override data
+    When the batch comparison is computed
+    Then the comparison returns one entry per batch run
+    And each comparison entry exposes status, eval pass rate, cost, tokens and the frozen snapshot
+    And the frozen snapshot recorded at fire time is used, not the live group

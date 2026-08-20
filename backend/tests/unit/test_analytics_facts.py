@@ -210,6 +210,7 @@ class TestRecordRunFacts:
                 "max_node_timeout_seconds",
                 "parent_run_id",
                 "snapshot_id",
+                "batch_id",
                 "run_number",
                 "output_bytes",
                 "telemetry_bytes",
@@ -280,6 +281,43 @@ class TestRecordRunFacts:
         update_keys = set(captured["set_"])
         assert {"status", "total_cost_usd", "total_tokens", "duration_ms", "run_date"} <= update_keys
         assert {"dispatched_at", "started_at", "completed_at", "total_queue_wait_ms"} <= update_keys
+        # FAR-332 — batch_id dimension is part of the fact write + update path.
+        assert "batch_id" in update_keys
+
+    async def test_writes_batch_id_dimension(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The run's batch_id is carried into the fact so batches are filterable."""
+        captured = self._capturing_insert(monkeypatch)
+        batch_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+        run = _make_run(batch_id=batch_id)
+        session = _session(
+            execute_side_effect=[
+                _scalar_one_result(None),
+                SimpleNamespace(first=lambda: (None, None)),
+                SimpleNamespace(),
+            ]
+        )
+        monkeypatch.setattr(analytics_mod, "record_facts_write_failed", MagicMock())
+
+        await analytics_mod.record_run_facts(session, run)
+
+        assert captured["values"]["batch_id"] == batch_id
+
+    async def test_batch_id_none_for_legacy_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A run without a batch_id records a NULL batch_id (non-variant run)."""
+        captured = self._capturing_insert(monkeypatch)
+        run = _make_run()  # no batch_id attribute
+        session = _session(
+            execute_side_effect=[
+                _scalar_one_result(None),
+                SimpleNamespace(first=lambda: (None, None)),
+                SimpleNamespace(),
+            ]
+        )
+        monkeypatch.setattr(analytics_mod, "record_facts_write_failed", MagicMock())
+
+        await analytics_mod.record_run_facts(session, run)
+
+        assert captured["values"]["batch_id"] is None
 
     async def test_failure_is_swallowed_fail_open(self, monkeypatch: pytest.MonkeyPatch) -> None:
         run = _make_run()

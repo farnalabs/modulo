@@ -114,6 +114,14 @@ class RunDailyFact(OrgScoped):
             "deliberately NOT a FK to runs — facts survive the run purge; a future 'fix' into an FK breaks retention"
         ),
     )
+    batch_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(),
+        comment=(
+            "FAR-332 batch-scoped variant comparison — the batch_id every run fired "
+            "together by run_variant_batch shares; NOT a FK (facts survive the run "
+            "purge, ADR 020). Null for legacy and non-variant runs."
+        ),
+    )
     snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), comment="NOT a FK — the snapshot row may be purged independently of the fact"
     )
