@@ -1743,6 +1743,16 @@ The per-run `guardrail_summary` telemetry is **shipped** (FAR-223 PR B):
 - **Per-pattern fired-signature regression** — each clean detection emits a structured log `guardrails.fired_signature` with `{guardrail, pattern_hash, fired}`, keying how often each guardrail pattern fires per run/org over time.
 - **`eval_results` consumer filter contract** — guardrail results are stored in `eval_results` alongside normal eval results. EVERY consumer must either explicitly include or exclude them; all normal-eval surfaces (run evals reader, dashboard, admin eval dashboard, OKR, regression, executor suite check, quality report, prompt optimizer) EXCLUDE guardrail rows, since a regex guardrail's `passed=True` (matched) would corrupt a normal pass rate.
 
+#### Advisory guardrail scorecards in analytics (shipped — FAR-217)
+
+The per-run guardrail telemetry is aggregated into an ADVISORY guardrail scorecard: `GET /api/v1/analytics/guardrails` (read-only, org-scoped, `analytics.query` permission + `analytics_page` feature, optional `date_from`/`date_to`). It reports:
+
+- **Fire counts** — runs with a guardrail bound, runs with ≥1 violation, blocked runs (terminal `eval.blocked`), and the summed buckets from `guardrail_summary_json` (`bound`, `evaluated`, `passed`, `violated`, `observed`, `errored`, `redacted`, `skipped`, `expected_skips`, `unexpected_skips`).
+- **Pass/fail rates, reported SEPARATELY — never merged** — `raw_violation_rate` (violated/bound, raw detection), `first_try_pass_rate` (runs whose ingestion-edge pass found no violation / runs with a bound guardrail), and a `self_correction` object (from the FAR-210 single-node correction trail): `corrections_total`, `converged_clean` (resolved), `escalated_hitl`, `budget_exhausted` (from the `guardrail.correction_escalated` audit verdict), `dismissed`, `in_flight`, and `corrected_pass_rate` (converged / total). First-try-pass and corrected-pass live in SEPARATE objects and are never combined into a single pass rate — retries would inflate a merged number (Goodhart).
+- **Evasion-band drift (advisory only)** — a `evasion_band_drift` object comparing the current errored rate (and `unexpected_skips` count) against a historical baseline window of the same length as the queried range immediately preceding `date_from` (capped at 30 days). `drift_detected` is flagged when unexpected skips occurred OR the current errored rate exceeds the baseline rate by a 0.05 margin; `drift_indicator` is `in_band`/`drift`/`no_baseline`. This is the canary-band concept (FAR-223 PR C) — informational, NEVER a gate.
+
+**Every metric is advisory.** The scorecard never gates autonomy, never blocks a run, and never changes CI enforcement. A raw-pass-rate gate is FAR-218 (deferred); this surface deliberately does not build one. The endpoint returns `advisory_only: true` and each rate carries a note stating it is not a gate.
+
 #### Guardrail T1 remainder (shipped — FAR-223 PR A)
 
 The engine's T1 residual controls are **shipped** (FAR-223 PR A, backend core):

@@ -1278,6 +1278,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analytics/guardrails": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Analytics Guardrails
+         * @description Advisory guardrail scorecard (FAR-217) — read-only, never a gate.
+         *
+         *     Aggregates the per-run guardrail_summary telemetry (fire counts, raw
+         *     detection rate, first-try-pass), the single-node self-correction trail
+         *     (converged clean / escalated to HITL / budget-exhausted, reported
+         *     SEPARATELY from first-try-pass), and an advisory evasion-band drift signal
+         *     (unexpected skips + errored rate vs baseline). Every metric is advisory:
+         *     nothing here gates autonomy, blocks a run, or changes CI enforcement.
+         *     ``date_from``/``date_to`` accept bare dates or ISO datetimes like the other
+         *     analytics endpoints.
+         */
+        get: operations["analytics_guardrails_api_v1_analytics_guardrails_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/analytics/export": {
         parameters: {
             query?: never;
@@ -10253,6 +10282,76 @@ export interface components {
             /** Applied Hash */
             applied_hash?: string | null;
         };
+        /**
+         * GuardrailEvasionBandDrift
+         * @description Advisory drift signal (canary-band concept, FAR-223 PR C).
+         *
+         *     Tracks when ``unexpected_skips`` or the ``errored`` bucket move outside a
+         *     soft band vs the historical baseline. ADVISORY ONLY — never a gate, never
+         *     blocks anything, never changes CI enforcement.
+         */
+        GuardrailEvasionBandDrift: {
+            /** Current Errored Rate */
+            current_errored_rate?: number | null;
+            /** Baseline Errored Rate */
+            baseline_errored_rate?: number | null;
+            /**
+             * Baseline Window Days
+             * @default 0
+             */
+            baseline_window_days: number;
+            /**
+             * Unexpected Skips Total
+             * @default 0
+             */
+            unexpected_skips_total: number;
+            /**
+             * Drift Detected
+             * @default false
+             */
+            drift_detected: boolean;
+            /**
+             * Drift Indicator
+             * @default in_band
+             */
+            drift_indicator: string;
+            /**
+             * Advisory Only
+             * @default true
+             */
+            advisory_only: boolean;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+        };
+        /**
+         * GuardrailFireCounts
+         * @description Guardrail-level aggregate buckets (summed across the per-run summaries).
+         */
+        GuardrailFireCounts: {
+            /** Bound */
+            bound: number;
+            /** Evaluated */
+            evaluated: number;
+            /** Passed */
+            passed: number;
+            /** Violated */
+            violated: number;
+            /** Observed */
+            observed: number;
+            /** Errored */
+            errored: number;
+            /** Redacted */
+            redacted: number;
+            /** Skipped */
+            skipped: number;
+            /** Expected Skips */
+            expected_skips: number;
+            /** Unexpected Skips */
+            unexpected_skips: number;
+        };
         /** GuardrailOverrideRequest */
         GuardrailOverrideRequest: {
             /** Input Data */
@@ -10289,6 +10388,23 @@ export interface components {
              */
             status: string;
         };
+        /**
+         * GuardrailRates
+         * @description ADVISORY rates only — the raw detection rate plus the separated
+         *     first-try-pass view. Every metric is labelled advisory and never gates
+         *     autonomy (a raw-pass-rate gate is FAR-218, deferred).
+         */
+        GuardrailRates: {
+            /** Raw Violation Rate */
+            raw_violation_rate?: number | null;
+            /** First Try Pass Rate */
+            first_try_pass_rate?: number | null;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+        };
         /** GuardrailRejectResponse */
         GuardrailRejectResponse: {
             /** Rejected */
@@ -10298,6 +10414,74 @@ export interface components {
              * @default clean
              */
             status: string;
+        };
+        /**
+         * GuardrailScorecardResponse
+         * @description Advisory guardrail scorecard (FAR-217).
+         *
+         *     Read-only, org-scoped, and deliberately advisory: no metric here gates
+         *     autonomy, blocks a run, or changes CI enforcement.
+         */
+        GuardrailScorecardResponse: {
+            /**
+             * Advisory Only
+             * @default true
+             */
+            advisory_only: boolean;
+            /** Date From */
+            date_from: string;
+            /** Date To */
+            date_to: string;
+            scope: components["schemas"]["GuardrailScorecardScope"];
+            fire_counts: components["schemas"]["GuardrailFireCounts"];
+            rates: components["schemas"]["GuardrailRates"];
+            self_correction: components["schemas"]["GuardrailSelfCorrection"];
+            evasion_band_drift: components["schemas"]["GuardrailEvasionBandDrift"];
+            /** Generated At */
+            generated_at: string;
+        };
+        /**
+         * GuardrailScorecardScope
+         * @description Run-level fire counts — how many runs in range carried/triggered guardrails.
+         */
+        GuardrailScorecardScope: {
+            /** Runs With Guardrail */
+            runs_with_guardrail: number;
+            /** Runs With Violations */
+            runs_with_violations: number;
+            /** Runs Blocked */
+            runs_blocked: number;
+            /** First Try Pass Runs */
+            first_try_pass_runs: number;
+        };
+        /**
+         * GuardrailSelfCorrection
+         * @description Single-node correction outcomes (FAR-210 T2b trail).
+         *
+         *     Reported SEPARATELY from first-try-pass — never merged into a single pass
+         *     rate (Goodhart: retries inflate pass rates; retrying a violation makes a
+         *     naive pass rate look better than the raw detection did).
+         */
+        GuardrailSelfCorrection: {
+            /** Corrections Total */
+            corrections_total: number;
+            /** Converged Clean */
+            converged_clean: number;
+            /** Escalated Hitl */
+            escalated_hitl: number;
+            /** Budget Exhausted */
+            budget_exhausted: number;
+            /** Dismissed */
+            dismissed: number;
+            /** In Flight */
+            in_flight: number;
+            /** Corrected Pass Rate */
+            corrected_pass_rate?: number | null;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -18741,6 +18925,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConcurrencyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    analytics_guardrails_api_v1_analytics_guardrails_get: {
+        parameters: {
+            query?: {
+                date_from?: string | null;
+                date_to?: string | null;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GuardrailScorecardResponse"];
                 };
             };
             /** @description Validation Error */
