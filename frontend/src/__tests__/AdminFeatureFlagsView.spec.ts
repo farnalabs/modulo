@@ -76,13 +76,13 @@ describe('AdminFeatureFlagsView', () => {
 
   it('renders the search input', async () => {
     const wrapper = await mountView()
-    const input = wrapper.find('input[placeholder*="Search flags"]')
+    const input = wrapper.find('input[data-testid="filter-bar-search"]')
     expect(input.exists()).toBe(true)
   })
 
   it('filters flags by search query', async () => {
     const wrapper = await mountView()
-    const input = wrapper.find('input[placeholder*="Search flags"]')
+    const input = wrapper.find('input[data-testid="filter-bar-search"]')
     await input.setValue('audit')
     expect(wrapper.text()).toContain('flag-audit-log')
     expect(wrapper.text()).not.toContain('flag-connectors')
@@ -160,7 +160,7 @@ describe('AdminFeatureFlagsView', () => {
 
   it('shows empty state when search yields no results', async () => {
     const wrapper = await mountView()
-    const input = wrapper.find('input[placeholder*="Search flags"]')
+    const input = wrapper.find('input[data-testid="filter-bar-search"]')
     await input.setValue('zzz_no_match_zzz')
     expect(wrapper.text()).toContain('No feature flags match your search')
   })
