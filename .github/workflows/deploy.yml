@@ -196,60 +196,22 @@ jobs:
     # 'failure'), and only when the deploy was actually attempted
     # (should_deploy was true). A throttled run skips pre-deploy-tests entirely
     # (result == 'skipped'), so it can never look like a failure to fix.
-    # Because a push-to-main deploy failure has no PR to attach to, this job
-    # CREATES the fix vehicle: branch fix/deploy-<short-sha> at the failing SHA,
-    # then sends the Branch Fixer webhook with prNumber: 0 so the Branch Fixer
-    # (running on app.modulo.run with GITHUB_REVIEWBOT_PAT) creates the PR.
+    # This job only sends the Branch Fixer webhook pointing at main
+    # (branchName: main, prNumber: 0). The Branch Fixer (running on
+    # app.modulo.run with the same GITHUB_TOKEN as the improve-* pipelines)
+    # creates its own fix branch from main, diagnoses the failure, fixes it,
+    # and raises the PR — exactly like the improve-* pipelines do. No checkout,
+    # no git, no branch creation happens here.
     if: always() && needs.pre-deploy-tests.result == 'failure' && needs.deploy-throttle.outputs.should_deploy == 'true'
     runs-on: ubicloud-standard-2
-    permissions:
-      actions: read
-      contents: write
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 1
-
-      - name: Create fix branch
-        id: fix-pr
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          SHORT_SHA="${GITHUB_SHA::7}"
-          BRANCH="fix/deploy-${SHORT_SHA}"
-          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
-
-          FAILED_STEPS="$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" \
-            --jq '[.jobs[] | select(.name == "Pre-deploy tests (fast + expensive)") | .steps[] | select(.conclusion == "failure") | .name] | join(", ")' 2>/dev/null || echo 'unknown')"
-          echo "failed_steps=${FAILED_STEPS}" >> "$GITHUB_OUTPUT"
-
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
-
-          if git ls-remote --heads origin "refs/heads/${BRANCH}" | grep -q "refs/heads/${BRANCH}"; then
-            # Deploy retry: the branch (and likely its PR) already exists. Reuse
-            # it - never force-push over a branch the Branch Fixer may be mid-fix on.
-            echo "::notice::Branch ${BRANCH} already exists on origin - reusing it (deploy retry)."
-            git fetch origin "${BRANCH}"
-            git checkout -B "${BRANCH}" "origin/${BRANCH}"
-          else
-            echo "Creating fix branch ${BRANCH} at ${GITHUB_SHA}"
-            git checkout -b "${BRANCH}"
-            git push origin "${BRANCH}"
-          fi
-
-          # No PR creation here - the Branch Fixer (running on app.modulo.run
-          # with GITHUB_REVIEWBOT_PAT) will create the PR via the webhook.
-          echo "pr_number=0" >> "$GITHUB_OUTPUT"
-
       - name: Dispatch Branch Fixer webhook
         env:
           MODULO_WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
           MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
-          BRANCH: ${{ steps.fix-pr.outputs.branch }}
-          PR_NUMBER: ${{ steps.fix-pr.outputs.pr_number }}
-          FEEDBACK: "Deploy pre-deploy tests failed on main at ${{ github.sha }}: ${{ steps.fix-pr.outputs.failed_steps }}"
+          BRANCH: main
+          PR_NUMBER: "0"
+          FEEDBACK: "Deploy pre-deploy tests failed on main at ${{ github.sha }}. The Branch Fixer should create a fix branch from main, diagnose the failure, fix it, and raise a PR."
         shell: bash
         run: |
           TIMESTAMP=$(date +%s)
