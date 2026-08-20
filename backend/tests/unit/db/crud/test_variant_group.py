@@ -234,8 +234,8 @@ class TestRunVariantBatch:
         assert [r["variant"]["name"] for r in results] == ["control", "experiment"]
         assert results[0]["run_id"] == mock_run.id
         assert results[0]["merged_payload"]["shared"] == "payload"
-        assert results[0]["merged_payload"]["model_backend_id"] == "backend-control"
-        assert results[1]["merged_payload"]["model_backend_id"] == "backend-experiment"
+        assert results[0]["merged_payload"]["_run_overrides"]["model_backend_id"] == "backend-control"
+        assert results[1]["merged_payload"]["_run_overrides"]["model_backend_id"] == "backend-experiment"
         mock_inc.assert_awaited_once_with(session, group.id, delta=2)
 
     async def test_prompt_version_override_merged_into_payload(self) -> None:
@@ -283,8 +283,8 @@ class TestRunVariantBatch:
             )
 
         assert results is not None
-        assert results[0]["merged_payload"]["prompt_version"] == "v3"
-        assert results[1]["merged_payload"]["prompt_version"] == "v4"
+        assert results[0]["merged_payload"]["_run_overrides"]["prompt_version"] == "v3"
+        assert results[1]["merged_payload"]["_run_overrides"]["prompt_version"] == "v4"
         assert results[0]["merged_payload"]["shared"] == "payload"
 
     async def test_returns_none_when_quota_exceeded_for_batch(self) -> None:
@@ -410,7 +410,7 @@ class TestRunVariantBatch:
             results = await run_variant_batch(session, org_id=org_id, group=group, input_payload={"topic": "x"})
 
         assert results is not None
-        assert [r["merged_payload"].get("prompt_version") for r in results] == ["v3", "v4"]
+        assert [r["merged_payload"]["_run_overrides"].get("prompt_version") for r in results] == ["v3", "v4"]
 
     async def test_injects_degraded_evals_flag_into_each_run(self) -> None:
         session = AsyncMock()

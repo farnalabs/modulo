@@ -60,10 +60,10 @@ async def _run_node(state: dict[str, Any]) -> tuple[dict[str, Any], _RecordingHu
 
 @pytest.mark.asyncio
 async def test_run_context_model_backend_override_wins_over_node_def() -> None:
-    """The run_context input override is used, not the node_def backend."""
+    """The namespaced ``_run_overrides`` override is used, not the node_def backend."""
     override_backend = str(uuid.uuid4())
     state = {
-        "run_context": {"input": {"task": "classify", "model_backend_id": override_backend}},
+        "run_context": {"input": {"task": "classify", "_run_overrides": {"model_backend_id": override_backend}}},
         "artifacts": [],
     }
     result, hub = await _run_node(state)
@@ -75,6 +75,18 @@ async def test_run_context_model_backend_override_wins_over_node_def() -> None:
 async def test_node_def_model_backend_used_when_no_override() -> None:
     """Without an override, the snapshot-embedded node_def backend is used."""
     state = {"run_context": {"input": {"task": "classify"}}, "artifacts": []}
+    result, hub = await _run_node(state)
+    assert hub.requested_ids == ["11111111-1111-1111-1111-111111111111"]
+    assert result["artifacts"][0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_bare_data_model_backend_id_does_not_hijack() -> None:
+    """A plain top-level ``model_backend_id`` data field must NOT reroute the model."""
+    state = {
+        "run_context": {"input": {"task": "classify", "model_backend_id": str(uuid.uuid4())}},
+        "artifacts": [],
+    }
     result, hub = await _run_node(state)
     assert hub.requested_ids == ["11111111-1111-1111-1111-111111111111"]
     assert result["artifacts"][0]["status"] == "completed"
