@@ -217,7 +217,7 @@ jobs:
         id: fix-pr
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           SHORT_SHA="${GITHUB_SHA::7}"
           BRANCH="fix/deploy-${SHORT_SHA}"
