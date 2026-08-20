@@ -2695,6 +2695,8 @@ export default {
       "group_monitor": "MONITOR",
       "group_configure": "CONFIGURE",
       "group_admin": "ADMIN",
+      "group_improve": "IMPROVE",
+      "group_system": "SYSTEM",
       "item_dashboard": "Dashboard",
       "item_notifications": "Notifications",
       "item_my_pipelines": "Pipelines",

@@ -376,6 +376,7 @@ routes:
         deprecated: false
 
     /settings/observability:
+        <<: *community
         name: settings-observability
         breadcrumb: Observability
         parent: /
@@ -601,7 +602,7 @@ routes:
         breadcrumb: Saved Views
         parent: /
         product_map:
-        sidebar_group: admin
+        sidebar_group: null
         sidebar_order: 7
         type: list_page
         <<: *team
@@ -623,7 +624,7 @@ routes:
         breadcrumb: Error Detail
         parent: /admin/errors
         product_map:
-        sidebar_group: admin
+        sidebar_group: null
         sidebar_order: 2
         type: detail_page
         pattern: /admin/errors/:id
