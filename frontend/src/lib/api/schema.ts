@@ -2974,6 +2974,23 @@ export interface paths {
         patch: operations["update_model_backend_endpoint_api_v1_model_backends__backend_id__patch"];
         trace?: never;
     };
+    "/api/v1/model-backends/{backend_id}/pipeline-references": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Pipeline References Endpoint */
+        get: operations["list_pipeline_references_endpoint_api_v1_model_backends__backend_id__pipeline_references_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/model-backends/{backend_id}/health-check": {
         parameters: {
             query?: never;
@@ -12447,6 +12464,36 @@ export interface components {
              * @default false
              */
             has_more: boolean;
+        };
+        /** PipelineReference */
+        PipelineReference: {
+            /**
+             * Pipeline Id
+             * Format: uuid
+             */
+            pipeline_id: string;
+            /** Pipeline Name */
+            pipeline_name: string;
+            /** Agent Name */
+            agent_name?: string | null;
+            /** Agent Id */
+            agent_id?: string | null;
+            /**
+             * Reference Type
+             * @enum {string}
+             */
+            reference_type: "direct_node" | "agent";
+        };
+        /** PipelineReferenceListResponse */
+        PipelineReferenceListResponse: {
+            /** Items */
+            items: components["schemas"]["PipelineReference"][];
+            /** Total */
+            total: number;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
         };
         /** PipelineResponse */
         PipelineResponse: {
@@ -23237,6 +23284,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ModelBackendResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_pipeline_references_endpoint_api_v1_model_backends__backend_id__pipeline_references_get: {
+        parameters: {
+            query?: {
+                page?: number;
+                page_size?: number;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                backend_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PipelineReferenceListResponse"];
                 };
             };
             /** @description Validation Error */
