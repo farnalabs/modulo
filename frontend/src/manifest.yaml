@@ -176,7 +176,7 @@ routes:
         breadcrumb: Evals
         parent: /
         product_map:
-        sidebar_group: improve
+        sidebar_group: monitor
         sidebar_order: 1
         type: form_page
         <<: *community
@@ -187,7 +187,7 @@ routes:
         breadcrumb: Eval Proposals
         parent: /
         product_map:
-        sidebar_group: improve
+        sidebar_group: monitor
         sidebar_order: 2
         type: list_page
         <<: *community
@@ -198,7 +198,7 @@ routes:
         breadcrumb: Variants
         parent: /
         product_map:
-        sidebar_group: improve
+        sidebar_group: monitor
         sidebar_order: 3
         type: page
         <<: *community
@@ -209,7 +209,7 @@ routes:
         breadcrumb: AB Test Models
         parent: /
         product_map:
-        sidebar_group: improve
+        sidebar_group: monitor
         sidebar_order: 4
         type: page
         <<: *community
@@ -303,7 +303,7 @@ routes:
         breadcrumb: License
         parent: /
         product_map:
-        sidebar_group: system
+        sidebar_group: admin
         sidebar_order: 1
         type: form_page
         <<: *team
@@ -346,7 +346,7 @@ routes:
         breadcrumb: Runtime Config
         parent: /
         product_map:
-        sidebar_group: system
+        sidebar_group: configure
         sidebar_order: 7
         type: form_page
         deprecated: false
@@ -357,7 +357,7 @@ routes:
         breadcrumb: Rate Limits
         parent: /
         product_map:
-        sidebar_group: system
+        sidebar_group: configure
         sidebar_order: 8
         type: form_page
         deprecated: false
@@ -380,7 +380,7 @@ routes:
         breadcrumb: Observability
         parent: /
         product_map:
-        sidebar_group: system
+        sidebar_group: admin
         sidebar_order: 9
         type: form_page
         visibility: private_preview
@@ -392,7 +392,7 @@ routes:
         breadcrumb: Error Forwarders
         parent: /
         product_map:
-        sidebar_group: system
+        sidebar_group: admin
         sidebar_order: 2
         type: form_page
         deprecated: false
@@ -403,7 +403,7 @@ routes:
         breadcrumb: Email
         parent: /
         product_map:
-        sidebar_group: system
+        sidebar_group: admin
         sidebar_order: 3
         type: form_page
         deprecated: false
@@ -535,7 +535,7 @@ routes:
         breadcrumb: Feature Flags
         parent: /
         product_map:
-        sidebar_group: system
+        sidebar_group: admin
         sidebar_order: 4
         type: list_page
         deprecated: false
@@ -546,7 +546,7 @@ routes:
         breadcrumb: Housekeeping
         parent: /
         product_map:
-        sidebar_group: system
+        sidebar_group: admin
         sidebar_order: 6
         type: page
         <<: *community
@@ -579,7 +579,7 @@ routes:
         breadcrumb: Run Retention
         parent: /
         product_map:
-        sidebar_group: system
+        sidebar_group: admin
         sidebar_order: 5
         type: form_page
         deprecated: false
@@ -601,7 +601,7 @@ routes:
         breadcrumb: Saved Views
         parent: /
         product_map:
-        sidebar_group: null
+        sidebar_group: admin
         sidebar_order: 7
         type: list_page
         <<: *team
@@ -623,7 +623,7 @@ routes:
         breadcrumb: Error Detail
         parent: /admin/errors
         product_map:
-        sidebar_group: null
+        sidebar_group: admin
         sidebar_order: 2
         type: detail_page
         pattern: /admin/errors/:id
@@ -814,23 +814,13 @@ sidebar_groups:
         order: 2
         default_expanded: true
         labelKey: components.SidebarNav.group_monitor
-    improve:
-        label: IMPROVE
-        order: 3
-        default_expanded: true
-        labelKey: components.SidebarNav.group_improve
     configure:
         label: CONFIGURE
-        order: 4
+        order: 3
         default_expanded: false
         labelKey: components.SidebarNav.group_configure
-    system:
-        label: SYSTEM
-        order: 5
-        default_expanded: false
-        labelKey: components.SidebarNav.group_system
     admin:
         label: ADMIN
-        order: 6
+        order: 4
         default_expanded: false
         labelKey: components.SidebarNav.group_admin

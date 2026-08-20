@@ -82,9 +82,7 @@ class TestManifestLoad:
         expected_groups = {
             "core",
             "monitor",
-            "improve",
             "configure",
-            "system",
             "admin",
         }
         assert set(groups.keys()) == expected_groups
