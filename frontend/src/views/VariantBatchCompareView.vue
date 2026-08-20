@@ -316,6 +316,7 @@ function batchStatusLabel(status: string): string {
   return translated === key ? status : translated
 }
 
+
 function passRateClass(rate: number): string {
   if (rate >= 80) return 'badge badge-status-success'
   if (rate >= 40) return 'badge badge-status-warning'
@@ -337,7 +338,7 @@ async function loadBatch(id: string) {
     const { data, error: err } = await fetchVariantBatch(id)
     if (thisId !== batchId.value) return
     if (err) {
-      error.value = `${t('views.variantBatch.failedToLoadBatch')} ${err}`
+      error.value = `${t('views.variantBatch.failedToLoadBatch')} ${formatApiError(err)}`
       return
     }
     batch.value = data ?? null
@@ -372,7 +373,7 @@ async function handleSoftDelete(batch: VariantBatchSummary) {
   try {
     const { error: err } = await softDeleteVariantBatch(batch.batch_id)
     if (err) {
-      error.value = `${t('views.variantBatch.failedToDelete')} ${err}`
+      error.value = `${t('views.variantBatch.failedToDelete')} ${formatApiError(err)}`
       return
     }
     await loadComparisons()
@@ -392,7 +393,7 @@ async function handleReFire() {
     const { data, error: err } = await reFireVariantBatch(thisId)
     if (thisId !== batchId.value) return
     if (err) {
-      error.value = `${t('views.variantBatch.refireFailed')} ${err}`
+      error.value = `${t('views.variantBatch.refireFailed')} ${formatApiError(err)}`
       return
     }
     if (data) {
