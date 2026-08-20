@@ -4,7 +4,7 @@ import contextlib
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -745,9 +745,10 @@ async def _scan_invalid_org_fk(session: AsyncSession, org_id: uuid.UUID) -> list
 
     candidates: list[Candidate] = []
     for cls in _tenant_models():
-        table = cls.__table__
+        model_cls = cast(Any, cls)
+        table = model_cls.__table__
         org_col = table.c.organisation_id
-        stmt = select(cls).where(org_col == org_id).where(org_col.is_not(None))
+        stmt = select(model_cls).where(org_col == org_id).where(org_col.is_not(None))
         rows = (await session.execute(stmt)).scalars().all()
         for r in rows:
             candidates.append(
