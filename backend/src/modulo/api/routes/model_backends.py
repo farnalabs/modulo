@@ -33,6 +33,7 @@ from modulo.db.crud.model_backend import (
     get_model_backend,
     list_backends_referencing_fallback,
     list_model_backends,
+    list_pipeline_references_for_backend,
     update_model_backend,
 )
 from modulo.db.models.model_backend import ModelBackend
@@ -50,6 +51,7 @@ _MSG_MODEL_BACKEND_NOT_FOUND = "Model backend not found"
 _CODE_MODEL_BACKENDS_UPDATE_MODEL = "model_backends.update_model_backend_endpoint"
 _CODE_MODEL_BACKENDS_DELETE_MODEL = "model_backends.delete_model_backend_endpoint"
 _CODE_MODEL_BACKENDS_RECHECK_MODEL = "model_backends.recheck_model_backend_health_endpoint"
+_CODE_MODEL_BACKENDS_PIPELINE_REFS = "model_backends.pipeline_references_endpoint"
 
 
 logger = logging.getLogger(__name__)
@@ -279,6 +281,21 @@ class ModelBackendHealthCheckResponse(BaseModel):
     status: Literal["healthy", "unhealthy", "not_applicable"]
     detail: str | None = None
     checked_at: datetime | None = None
+
+
+class PipelineReference(BaseModel):
+    pipeline_id: uuid.UUID
+    pipeline_name: str
+    agent_name: str | None = None
+    agent_id: uuid.UUID | None = None
+    reference_type: Literal["direct_node", "agent"]
+
+
+class PipelineReferenceListResponse(BaseModel):
+    items: list[PipelineReference]
+    total: int
+    page: int
+    page_size: int
 
 
 def _to_response(mb: Any) -> ModelBackendResponse:
@@ -642,6 +659,63 @@ async def get_model_backend_endpoint(
     if mb is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_MODEL_BACKEND_NOT_FOUND)
     return _to_response(mb)
+
+
+@router.get("/{backend_id}/pipeline-references", response_model=PipelineReferenceListResponse)
+@handle_db_errors(_CODE_MODEL_BACKENDS_PIPELINE_REFS)
+async def list_pipeline_references_endpoint(
+    backend_id: uuid.UUID,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("model_backend.list"),
+) -> PipelineReferenceListResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            mb = await get_model_backend(session, backend_id)
+            if mb is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_MODEL_BACKEND_NOT_FOUND)
+            result = await list_pipeline_references_for_backend(
+                session,
+                org_id=principal.organisation_id,
+                backend_id=backend_id,
+                page=page,
+                page_size=page_size,
+            )
+    except IntegrityError:
+        logger.exception(_CODE_MODEL_BACKENDS_PIPELINE_REFS)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except ProgrammingError:
+        logger.exception(_CODE_MODEL_BACKENDS_PIPELINE_REFS)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=_MSG_MODEL_BACKENDS_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        logger.exception(_CODE_MODEL_BACKENDS_PIPELINE_REFS)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while listing pipeline references.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Unexpected error listing pipeline references")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while listing pipeline references.",
+        ) from None
+    return PipelineReferenceListResponse(
+        items=[PipelineReference(**ref) for ref in result.items],
+        total=result.total,
+        page=result.page,
+        page_size=result.page_size,
+    )
 
 
 @router.patch("/{backend_id}", response_model=ModelBackendResponse, dependencies=[Depends(deny_break_glass_mint)])
