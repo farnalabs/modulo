@@ -13,6 +13,7 @@ SQLAlchemy error classes on demand; no database required.
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -91,9 +92,21 @@ class TestStatementBuilders:
         assert "runs.organisation_id = " in sql
         assert "guardrail_summary_json ->> 'bound'" in sql
         assert "guardrail_summary_json ->> 'violated'" in sql
+        assert "guardrail_summary_json IS NOT NULL" in sql, "runs without a guardrail summary must be excluded"
         for code in expand_code_variants("eval.blocked"):
             assert f"'{code}'" in sql, f"blocked variant {code} missing from IN clause"
-        for label in ("bound", "evaluated", "passed", "observed", "errored", "redacted", "skipped"):
+        for label in (
+            "bound",
+            "evaluated",
+            "passed",
+            "violated",
+            "observed",
+            "errored",
+            "redacted",
+            "skipped",
+            "expected_skips",
+            "unexpected_skips",
+        ):
             assert f"->> '{label}'" in sql, f"json key {label} missing"
 
     def test_budget_exhausted_stmt_uses_real_verdict_key_on_postgres(self) -> None:
@@ -193,15 +206,22 @@ class TestAssembleScorecard:
         result = self._call()
         counts = result["fire_counts"]
         assert counts["bound"] == 8
+        assert counts["evaluated"] == 8
+        assert counts["passed"] == 4
         assert counts["violated"] == 4
         assert counts["observed"] == 1
         assert counts["errored"] == 1
         assert counts["redacted"] == 2
         assert counts["skipped"] == 1
+        assert counts["expected_skips"] == 0
         assert counts["unexpected_skips"] == 1
         assert result["scope"]["runs_with_guardrail"] == 4
         assert result["scope"]["runs_with_violations"] == 2
         assert result["scope"]["runs_blocked"] == 1
+
+    def test_expected_skips_flow_through(self) -> None:
+        result = self._call(runs_row=_runs_row(expected_skips_total=5))
+        assert result["fire_counts"]["expected_skips"] == 5
 
     def test_first_try_pass_and_corrected_pass_are_separate(self) -> None:
         """The core Goodhart contract: first-try-pass and corrected-pass must
@@ -236,6 +256,11 @@ class TestAssembleScorecard:
             corrections_row=_corrections_row(corrections_total=0, converged_clean=0, escalated_hitl=0),
             baseline_row=_runs_row(bound_total=0, errored_total=0),
         )
+        assert result["fire_counts"]["bound"] == 0
+        assert result["fire_counts"]["violated"] == 0
+        assert result["fire_counts"]["unexpected_skips"] == 0
+        assert result["scope"]["runs_with_guardrail"] == 0
+        assert result["scope"]["runs_blocked"] == 0
         assert result["rates"]["raw_violation_rate"] is None
         assert result["rates"]["first_try_pass_rate"] is None
         assert result["self_correction"]["corrected_pass_rate"] is None
@@ -249,9 +274,51 @@ class TestAssembleScorecard:
         assert drift["drift_detected"] is True
         assert drift["drift_indicator"] == "drift"
 
+    def test_drift_detected_from_errored_rate_without_skips(self) -> None:
+        # No unexpected skips; errored rate 3/8 = 0.375 vs baseline 1/8 = 0.125
+        # exceeds the 0.05 advisory margin — drift without any skip signal.
+        result = self._call(
+            runs_row=_runs_row(errored_total=3, unexpected_skips_total=0),
+            baseline_row=_runs_row(errored_total=1, bound_total=8),
+        )
+        drift = result["evasion_band_drift"]
+        assert drift["drift_detected"] is True
+        assert drift["drift_indicator"] == "drift"
+
+    def test_in_band_when_rate_within_margin(self) -> None:
+        result = self._call(
+            runs_row=_runs_row(errored_total=1, unexpected_skips_total=0),
+            baseline_row=_runs_row(errored_total=1, bound_total=8),
+        )
+        drift = result["evasion_band_drift"]
+        assert drift["drift_detected"] is False
+        assert drift["drift_indicator"] == "in_band"
+
     def test_budget_exhausted_is_reported_within_self_correction(self) -> None:
         result = self._call(budget_exhausted=2)
         assert result["self_correction"]["budget_exhausted"] == 2
+
+    def test_self_correction_object_is_complete(self) -> None:
+        result = self._call()
+        corrections = result["self_correction"]
+        assert corrections["corrections_total"] == 10
+        assert corrections["converged_clean"] == 6
+        assert corrections["escalated_hitl"] == 3
+        assert corrections["budget_exhausted"] == 2
+        assert corrections["dismissed"] == 1
+        assert corrections["in_flight"] == 0
+        assert corrections["corrected_pass_rate"] == 0.6
+
+    def test_no_gating_fields_anywhere(self) -> None:
+        """Advisory contract: no gate/block/decision surface on any object."""
+        result = self._call()
+        gated = {"gate", "block", "blocked", "allow", "deny", "decision", "autonomy", "verdict"}
+        assert gated.isdisjoint(result.keys())
+        assert gated.isdisjoint(result["rates"].keys())
+        assert gated.isdisjoint(result["self_correction"].keys())
+        assert gated.isdisjoint(result["evasion_band_drift"].keys())
+        assert result["advisory_only"] is True
+        assert result["evasion_band_drift"]["advisory_only"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -416,7 +483,8 @@ class TestRunGuardrailScorecard:
                 date_to=datetime(2026, 8, 1, tzinfo=UTC),
             )
 
-    async def test_programming_error_maps_to_migration_required(self) -> None:
+    async def test_programming_error_maps_to_migration_required(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.DEBUG, logger="modulo.core.analytics.guardrails")
         session = _FakeSession(exc=ProgrammingError("stmt", {}, "relation does not exist"))
         with (
             patch.object(gr, "set_rls_org", new_callable=AsyncMock),
@@ -424,6 +492,7 @@ class TestRunGuardrailScorecard:
             pytest.raises(AnalyticsMigrationRequiredError, match="migrations"),
         ):
             await self._call(session)
+        assert "analytics.guardrails.programming_error" in caplog.text
 
     async def test_canceled_dbapi_error_maps_to_query_timeout(self) -> None:
         session = _FakeSession(exc=DBAPIError("stmt", {}, _QueryCanceledError("canceled")))
@@ -452,7 +521,8 @@ class TestRunGuardrailScorecard:
         ):
             await self._call(session)
 
-    async def test_unexpected_error_maps_to_database_error(self) -> None:
+    async def test_unexpected_error_maps_to_database_error(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.DEBUG, logger="modulo.core.analytics.guardrails")
         session = _FakeSession(exc=RuntimeError("kaboom"))
         with (
             patch.object(gr, "set_rls_org", new_callable=AsyncMock),
@@ -460,6 +530,7 @@ class TestRunGuardrailScorecard:
             pytest.raises(AnalyticsDatabaseError, match="Database temporarily"),
         ):
             await self._call(session)
+        assert "analytics.guardrails.unexpected_error" in caplog.text
 
     async def test_cancelled_error_propagates_untouched(self) -> None:
         session = _FakeSession(exc=asyncio.CancelledError())
@@ -491,3 +562,37 @@ class TestRunGuardrailScorecard:
             result = await self._call(session)
         assert result["scope"]["runs_with_guardrail"] == 4
         assert len(session.executed) == 4, "no timezone/statement_timeout set_configs on sqlite"
+
+
+class TestResponseModel:
+    """The REST response models are the wire-level advisory contract — assert
+    no gate/block/decision surface exists on the actual Pydantic schema."""
+
+    def test_response_models_expose_no_gating_fields(self) -> None:
+        from modulo.api.routes.analytics import (
+            GuardrailEvasionBandDrift,
+            GuardrailRates,
+            GuardrailScorecardResponse,
+            GuardrailSelfCorrection,
+        )
+
+        gated = {
+            "gate",
+            "block",
+            "blocked",
+            "allow",
+            "deny",
+            "decision",
+            "autonomy",
+            "autonomy_level",
+            "verdict",
+        }
+        assert gated.isdisjoint(GuardrailScorecardResponse.model_fields)
+        assert gated.isdisjoint(GuardrailRates.model_fields)
+        assert gated.isdisjoint(GuardrailSelfCorrection.model_fields)
+        assert gated.isdisjoint(GuardrailEvasionBandDrift.model_fields)
+        assert "advisory_only" in GuardrailScorecardResponse.model_fields
+        assert GuardrailScorecardResponse.model_fields["advisory_only"].default is True
+        assert "advisory_only" in GuardrailEvasionBandDrift.model_fields
+        assert GuardrailEvasionBandDrift.model_fields["advisory_only"].default is True
+        assert GuardrailEvasionBandDrift.model_fields["drift_indicator"].default == "in_band"
