@@ -18,7 +18,7 @@ const SAMPLE_DETAIL = {
 
 async function mockFeedbackInboxApi(page: Page, detailStatus: number) {
   await page.route(/\/api\/v1\/admin\/feature-flags$/, async (route) => {
-    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ flags: [], license: { tier: 'enterprise' }, dev_mode: true }) })
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ flags: [], license: { tier: 'team' }, dev_mode: true }) })
   })
   await page.route(/\/api\/v1\/feedback\/inbox/, async (route) => {
     const url = route.request().url()

@@ -38,7 +38,7 @@ test.describe('Remy-only mode at /remy', { tag: '@smoke' }, () => {
         contentType: 'application/json',
         body: JSON.stringify({
           flags: [],
-          license: { tier: 'enterprise' },
+          license: { tier: 'team' },
           dev_mode: true,
         }),
       })

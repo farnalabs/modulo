@@ -398,7 +398,7 @@ describe('Context enrichment', () => {
   it('includes tier from planStore', () => {
     setActivePinia(createPinia())
     const plan = usePlanStore()
-    plan.$patch({ currentTier: 'enterprise' })
+    plan.$patch({ currentTier: 'team' })
 
     const mockBackend = new BuiltinMonitorBackend()
     const captureSpy = vi.spyOn(mockBackend, 'captureError')
@@ -409,7 +409,7 @@ describe('Context enrichment', () => {
     expect(captureSpy).toHaveBeenCalledTimes(1)
     const event = captureSpy.mock.calls[0]?.[0]
     expectRecord(event?.context_json)
-    expect(event.context_json.tier).toBe('enterprise')
+    expect(event.context_json.tier).toBe('team')
 
     tracker.dispose()
   })
