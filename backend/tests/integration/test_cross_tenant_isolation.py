@@ -179,7 +179,7 @@ async def _seed_run(
 ) -> uuid.UUID:
     run_id = uuid.uuid4()
     snapshot_id = await _seed_pipeline_snapshot(db_engine, org_id, pipeline_id)
-    async with db_engine.connect() as conn, conn.begin():
+    async with db_engine.connect() as conn, conn.begin(), _bypass_triggers(conn):
         await conn.execute(
             text(
                 "INSERT INTO runs (id, organisation_id, pipeline_id, "
