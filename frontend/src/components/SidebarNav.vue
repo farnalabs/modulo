@@ -97,7 +97,7 @@ import { OverlayScrollbarsComponent } from "overlayscrollbars-vue";
 import SidebarLink from "./SidebarLink.vue";
 import SidebarGroup from "./SidebarGroup.vue";
 
-import { getNavGroups, canSeeItem } from "../config/navigation";
+import { getVisibleNavGroups } from "../config/navigation";
 import type { NavGroup } from "../config/navigation";
 import { useSidebar } from "../composables/useSidebar";
 import { usePlanStore } from "../stores/planStore";
@@ -158,28 +158,14 @@ const activeGroupIds = computed(() => {
 const tierInfoLoaded = computed(() => planStore.tierRanks ? Object.keys(planStore.tierRanks).length > 0 : false);
 
 const visibleSidebarGroups = computed(() =>
-  getNavGroups()
-    .filter(
-      (g) =>
-        (!g.systemAdminOnly || props.isSystemAdmin),
-    )
-    .map((group) => ({
-      ...group,
-      items: group.items.filter((item) => {
-        if ((item.visibility === 'private_preview' || item.visibility === 'in_dev') && !planStore.devMode) return false
-        if (!item.requiredRoles && !item.requiredTier) return true
-        if (item.requiredTier && !tierInfoLoaded.value) return false
-        return canSeeItem(
-          item,
-          {
-            role: props.userRole || "",
-            permissions: props.userPermissions,
-          },
-          { isAtMinimumTier: (tier: string) => planStore.isAtMinimumTier(tier) },
-        )
-      }),
-    }))
-    .filter(g => g.items.length > 0)
+  getVisibleNavGroups({
+    isSystemAdmin: props.isSystemAdmin,
+    userRole: props.userRole || null,
+    userPermissions: props.userPermissions || [],
+    devMode: planStore.devMode,
+    tierInfoLoaded: tierInfoLoaded.value,
+    isAtMinimumTier: (tier: string) => planStore.isAtMinimumTier(tier),
+  }),
 );
 </script>
 
