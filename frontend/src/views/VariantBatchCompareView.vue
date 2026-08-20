@@ -397,15 +397,16 @@ async function handleReFire() {
     }
     if (data) {
       batch.value = data
+      expandedRunIds.value = new Set()
+      refiring.value = false
       await router.replace(`/variants/compare/${data.batch_id}`)
+      await loadComparisons()
     }
-    expandedRunIds.value = new Set()
-    await loadComparisons()
   } catch (e: unknown) {
     if (thisId !== batchId.value) return
     error.value = `${t('views.variantBatch.refireFailed')} ${formatApiError(e)}`
   } finally {
-    if (thisId === batchId.value) refiring.value = false
+    refiring.value = false
   }
 }
 

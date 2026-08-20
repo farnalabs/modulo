@@ -251,6 +251,30 @@ describe('VariantBatchCompareView', () => {
     expect(routerMocks.replace).toHaveBeenCalledWith('/variants/compare/b9')
   })
 
+  it('re-enables the Re-fire button after a re-fire that produces a new batch id', async () => {
+    batchMocks.reFireVariantBatch.mockResolvedValue({
+      data: mockBatch({ batch_id: 'b9', name: 'Rebuilt comparison' }),
+      error: undefined,
+    })
+
+    const wrapper = mount(VariantBatchCompareView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const refire = () => wrapper.find('[data-testid="variant-batch-refire"]')
+
+    await refire().trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    // The re-fire navigated to a NEW batch id (b9), so the old id-guard no longer
+    // matches — the in-flight button flag must still be cleared.
+    expect(routerMocks.replace).toHaveBeenCalledWith('/variants/compare/b9')
+    expect(refire().attributes('disabled')).toBeUndefined()
+  })
+
   it('drops a stale loadBatch response that resolves after the route moved on', async () => {
     let resolveSlow: (value: unknown) => void = () => {}
     batchMocks.fetchVariantBatch.mockImplementationOnce(() => new Promise((res) => { resolveSlow = res }))
