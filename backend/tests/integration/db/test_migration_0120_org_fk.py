@@ -73,7 +73,7 @@ async def _fk_delete_rule(engine, table: str, constraint: str) -> str:
         return (
             await conn.execute(
                 text(
-                    "SELECT confdeltype FROM pg_constraint "
+                    "SELECT confdeltype::text FROM pg_constraint "
                     "WHERE conname = :c "
                     "AND conrelid = (SELECT oid FROM pg_class WHERE relname = :t)"
                 ),
