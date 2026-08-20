@@ -103,7 +103,7 @@ class TestRefresh:
 
     def test_community_tier_flags_active(self) -> None:
         registry = FeatureFlagRegistry(current_tier="community")
-        flag = registry.get_flag("saved_views")
+        flag = registry.get_flag("parallel_branches")
         assert flag is not None
         assert flag.currently_active is True
 
@@ -115,7 +115,7 @@ class TestRefresh:
 
     def test_team_tier_keeps_community_active(self) -> None:
         registry = FeatureFlagRegistry(current_tier="team", has_license_key=True)
-        flag = registry.get_flag("saved_views")
+        flag = registry.get_flag("parallel_branches")
         assert flag is not None
         assert flag.currently_active is True
 
@@ -314,8 +314,8 @@ class TestInactiveCatalogFlags:
                 "is_active": False,
             },
             {
-                "name": "saved_views",
-                "description": "Persistent saved views for run and pipeline lists",
+                "name": "parallel_branches",
+                "description": "Run branching logic in parallel within a pipeline",
                 "tier_id": "community",
                 "depends_on": None,
                 "is_active": True,
@@ -341,8 +341,8 @@ class TestInactiveCatalogFlags:
         assert flag is not None, "inactive catalog flags must still be listed"
         assert flag.currently_active is False
         # A community-tier flag seeded active still activates normally.
-        assert registry.get_flag("saved_views") is not None
-        assert registry.get_flag("saved_views").currently_active is True  # type: ignore[union-attr]
+        assert registry.get_flag("parallel_branches") is not None
+        assert registry.get_flag("parallel_branches").currently_active is True  # type: ignore[union-attr]
 
     async def test_inactive_flag_stays_inactive_on_community_tier(self) -> None:
         session = _make_session()

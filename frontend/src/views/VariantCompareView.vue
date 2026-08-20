@@ -245,8 +245,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onBeforeUnmount, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRoute } from 'vue-router'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import type { components } from '../lib/api/client'
@@ -265,6 +266,7 @@ import { TERMINAL_STATUSES } from '../constants/runStatuses'
 
 const { t } = useI18n()
 const { currencyCode, loadCurrency } = useOrgCurrency()
+const route = useRoute()
 
 type VariantGroup = components['schemas']['VariantGroupResponse']
 type RunResponse = components['schemas']['RunResponse']
@@ -314,6 +316,8 @@ const runningVariants = ref<Set<string>>(new Set())
 const diffNode = ref<string | null>(null)
 const diffVarA = ref<string | null>(null)
 const diffVarB = ref<string | null>(null)
+
+const firedRunsSeeded = ref(false)
 
 const terminalStatuses: Set<string> = new Set(TERMINAL_STATUSES)
 
@@ -432,6 +436,7 @@ const diffDataB = computed(() => {
 watch(selectedGroupId, async (id) => {
   if (id) {
     await fetchGroupDetail(id)
+    seedFiredRuns()
   }
 })
 
@@ -452,10 +457,45 @@ onBeforeUnmount(() => {
 })
 
 watch(groups, (list) => {
-  if (list.length > 0 && !selectedGroupId.value) {
+  if (list.length === 0) return
+  const paramId = typeof route.params.batchId === 'string' ? route.params.batchId : null
+  if (paramId && list.some(g => g.id === paramId)) {
+    selectedGroupId.value = paramId
+  } else if (!selectedGroupId.value) {
     selectedGroupId.value = list[0].id
   }
 }, { immediate: true })
+
+interface FiredRun {
+  run_id: string
+  variant_name: string
+}
+
+function seedFiredRuns() {
+  if (firedRunsSeeded.value) return
+  const state = history.state as { firedRuns?: FiredRun[] } | null
+  const fired = state?.firedRuns
+  if (!fired || fired.length === 0) return
+  firedRunsSeeded.value = true
+  for (const r of fired) {
+    if (runEntries.value.has(r.variant_name)) continue
+    runEntries.value.set(r.variant_name, {
+      runId: r.run_id,
+      variantName: r.variant_name,
+      runStatus: 'pending',
+      totalCostUsd: null,
+      tokenConsumption: null,
+      nodeOutputs: null,
+      evalResults: [],
+    })
+    runningVariants.value.add(r.variant_name)
+    void pollRunStatus(r.run_id, r.variant_name)
+  }
+}
+
+onMounted(() => {
+  seedFiredRuns()
+})
 
 async function fetchGroupDetail(id: string) {
   error.value = null

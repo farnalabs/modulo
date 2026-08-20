@@ -1461,6 +1461,13 @@ def make_node_fn(
         model_backend_id_str = node_def.get("model_backend_id")
         output_schema_json = node_def.get("output_schema_json")
 
+        # FAR-332: a model_backend_id run_context override (fired by the variant
+        # comparison / A/B test views) takes precedence over the snapshot-embedded
+        # node_def backend, so every variant can run on a different model backend.
+        _input = run_context.get("input") or {}
+        if isinstance(_input, dict) and _input.get("model_backend_id"):
+            model_backend_id_str = str(_input["model_backend_id"])
+
         # If no model_backend_id, fall back to stub behavior
         # (connector_binding nodes, manual nodes routed through wrong path, etc.).
         if not model_backend_id_str:

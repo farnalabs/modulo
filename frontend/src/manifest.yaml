@@ -611,17 +611,6 @@ routes:
         <<: *team
         deprecated: false
 
-    /admin/views:
-        name: admin-views
-        breadcrumb: Saved Views
-        parent: /
-        product_map:
-        sidebar_group: admin
-        sidebar_order: 7
-        type: list_page
-        <<: *team
-        deprecated: false
-
     /admin/errors:
         name: admin-errors
         breadcrumb: Error Dashboard

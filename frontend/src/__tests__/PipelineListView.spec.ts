@@ -248,6 +248,47 @@ describe('PipelineListView', () => {
     expect(wrapper2.find('[data-testid="pipeline-tree-row-p1"]').exists()).toBe(true)
   })
 
+  it('offers a "Run as variant" action that deep-links to the ab-test creator with the pipeline id', async () => {
+    mockResponses['/api/v1/pipelines?page_size=100'] = {
+      items: [
+        { id: 'p1', organisation_id: 'org1', name: 'Deep Link Pipe', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' },
+      ],
+      total: 1,
+      page: 1,
+      page_size: 100,
+    }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: {
+        plugins: [router],
+        stubs: {
+          ErrorAlert: true,
+          FolderTree: true,
+          Menu: {
+            props: ['model', 'popup'],
+            template: '<div />',
+            methods: { toggle: () => false },
+          },
+        },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as {
+      openActionMenu: (event: MouseEvent, p: unknown) => void
+      actionMenuItems: Array<{ label: string; command: () => void }>
+    }
+    vm.openActionMenu({} as MouseEvent, { id: 'p1' })
+    await nextTick()
+
+    const runAsVariant = vm.actionMenuItems.find(i => i.label === 'Run as variant')
+    expect(runAsVariant).toBeDefined()
+    runAsVariant!.command()
+    expect(router.push).toHaveBeenCalledWith({ path: '/variants/ab-test', query: { pipeline_id: 'p1' } })
+  })
+
   it('auto-expands the selected folder and reflects expanded state in the toggle', async () => {
     mockResponses['/api/v1/pipeline-folders'] = [
       { id: 'f1', organisation_id: 'org1', name: 'Folder One', parent_id: null, sort_order: 0 },

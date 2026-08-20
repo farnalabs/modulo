@@ -1,4 +1,4 @@
-﻿import { formatApiError } from '../lib/api/formatError'
+import { formatApiError } from '../lib/api/formatError'
 import { decodeJwtPayload } from '../lib/jwt'
 
 import { createRouter, createWebHistory } from 'vue-router'
@@ -292,7 +292,7 @@ const router = createRouter({
     },
     {
       path: '/variants/compare/:batchId',
-      name: 'variant-batch-compare',
+      name: 'variant-compare-detail',
       component: VariantBatchCompareView,
       props: true,
       meta: { breadcrumb: 'Variant Batch Compare', parent: 'variant-compare', testid: 'variant-batch-compare' },

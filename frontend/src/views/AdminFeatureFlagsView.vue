@@ -108,9 +108,8 @@
 
     <div>
       <FilterBar
-        :search="{ placeholder: 'Search flags by name or description...' }"
+        :search="{ placeholder: $t('views.AdminFeatureFlagsView.search_flags') }"
         :search-value="searchQuery"
-        data-testid="search-input"
         @update:search="searchQuery = $event; currentPage = 1"
       />
 

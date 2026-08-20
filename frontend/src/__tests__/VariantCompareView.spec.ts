@@ -7,6 +7,27 @@ vi.mock('vue-i18n', () => ({
   useI18n: () => ({ t: (key: string) => key }),
 }))
 
+const hoisted = vi.hoisted(() => ({
+  route: {
+    path: '/',
+    fullPath: '/',
+    params: {} as Record<string, string>,
+    query: {} as Record<string, string>,
+    hash: '',
+    matched: [] as unknown[],
+    name: null,
+    redirectedFrom: undefined,
+  },
+}))
+
+vi.mock('vue-router', () => ({
+  useRoute: () => hoisted.route,
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+  createRouter: vi.fn(() => ({ push: vi.fn() })),
+  createWebHistory: vi.fn(() => ({})),
+  createMemoryHistory: vi.fn(() => ({})),
+}))
+
 vi.mock('../lib/api/client', () => ({
   api: {
     GET: vi.fn().mockImplementation((url: string) => {
@@ -37,6 +58,7 @@ describe('VariantCompareView', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+    window.history.replaceState(null, '')
   })
 
   it('renders without crashing', async () => {
@@ -265,5 +287,100 @@ describe('VariantCompareView', () => {
     // var-b has no run data — its pass-rate cell shows an em dash
     expect(text).toContain('—')
     vi.useRealTimers()
+  })
+
+  it('seeds fired batch runs passed via navigation state and polls them to completion', async () => {
+    vi.useFakeTimers()
+
+    window.history.replaceState(
+      {
+        firedRuns: [
+          { run_id: 'fr1', variant_name: 'var-a' },
+          { run_id: 'fr2', variant_name: 'var-b' },
+        ],
+      },
+      '',
+    )
+    hoisted.route.params.batchId = 'g1'
+
+    vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mockImplementation((url: string) => {
+      if (url === '/api/v1/variant-groups') return Promise.resolve({ data: [groupWithVariants], error: undefined })
+      if (url === '/api/v1/variant-groups/{group_id}') return Promise.resolve({ data: groupWithVariants, error: undefined })
+      if (url.startsWith('/api/v1/runs/') && url.endsWith('/io')) {
+        return Promise.resolve({ data: { outputs_json: { 'node-a': { summary: 'fired' } } }, error: undefined })
+      }
+      if (url.startsWith('/api/v1/runs/') && url.endsWith('/evals')) {
+        return Promise.resolve({
+          data: { items: [{ eval_id: 'e1', node_id: 'node-a', passed: true, score: 0.9 }] },
+          error: undefined,
+        })
+      }
+      if (url.startsWith('/api/v1/runs/')) {
+        return Promise.resolve({
+          data: { run_id: 'fr1', status: 'complete', total_cost_usd: 0, token_consumption: null },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    const wrapper = mount(VariantCompareView, {
+      global: {
+        stubs: { FeatureGate: { template: '<div><slot /></div>' } },
+        mocks: { $t: (key: string) => key },
+      },
+    })
+    await nextTick()
+    await nextTick()
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(2000)
+    await nextTick()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { runEntries: Map<string, unknown> }
+    expect(vm.runEntries.size).toBe(2)
+    const text = wrapper.text()
+    expect(text).toContain('var-a')
+    expect(text).toContain('var-b')
+    expect(text).toContain('fired')
+    vi.useRealTimers()
+  })
+
+  it('preselects the group named by the :batchId route param on a deep link', async () => {
+    // groups are ordered newest-first; the requested batch is the OLDER one (not first)
+    const newGroup = { ...groupWithVariants, id: 'g-new', name: 'Group New' }
+    const olderGroup = { ...groupWithVariants, id: 'g-older', name: 'Group Older' }
+    hoisted.route.params.batchId = 'g-older'
+
+    vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mockImplementation((url: string) => {
+      if (url === '/api/v1/variant-groups') {
+        return Promise.resolve({ data: [newGroup, olderGroup], error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    try {
+      const wrapper = mount(VariantCompareView, {
+        global: {
+          stubs: { FeatureGate: { template: '<div><slot /></div>' } },
+          mocks: { $t: (key: string) => key },
+        },
+      })
+      await nextTick()
+      await nextTick()
+      await new Promise(r => setTimeout(r, 0))
+      await nextTick()
+      const vm = wrapper.vm as unknown as { selectedGroupId: string | null }
+      expect(vm.selectedGroupId).toBe('g-older')
+    } finally {
+      vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mockImplementation(
+        (url: string) =>
+          Promise.resolve(
+            url === '/api/v1/variant-groups'
+              ? { data: [], error: undefined }
+              : { data: null, error: undefined },
+          ),
+      )
+    }
   })
 })

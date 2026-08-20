@@ -96,8 +96,8 @@ def _db_flags() -> list[dict[str, object]]:
     return [
         {"name": "sso", "description": "SSO", "tier_id": "team", "depends_on": None, "is_active": True},
         {
-            "name": "saved_views",
-            "description": "Saved views",
+            "name": "parallel_branches",
+            "description": "Parallel branches",
             "tier_id": "community",
             "depends_on": None,
             "is_active": True,
@@ -115,7 +115,7 @@ def _db_tiers() -> list[dict[str, object]]:
 class TestCommunityTier:
     def test_feature_enabled_reflects_active_flag(self) -> None:
         ctx = CommunityTier()
-        assert ctx.feature_enabled("saved_views") is True
+        assert ctx.feature_enabled("parallel_branches") is True
         assert ctx.feature_enabled("sso") is False
 
     def test_feature_enabled_unknown_flag_returns_false(self) -> None:
@@ -125,7 +125,7 @@ class TestCommunityTier:
     def test_list_enabled_features_only_active(self) -> None:
         ctx = CommunityTier()
         names = {f.name for f in ctx.list_enabled_features()}
-        assert "saved_views" in names
+        assert "parallel_branches" in names
         assert "sso" not in names
 
     def test_tier_and_license_accessors(self) -> None:
@@ -151,7 +151,7 @@ class TestLicenseKeyTier:
         ctx = LicenseKeyTier(_license(tier="community", features=["sso"]))
         names = {f.name for f in ctx.list_enabled_features()}
         assert "sso" in names
-        assert "saved_views" in names
+        assert "parallel_branches" in names
 
     def test_tier_and_license_accessors(self) -> None:
         ctx = LicenseKeyTier(_license())
@@ -182,17 +182,17 @@ class TestDbPlanContext:
     async def test_license_features_activate_flags_regardless_of_tier(self) -> None:
         ctx = await self._ctx("community", has_license_key=True, license_features={"sso"})
         assert ctx.feature_enabled("sso") is True
-        assert ctx.feature_enabled("saved_views") is True
+        assert ctx.feature_enabled("parallel_branches") is True
 
     async def test_no_license_features_keeps_tier_defaults(self) -> None:
         ctx = await self._ctx("community", has_license_key=True)
         assert ctx.feature_enabled("sso") is False
-        assert ctx.feature_enabled("saved_views") is True
+        assert ctx.feature_enabled("parallel_branches") is True
 
     async def test_list_enabled_features(self) -> None:
         ctx = await self._ctx("community", has_license_key=True, license_features={"sso"})
         names = {f.name for f in ctx.list_enabled_features()}
-        assert names == {"sso", "saved_views"}
+        assert names == {"sso", "parallel_branches"}
 
     async def test_tier_and_license_accessors(self) -> None:
         ctx = await self._ctx("team", has_license_key=True)
@@ -384,7 +384,7 @@ class TestResolveFlag:
             patch.object(registry, "_get_org_override", new=AsyncMock(return_value=None)),
         ):
             assert await registry.resolve_flag("sso") is False
-            assert await registry.resolve_flag("saved_views") is True
+            assert await registry.resolve_flag("parallel_branches") is True
 
     async def test_unknown_flag_returns_false(self) -> None:
         registry = self._registry()
@@ -394,7 +394,7 @@ class TestResolveFlag:
         registry = self._registry()
         user = AsyncMock(return_value=None)
         with patch.object(registry, "_get_user_override", new=user):
-            await registry.resolve_flag("saved_views")
+            await registry.resolve_flag("parallel_branches")
         user.assert_not_awaited()
 
 
@@ -719,9 +719,11 @@ class TestGoldenPins:
 
     def test_community_tier_activates_only_community_flags(self) -> None:
         registry = FeatureFlagRegistry(current_tier="community")
+        # Flags intentionally shipped default-OFF regardless of tier.
+        forced_off = {"mobile_sidebar_rail", "dashboard_charts", "saved_views"}
         for flag in registry.list_flags():
-            if flag.name == "mobile_sidebar_rail":
-                assert flag.currently_active is False
+            if flag.name in forced_off:
+                assert flag.currently_active is False, f"{flag.name} is forced OFF"
             elif flag.tier == "community":
                 assert flag.currently_active is True, f"{flag.name} should be active on community"
             else:
@@ -729,8 +731,10 @@ class TestGoldenPins:
 
     def test_team_tier_activates_all_flags_except_inactive_experiments(self) -> None:
         registry = FeatureFlagRegistry(current_tier="team", has_license_key=True)
+        # Flags intentionally shipped default-OFF regardless of tier.
+        forced_off = {"mobile_sidebar_rail", "dashboard_charts", "saved_views"}
         for flag in registry.list_flags():
-            if flag.name == "mobile_sidebar_rail":
-                assert flag.currently_active is False
+            if flag.name in forced_off:
+                assert flag.currently_active is False, f"{flag.name} is forced OFF"
             else:
                 assert flag.currently_active is True, f"{flag.name} should be active on team"

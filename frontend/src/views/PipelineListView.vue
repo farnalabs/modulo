@@ -696,6 +696,10 @@ const actionMenuItems = computed(() => {
   if (!p) return []
   return [
     { label: t('views.PipelineListView.runs'), command: () => router.push({ name: 'runs-list', query: { pipeline_id: p.id } }) },
+    {
+      label: t('views.PipelineListView.run_as_variant'),
+      command: () => router.push({ path: '/variants/ab-test', query: { pipeline_id: p.id } }),
+    },
     { label: t('views.PipelineListView.rename'), command: () => openRename(p) },
     ...(!p.archived_at
       ? [{ label: t('views.PipelineListView.archive'), command: () => handleArchive(p) }]

@@ -9,14 +9,17 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
 from modulo.db.crud.run import count_active_runs_for_pipeline, create_run
 from modulo.db.models.eval_definition import EvalDefinition
+from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+from modulo.db.models.run import Run
 from modulo.db.models.variant_group import VariantGroup
 
 _log = logging.getLogger(__name__)
@@ -200,6 +203,41 @@ def pick_variant_weighted(
     return clean[-1]
 
 
+async def _lock_variant_group(session: AsyncSession, group: VariantGroup) -> VariantGroup | None:
+    """Row-lock the group to prevent concurrent quota races (PRD 8.19)."""
+    result = await session.execute(select(VariantGroup).where(VariantGroup.id == group.id).with_for_update())
+    locked = result.scalar_one_or_none()
+    return locked if locked is not None else None
+
+
+def _coerce_snapshot_id(raw: Any) -> uuid.UUID | None:
+    """Normalise a variant's ``snapshot_id`` to a UUID (or ``None``)."""
+    if raw is None:
+        return None
+    return uuid.UUID(str(raw)) if isinstance(raw, str) else raw
+
+
+def _merge_variant_payload(
+    variant: dict[str, Any],
+    base_payload: dict[str, Any],
+    *,
+    degraded_evals: bool,
+) -> dict[str, Any]:
+    """Merge a variant's ``run_context_overrides`` into the base payload.
+
+    Returns a NEW dict; neither *base_payload* nor *variant* is mutated. When
+    ``degraded_evals`` is set the ``_degraded_evals`` marker is applied last so
+    the group setting always wins over any override.
+    """
+    payload = dict(base_payload)
+    overrides = variant.get("run_context_overrides", {})
+    if isinstance(overrides, dict):
+        payload.update(overrides)
+    if degraded_evals:
+        payload["_degraded_evals"] = True
+    return payload
+
+
 async def run_variant_weighted(
     session: AsyncSession,
     *,
@@ -214,8 +252,7 @@ async def run_variant_weighted(
     Returns dict with run_id, variant, merged_payload, or None if quota exceeded.
     Locks the variant group row to prevent concurrent quota races.
     """
-    result = await session.execute(select(VariantGroup).where(VariantGroup.id == group.id).with_for_update())
-    locked = result.scalar_one_or_none()
+    locked = await _lock_variant_group(session, group)
     if locked is None:
         return None
     group = locked
@@ -227,18 +264,11 @@ async def run_variant_weighted(
     if variant is None:
         return None
 
-    merged_payload = dict(input_payload or {})
-    overrides = variant.get("run_context_overrides", {})
-    if isinstance(overrides, dict):
-        merged_payload.update(overrides)
+    merged_payload = _merge_variant_payload(variant, input_payload or {}, degraded_evals=group.degraded_evals)
 
-    if group.degraded_evals:
-        merged_payload["_degraded_evals"] = True
-
-    raw_sid = variant.get("snapshot_id")
-    if raw_sid is None:
+    snapshot_id = _coerce_snapshot_id(variant.get("snapshot_id"))
+    if snapshot_id is None:
         return None
-    snapshot_id = uuid.UUID(str(raw_sid)) if isinstance(raw_sid, str) else raw_sid
 
     run = await create_run(
         session,
@@ -283,8 +313,7 @@ async def run_variant_batch(
     Returns a list of ``{run_id, variant, merged_payload}`` in variant insertion
     order, or ``None`` when the group cannot fire.
     """
-    result = await session.execute(select(VariantGroup).where(VariantGroup.id == group.id).with_for_update())
-    locked = result.scalar_one_or_none()
+    locked = await _lock_variant_group(session, group)
     if locked is None:
         return None
     group = locked
@@ -301,21 +330,33 @@ async def run_variant_batch(
     if not await check_pipeline_run_quota_for_batch(session, group, batch_size):
         return None
 
-    merged_payload = dict(input_payload or {})
-    if group.degraded_evals:
-        merged_payload["_degraded_evals"] = True
+    # FAR-332 3c — one batch = one batch_id. Every run created below is stamped
+    # with the same value so the compare route can load the batch purely by it.
+    batch_id = uuid.uuid4()
 
     results: list[dict[str, Any]] = []
     for variant in variants:
-        payload = dict(merged_payload)
         overrides = variant.get("run_context_overrides", {})
-        if isinstance(overrides, dict):
-            payload.update(overrides)
+        if not isinstance(overrides, dict):
+            overrides = {}
+        payload = _merge_variant_payload(variant, input_payload or {}, degraded_evals=group.degraded_evals)
 
-        raw_sid = variant.get("snapshot_id")
-        if raw_sid is None:
+        snapshot_id = _coerce_snapshot_id(variant.get("snapshot_id"))
+        if snapshot_id is None:
             return None  # defensive — the pre-flight loop above already guarantees this
-        snapshot_id = uuid.UUID(str(raw_sid)) if isinstance(raw_sid, str) else raw_sid
+
+        # Frozen snapshot/override capture at fire time — the single source of
+        # truth for "which input this variant ran with". The compare view reads
+        # this, never the live snapshot, so later group edits cannot rewrite
+        # history. ``variant_id`` is the stable persisted id (frontend-minted
+        # on Duplicate, FAR-332 3b); it may be absent on legacy variants.
+        frozen_snapshot = {
+            "variant_id": str(variant["id"]) if variant.get("id") is not None else None,
+            "variant_name": variant.get("name"),
+            "snapshot_id": str(snapshot_id),
+            "run_context_overrides": dict(overrides) if isinstance(overrides, dict) else {},
+            "batch_id": str(batch_id),
+        }
 
         run = await create_run(
             session,
@@ -326,12 +367,16 @@ async def run_variant_batch(
             input_payload=payload,
             account_id=account_id,
             variant_group_id=group.id,
+            batch_id=batch_id,
+            variant_config_snapshot=frozen_snapshot,
         )
         results.append(
             {
                 "run_id": run.id,
+                "batch_id": batch_id,
                 "variant": variant,
                 "merged_payload": payload,
+                "frozen_snapshot": frozen_snapshot,
             }
         )
 
@@ -445,3 +490,139 @@ async def get_prompt_diffs(
                 )
 
     return diffs
+
+
+async def validate_batch_ownership(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    snapshot_ids: list[uuid.UUID],
+) -> bool:
+    """Server-side ownership validation for the batch-run path (FAR-332 3f).
+
+    Verifies the pipeline and every variant snapshot belong to the org. RLS
+    already scopes reads; this is the explicit defence-in-depth check that
+    turns a cross-org reference into a clear 403 (fail closed) instead of a
+    generic FK error at insert time.
+    """
+    pipeline = await session.execute(
+        select(Pipeline.id).where(Pipeline.id == pipeline_id, Pipeline.organisation_id == org_id)
+    )
+    if pipeline.scalar_one_or_none() is None:
+        return False
+    if not snapshot_ids:
+        return True
+    snap_result = await session.execute(
+        select(PipelineSnapshot.id).where(
+            PipelineSnapshot.id.in_(snapshot_ids),
+            PipelineSnapshot.organisation_id == org_id,
+        )
+    )
+    owned = set(snap_result.scalars())
+    return all(sid in owned for sid in snapshot_ids)
+
+
+async def has_pipeline_default_evals(session: AsyncSession, pipeline_id: uuid.UUID) -> bool:
+    """Whether the pipeline has any default eval definitions (FAR-332 3g).
+
+    A warn-not-block signal for the batch-run path: when the pipeline has no
+    default evals the frontend shows "no evals → cost/diff only". Returned as a
+    signal only — never a hard block.
+    """
+    result = await session.execute(select(EvalDefinition.id).where(EvalDefinition.pipeline_id == pipeline_id).limit(1))
+    return result.scalar_one_or_none() is not None
+
+
+async def get_batch_runs(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    batch_id: uuid.UUID,
+) -> list[Run]:
+    """Load a batch's runs purely by ``batch_id``, org-scoped (FAR-332 3d).
+
+    Never joins a live variant group — the group may be soft-deleted and the
+    batch must still be comparable. The explicit ``organisation_id`` predicate
+    is the cross-org IDOR backstop on top of RLS.
+    """
+    result = await session.execute(
+        select(Run).where(Run.organisation_id == org_id, Run.batch_id == batch_id).order_by(Run.created_at)
+    )
+    return list(result.scalars().all())
+
+
+async def get_batch_compare(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    batch_id: uuid.UUID,
+) -> list[dict[str, Any]]:
+    """Per-run compare data for a batch (FAR-332 3d).
+
+    Returns one entry per run in the batch (org-scoped, ordered by created_at),
+    each carrying the canonical RUN_STATUS, eval pass rate, cost, tokens, and
+    the frozen snapshot/override diff against the batch's base (first) run. The
+    override diff is derived from the FROZEN ``variant_config_snapshot`` captured
+    at fire time — never the live snapshot or group.
+    """
+    runs = await get_batch_runs(session, org_id=org_id, batch_id=batch_id)
+    if not runs:
+        return []
+
+    # One grouped query for eval pass rate across the whole batch (no N+1).
+    # Guardrail rows are excluded per the eval_results consumer contract.
+    run_ids = [run.id for run in runs]
+    eval_stats: dict[uuid.UUID, tuple[int, int]] = {}
+    er_result = await session.execute(
+        select(
+            EvalResult.run_id,
+            func.count(EvalResult.id),
+            func.sum(case((EvalResult.passed, 1), else_=0)),
+        )
+        .where(EvalResult.run_id.in_(run_ids), non_guardrail_eval_results_clause())
+        .group_by(EvalResult.run_id)
+    )
+    for run_id, total, passed in er_result.all():
+        eval_stats[uuid.UUID(str(run_id))] = (int(total or 0), int(passed or 0))
+
+    def _frozen(run: Run) -> dict[str, Any]:
+        snap = run.variant_config_snapshot
+        return snap if isinstance(snap, dict) else {}
+
+    def _uuid(raw: Any) -> uuid.UUID | None:
+        if raw is None:
+            return None
+        return uuid.UUID(str(raw)) if not isinstance(raw, uuid.UUID) else raw
+
+    base_overrides = _frozen(runs[0]).get("run_context_overrides", {})
+    base_overrides = base_overrides if isinstance(base_overrides, dict) else {}
+
+    entries: list[dict[str, Any]] = []
+    for run in runs:
+        frozen = _frozen(run)
+        overrides = frozen.get("run_context_overrides", {})
+        overrides = overrides if isinstance(overrides, dict) else {}
+        added = {k: v for k, v in overrides.items() if k not in base_overrides}
+        removed = {k: v for k, v in base_overrides.items() if k not in overrides}
+        changed = {k: v for k, v in overrides.items() if k in base_overrides and base_overrides[k] != v}
+        total, passed = eval_stats.get(run.id, (0, 0))
+        entries.append(
+            {
+                "run_id": run.id,
+                "run_number": run.run_number,
+                "status": run.status,
+                "variant_id": frozen.get("variant_id"),
+                "variant_name": frozen.get("variant_name") or "unknown",
+                "snapshot_id": _uuid(frozen.get("snapshot_id")),
+                "run_context_overrides": overrides,
+                "eval_pass_rate": round(passed / total, 4) if total else None,
+                "eval_count": total,
+                "total_cost_usd": run.total_cost_usd,
+                "total_tokens": run.total_tokens,
+                "created_at": run.created_at,
+                "completed_at": run.completed_at,
+                "override_diff": {"added": added, "removed": removed, "changed": changed},
+            }
+        )
+    return entries

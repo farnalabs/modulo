@@ -38,7 +38,7 @@
       </div>
 
       <!-- License Key Management -->
-      <div class="rounded-lg border bg-card p-6 shadow-sm max-w-3xl">
+      <div class="rounded-lg border bg-card p-6 shadow-sm">
         <h2 class="mb-4 text-base font-semibold">{{ $t('views.AdminFeatureFlagsView.license_key') }}</h2>
 
         <div v-if="licenseInfo.has_license" class="mb-6 rounded-lg bg-muted/50 p-4">
