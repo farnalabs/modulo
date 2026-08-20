@@ -1,8 +1,5 @@
 <template>
-  <div
-    class="relative flex h-full w-full items-stretch"
-    data-testid="sparkline"
-  >
+  <div class="relative flex items-stretch" data-testid="sparkline">
     <!-- Y-axis labels: rendered as plain HTML, NOT inside the svg below. The
          svg uses preserveAspectRatio="none" so its polyline/area can fill an
          arbitrary card box, but that means everything inside the svg's
