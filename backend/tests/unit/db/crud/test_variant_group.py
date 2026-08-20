@@ -1256,6 +1256,41 @@ class TestMergeVariantPayloadStripsRunOverrides:
         # The caller's original dict is untouched (we copy before popping).
         assert payload["_run_overrides"] == {"prompt_templates": {"abc": "injected"}}
 
+    def test_model_override_is_a_system_control_key(self) -> None:
+        """A ``model`` override (opencode model ID) flows into ``_run_overrides``.
+
+        FAR-343: ``model`` is a system-reserved control key for ``sandbox_agent``
+        nodes — the opencode CLI model ID is rendered into the ``agent_command``
+        template via ``{{ run_context._run_overrides.model }}``. Like the other
+        control keys it is returned SEPARATELY (stored in the frozen snapshot's
+        ``_run_overrides``, seeded into run_context by the executor), never
+        written back into the payload.
+        """
+        merged, controls = _merge_variant_payload(
+            self._variant(model="opencode-go/hy3"),
+            {"task": "classify"},
+            degraded_evals=False,
+        )
+        assert controls == {"model": "opencode-go/hy3"}
+        # The namespace is NOT written back into the payload — it lives in the
+        # frozen snapshot so the sandbox_agent command can read it per-run.
+        assert "_run_overrides" not in merged
+
+    def test_model_override_kept_out_of_data_payload(self) -> None:
+        """A ``model`` override is NOT merged into the payload as a data field.
+
+        ``model`` is a control key, so it must be returned in ``controls`` (the
+        frozen ``_run_overrides``) and excluded from the data overrides that get
+        written back into the payload.
+        """
+        merged, controls = _merge_variant_payload(
+            self._variant(model="opencode-go/hy3"),
+            {"task": "classify"},
+            degraded_evals=False,
+        )
+        assert controls == {"model": "opencode-go/hy3"}
+        assert "model" not in merged
+
 
 @pytest.mark.asyncio
 class TestResolvePromptTemplateOverride:

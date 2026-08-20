@@ -9,7 +9,7 @@ its own model backend.
 
 import uuid
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -189,3 +189,107 @@ async def test_normal_run_caller_supplied_run_overrides_is_data_not_override() -
     # reaches the override boundary.
     assert hub.prompts == ["Summarise the input."]
     assert result["artifacts"][0]["status"] == "completed"
+
+
+# ---------------------------------------------------------------------------
+# FAR-343: sandbox_agent per-run model variation via ``_run_overrides["model"]``
+# ---------------------------------------------------------------------------
+
+
+async def _run_sandbox_with_model_override(
+    *,
+    agent_command: str,
+    override_model: str | None,
+) -> str:
+    """Run a sandbox_agent node with the given agent_command and model override.
+
+    Returns the wrapped command actually dispatched to the E2B sandbox
+    (``sandbox.commands.run.call_args.args[0]``).
+    """
+    from modulo.core.pipeline_engine.node_runner import make_sandbox_agent_fn
+
+    node_def = {
+        "id": "sbx-1",
+        "agent_prompt": "Do the thing",
+        "agent_command": agent_command,
+    }
+    fn = make_sandbox_agent_fn(node_def)
+
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = "agent stdout"
+    cmd_result.stderr = ""
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(return_value=cmd_result)
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(return_value='{"summary": "done"}')
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=0))
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+
+    state: dict[str, Any] = {
+        "run_context": {"input": {"task": "x"}},
+        "_run_id": "run-1",
+        "_pipeline_id": "pipe-1",
+        "_org_id": "org-1",
+    }
+    if override_model is not None:
+        state["run_context"]["_run_overrides"] = {"model": override_model}
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(state)
+
+    assert result["output"]["status"] == "completed"
+    return sandbox.commands.run.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_sandbox_agent_command_renders_run_overrides_model() -> None:
+    """A sandbox_agent command referencing ``_run_overrides.model`` varies per-run.
+
+    FAR-343: the ``agent_command`` is Jinja-rendered with ``run_context`` in
+    scope, and the executor seeds the frozen variant's ``model`` override into
+    the TOP-LEVEL ``run_context["_run_overrides"]``. A pipeline author writes
+    ``--model {{ run_context._run_overrides.model }}`` in the command to vary
+    the opencode model per run.
+    """
+    wrapped = await _run_sandbox_with_model_override(
+        agent_command="opencode run --model {{ run_context._run_overrides.model }} --auto < /home/user/prompt.md",
+        override_model="opencode-go/hy3",
+    )
+    assert "opencode run --model opencode-go/hy3 --auto" in wrapped
+
+
+@pytest.mark.asyncio
+async def test_sandbox_agent_command_undefined_model_falls_back_verbatim() -> None:
+    """Without a ``model`` override the ``{{ }}`` reference is undefined.
+
+    The render path treats an undefined ``_run_overrides.model`` as a skipped
+    node (UndefinedError) rather than injecting a broken model — a pipeline
+    that references the override MUST supply it, otherwise the run is safely
+    skipped rather than dispatched with a mangled command.
+    """
+    from modulo.core.pipeline_engine.node_runner import make_sandbox_agent_fn
+
+    node_def = {
+        "id": "sbx-2",
+        "agent_prompt": "Do the thing",
+        "agent_command": "opencode run --model {{ run_context._run_overrides.model }} --auto < /home/user/prompt.md",
+    }
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = MagicMock()
+
+    state = {
+        "run_context": {"input": {"task": "x"}},
+        "_run_id": "run-1",
+        "_pipeline_id": "pipe-1",
+        "_org_id": "org-1",
+    }
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(state)
+
+    assert result["status"] == "skipped"
+    assert "agent_command template references missing input fields" in result["summary"]
