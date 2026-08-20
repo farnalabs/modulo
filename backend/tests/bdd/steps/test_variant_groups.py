@@ -342,6 +342,8 @@ def check_variant_distribution(variant: str, expected: int, ctx: dict[str, Any])
 
 @then("each batch run merges its variant's run_context_overrides into the input payload")
 def check_batch_run_overrides_merged(ctx: dict[str, Any]) -> None:
+    from modulo.db.crud.variant_group import _CONTROL_OVERRIDE_KEYS
+
     results = ctx.get("run_results")
     assert results is not None, "Expected batch run results"
     assert len(results) >= 1
@@ -349,10 +351,10 @@ def check_batch_run_overrides_merged(ctx: dict[str, Any]) -> None:
         variant = entry["variant"]
         overrides = variant.get("run_context_overrides", {})
         if isinstance(overrides, dict):
+            merged = entry["merged_payload"]
             for key, value in overrides.items():
-                assert entry["merged_payload"].get(key) == value, (
-                    f"Run for variant {variant['name']!r} missing override {key!r}={value!r}"
-                )
+                actual = merged.get("_run_overrides", {}).get(key) if key in _CONTROL_OVERRIDE_KEYS else merged.get(key)
+                assert actual == value, f"Run for variant {variant['name']!r} missing override {key!r}={value!r}"
 
 
 @then("runs are created in variant insertion order")
