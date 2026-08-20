@@ -149,7 +149,25 @@ describe('DashboardView', () => {
     expect(wrapper.text()).not.toContain('Team Breakdown')
   })
 
-  it('renders run activity trend section', async () => {
+  it('hides the run activity trend section when the dashboard_charts flag is off', async () => {
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    // dashboard_charts is off by default (MVP) — the trend section must not render.
+    expect(wrapper.text()).not.toContain('Run Activity')
+  })
+
+  it('renders the run activity trend section when the dashboard_charts flag is on', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/admin/feature-flags') {
+        return Promise.resolve({
+          data: { ...mockFlagData, flags: [{ name: 'dashboard_charts', currently_active: true }] },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/dashboard/summary') return Promise.resolve({ data: mockSummaryData, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
     const wrapper = mount(DashboardView)
     await flushPromises()
     expect(wrapper.text()).toContain('Run Activity')
@@ -391,7 +409,9 @@ describe('DashboardView', () => {
     const wrapper = mount(DashboardView)
     await flushPromises()
     expect(wrapper.text()).toContain('No runs yet')
-    expect(wrapper.text()).toContain('No data yet')
+    // The run-activity trend section (whose empty state was 'No data yet') is
+    // hidden when dashboard_charts is off; the eval card empty state remains.
+    expect(wrapper.text()).toContain('No eval data yet')
   })
 
   it('shows the eval trend indicator as declining when eval pass rates dip', async () => {
@@ -471,18 +491,15 @@ describe('DashboardView', () => {
     const wrapper = mount(DashboardView)
     await flushPromises()
     const sparklines = wrapper.findAllComponents({ name: 'SparklineChart' })
-    // 2 card sparklines (eval pass rate, token spend) + 3 run-activity sparklines.
-    expect(sparklines.length).toBe(5)
+    // dashboard_charts is off by default (MVP): only the 2 always-on card
+    // sparklines (eval pass rate, token spend) render. The 3 run-activity
+    // sparklines are gated behind the flag.
+    expect(sparklines.length).toBe(2)
     // Card sparklines carry units.
     expect(sparklines[0].props('unit')).toBe('%')
     expect(sparklines[1].props('unit')).toBe('$')
     // Card sparkline labels come from summary.trend dates.
     expect(sparklines[0].props('labels')).toEqual(mockSummaryData.trend.map(d => d.date))
-    // Run-activity sparklines carry trend dates as labels and per-series units.
-    expect(sparklines[2].props('unit')).toBe('Runs')
-    expect(sparklines[2].props('labels')).toEqual(['2026-06-23', '2026-06-24', '2026-06-25'])
-    expect(sparklines[3].props('unit')).toBe('%')
-    expect(sparklines[4].props('unit')).toBe('$')
   })
 
   it('renders the no-data placeholder inside sparklines when the trend is empty', async () => {
