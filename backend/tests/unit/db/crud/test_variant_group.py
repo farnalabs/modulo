@@ -554,10 +554,12 @@ class TestRunVariantBatch:
         ):
             second = await run_variant_batch(session, org_id=org_id, group=group)
 
-        assert first is not None and second is not None
+        assert first is not None
+        assert second is not None
         first_batch = {r["batch_id"] for r in first}
         second_batch = {r["batch_id"] for r in second}
-        assert len(first_batch) == 1 and len(second_batch) == 1
+        assert len(first_batch) == 1
+        assert len(second_batch) == 1
         assert first_batch != second_batch
 
     async def test_freezes_snapshot_and_overrides_onto_each_run(self) -> None:
