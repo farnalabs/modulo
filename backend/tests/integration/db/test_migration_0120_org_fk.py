@@ -70,7 +70,7 @@ async def _count_fk(engine, table: str) -> list[str]:
 
 async def _fk_delete_rule(engine, table: str, constraint: str) -> str:
     async with engine.connect() as conn:
-        return (
+        row = (
             await conn.execute(
                 text(
                     "SELECT confdeltype::text FROM pg_constraint "
@@ -80,6 +80,10 @@ async def _fk_delete_rule(engine, table: str, constraint: str) -> str:
                 {"c": constraint, "t": table},
             )
         ).scalar()
+    # pg_constraint.confdeltype is a "char" column; asyncpg returns it as bytes.
+    if isinstance(row, bytes):
+        row = row.decode()
+    return row
 
 
 async def test_0120_org_fk_hardening_on_drifted_schema(migrated_db_url, monkeypatch) -> None:
