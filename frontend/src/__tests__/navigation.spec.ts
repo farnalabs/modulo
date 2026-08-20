@@ -153,10 +153,10 @@ describe('navigation.ts', () => {
       icon: 'Star',
       label: 'Enterprise',
       labelKey: 'item_enterprise',
-      requiredTier: 'enterprise',
+      requiredTier: 'team',
     }
-    expect(canSeeItem(item, { role: 'admin' }, { isAtMinimumTier: (t) => t === 'enterprise' })).toBe(true)
-    expect(canSeeItem(item, { role: 'admin' }, { isAtMinimumTier: (t) => t !== 'enterprise' })).toBe(false)
+    expect(canSeeItem(item, { role: 'admin' }, { isAtMinimumTier: (t) => t === 'team' })).toBe(true)
+    expect(canSeeItem(item, { role: 'admin' }, { isAtMinimumTier: (t) => t !== 'team' })).toBe(false)
   })
 
   it('canSeeItem checks both role and tier', () => {
@@ -166,11 +166,11 @@ describe('navigation.ts', () => {
       label: 'Super Admin',
       labelKey: 'item_super_admin',
       requiredRoles: ['admin'],
-      requiredTier: 'enterprise',
+      requiredTier: 'team',
     }
-    expect(canSeeItem(item, { role: 'admin' }, { isAtMinimumTier: (t) => t === 'enterprise' })).toBe(true)
-    expect(canSeeItem(item, { role: 'viewer' }, { isAtMinimumTier: (t) => t === 'enterprise' })).toBe(false)
-    expect(canSeeItem(item, { role: 'admin' }, { isAtMinimumTier: (t) => t !== 'enterprise' })).toBe(false)
+    expect(canSeeItem(item, { role: 'admin' }, { isAtMinimumTier: (t) => t === 'team' })).toBe(true)
+    expect(canSeeItem(item, { role: 'viewer' }, { isAtMinimumTier: (t) => t === 'team' })).toBe(false)
+    expect(canSeeItem(item, { role: 'admin' }, { isAtMinimumTier: (t) => t !== 'team' })).toBe(false)
   })
 
   it('exports canSeeItem with correct type signature', () => {
