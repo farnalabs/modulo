@@ -509,7 +509,18 @@ export default {
       "save": "Save",
       "delete_confirm": "Delete \"{name}\"?",
       "delete": "Delete",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "pipeline_references": "Pipeline References",
+      "no_pipeline_refs": "No pipeline graph references found. Snapshot pins and fallback chains are checked during deletion protection.",
+      "pipeline_name": "Pipeline Name",
+      "agent_name": "Agent Name",
+      "reference_type": "Reference Type",
+      "ref_type_direct": "Direct",
+      "ref_type_agent": "Via Agent",
+      "refs_page_info": "Page {page} of {total}",
+      "previous": "Previous",
+      "next": "Next",
+      "retry": "Retry"
     },
     "AdminAuditView": {
       "target_type": "Target Type",
