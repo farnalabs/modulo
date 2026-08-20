@@ -334,10 +334,6 @@ async def run_variant_batch(
     # with the same value so the compare route can load the batch purely by it.
     batch_id = uuid.uuid4()
 
-    # FAR-332 3c — one batch = one batch_id. Every run created below is stamped
-    # with the same value so the compare route can load the batch purely by it.
-    batch_id = uuid.uuid4()
-
     results: list[dict[str, Any]] = []
     for variant in variants:
         overrides = variant.get("run_context_overrides", {})
@@ -348,19 +344,6 @@ async def run_variant_batch(
         snapshot_id = _coerce_snapshot_id(variant.get("snapshot_id"))
         if snapshot_id is None:
             return None  # defensive — the pre-flight loop above already guarantees this
-
-        # Frozen snapshot/override capture at fire time — the single source of
-        # truth for "which input this variant ran with". The compare view reads
-        # this, never the live snapshot, so later group edits cannot rewrite
-        # history. ``variant_id`` is the stable persisted id (frontend-minted
-        # on Duplicate, FAR-332 3b); it may be absent on legacy variants.
-        frozen_snapshot = {
-            "variant_id": str(variant["id"]) if variant.get("id") is not None else None,
-            "variant_name": variant.get("name"),
-            "snapshot_id": str(snapshot_id),
-            "run_context_overrides": dict(overrides) if isinstance(overrides, dict) else {},
-            "batch_id": str(batch_id),
-        }
 
         # Frozen snapshot/override capture at fire time — the single source of
         # truth for "which input this variant ran with". The compare view reads
