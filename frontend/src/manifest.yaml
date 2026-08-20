@@ -203,6 +203,21 @@ routes:
         type: page
         <<: *community
         deprecated: false
+        exact: true
+
+    /variants/compare/:batchId:
+        name: variant-compare-detail
+        breadcrumb: Variant Batch Compare
+        parent: /variants/compare
+        product_map:
+        sidebar_group: monitor
+        sidebar_order: 5
+        type: detail_page
+        pattern: /variants/compare/:batchId
+        dynamic_params:
+        -   batchId
+        <<: *community
+        deprecated: false
 
     /variants/ab-test:
         name: ab-test-models
