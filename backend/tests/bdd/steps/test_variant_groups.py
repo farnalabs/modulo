@@ -500,13 +500,33 @@ def batch_comparison_computed(ctx: dict[str, Any]) -> None:
 
     from modulo.db.crud.variant_group import get_batch_compare
 
+    def _as_run(d: dict[str, Any]) -> Any:
+        # get_batch_compare reads ORM-shaped Run attributes off each row; the
+        # step fixture stores plain dicts, so surface a SimpleNamespace carrying
+        # exactly the attributes the compare reads (eval_stats is empty, so the
+        # id is only used as a key/label).
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            id=d["run_id"],
+            run_number=d["run_number"],
+            status=d["status"],
+            total_cost_usd=d["total_cost_usd"],
+            total_tokens=d["total_tokens"],
+            variant_config_snapshot=d["variant_config_snapshot"],
+            created_at=None,
+            completed_at=None,
+        )
+
+    orm_runs = [_as_run(r) for r in ctx["batch_runs"]]
+
     async def _run():
         session = AsyncMock()
 
         def _rows(stmt, *args: Any, **kwargs: Any) -> Any:
             # get_batch_runs select(Run) → .scalars().all()
             scalar_mock = MagicMock()
-            scalar_mock.scalars.return_value = ctx["batch_runs"]
+            scalar_mock.scalars.return_value.all.return_value = orm_runs
             # eval-results group-by → .all()
             eval_mock = MagicMock()
             eval_mock.all.return_value = []
