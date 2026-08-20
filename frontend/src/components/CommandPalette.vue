@@ -54,11 +54,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
-import { getNavGroups, getVisibleNavGroups, isNavItemVisible, type NavVisibilityContext } from '../config/navigation'
+import { getNavGroups, getVisibleNavGroups } from '../config/navigation'
 import SvgIcon from './SvgIcon.vue'
-import { usePlanStore } from '../stores/planStore'
-import { getAccessToken } from '../lib/api/client'
-import { decodeJwtPayload } from '../lib/jwt'
+import { useNavVisibilityContext } from '../composables/useNavVisibilityContext'
 
 interface SearchItem {
   label: string
@@ -68,20 +66,7 @@ interface SearchItem {
 }
 
 const router = useRouter()
-const planStore = usePlanStore()
-
-const jwtPayload = computed<{ is_system_admin?: boolean; org_role?: string | null; permissions?: unknown } | null>(() =>
-  decodeJwtPayload(getAccessToken()) as { is_system_admin?: boolean; org_role?: string | null; permissions?: unknown } | null,
-)
-
-const navContext = computed<NavVisibilityContext>(() => ({
-  isSystemAdmin: jwtPayload.value?.is_system_admin === true,
-  userRole: jwtPayload.value?.org_role || null,
-  userPermissions: Array.isArray(jwtPayload.value?.permissions) ? (jwtPayload.value!.permissions as string[]) : [],
-  devMode: planStore.devMode,
-  tierInfoLoaded: planStore.tierRanks ? Object.keys(planStore.tierRanks).length > 0 : false,
-  isAtMinimumTier: (tier: string) => planStore.isAtMinimumTier(tier),
-}))
+const navContext = useNavVisibilityContext()
 const isOpen = ref(false)
 const query = ref('')
 const selectedIndex = ref(0)
@@ -91,8 +76,9 @@ const searchItems = computed<SearchItem[]>(() => {
   const seen = new Set<string>()
   const items: SearchItem[] = []
   const ctx = navContext.value
-  const groups = getVisibleNavGroups(ctx)
-  for (const group of groups) {
+  const visibleGroups = getVisibleNavGroups(ctx)
+  const visiblePaths = new Set(visibleGroups.flatMap((g) => g.items.map((i) => i.to)))
+  for (const group of visibleGroups) {
     for (const navItem of group.items) {
       const path = navItem.to
       if (seen.has(path)) continue
@@ -105,10 +91,12 @@ const searchItems = computed<SearchItem[]>(() => {
       })
     }
   }
-  // Curated parent routes that are not sidebar items in the manifest
-  // (e.g. /settings, /admin/system). Gate them identically to the navbar:
-  // look up the item's manifest metadata and apply the same visibility rules.
-  // Parent routes with no manifest entry have no gating and are always shown.
+  // Curated parent/landing routes that are not sidebar items in the manifest
+  // (e.g. /settings, /admin/system). Gate them with the SAME navbar rules:
+  // if a path resolves to a manifest item it must appear in the visible set
+  // (group-level systemAdminOnly + item-level gates already applied),
+  // otherwise it stays hidden. Parent routes with no manifest entry are
+  // landing pages and are always shown.
   const extras: SearchItem[] = [
     { label: 'Dashboard', path: '/', icon: 'LayoutDashboard', section: 'BUILD' },
     { label: 'Pipelines', path: '/pipelines', icon: 'GitFork', section: 'BUILD' },
@@ -122,12 +110,11 @@ const searchItems = computed<SearchItem[]>(() => {
     { label: 'System', path: '/admin/system', icon: 'Settings', section: 'ADMIN' },
     { label: 'Cost Management', path: '/admin/costs', icon: 'DollarSign', section: 'ADMIN' },
   ]
-  const rawGroups = getNavGroups()
-  const rawItems = rawGroups.flatMap((g) => g.items)
+  const rawItems = getNavGroups().flatMap((g) => g.items)
   for (const extra of extras) {
     if (seen.has(extra.path)) continue
     const navItem = rawItems.find((i) => i.to === extra.path)
-    if (navItem && !isNavItemVisible(navItem, ctx)) continue
+    if (navItem && !visiblePaths.has(extra.path)) continue
     seen.add(extra.path)
     items.push(extra)
   }
