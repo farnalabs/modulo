@@ -89,7 +89,7 @@ describe('ViewToggle', () => {
     expect(badge.text()).toContain('Active')
   })
 
-  it('shows disabled overlay when feature is disabled via FeatureGate', async () => {
+  it('does not render the toggle when the saved_views feature is disabled', async () => {
     const store = usePlanStore()
     store.$patch({ features: { saved_views: false } })
 
@@ -98,8 +98,7 @@ describe('ViewToggle', () => {
     await nextTick()
 
     const gate = wrapper.find('[data-testid="view-toggle-gate"]')
-    expect(gate.exists()).toBe(true)
-    expect(gate.find('[data-testid="feature-gate-disabled"]').exists()).toBe(true)
+    expect(gate.exists()).toBe(false)
   })
 
   it('does not fetch views from API when feature is disabled', async () => {
