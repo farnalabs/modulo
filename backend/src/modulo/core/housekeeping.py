@@ -4,7 +4,7 @@ import contextlib
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +17,7 @@ from modulo.db.models.environment_profile import EnvironmentProfile
 from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.org_membership import OrgMembership
+from modulo.db.models.organisation import Organisation
 from modulo.db.models.parameter_schema import ParameterSchema
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -31,6 +32,39 @@ from modulo.db.models.trigger import Trigger
 from modulo.db.models.webhook import WebhookDedupHash
 
 _log = logging.getLogger(__name__)
+
+# Registry of every ORM model that carries an ``organisation_id`` column
+# (the tenant-scoped tables). Populated lazily from the mapper registry so it
+# stays in sync with the model layer without a hand-maintained list.
+_TENANT_MODELS: list[type] | None = None
+
+
+def _collect_tenant_models() -> list[type]:
+    """Return all mapped classes that own an ``organisation_id`` column.
+
+    Excludes the ``organisations`` table itself (which is the FK target).
+    """
+    import modulo.db.models  # noqa: F401  (ensures all models are registered)
+    from modulo.db.models.base import Base
+
+    models: list[type] = []
+    for mapper in Base.registry.mappers:
+        cls = mapper.class_
+        table = getattr(cls, "__table__", None)
+        if table is None or table.name == "organisations":
+            continue
+        if "organisation_id" not in table.columns:
+            continue
+        models.append(cls)
+    return models
+
+
+def _tenant_models() -> list[type]:
+    global _TENANT_MODELS
+    if _TENANT_MODELS is None:
+        _TENANT_MODELS = _collect_tenant_models()
+    return _TENANT_MODELS
+
 
 ENTITY_MODEL_MAP: dict[str, type] = {
     "secret": Secret,
@@ -66,6 +100,7 @@ _CATEGORY_LABELS: dict[str, str] = {
     "unused_parameter_schemas": "Unused Parameter Schemas",
     "unused_schemas": "Unused Schemas",
     "empty_lifecycle_maps": "Empty Lifecycle Maps",
+    "invalid_org_fk": "Invalid Organisation FK",
 }
 
 _CATEGORY_TO_ENTITY: dict[str, str] = {
@@ -87,6 +122,12 @@ _CATEGORY_TO_ENTITY: dict[str, str] = {
     "empty_lifecycle_maps": "lifecycle_map",
 }
 
+# Categories that are detection-only (surfaced for triage, never auto-deleted).
+# Submitting a candidate from one of these to the cleanup endpoint returns a
+# clear triage message instead of a misleading "Unknown entity type" error.
+NON_DELETABLE_ENTITY_TYPES: frozenset[str] = frozenset({"invalid_org_fk"})
+
+
 _CATEGORY_DESCRIPTIONS: dict[str, str] = {
     "orphan_secrets": "Secrets whose key is not referenced by any connector config or agent connector_type_refs",
     "unbound_connectors": "Connector instances not bound to any pipeline snapshot",
@@ -104,6 +145,10 @@ _CATEGORY_DESCRIPTIONS: dict[str, str] = {
     "unused_parameter_schemas": "Parameter schemas not assigned to any agent",
     "unused_schemas": "Schemas not referenced by any agent or pipeline snapshot",
     "empty_lifecycle_maps": "Lifecycle maps with empty content (no stages configured)",
+    "invalid_org_fk": (
+        "Tenant-scoped rows whose organisation_id references a non-existent "
+        "organisation (orphaned data) — surfaced for triage, not auto-deleted."
+    ),
 }
 
 
@@ -384,20 +429,18 @@ async def _scan_expired_webhook_dedups(session: AsyncSession, org_id: uuid.UUID)
 
 async def _scan_duplicate_triggers(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
     """Find pipelines with multiple triggers of the same type (e.g. two cron triggers)."""
-    from sqlalchemy import func as sa_func
-
     dup_subq = (
         select(
             Trigger.pipeline_id,
             Trigger.trigger_type,
-            sa_func.count(Trigger.id).label("cnt"),
+            func.count(Trigger.id).label("cnt"),
         )
         .where(
             Trigger.organisation_id == org_id,
             Trigger.deleted_at.is_(None),
         )
         .group_by(Trigger.pipeline_id, Trigger.trigger_type)
-        .having(sa_func.count(Trigger.id) > 1)
+        .having(func.count(Trigger.id) > 1)
         .subquery()
     )
 
@@ -611,12 +654,25 @@ async def _scan_unused_parameter_schemas(session: AsyncSession, org_id: uuid.UUI
 async def _scan_unused_schemas(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
     """Schemas not referenced by any agent (input/output) or snapshot schema pin. Excludes system schemas."""
     # IDs used by agents (input or output schema)
-    agent_input_ids = select(Agent.input_schema_id).where(Agent.organisation_id == org_id).distinct().subquery()
-    agent_output_ids = select(Agent.output_schema_id).where(Agent.organisation_id == org_id).distinct().subquery()
+    agent_input_ids = (
+        select(Agent.input_schema_id)
+        .where(Agent.organisation_id == org_id, Agent.input_schema_id.is_not(None))
+        .distinct()
+        .subquery()
+    )
+    agent_output_ids = (
+        select(Agent.output_schema_id)
+        .where(Agent.organisation_id == org_id, Agent.output_schema_id.is_not(None))
+        .distinct()
+        .subquery()
+    )
 
     # IDs used by snapshot schema pins
     pin_schema_ids = (
-        select(SnapshotSchemaPin.schema_id).where(SnapshotSchemaPin.organisation_id == org_id).distinct().subquery()
+        select(SnapshotSchemaPin.schema_id)
+        .where(SnapshotSchemaPin.organisation_id == org_id, SnapshotSchemaPin.schema_id.is_not(None))
+        .distinct()
+        .subquery()
     )
 
     schemas = (
@@ -671,6 +727,59 @@ async def _scan_empty_lifecycle_maps(session: AsyncSession, org_id: uuid.UUID) -
     ]
 
 
+async def _scan_invalid_org_fk(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
+    """Detect tenant-scoped rows whose ``organisation_id`` points to a missing org.
+
+    This is the detection counterpart to migration ``0120_org_fk_hardening``. That
+    migration adds DB-level FK constraints (where data is already clean) to prevent
+    NEW orphaned tenant rows; this scan reports any that already exist so they can
+    be triaged. It is a **read-only, detection-only** category — floated rows are
+    surfaced for human review, never auto-deleted, because reparenting/removing
+    orphaned tenant data is a destructive, decision-gated action.
+
+    Because housekeeping runs scoped to ``org_id`` (under RLS), the practical
+    signal is: if ``organisation_id`` no longer exists in ``organisations``, every
+    tenant-scoped row still carrying that value is orphaned and is floated here.
+    """
+    org_exists = (
+        await session.execute(select(Organisation.id).where(Organisation.id == org_id))
+    ).scalar_one_or_none() is not None
+
+    if org_exists:
+        # The org is valid, so no row within this scope can reference a missing org.
+        return []
+
+    candidates: list[Candidate] = []
+    for cls in _tenant_models():
+        model_cls = cast(Any, cls)
+        table = model_cls.__table__
+        if "organisation_id" not in table.c:
+            continue
+        org_col = table.c.organisation_id
+        # Some tenant-scoped tables have a primary key that is NOT a surrogate
+        # ``id`` (e.g. OAuthAuthorizationCode PK ``code``, OAuthTokenFamily PK
+        # ``family_id``). Derive the candidate id from the real primary key so we
+        # never assume ``r.id`` exists and silently drop the whole category when
+        # an orphaned row is found in those tables.
+        pk_cols = list(table.primary_key.columns)
+        if not pk_cols:
+            continue
+        stmt = select(model_cls).where(org_col == org_id).where(org_col.is_not(None))
+        rows = (await session.execute(stmt)).scalars().all()
+        for r in rows:
+            pk_values = [str(getattr(r, pk.name)) for pk in pk_cols]
+            pk_str = "/".join(pk_values)
+            candidates.append(
+                Candidate(
+                    id=pk_str,
+                    name=f"{table.name}#{pk_str[:8]}",
+                    detail=f"Orphaned tenant row: organisation_id {org_id} no longer exists",
+                    entity_type="invalid_org_fk",
+                )
+            )
+    return candidates
+
+
 _SCANNERS: list[tuple[str, Any]] = [
     ("orphan_secrets", _scan_orphan_secrets),
     ("unbound_connectors", _scan_unbound_connectors),
@@ -688,6 +797,7 @@ _SCANNERS: list[tuple[str, Any]] = [
     ("unused_parameter_schemas", _scan_unused_parameter_schemas),
     ("unused_schemas", _scan_unused_schemas),
     ("empty_lifecycle_maps", _scan_empty_lifecycle_maps),
+    ("invalid_org_fk", _scan_invalid_org_fk),
 ]
 
 
@@ -696,9 +806,10 @@ async def scan_all(session: AsyncSession, org_id: uuid.UUID) -> list[CategoryRes
     for category, scanner in _SCANNERS:
         try:
             candidates = await scanner(session, org_id)
-            entity_type = _CATEGORY_TO_ENTITY[category]
-            for c in candidates:
-                c.entity_type = entity_type
+            entity_type = _CATEGORY_TO_ENTITY.get(category)
+            if entity_type:
+                for c in candidates:
+                    c.entity_type = entity_type
             results.append(CategoryResult(category=category, candidates=candidates))
         except Exception:
             _log.exception("Housekeeping scanner '%s' failed", category)

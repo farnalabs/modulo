@@ -5240,8 +5240,13 @@ async def _delete_housekeeping_groups(
     errors: list[dict[str, str]],
 ) -> int:
     """Delete all grouped housekeeping items. Returns the total deleted count."""
+    from modulo.core.housekeeping import NON_DELETABLE_ENTITY_TYPES
+
     deleted_count = 0
     for entity_type, ids in grouped.items():
+        if entity_type in NON_DELETABLE_ENTITY_TYPES:
+            errors.append({"entity_type": entity_type, "error": "Surfaced for triage only — not auto-deleted."})
+            continue
         model_cls = hk_entity_map.get(entity_type)
         if model_cls is None:
             errors.append({"entity_type": entity_type, "error": f"Unknown entity type: {entity_type}"})

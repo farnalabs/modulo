@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
-from modulo.core.housekeeping import ENTITY_MODEL_MAP, scan_all
+from modulo.core.housekeeping import ENTITY_MODEL_MAP, NON_DELETABLE_ENTITY_TYPES, scan_all
 from modulo.db.rls import set_rls_org
 
 _log = logging.getLogger(__name__)
@@ -125,6 +125,14 @@ async def perform_cleanup(
             await set_rls_org(session, principal.organisation_id)
 
             for entity_type, ids in grouped.items():
+                if entity_type in NON_DELETABLE_ENTITY_TYPES:
+                    errors.append(
+                        {
+                            "entity_type": entity_type,
+                            "error": "Surfaced for triage only — not auto-deleted.",
+                        }
+                    )
+                    continue
                 model_cls = ENTITY_MODEL_MAP.get(entity_type)
                 if model_cls is None:
                     errors.append({"entity_type": entity_type, "error": f"Unknown entity type: {entity_type}"})

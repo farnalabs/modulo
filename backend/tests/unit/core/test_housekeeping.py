@@ -1,10 +1,14 @@
 """Unit tests for the housekeeping scan service (modulo.core.housekeeping)."""
 
 import uuid
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy import Column, String, Uuid
+from sqlalchemy.orm import declarative_base
 
+from modulo.core import housekeeping as hk
 from modulo.core.housekeeping import (
     _CATEGORY_TO_ENTITY,
     _SCANNERS,
@@ -13,6 +17,22 @@ from modulo.core.housekeeping import (
     CategoryResult,
     scan_all,
 )
+
+_FakeBase = declarative_base()
+
+
+class _FakeTenantModel(_FakeBase):
+    __tablename__ = "pipelines"
+    id = Column(Uuid(), primary_key=True)
+    organisation_id = Column(Uuid())
+
+
+class _FakeNonIdPkTenantModel(_FakeBase):
+    """Tenant-scoped model whose PK is NOT ``id`` (mirrors OAuthAuthorizationCode)."""
+
+    __tablename__ = "oauth_authorization_codes"
+    code = Column(String(64), primary_key=True)
+    organisation_id = Column(Uuid())
 
 
 class TestCandidate:
@@ -106,16 +126,91 @@ class TestScanAll:
         assert not results[0].candidates
 
 
+class TestScanInvalidOrgFk:
+    @pytest.mark.asyncio
+    async def test_missing_org_floats_orphaned_rows(self) -> None:
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+        fake_rows = [SimpleNamespace(id=uuid.uuid4()), SimpleNamespace(id=uuid.uuid4())]
+
+        def fake_execute(stmt: object, *args: object, **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            lowered = str(stmt).lower()
+            if "organisations" in lowered and "where" in lowered:
+                # First call: organisation existence check -> missing.
+                result.scalar_one_or_none.return_value = None
+            else:
+                result.scalars.return_value.all.return_value = fake_rows
+            return result
+
+        session.execute.side_effect = fake_execute
+        with patch.object(hk, "_tenant_models", return_value=[_FakeTenantModel]):
+            candidates = await hk._scan_invalid_org_fk(session, org_id)
+
+        assert len(candidates) == 2
+        assert all(c.entity_type == "invalid_org_fk" for c in candidates)
+        assert all(str(org_id) in c.detail for c in candidates)
+
+    @pytest.mark.asyncio
+    async def test_valid_org_returns_no_candidates(self) -> None:
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+
+        def fake_execute(stmt: object, *args: object, **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.scalar_one_or_none.return_value = org_id  # org exists
+            return result
+
+        session.execute.side_effect = fake_execute
+        candidates = await hk._scan_invalid_org_fk(session, org_id)
+        assert candidates == []
+
+    @pytest.mark.asyncio
+    async def test_missing_org_floats_orphaned_rows_for_non_id_pk_model(self) -> None:
+        """Regression test for the AttributeError raised when a tenant-scoped
+        model's PK is not ``id`` (e.g. OAuthAuthorizationCode PK ``code``)."""
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+        orphan_code = "abc123def456"
+        fake_rows = [SimpleNamespace(code=orphan_code)]
+
+        def fake_execute(stmt: object, *args: object, **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            lowered = str(stmt).lower()
+            if "organisations" in lowered and "where" in lowered:
+                result.scalar_one_or_none.return_value = None  # org missing
+            else:
+                result.scalars.return_value.all.return_value = fake_rows
+            return result
+
+        session.execute.side_effect = fake_execute
+        with patch.object(hk, "_tenant_models", return_value=[_FakeNonIdPkTenantModel]):
+            candidates = await hk._scan_invalid_org_fk(session, org_id)
+
+        assert len(candidates) == 1
+        assert candidates[0].entity_type == "invalid_org_fk"
+        # The candidate id must be derived from the real PK, not a non-existent ``r.id``.
+        assert candidates[0].id == orphan_code
+        assert candidates[0].name.startswith("oauth_authorization_codes#")
+
+    def test_invalid_org_fk_is_registered_and_metadata_present(self) -> None:
+        assert ("invalid_org_fk", hk._scan_invalid_org_fk) in hk._SCANNERS
+        assert hk._CATEGORY_LABELS["invalid_org_fk"] == "Invalid Organisation FK"
+        assert "orphaned" in hk._CATEGORY_DESCRIPTIONS["invalid_org_fk"]
+
+
 class TestMappings:
-    def test_category_to_entity_covers_all_scanners(self) -> None:
+    def test_cleanup_categories_are_a_subset_of_scanners(self) -> None:
         scanner_categories = {name for name, _ in _SCANNERS}
-        assert set(_CATEGORY_TO_ENTITY) == scanner_categories
+        # Detection-only categories (e.g. invalid_org_fk) are intentionally not
+        # in _CATEGORY_TO_ENTITY, so the relation is a subset, not equality.
+        assert set(_CATEGORY_TO_ENTITY).issubset(scanner_categories)
 
     def test_entity_types_are_valid_cleanup_targets(self) -> None:
         for entity_type in set(_CATEGORY_TO_ENTITY.values()):
             assert entity_type in ENTITY_MODEL_MAP, f"{entity_type} missing from ENTITY_MODEL_MAP"
 
-    def test_every_scanner_entity_type_is_deletable(self) -> None:
-        for category, _ in _SCANNERS:
-            assert category in _CATEGORY_TO_ENTITY, f"{category} missing from _CATEGORY_TO_ENTITY"
-            assert _CATEGORY_TO_ENTITY[category] in ENTITY_MODEL_MAP
+    def test_every_cleanup_scanner_entity_type_is_deletable(self) -> None:
+        for category, entity_type in _CATEGORY_TO_ENTITY.items():
+            assert entity_type in ENTITY_MODEL_MAP
+            assert category in {name for name, _ in _SCANNERS}

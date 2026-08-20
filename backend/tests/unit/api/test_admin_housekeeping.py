@@ -246,6 +246,28 @@ class TestPerformCleanup:
         assert body["deleted_count"] == 0
         assert body["errors"] == [{"entity_type": "does_not_exist", "error": "Unknown entity type: does_not_exist"}]
 
+    def test_invalid_org_fk_is_triage_only(self, client: TestClient) -> None:
+        with patch("modulo.api.routes.admin_housekeeping.set_rls_org"):
+            session = _make_mock_session()
+
+            async def override_session() -> AsyncGenerator[AsyncMock, None]:
+                yield session
+
+            client.app.dependency_overrides[get_db_session] = override_session
+            resp = client.post(
+                self.URL,
+                json={"items": [{"id": str(uuid.uuid4()), "entity_type": "invalid_org_fk"}]},
+            )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["deleted_count"] == 0
+        assert body["errors"] == [
+            {"entity_type": "invalid_org_fk", "error": "Surfaced for triage only — not auto-deleted."}
+        ]
+        # The triage-only type must never reach the delete path.
+        session.delete.assert_not_awaited()
+
     def test_integrity_error_does_not_block_other_types(self, client: TestClient) -> None:
         with patch("modulo.api.routes.admin_housekeeping.set_rls_org"):
             session = _make_mock_session()
