@@ -150,110 +150,110 @@
               </tr>
             </thead>
             <tbody class="divide-y">
-              <tr
-                v-for="backend in nativeBackends"
-                :key="backend.id"
-                class="hover:bg-muted/30 transition-colors"
-                :data-testid="`model-backend-row-${backend.id}`"
-              >
-                <td class="table-cell font-medium">{{ backend.name }}</td>
-                <td class="table-cell">
-                  <span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
-                    {{ backend.provider }}
-                  </span>
-                </td>
-                <td class="table-cell font-mono text-xs">{{ backend.model_id }}</td>
-                <td class="table-cell text-muted-foreground">{{ backend.display_name }}</td>
-                <td class="table-cell">
-                  <span
-                    class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
-                    :class="backend.has_credentials ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'"
-                  >
+              <template v-for="backend in nativeBackends" :key="backend.id">
+                <tr
+                  class="hover:bg-muted/30 transition-colors"
+                  :data-testid="`model-backend-row-${backend.id}`"
+                >
+                  <td class="table-cell font-medium">{{ backend.name }}</td>
+                  <td class="table-cell">
+                    <span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
+                      {{ backend.provider }}
+                    </span>
+                  </td>
+                  <td class="table-cell font-mono text-xs">{{ backend.model_id }}</td>
+                  <td class="table-cell text-muted-foreground">{{ backend.display_name }}</td>
+                  <td class="table-cell">
                     <span
-                      class="h-1.5 w-1.5 rounded-full"
-                      :class="backend.has_credentials ? 'bg-success' : 'bg-muted-foreground'"
-                    />
-                    {{ backend.has_credentials ? $t('views.AdminModelBackendsView.configured') : $t('views.AdminModelBackendsView.missing') }}
-                  </span>
-                </td>
-                <td class="table-cell text-xs text-muted-foreground">
-                  {{ backend.visibility }}
-                </td>
-                <td class="table-cell-numeric">
-                  <TableActions :actions="backendActions(backend)" />
-                </td>
-              </tr>
-              <tr>
-                <td colspan="7" class="p-0">
-                  <details
-                    :data-testid="`admin-model-backends-refs-expand-${backend.id}`"
-                    @toggle="toggleRefsExpand(backend.id)"
-                  >
-                    <summary class="cursor-pointer px-4 py-2 text-xs text-muted-foreground hover:text-foreground">
-                      {{ $t('views.AdminModelBackendsView.pipeline_references') }}
-                    </summary>
-                    <div class="border-t px-4 py-3" :data-testid="`admin-model-backends-refs-${backend.id}`">
-                      <LoadingSpinner v-if="refsLoading && expandedBackendId === backend.id" />
-                      <div v-else-if="refsError && expandedBackendId === backend.id" class="flex items-center gap-2 text-sm text-destructive">
-                        <span>{{ refsError }}</span>
-                        <button
-                          class="rounded border border-input px-2 py-1 text-xs hover:bg-accent"
-                          @click="fetchPipelineRefs(backend.id, 1)"
-                        >
-                          {{ $t('views.AdminModelBackendsView.retry') }}
-                        </button>
-                      </div>
-                      <div v-else-if="expandedBackendId === backend.id && refsData">
-                        <div v-if="refsData.items.length === 0" class="text-sm text-muted-foreground">
-                          {{ $t('views.AdminModelBackendsView.no_pipeline_refs') }}
+                      class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
+                      :class="backend.has_credentials ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'"
+                    >
+                      <span
+                        class="h-1.5 w-1.5 rounded-full"
+                        :class="backend.has_credentials ? 'bg-success' : 'bg-muted-foreground'"
+                      />
+                      {{ backend.has_credentials ? $t('views.AdminModelBackendsView.configured') : $t('views.AdminModelBackendsView.missing') }}
+                    </span>
+                  </td>
+                  <td class="table-cell text-xs text-muted-foreground">
+                    {{ backend.visibility }}
+                  </td>
+                  <td class="table-cell-numeric">
+                    <TableActions :actions="backendActions(backend)" />
+                  </td>
+                </tr>
+                <tr>
+                  <td colspan="7" class="p-0">
+                    <details
+                      :data-testid="`admin-model-backends-refs-expand-${backend.id}`"
+                      @toggle="toggleRefsExpand(backend.id)"
+                    >
+                      <summary class="cursor-pointer px-4 py-2 text-xs text-muted-foreground hover:text-foreground">
+                        {{ $t('views.AdminModelBackendsView.pipeline_references') }}
+                      </summary>
+                      <div class="border-t px-4 py-3" :data-testid="`admin-model-backends-refs-${backend.id}`">
+                        <LoadingSpinner v-if="refsLoading && expandedBackendId === backend.id" />
+                        <div v-else-if="refsError && expandedBackendId === backend.id" class="flex items-center gap-2 text-sm text-destructive">
+                          <span>{{ refsError }}</span>
+                          <button
+                            class="rounded border border-input px-2 py-1 text-xs hover:bg-accent"
+                            @click="fetchPipelineRefs(backend.id, 1)"
+                          >
+                            {{ $t('views.AdminModelBackendsView.retry') }}
+                          </button>
                         </div>
-                        <template v-else>
-                          <table class="w-full text-left text-xs" :data-testid="`admin-model-backends-refs-table-${backend.id}`">
-                            <thead>
-                              <tr>
-                                <th class="table-header">{{ $t('views.AdminModelBackendsView.pipeline_name') }}</th>
-                                <th class="table-header">{{ $t('views.AdminModelBackendsView.agent_name') }}</th>
-                                <th class="table-header">{{ $t('views.AdminModelBackendsView.reference_type') }}</th>
-                              </tr>
-                            </thead>
-                            <tbody class="divide-y">
-                              <tr v-for="ref in refsData.items" :key="`${ref.pipeline_id}-${ref.agent_id ?? 'direct'}`" class="hover:bg-muted/30">
-                                <td class="table-cell font-medium">{{ ref.pipeline_name }}</td>
-                                <td class="table-cell text-muted-foreground">{{ ref.agent_name || '\u2014' }}</td>
-                                <td class="table-cell">
-                                  <span
-                                    class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium"
-                                    :class="ref.reference_type === 'direct_node' ? 'bg-primary/10 text-primary' : 'bg-warning/10 text-warning'"
-                                  >
-                                    {{ ref.reference_type === 'direct_node' ? $t('views.AdminModelBackendsView.ref_type_direct') : $t('views.AdminModelBackendsView.ref_type_agent') }}
-                                  </span>
-                                </td>
-                              </tr>
-                            </tbody>
-                          </table>
-                          <div v-if="refsData.total > refsData.page_size" class="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-                            <span>{{ $t('views.AdminModelBackendsView.refs_page_info', { page: refsData.page, total: Math.ceil(refsData.total / refsData.page_size) }) }}</span>
-                            <button
-                              v-if="refsData.page > 1"
-                              class="rounded border border-input px-2 py-1 hover:bg-accent"
-                              @click="fetchPipelineRefs(backend.id, refsData.page - 1)"
-                            >
-                              {{ $t('views.AdminModelBackendsView.previous') }}
-                            </button>
-                            <button
-                              v-if="refsData.page < Math.ceil(refsData.total / refsData.page_size)"
-                              class="rounded border border-input px-2 py-1 hover:bg-accent"
-                              @click="fetchPipelineRefs(backend.id, refsData.page + 1)"
-                            >
-                              {{ $t('views.AdminModelBackendsView.next') }}
-                            </button>
+                        <div v-else-if="expandedBackendId === backend.id && refsData">
+                          <div v-if="refsData.items.length === 0" class="text-sm text-muted-foreground">
+                            {{ $t('views.AdminModelBackendsView.no_pipeline_refs') }}
                           </div>
-                        </template>
+                          <template v-else>
+                            <table class="w-full text-left text-xs" :data-testid="`admin-model-backends-refs-table-${backend.id}`">
+                              <thead>
+                                <tr>
+                                  <th class="table-header">{{ $t('views.AdminModelBackendsView.pipeline_name') }}</th>
+                                  <th class="table-header">{{ $t('views.AdminModelBackendsView.agent_name') }}</th>
+                                  <th class="table-header">{{ $t('views.AdminModelBackendsView.reference_type') }}</th>
+                                </tr>
+                              </thead>
+                              <tbody class="divide-y">
+                                <tr v-for="ref in refsData.items" :key="`${ref.pipeline_id}-${ref.agent_id ?? 'direct'}`" class="hover:bg-muted/30">
+                                  <td class="table-cell font-medium">{{ ref.pipeline_name }}</td>
+                                  <td class="table-cell text-muted-foreground">{{ ref.agent_name || '\u2014' }}</td>
+                                  <td class="table-cell">
+                                    <span
+                                      class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium"
+                                      :class="ref.reference_type === 'direct_node' ? 'bg-primary/10 text-primary' : 'bg-warning/10 text-warning'"
+                                    >
+                                      {{ ref.reference_type === 'direct_node' ? $t('views.AdminModelBackendsView.ref_type_direct') : $t('views.AdminModelBackendsView.ref_type_agent') }}
+                                    </span>
+                                  </td>
+                                </tr>
+                              </tbody>
+                            </table>
+                            <div v-if="refsData.total > refsData.page_size" class="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                              <span>{{ $t('views.AdminModelBackendsView.refs_page_info', { page: refsData.page, total: Math.ceil(refsData.total / refsData.page_size) }) }}</span>
+                              <button
+                                v-if="refsData.page > 1"
+                                class="rounded border border-input px-2 py-1 hover:bg-accent"
+                                @click="fetchPipelineRefs(backend.id, refsData.page - 1)"
+                              >
+                                {{ $t('views.AdminModelBackendsView.previous') }}
+                              </button>
+                              <button
+                                v-if="refsData.page < Math.ceil(refsData.total / refsData.page_size)"
+                                class="rounded border border-input px-2 py-1 hover:bg-accent"
+                                @click="fetchPipelineRefs(backend.id, refsData.page + 1)"
+                              >
+                                {{ $t('views.AdminModelBackendsView.next') }}
+                              </button>
+                            </div>
+                          </template>
+                        </div>
                       </div>
-                    </div>
-                  </details>
-                </td>
-              </tr>
+                    </details>
+                  </td>
+                </tr>
+              </template>
             </tbody>
           </table>
         </div>
