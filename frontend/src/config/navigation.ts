@@ -198,6 +198,36 @@ export function canSeeItem(
   return true
 }
 
+export interface NavVisibilityContext {
+  isSystemAdmin: boolean
+  userRole: string | null
+  userPermissions: string[]
+  devMode: boolean
+  tierInfoLoaded: boolean
+  isAtMinimumTier: (tier: string) => boolean
+}
+
+export function isNavItemVisible(item: NavItem, ctx: NavVisibilityContext): boolean {
+  if ((item.visibility === 'private_preview' || item.visibility === 'in_dev') && !ctx.devMode) return false
+  if (!item.requiredRoles && !item.requiredTier && !item.requiredPermissions) return true
+  if (item.requiredTier && !ctx.tierInfoLoaded) return false
+  return canSeeItem(
+    item,
+    { role: ctx.userRole || '', permissions: ctx.userPermissions },
+    { isAtMinimumTier: ctx.isAtMinimumTier },
+  )
+}
+
+export function getVisibleNavGroups(ctx: NavVisibilityContext): NavGroup[] {
+  return getNavGroups()
+    .filter((g) => !g.systemAdminOnly || ctx.isSystemAdmin)
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => isNavItemVisible(item, ctx)),
+    }))
+    .filter((g) => g.items.length > 0)
+}
+
 let _cachedGroups: NavGroup[] | null = null
 
 export function getNavGroups(): NavGroup[] {
