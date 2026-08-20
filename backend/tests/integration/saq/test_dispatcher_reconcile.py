@@ -330,7 +330,20 @@ async def test_two_connections_no_double_redispatch(
 
     # Per-connection engines: each reconcile pass gets a FRESH NullPool engine
     # running as the NOBYPASSRLS role (RLS applies, mirroring production).
-    monkeypatch.setattr(ch, "_get_engine", _make_rls_engine)
+    #
+    # PR #1637 routed dispatcher_reconcile through _open_system_factory (the
+    # modulo_system engine path). _get_system_engine caches its engine globally
+    # (and falls back to _get_engine when MODULO_SYSTEM_DATABASE_URL is unset),
+    # so patching _get_engine alone no longer guarantees each reconcile pass uses
+    # the RLS role engine. Patch _open_system_factory directly to bind the
+    # reconcile sessions to the NOBYPASSRLS role engine.
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    monkeypatch.setattr(
+        ch,
+        "_open_system_factory",
+        lambda: async_sessionmaker(_make_rls_engine(), expire_on_commit=False, autobegin=False),
+    )
 
     try:
         summary_a, summary_b = await asyncio.gather(ch.dispatcher_reconcile(), ch.dispatcher_reconcile())
