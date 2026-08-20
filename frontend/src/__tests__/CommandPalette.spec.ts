@@ -1,9 +1,13 @@
 import { mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
+import { createPinia, setActivePinia } from 'pinia'
 import CommandPalette from '../components/CommandPalette.vue'
 
 beforeEach(() => {
+  // CommandPalette uses useNavVisibilityContext, which depends on the plan
+  // Pinia store, so a Pinia instance must be active during mount.
+  setActivePinia(createPinia())
   // jsdom does not implement scrollIntoView; the selectedIndex watcher calls
   // it whenever the selection changes.
   Element.prototype.scrollIntoView = vi.fn()
