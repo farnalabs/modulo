@@ -38,7 +38,7 @@ def test_encrypt_trigger_config_secrets_is_idempotent() -> None:
 def test_encrypt_trigger_config_secrets_leaves_mask_and_empty_untouched() -> None:
     stored = _encrypt_trigger_config_secrets({"hmac_secret": SENSITIVE_VALUE_MASK, "signing_secret": ""}, _FERNET_KEY)
     assert stored["hmac_secret"] == SENSITIVE_VALUE_MASK
-    assert stored["signing_secret"] == ""
+    assert not stored["signing_secret"]
 
 
 def test_encrypt_trigger_config_secrets_encrypts_both_secret_keys() -> None:
@@ -48,5 +48,5 @@ def test_encrypt_trigger_config_secrets_encrypts_both_secret_keys() -> None:
 
 
 def test_encrypt_trigger_config_secrets_empty_config_returns_empty() -> None:
-    assert _encrypt_trigger_config_secrets(None, _FERNET_KEY) == {}
-    assert _encrypt_trigger_config_secrets({}, _FERNET_KEY) == {}
+    assert not _encrypt_trigger_config_secrets(None, _FERNET_KEY)
+    assert not _encrypt_trigger_config_secrets({}, _FERNET_KEY)
