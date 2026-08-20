@@ -12,19 +12,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_RESOURCE_ALREADY_EXISTS
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
+from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitive_value
 from modulo.auth.jwt import TenantPrincipal
+from modulo.db.crud.run import get_run
 from modulo.db.crud.variant_group import (
     check_pipeline_run_quota,
     create_variant_group,
+    get_batch_compare,
     get_coverage_gaps,
     get_prompt_diffs,
     get_variant_group,
+    has_pipeline_default_evals,
     list_variant_groups,
     restore_variant_group,
     run_variant_batch,
     run_variant_weighted,
     soft_delete_variant_group,
     update_variant_group,
+    validate_batch_ownership,
 )
 from modulo.db.rls import set_rls_org
 
@@ -43,6 +48,7 @@ _CODE_VARIANTS_RUN_VARIANT = "variants.run_variant"
 _CODE_VARIANTS_RUN_VARIANT_BATCH = "variants.run_variant_batch"
 _CODE_VARIANTS_COVERAGE_GAPS = "variants.coverage_gaps"
 _CODE_VARIANTS_PROMPT_DIFFS = "variants.prompt_diffs"
+_CODE_VARIANTS_BATCH_COMPARE = "variants.batch_compare"
 
 
 _log = logging.getLogger(__name__)
@@ -51,6 +57,11 @@ router = APIRouter(prefix="/api/v1/variant-groups", tags=["variant-groups"])
 
 
 class VariantDef(BaseModel):
+    # Stable persisted id (FAR-332 3b) — minted by the frontend on Duplicate and
+    # round-tripped through variant-group CRUD. Optional so legacy payloads
+    # without it keep validating; a fresh id is minted server-side when absent
+    # at create time so every persisted variant carries one.
+    id: str | uuid.UUID | None = None
     snapshot_id: str | uuid.UUID
     name: str
     weight: float = Field(default=1.0, ge=0)
@@ -91,6 +102,34 @@ class RunVariantResponse(BaseModel):
 class RunVariantBatchResponse(BaseModel):
     runs: list[RunVariantResponse]
     count: int
+    batch_id: uuid.UUID
+    # Eval-coverage signal (FAR-332 3g) — False when the pipeline has no default
+    # evals, so the frontend can show "no evals → cost/diff only". A warn, not a
+    # hard block: the batch still fires.
+    has_evals: bool = True
+
+
+class BatchRunCompare(BaseModel):
+    run_id: uuid.UUID
+    run_number: int
+    status: str
+    variant_id: str | None = None
+    variant_name: str
+    snapshot_id: uuid.UUID | None = None
+    run_context_overrides: dict[str, Any] = Field(default_factory=dict)
+    eval_pass_rate: float | None = None
+    eval_count: int = 0
+    total_cost_usd: Any = None
+    total_tokens: int | None = None
+    created_at: Any = None
+    completed_at: Any = None
+    override_diff: dict[str, Any] = Field(default_factory=dict)
+
+
+class BatchCompareResponse(BaseModel):
+    batch_id: uuid.UUID
+    has_evals: bool = True
+    runs: list[BatchRunCompare] = Field(default_factory=list)
 
 
 class CoverageGap(BaseModel):
@@ -106,6 +145,22 @@ class PromptDiffEntry(BaseModel):
 
 class RunVariantRequest(BaseModel):
     input_payload: dict[str, Any] = Field(default_factory=dict)
+
+
+def _mint_variant_ids(variants: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Assign a stable persisted ``id`` to any variant missing one (FAR-332 3b).
+
+    The frontend mints ids on Duplicate, but a variant created without an id
+    (legacy payloads) must still persist one so every variant is comparable.
+    Returns a NEW list of dicts; the input is never mutated.
+    """
+    out: list[dict[str, Any]] = []
+    for variant in variants:
+        entry = dict(variant)
+        if entry.get("id") is None:
+            entry["id"] = str(uuid.uuid4())
+        out.append(entry)
+    return out
 
 
 def _variant_to_response(group: Any) -> dict[str, Any]:
@@ -139,7 +194,7 @@ async def create_group(
                 org_id=principal.organisation_id,
                 pipeline_id=req.pipeline_id,
                 name=req.name,
-                variants=[v.model_dump() for v in req.variants],
+                variants=_mint_variant_ids([v.model_dump() for v in req.variants]),
                 description=req.description,
                 selection_strategy=req.selection_strategy,
                 max_concurrent_runs=req.max_concurrent_runs,
@@ -275,7 +330,7 @@ async def update_group(
                 group_id,
                 name=req.name,
                 description=req.description,
-                variants=[v.model_dump() for v in req.variants],
+                variants=_mint_variant_ids([v.model_dump() for v in req.variants]),
                 selection_strategy=req.selection_strategy,
                 max_concurrent_runs=req.max_concurrent_runs,
                 degraded_evals=req.degraded_evals,
@@ -479,6 +534,7 @@ async def run_batch(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("variant.run"),
 ) -> dict[str, Any]:
+    has_evals = True
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -495,6 +551,27 @@ async def run_batch(
                     detail="Variant group has no variants configured",
                 )
 
+            # Server-side ownership validation (FAR-332 3f): every variant's
+            # snapshot must belong to the org, not just the group. Fail closed
+            # with a 403 (never leak existence).
+            snapshot_ids = [
+                uuid.UUID(str(v["snapshot_id"]))
+                if not isinstance(v.get("snapshot_id"), uuid.UUID)
+                else v["snapshot_id"]
+                for v in group.variants
+                if isinstance(v, dict) and v.get("snapshot_id") is not None
+            ]
+            if not await validate_batch_ownership(
+                session,
+                org_id=principal.organisation_id,
+                pipeline_id=group.pipeline_id,
+                snapshot_ids=snapshot_ids,
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Variant group references a pipeline or snapshot outside your organisation.",
+                ) from None
+
             results = await run_variant_batch(
                 session,
                 org_id=principal.organisation_id,
@@ -502,6 +579,8 @@ async def run_batch(
                 input_payload=req.input_payload,
                 account_id=principal.account_id,
             )
+            if results is not None and results:
+                has_evals = await has_pipeline_default_evals(session, group.pipeline_id)
     except IntegrityError:
         _log.exception(_CODE_VARIANTS_RUN_VARIANT_BATCH)
         raise HTTPException(
@@ -543,7 +622,13 @@ async def run_batch(
         }
         for r in results
     ]
-    return {"runs": runs, "count": len(runs)}
+    batch_id = results[0].get("batch_id") if results else None
+    return {
+        "runs": runs,
+        "count": len(runs),
+        "batch_id": batch_id,
+        "has_evals": has_evals,
+    }
 
 
 @router.get("/{group_id}/coverage-gaps", response_model=list[CoverageGap])
@@ -636,3 +721,78 @@ async def prompt_diffs(
             detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
     return diffs
+
+
+@router.get("/batches/{batch_id}/compare", response_model=BatchCompareResponse)
+@handle_db_errors(_CODE_VARIANTS_BATCH_COMPARE)
+async def batch_compare(
+    batch_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_VARIANT_LIST),
+) -> dict[str, Any]:
+    """Batch-scoped variant comparison (FAR-332 3d).
+
+    Loads a batch's runs purely by ``batch_id`` — never by a live variant group,
+    so soft-deleting the group does not break comparison. Org-scoped (RLS +
+    explicit organisation_id predicate) so another org's batch_id returns 404.
+    Each run carries its canonical status, eval pass rate, cost, tokens, and the
+    frozen snapshot/override diff captured at fire time.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            entries = await get_batch_compare(session, org_id=principal.organisation_id, batch_id=batch_id)
+            has_evals = False
+            if entries:
+                # Eval-coverage signal is per-pipeline: derive from the batch's
+                # first run's pipeline (all runs in one batch share it).
+                first_run = await get_run(session, entries[0]["run_id"], organisation_id=principal.organisation_id)
+                has_evals = bool(first_run) and await has_pipeline_default_evals(session, first_run.pipeline_id)
+    except IntegrityError:
+        _log.exception(_CODE_VARIANTS_BATCH_COMPARE)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except ProgrammingError:
+        _log.exception(_CODE_VARIANTS_BATCH_COMPARE)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception(_CODE_VARIANTS_BATCH_COMPARE)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("Unexpected error in variant group batch compare endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+        ) from None
+
+    if not entries:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Batch not found",
+        )
+
+    # Sensitive masking (FAR-332 3i): frozen run_context_overrides may hold
+    # secrets; never surface them in plaintext on the compare surface.
+    def _mask_overrides(overrides: dict[str, Any]) -> dict[str, Any]:
+        return {k: (mask_sensitive_value(str(v)) if is_sensitive_key(k) else v) for k, v in overrides.items()}
+
+    for entry in entries:
+        entry["run_context_overrides"] = _mask_overrides(entry.get("run_context_overrides", {}))
+        diff = entry.get("override_diff", {})
+        if isinstance(diff, dict):
+            for part in ("added", "changed"):
+                raw = diff.get(part, {})
+                if isinstance(raw, dict):
+                    diff[part] = _mask_overrides(raw)
+
+    return {"batch_id": batch_id, "has_evals": has_evals, "runs": entries}

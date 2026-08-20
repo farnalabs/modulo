@@ -13,6 +13,7 @@ from modulo.api.routes.variants import (
     CreateVariantGroupRequest,
     VariantDef,
     _variant_to_response,
+    batch_compare,
     coverage_gaps,
     create_group,
     delete_group,
@@ -245,16 +246,29 @@ class TestRunVariantBatch:
                 "modulo.api.routes.variants.run_variant_batch",
                 new_callable=AsyncMock,
             ) as mock_run,
+            patch(
+                "modulo.api.routes.variants.validate_batch_ownership",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.api.routes.variants.has_pipeline_default_evals",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
         ):
             mock_get.return_value = self._make_group()
+            batch_id = uuid.uuid4()
             mock_run.return_value = [
                 {
                     "run_id": uuid.uuid4(),
+                    "batch_id": batch_id,
                     "variant": {"name": "control"},
                     "merged_payload": {"key": "value"},
                 },
                 {
                     "run_id": uuid.uuid4(),
+                    "batch_id": batch_id,
                     "variant": {"name": "experiment"},
                     "merged_payload": {"key": "value"},
                 },
@@ -262,6 +276,8 @@ class TestRunVariantBatch:
 
             result = await run_batch(group_id, body, mock_session, principal)
         assert result["count"] == 2
+        assert result["batch_id"] == batch_id
+        assert result["has_evals"] is True
         assert [r["variant_name"] for r in result["runs"]] == ["control", "experiment"]
 
     async def test_raises_429_with_quota_code_when_batch_rejected(self) -> None:
@@ -276,6 +292,11 @@ class TestRunVariantBatch:
                 "modulo.api.routes.variants.get_variant_group",
                 new_callable=AsyncMock,
             ) as mock_get,
+            patch(
+                "modulo.api.routes.variants.validate_batch_ownership",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
             patch(
                 "modulo.api.routes.variants.run_variant_batch",
                 new_callable=AsyncMock,
@@ -978,6 +999,220 @@ class TestPromptDiffsException:
             with pytest.raises(HTTPException) as exc:
                 await prompt_diffs(uuid.uuid4(), mock_session, principal)
             assert exc.value.status_code == 500
+
+
+@pytest.mark.asyncio
+class TestBatchCompare:
+    def _entry(self, **overrides: object) -> dict:
+        entry: dict = {
+            "run_id": uuid.uuid4(),
+            "run_number": 1,
+            "status": "complete",
+            "variant_id": "variant-a",
+            "variant_name": "control",
+            "snapshot_id": uuid.uuid4(),
+            "run_context_overrides": {"model_backend_id": "backend-a"},
+            "eval_pass_rate": 0.75,
+            "eval_count": 4,
+            "total_cost_usd": 0.5,
+            "total_tokens": 100,
+            "created_at": None,
+            "completed_at": None,
+            "override_diff": {"added": {}, "removed": {}, "changed": {}},
+        }
+        entry.update(overrides)
+        return entry
+
+    async def test_returns_exactly_batch_runs(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        batch_id = uuid.uuid4()
+
+        entries = [self._entry(), self._entry(variant_name="experiment")]
+        mock_run = MagicMock()
+        mock_run.pipeline_id = uuid.uuid4()
+
+        with (
+            patch(
+                "modulo.api.routes.variants.get_batch_compare",
+                new_callable=AsyncMock,
+                return_value=entries,
+            ) as mock_cmp,
+            patch(
+                "modulo.api.routes.variants.get_run",
+                new_callable=AsyncMock,
+                return_value=mock_run,
+            ),
+            patch(
+                "modulo.api.routes.variants.has_pipeline_default_evals",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            result = await batch_compare(batch_id, mock_session, principal)
+
+        assert result["batch_id"] == batch_id
+        assert result["has_evals"] is True
+        assert len(result["runs"]) == 2
+        assert [r["variant_name"] for r in result["runs"]] == ["control", "experiment"]
+        mock_cmp.assert_awaited_once()
+
+    async def test_raises_404_when_batch_not_found(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+
+        with patch(
+            "modulo.api.routes.variants.get_batch_compare",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await batch_compare(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 404
+
+    async def test_masks_sensitive_override_values(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        batch_id = uuid.uuid4()
+
+        entries = [
+            self._entry(
+                run_context_overrides={"api_key": "sk-abc", "model": "gpt-4"},
+                override_diff={"added": {"api_key": "sk-abc"}, "removed": {}, "changed": {}},
+            )
+        ]
+        mock_run = MagicMock()
+        mock_run.pipeline_id = uuid.uuid4()
+
+        with (
+            patch(
+                "modulo.api.routes.variants.get_batch_compare",
+                new_callable=AsyncMock,
+                return_value=entries,
+            ),
+            patch(
+                "modulo.api.routes.variants.get_run",
+                new_callable=AsyncMock,
+                return_value=mock_run,
+            ),
+            patch(
+                "modulo.api.routes.variants.has_pipeline_default_evals",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            result = await batch_compare(batch_id, mock_session, principal)
+
+        masked = result["runs"][0]["run_context_overrides"]
+        assert masked["api_key"] != "sk-abc"
+        assert masked["model"] == "gpt-4"
+        assert result["runs"][0]["override_diff"]["added"]["api_key"] != "sk-abc"
+
+    async def test_returns_404_for_cross_org_batch(self) -> None:
+        """Cross-org IDOR: another org's batch_id resolves to no org-owned runs."""
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+
+        with patch(
+            "modulo.api.routes.variants.get_batch_compare",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await batch_compare(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+class TestRunVariantBatchOwnership:
+    async def test_rejects_cross_org_reference_with_403(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        group_id = uuid.uuid4()
+        body = MagicMock()
+        body.input_payload = {}
+
+        with (
+            patch(
+                "modulo.api.routes.variants.get_variant_group",
+                new_callable=AsyncMock,
+            ) as mock_get,
+            patch(
+                "modulo.api.routes.variants.validate_batch_ownership",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "modulo.api.routes.variants.run_variant_batch",
+                new_callable=AsyncMock,
+            ) as mock_run,
+        ):
+            mock_group = MagicMock()
+            mock_group.pipeline_id = uuid.uuid4()
+            mock_group.variants = [{"name": "v", "snapshot_id": str(uuid.uuid4())}]
+            mock_get.return_value = mock_group
+
+            with pytest.raises(HTTPException) as exc:
+                await run_batch(group_id, body, mock_session, principal)
+            assert exc.value.status_code == 403
+            mock_run.assert_not_called()
+
+
+@pytest.mark.asyncio
+class TestRunVariantBatchEvalCoverage:
+    async def test_reports_has_evals_false_when_pipeline_has_none(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        group_id = uuid.uuid4()
+        body = MagicMock()
+        body.input_payload = {}
+
+        batch_id = uuid.uuid4()
+        with (
+            patch(
+                "modulo.api.routes.variants.get_variant_group",
+                new_callable=AsyncMock,
+            ) as mock_get,
+            patch(
+                "modulo.api.routes.variants.validate_batch_ownership",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.api.routes.variants.has_pipeline_default_evals",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "modulo.api.routes.variants.run_variant_batch",
+                new_callable=AsyncMock,
+            ) as mock_run,
+        ):
+            mock_group = MagicMock()
+            mock_group.pipeline_id = uuid.uuid4()
+            mock_group.variants = [{"name": "v", "snapshot_id": str(uuid.uuid4())}]
+            mock_get.return_value = mock_group
+            mock_run.return_value = [
+                {"run_id": uuid.uuid4(), "batch_id": batch_id, "variant": {"name": "v"}, "merged_payload": {}}
+            ]
+
+            result = await run_batch(group_id, body, mock_session, principal)
+
+        assert result["has_evals"] is False
+        assert result["batch_id"] == batch_id
+        assert result["count"] == 1
+
+
+class TestVariantDefId:
+    def test_id_optional_and_round_trips(self) -> None:
+        vid = "variant-control"
+        variant = VariantDef(id=vid, snapshot_id=uuid.uuid4(), name="control")
+        dumped = variant.model_dump()
+        assert dumped["id"] == vid
+
+    def test_id_defaults_to_none(self) -> None:
+        variant = VariantDef(snapshot_id=uuid.uuid4(), name="control")
+        assert variant.id is None
 
 
 class TestCreateVariantGroupRequestValidation:

@@ -114,6 +114,10 @@ class Run(OrgScoped):
             unique=True,
             postgresql_where=text("rate_limit_key IS NOT NULL"),
         ),
+        # FAR-332 batch-scoped variant comparison — one batch = one batch_id
+        # shared by every run fired together; the (variant_group_id, batch_id)
+        # composite powers the batch compare read. Migration 0118.
+        Index("ix_runs_variant_group_batch", "variant_group_id", "batch_id"),
     )
 
     pipeline_id: Mapped[uuid.UUID] = mapped_column(
@@ -237,6 +241,17 @@ class Run(OrgScoped):
     work_item_refs: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON(none_as_null=True), nullable=True)
     is_replay: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
     variant_group_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
+    # FAR-332 batch-scoped variant comparison (migration 0118). Every run fired
+    # together in one ``run_variant_batch`` shares the same ``batch_id``; the
+    # compare route loads runs purely by batch_id (never a live group), so
+    # soft-deleting the group does not break comparison.
+    batch_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
+    # Frozen snapshot/override capture at fire time (FAR-332 3c) — the single
+    # source of truth for "which input each variant ran with". Shape:
+    # {variant_id, variant_name, snapshot_id, run_context_overrides, batch_id}.
+    # The compare view reads this, never the live snapshot, so later edits to
+    # the variant group cannot rewrite history.
+    variant_config_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON(none_as_null=True), nullable=True)
     organisation: Mapped["Organisation"] = relationship()
     pipeline: Mapped["Pipeline"] = relationship()
     snapshot: Mapped["PipelineSnapshot"] = relationship()
