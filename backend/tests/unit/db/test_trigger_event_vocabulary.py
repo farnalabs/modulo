@@ -18,8 +18,9 @@ constraint with the FULL 21-value vocabulary. This file asserts:
   ``0112_feedback_correction_state``, FAR-223
   ``0113_guardrail_summary``, FAR-296 ``0114_org_api_keys_run_id``,
   FAR-247 ``0115_notification_preferences``, FAR-309
-  ``0116_guardrail_trust_pr_b``, TOCTOU ``0117_toctou_hardening``, and
-  batch-scoped variants ``0118_batch_scoped_variants``
+  ``0116_guardrail_trust_pr_b``, TOCTOU ``0117_toctou_hardening``,
+  batch-scoped variants ``0118_batch_scoped_variants``,
+  ``0119_analytics_batch_id``, and org-FK hardening ``0120_org_fk_hardening``
   migrations chain on top of it).
 
 The old SQLite round-trip (which ran the migration's upgrade/downgrade against
@@ -47,7 +48,7 @@ _MIGRATION_PATH = (
 # The chain head after the FAR-210 feedback correction_state migration (0112),
 # now topped by the FAR-309 PR B trust-model migration (0116), the TOCTOU
 # hardening migration (0117), and the batch-scoped variants migration (0118).
-_CHAIN_HEAD_MIGRATION_NAME = "0119_analytics_batch_id"
+_CHAIN_HEAD_MIGRATION_NAME = "0120_org_fk_hardening"
 
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 

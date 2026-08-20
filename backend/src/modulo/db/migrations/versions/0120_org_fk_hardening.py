@@ -1,7 +1,7 @@
 """Harden tenant-scoped FKs to organisations (FAR-294).
 
-Revision ID: 0118_org_fk_hardening
-Revises: 0117_toctou_hardening
+Revision ID: 0120_org_fk_hardening
+Revises: 0119_analytics_batch_id
 Create Date: 2026-08-20
 
 Adds a DB-level foreign key from every ``organisation_id`` column to
@@ -23,8 +23,8 @@ constraints) and intentionally non-reversible.
 from alembic import op
 from sqlalchemy import text
 
-revision = "0118_org_fk_hardening"
-down_revision = "0117_toctou_hardening"
+revision = "0120_org_fk_hardening"
+down_revision = "0119_analytics_batch_id"
 branch_labels = None
 depends_on = None
 

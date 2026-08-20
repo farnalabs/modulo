@@ -724,7 +724,7 @@ async def _scan_empty_lifecycle_maps(session: AsyncSession, org_id: uuid.UUID) -
 async def _scan_invalid_org_fk(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
     """Detect tenant-scoped rows whose ``organisation_id`` points to a missing org.
 
-    This is the detection counterpart to migration ``0118_org_fk_hardening``. That
+    This is the detection counterpart to migration ``0120_org_fk_hardening``. That
     migration adds DB-level FK constraints (where data is already clean) to prevent
     NEW orphaned tenant rows; this scan reports any that already exist so they can
     be triaged. It is a **read-only, detection-only** category — floated rows are
