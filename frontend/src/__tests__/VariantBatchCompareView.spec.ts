@@ -66,6 +66,7 @@ vi.mock('../lib/api/variantBatches', () => ({
 }))
 
 import VariantBatchCompareView from '../views/VariantBatchCompareView.vue'
+import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 
 const run = (overrides: Record<string, unknown> = {}) => ({
   run_id: 'r1',
@@ -268,6 +269,30 @@ describe('VariantBatchCompareView', () => {
     await nextTick()
 
     expect(wrapper.text()).not.toContain('stale')
+  })
+
+  it('keeps the loading flag set when a stale response resolves after the route moved on', async () => {
+    let resolveStale: (value: unknown) => void = () => {}
+    batchMocks.fetchVariantBatch.mockImplementationOnce(() => new Promise((res) => { resolveStale = res }))
+    // The new batch's request stays in flight (never settles), so the loading flag must remain set.
+    batchMocks.fetchVariantBatch.mockImplementationOnce(() => new Promise<never>(() => {}))
+
+    const wrapper = mount(VariantBatchCompareView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    // Route moves on to b2 while b1's request is still in flight.
+    ;(routeHolder.route as { params: { batchId: string } }).params.batchId = 'b2'
+    await nextTick()
+
+    // The stale b1 response resolves — it must NOT clear the loading flag for the current batch.
+    resolveStale({ data: mockBatch({ name: 'stale' }), error: undefined })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.findComponent(LoadingSpinner).exists()).toBe(true)
   })
 
   it('lists My comparisons with soft-delete', async () => {

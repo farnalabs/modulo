@@ -345,7 +345,7 @@ async function loadBatch(id: string) {
     if (thisId !== batchId.value) return
     error.value = `${t('views.variantBatch.failedToLoadBatch')} ${formatApiError(e)}`
   } finally {
-    loading.value = false
+    if (thisId === batchId.value) loading.value = false
   }
 }
 
@@ -405,7 +405,7 @@ async function handleReFire() {
     if (thisId !== batchId.value) return
     error.value = `${t('views.variantBatch.refireFailed')} ${formatApiError(e)}`
   } finally {
-    refiring.value = false
+    if (thisId === batchId.value) refiring.value = false
   }
 }
 
