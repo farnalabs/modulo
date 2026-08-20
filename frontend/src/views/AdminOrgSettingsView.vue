@@ -8,6 +8,7 @@
     <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadData" />
 
     <template v-else>
+      <div class="space-y-6">
       <!-- Org Info -->
       <SectionCard title="Organisation Info">
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -92,6 +93,7 @@
           Delete Organisation
         </Button>
       </SectionCard>
+      </div>
     </template>
 
     <FormDialog
@@ -148,20 +150,20 @@ const router = useRouter()
 
 const { data: orgData, loading, error: loadError, load: loadData } = useDataFetch(
   async () => {
-    const [overviewResp, exportResp] = await Promise.all([
+    const [overviewResp, orgResp] = await Promise.all([
       (api as any).GET('/api/v1/admin/billing/overview').catch(() => null),
-      (api as any).GET('/api/v1/admin/org/export').catch(() => null),
+      (api as any).GET('/api/v1/admin/org').catch(() => null),
     ])
     if (overviewResp.error) return { error: { detail: `Failed to load org info: ${formatApiError(overviewResp.error)}` } }
-    if (exportResp.error) return { error: { detail: `Failed to load org info: ${formatApiError(exportResp.error)}` } }
+    if (orgResp.error) return { error: { detail: `Failed to load org info: ${formatApiError(orgResp.error)}` } }
     const overview = overviewResp.data as BillingOverviewResponse
-    const exportResult = exportResp.data as ExportResponse
+    const orgProfile = orgResp.data as OrgProfileResponse
     return {
       data: {
-        id: exportResult.organisation?.id ?? '',
-        name: exportResult.organisation?.name ?? 'Unnamed Org',
-        slug: exportResult.organisation?.slug ?? '',
-        createdAt: exportResult.organisation?.created_at ?? '',
+        id: orgProfile.id ?? '',
+        name: orgProfile.name ?? 'Unnamed Org',
+        slug: orgProfile.slug ?? '',
+        createdAt: orgProfile.created_at ?? '',
         planTier: overview.plan_tier ?? 'community',
         memberCount: overview.total_users ?? 0,
       }
@@ -172,14 +174,13 @@ const { data: orgData, loading, error: loadError, load: loadData } = useDataFetc
 
 const orgInfo = computed(() => orgData.value!)
 
-interface ExportResponse {
-  organisation?: {
-    id?: string
-    name?: string
-    slug?: string
-    created_at?: string
-  }
-  exported_at?: string
+interface OrgProfileResponse {
+  id?: string
+  name?: string
+  slug?: string
+  created_at?: string
+  logo_url?: string
+  plan_id?: string
 }
 
 interface BillingOverviewResponse {
@@ -220,7 +221,7 @@ async function startExport() {
       exportError.value = String(resp.error)
       return
     }
-    const data = resp.data as ExportResponse
+    const data = resp.data as { exported_at?: string }
     exportData.raw = data
     exportData.exportedAt = data.exported_at ?? new Date().toISOString()
     exportStatus.value = 'complete'
