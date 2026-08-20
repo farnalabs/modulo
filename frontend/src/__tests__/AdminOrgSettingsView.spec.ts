@@ -18,15 +18,20 @@ vi.mock('../lib/api/client', () => ({
           error: undefined,
         })
       }
+      if (url === '/api/v1/admin/org') {
+        return Promise.resolve({
+          data: {
+            id: '00000000-0000-0000-0000-000000000001',
+            name: 'Test Org',
+            slug: 'test-org',
+            created_at: '2025-01-15T00:00:00+00:00',
+          },
+          error: undefined,
+        })
+      }
       if (url === '/api/v1/admin/org/export') {
         return Promise.resolve({
           data: {
-            organisation: {
-              id: '00000000-0000-0000-0000-000000000001',
-              name: 'Test Org',
-              slug: 'test-org',
-              created_at: '2025-01-15T00:00:00+00:00',
-            },
             exported_at: '2025-06-30T12:00:00+00:00',
           },
           error: undefined,
