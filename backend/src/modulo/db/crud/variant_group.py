@@ -288,19 +288,21 @@ def _merge_variant_payload(
     base_payload: dict[str, Any],
     *,
     degraded_evals: bool,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Merge a variant's ``run_context_overrides`` into the base payload.
 
-    Returns a NEW dict; neither *base_payload* nor *variant* is mutated. Any
-    caller-supplied ``_run_overrides`` in *base_payload* is STRIPPED (the
-    namespace is system-reserved — a crafted dict is a prompt-injection
-    vector). Control keys (``model_backend_id``, ``prompt_version``) are then
-    namespaced under a fresh ``_run_overrides`` dict in the payload instead of
-    being merged at the top level, so a legitimate data field named
-    ``model_backend_id`` in user-supplied input can never silently reroute
-    model routing. Any other (data) override still merges at the top level as
-    before. When ``degraded_evals`` is set the ``_degraded_evals`` marker is
-    applied last so the group setting always wins over any override.
+    Returns ``(payload, control_overrides)``. Neither *base_payload* nor
+    *variant* is mutated. Any caller-supplied ``_run_overrides`` in
+    *base_payload* is STRIPPED (the namespace is system-reserved — a crafted
+    dict is a prompt-injection vector). Control keys (``model_backend_id``,
+    ``prompt_version``) are returned SEPARATELY in ``control_overrides`` — they
+    are stored in the run's ``variant_config_snapshot`` (seeded into run_context
+    by the executor), NEVER written back into the payload, so a legitimate data
+    field named ``model_backend_id`` in user-supplied input can never silently
+    reroute model routing. Any other (data) override still merges into the
+    payload at the top level as before. When ``degraded_evals`` is set the
+    ``_degraded_evals`` marker is applied last so the group setting always wins
+    over any override.
     """
     payload = dict(base_payload)
     # The ``_run_overrides`` namespace is system-reserved. ANY caller-supplied
@@ -312,16 +314,15 @@ def _merge_variant_payload(
     # resolved ``prompt_templates``), never trusting caller input.
     payload.pop("_run_overrides", None)
     overrides = variant.get("run_context_overrides", {})
+    controls: dict[str, Any] = {}
     if isinstance(overrides, dict):
         controls = {k: overrides[k] for k in _CONTROL_OVERRIDE_KEYS if k in overrides}
-        if controls:
-            payload["_run_overrides"] = controls
         data_overrides = {k: v for k, v in overrides.items() if k not in _CONTROL_OVERRIDE_KEYS}
         if data_overrides:
             payload.update(data_overrides)
     if degraded_evals:
         payload["_degraded_evals"] = True
-    return payload
+    return payload, controls
 
 
 async def run_variant_weighted(
@@ -354,20 +355,24 @@ async def run_variant_weighted(
     if snapshot_id is None:
         return None
 
-    merged_payload = _merge_variant_payload(variant, input_payload or {}, degraded_evals=group.degraded_evals)
+    merged_payload, control_overrides = _merge_variant_payload(
+        variant, input_payload or {}, degraded_evals=group.degraded_evals
+    )
 
     # FAR-342: resolve a prompt_version override to its per-agent templates (see
-    # the batch path for the full comment).
-    _run_overrides = merged_payload.get("_run_overrides")
-    if isinstance(_run_overrides, dict) and _run_overrides.get("prompt_version"):
+    # the batch path for the full comment). The override namespace lives in the
+    # frozen ``variant_config_snapshot`` — the executor seeds it into run_context
+    # as a top-level system-reserved key, NEVER from caller input.
+    if control_overrides.get("prompt_version"):
         resolved = await _resolve_prompt_template_override(
             session,
             snapshot_id=snapshot_id,
-            prompt_version=str(_run_overrides["prompt_version"]),
+            prompt_version=str(control_overrides["prompt_version"]),
         )
         if resolved:
-            _run_overrides["prompt_templates"] = resolved
-            merged_payload["_run_overrides"] = _run_overrides
+            control_overrides["prompt_templates"] = resolved
+
+    frozen_snapshot: dict[str, Any] = {"_run_overrides": control_overrides}
 
     run = await create_run(
         session,
@@ -378,6 +383,7 @@ async def run_variant_weighted(
         input_payload=merged_payload,
         account_id=account_id,
         variant_group_id=group.id,
+        variant_config_snapshot=frozen_snapshot,
     )
 
     await increment_run_count(session, group.id)
@@ -386,6 +392,7 @@ async def run_variant_weighted(
         "run_id": run.id,
         "variant": variant,
         "merged_payload": merged_payload,
+        "frozen_snapshot": frozen_snapshot,
     }
 
 
@@ -442,34 +449,39 @@ async def run_variant_batch(
         if snapshot_id is None:
             return None  # defensive — the pre-flight loop above already guarantees this
 
-        payload = _merge_variant_payload(variant, input_payload or {}, degraded_evals=group.degraded_evals)
+        payload, control_overrides = _merge_variant_payload(
+            variant, input_payload or {}, degraded_evals=group.degraded_evals
+        )
 
         # FAR-342: resolve a prompt_version override to its per-agent templates
         # so the node_runner can render the selected prompt for each node, not
         # the snapshot-embedded one — keyed by agent so one agent's template
         # never clobbers another's. Stored alongside the version label under
-        # _run_overrides.
-        _run_overrides = payload.get("_run_overrides")
-        if isinstance(_run_overrides, dict) and _run_overrides.get("prompt_version"):
+        # ``_run_overrides`` in the frozen snapshot (the executor seeds it into
+        # run_context as a top-level system-reserved key, NEVER from caller
+        # input).
+        if control_overrides.get("prompt_version"):
             resolved = await _resolve_prompt_template_override(
                 session,
                 snapshot_id=snapshot_id,
-                prompt_version=str(_run_overrides["prompt_version"]),
+                prompt_version=str(control_overrides["prompt_version"]),
             )
             if resolved:
-                _run_overrides["prompt_templates"] = resolved
-                payload["_run_overrides"] = _run_overrides
+                control_overrides["prompt_templates"] = resolved
 
         # Frozen snapshot/override capture at fire time — the single source of
         # truth for "which input this variant ran with". The compare view reads
         # this, never the live snapshot, so later group edits cannot rewrite
         # history. ``variant_id`` is the stable persisted id (frontend-minted
-        # on Duplicate, FAR-332 3b); it may be absent on legacy variants.
+        # on Duplicate, FAR-332 3b); it may be absent on legacy variants. The
+        # system-reserved ``_run_overrides`` (model_backend_id / prompt_version /
+        # resolved prompt_templates) rides here, never in the input payload.
         frozen_snapshot = {
             "variant_id": str(variant["id"]) if variant.get("id") is not None else None,
             "variant_name": variant.get("name"),
             "snapshot_id": str(snapshot_id),
             "run_context_overrides": dict(overrides) if isinstance(overrides, dict) else {},
+            "_run_overrides": control_overrides,
             "batch_id": str(batch_id),
         }
 
