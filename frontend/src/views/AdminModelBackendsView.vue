@@ -420,12 +420,8 @@ import { formatApiError } from '../lib/api/formatError'
 import Button from 'primevue/button'
 import Select from 'primevue/select'
 import TableActions from '../components/shared/TableActions.vue'
-import { useI18n } from 'vue-i18n'
-
 type ModelBackendItem = components['schemas']['ModelBackendResponse']
 type PipelineRefItem = components['schemas']['PipelineReference']
-
-const { t } = useI18n()
 
 interface BackendFormState {
   name: string
