@@ -485,4 +485,4 @@ async def test_cross_org_batch_returns_empty(
     # test_org's RLS-scoped session must NOT see the foreign org's batch.
     runs = await get_batch_runs(rls_session, org_id=test_org, batch_id=foreign_batch)
     assert runs == []
-    assert await get_batch_compare(rls_session, org_id=test_org, batch_id=foreign_batch) == []
+    assert not (await get_batch_compare(rls_session, org_id=test_org, batch_id=foreign_batch))
