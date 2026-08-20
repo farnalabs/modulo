@@ -321,7 +321,7 @@ async function loadBatch(id: string) {
   try {
     const { data, error: err } = await fetchVariantBatch(id)
     if (err) {
-      error.value = `${t('views.variantBatch.failedToLoadBatch')} ${err}`
+      error.value = `${t('views.variantBatch.failedToLoadBatch')} ${formatApiError(err)}`
       return
     }
     batch.value = data ?? null
@@ -355,7 +355,7 @@ async function handleSoftDelete(batch: VariantBatchSummary) {
   try {
     const { error: err } = await softDeleteVariantBatch(batch.batch_id)
     if (err) {
-      error.value = `${t('views.variantBatch.failedToDelete')} ${err}`
+      error.value = `${t('views.variantBatch.failedToDelete')} ${formatApiError(err)}`
       return
     }
     await loadComparisons()
@@ -373,7 +373,7 @@ async function handleReFire() {
   try {
     const { data, error: err } = await reFireVariantBatch(batchId.value)
     if (err) {
-      error.value = `${t('views.variantBatch.refireFailed')} ${err}`
+      error.value = `${t('views.variantBatch.refireFailed')} ${formatApiError(err)}`
       return
     }
     batch.value = data ?? null
