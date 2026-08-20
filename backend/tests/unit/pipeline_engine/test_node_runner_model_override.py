@@ -66,10 +66,14 @@ async def _run_node(state: dict[str, Any]) -> tuple[dict[str, Any], _RecordingHu
 
 @pytest.mark.asyncio
 async def test_run_context_model_backend_override_wins_over_node_def() -> None:
-    """The namespaced ``_run_overrides`` override is used, not the node_def backend."""
+    """The namespaced ``_run_overrides`` override is used, not the node_def backend.
+
+    The executor seeds ``_run_overrides`` as a TOP-LEVEL run_context key from the
+    run's frozen variant config — never inside ``input``.
+    """
     override_backend = str(uuid.uuid4())
     state = {
-        "run_context": {"input": {"task": "classify", "_run_overrides": {"model_backend_id": override_backend}}},
+        "run_context": {"input": {"task": "classify"}, "_run_overrides": {"model_backend_id": override_backend}},
         "artifacts": [],
     }
     result, hub = await _run_node(state)
@@ -120,10 +124,8 @@ async def test_prompt_template_override_wins_over_node_def() -> None:
     override_prompt = "Render THIS prompt version instead."
     state = {
         "run_context": {
-            "input": {
-                "task": "classify",
-                "_run_overrides": {"prompt_templates": {"22222222-2222-2222-2222-222222222222": override_prompt}},
-            }
+            "input": {"task": "classify"},
+            "_run_overrides": {"prompt_templates": {"22222222-2222-2222-2222-222222222222": override_prompt}},
         },
         "artifacts": [],
     }
@@ -143,10 +145,8 @@ async def test_other_agent_prompt_override_does_not_clobber_this_node() -> None:
     other_agent_prompt = "This belongs to another agent."
     state = {
         "run_context": {
-            "input": {
-                "task": "classify",
-                "_run_overrides": {"prompt_templates": {"99999999-9999-9999-9999-999999999999": other_agent_prompt}},
-            }
+            "input": {"task": "classify"},
+            "_run_overrides": {"prompt_templates": {"99999999-9999-9999-9999-999999999999": other_agent_prompt}},
         },
         "artifacts": [],
     }
@@ -160,5 +160,32 @@ async def test_node_def_prompt_used_when_no_prompt_override() -> None:
     """Without a prompt_templates override, the node_def prompt is rendered."""
     state = {"run_context": {"input": {"task": "classify"}}, "artifacts": []}
     result, hub = await _run_node(state)
+    assert hub.prompts == ["Summarise the input."]
+    assert result["artifacts"][0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_normal_run_caller_supplied_run_overrides_is_data_not_override() -> None:
+    """FAR-342 injection: a NORMAL run's ``_run_overrides`` in input is DATA.
+
+    A caller-supplied ``input_payload={"task": ..., "_run_overrides": {...}}``
+    flows into ``run_context["input"]`` untouched — the executor only ever seeds
+    the TOP-LEVEL ``_run_overrides`` key from the run's frozen variant config.
+    With no top-level seed, the node_runner must render the snapshot prompt, NOT
+    the injected one.
+    """
+    injected = "INJECTED prompt via caller input."
+    state = {
+        "run_context": {
+            "input": {
+                "task": "classify",
+                "_run_overrides": {"prompt_templates": {"22222222-2222-2222-2222-222222222222": injected}},
+            }
+        },
+        "artifacts": [],
+    }
+    result, hub = await _run_node(state)
+    # The node_def prompt is rendered — the injected template in input never
+    # reaches the override boundary.
     assert hub.prompts == ["Summarise the input."]
     assert result["artifacts"][0]["status"] == "completed"

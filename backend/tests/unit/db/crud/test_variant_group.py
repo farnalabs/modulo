@@ -237,8 +237,10 @@ class TestRunVariantBatch:
         assert [r["variant"]["name"] for r in results] == ["control", "experiment"]
         assert results[0]["run_id"] == mock_run.id
         assert results[0]["merged_payload"]["shared"] == "payload"
-        assert results[0]["merged_payload"]["_run_overrides"]["model_backend_id"] == "backend-control"
-        assert results[1]["merged_payload"]["_run_overrides"]["model_backend_id"] == "backend-experiment"
+        # The override namespace lives in the frozen snapshot, NOT the payload.
+        assert "_run_overrides" not in results[0]["merged_payload"]
+        assert results[0]["frozen_snapshot"]["_run_overrides"]["model_backend_id"] == "backend-control"
+        assert results[1]["frozen_snapshot"]["_run_overrides"]["model_backend_id"] == "backend-experiment"
         mock_inc.assert_awaited_once_with(session, group.id, delta=2)
 
     async def test_prompt_version_override_merged_into_payload(self) -> None:
@@ -286,9 +288,11 @@ class TestRunVariantBatch:
             )
 
         assert results is not None
-        assert results[0]["merged_payload"]["_run_overrides"]["prompt_version"] == "v3"
-        assert results[1]["merged_payload"]["_run_overrides"]["prompt_version"] == "v4"
+        # The prompt_version control override lives in the frozen snapshot.
+        assert results[0]["frozen_snapshot"]["_run_overrides"]["prompt_version"] == "v3"
+        assert results[1]["frozen_snapshot"]["_run_overrides"]["prompt_version"] == "v4"
         assert results[0]["merged_payload"]["shared"] == "payload"
+        assert "_run_overrides" not in results[0]["merged_payload"]
 
     async def test_prompt_version_override_resolved_to_template(self) -> None:
         """A prompt_version override resolves to its per-agent templates (FAR-342).
@@ -342,9 +346,11 @@ class TestRunVariantBatch:
             )
 
         assert results is not None
-        overrides = results[0]["merged_payload"]["_run_overrides"]
+        overrides = results[0]["frozen_snapshot"]["_run_overrides"]
         assert overrides["prompt_version"] == "v3"
         assert overrides["prompt_templates"] == {agent_a: "You are v3."}
+        # The override namespace never leaks into the input payload.
+        assert "_run_overrides" not in results[0]["merged_payload"]
 
     async def test_prompt_version_override_unresolved_leaves_template_unset(self) -> None:
         """An unresolvable prompt_version leaves ``_run_overrides["prompt_templates"]`` unset.
@@ -393,7 +399,7 @@ class TestRunVariantBatch:
             )
 
         assert results is not None
-        overrides = results[0]["merged_payload"]["_run_overrides"]
+        overrides = results[0]["frozen_snapshot"]["_run_overrides"]
         assert overrides["prompt_version"] == "v9"
         assert "prompt_templates" not in overrides
 
@@ -520,7 +526,7 @@ class TestRunVariantBatch:
             results = await run_variant_batch(session, org_id=org_id, group=group, input_payload={"topic": "x"})
 
         assert results is not None
-        assert [r["merged_payload"]["_run_overrides"].get("prompt_version") for r in results] == ["v3", "v4"]
+        assert [r["frozen_snapshot"]["_run_overrides"].get("prompt_version") for r in results] == ["v3", "v4"]
 
     async def test_injects_degraded_evals_flag_into_each_run(self) -> None:
         session = AsyncMock()
@@ -734,6 +740,17 @@ class TestRunVariantBatch:
         assert mock_create.await_args_list[1].kwargs["variant_config_snapshot"]["run_context_overrides"] == {
             "model_backend_id": "backend-experiment"
         }
+        # The system-reserved override namespace rides in the frozen snapshot
+        # (not the input payload), and each run was handed it via create_run.
+        assert mock_create.await_args_list[0].kwargs["variant_config_snapshot"]["_run_overrides"] == {
+            "model_backend_id": "backend-control"
+        }
+        assert mock_create.await_args_list[1].kwargs["variant_config_snapshot"]["_run_overrides"] == {
+            "model_backend_id": "backend-experiment"
+        }
+        # The override never leaks into the payload handed to create_run.
+        assert "_run_overrides" not in mock_create.await_args_list[0].kwargs["input_payload"]
+        assert "_run_overrides" not in mock_create.await_args_list[1].kwargs["input_payload"]
 
 
 @pytest.mark.asyncio
@@ -1199,14 +1216,20 @@ class TestMergeVariantPayloadStripsRunOverrides:
             "task": "classify",
             "_run_overrides": {"prompt_templates": {"abc": "injected prompt"}},
         }
-        merged = _merge_variant_payload(self._variant(), payload, degraded_evals=False)
-        # No system control keys were set, so the namespace must not exist at all.
+        merged, controls = _merge_variant_payload(self._variant(), payload, degraded_evals=False)
+        # No system control keys were set, so the namespace must not exist in the payload.
         assert "_run_overrides" not in merged
+        # Control overrides are returned separately for the frozen snapshot.
+        assert controls == {}
         # The caller's injected template must never survive.
         assert "prompt_templates" not in merged
 
     def test_strips_caller_supplied_run_overrides_then_readds_system_controls(self) -> None:
-        """System-set control keys replace (not merge with) a caller-supplied ``_run_overrides``."""
+        """System-set control keys replace (not merge with) a caller-supplied ``_run_overrides``.
+
+        The system control keys are returned SEPARATELY (for the frozen
+        ``variant_config_snapshot``), never written back into the payload.
+        """
         payload = {
             "task": "classify",
             "_run_overrides": {
@@ -1215,15 +1238,17 @@ class TestMergeVariantPayloadStripsRunOverrides:
                 "prompt_templates": {"abc": "injected prompt"},
             },
         }
-        merged = _merge_variant_payload(
+        merged, controls = _merge_variant_payload(
             self._variant(model_backend_id="good-backend", prompt_version="v3"),
             payload,
             degraded_evals=False,
         )
-        overrides = merged["_run_overrides"]
-        assert overrides == {"model_backend_id": "good-backend", "prompt_version": "v3"}
+        assert controls == {"model_backend_id": "good-backend", "prompt_version": "v3"}
+        # The namespace is NOT written back into the payload (it lives in the
+        # frozen snapshot instead, seeded into run_context by the executor).
+        assert "_run_overrides" not in merged
         # The caller's injection values must be gone, not merged over.
-        assert overrides.get("prompt_templates") is None
+        assert controls.get("prompt_templates") is None
 
     def test_base_payload_not_mutated(self) -> None:
         payload = {"task": "classify", "_run_overrides": {"prompt_templates": {"abc": "injected"}}}

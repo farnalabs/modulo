@@ -416,13 +416,24 @@ class GraphValidationError(ValueError):
         self.issues = issues
 
 
-def _seed_state(snapshot: PipelineSnapshot, input_payload: dict[str, Any]) -> dict[str, Any]:
+def _seed_state(
+    snapshot: PipelineSnapshot,
+    input_payload: dict[str, Any],
+    variant_config_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Build the initial LangGraph state for a run.
 
     If *input_payload* contains a ``_feedback_correction`` key, it is
     promoted to the top-level ``run_context`` as ``feedback_correction``
     and removed from the input dict so the pipeline agents never see it
     as part of their normal input.
+
+    ``_run_overrides`` is a SYSTEM-RESERVED TOP-LEVEL run_context key. It is
+    seeded ONLY from the run's frozen ``variant_config_snapshot`` (captured at
+    fire time) — NEVER from caller input. A normal run has no variant config, so
+    a caller-supplied ``_run_overrides`` inside ``input_payload`` stays DATA in
+    ``run_context["input"]`` and can never reach the node_runner's override
+    boundary (FAR-342 injection surface).
     """
     # Copy input_payload to avoid mutating the caller's dict.
     payload = dict(input_payload)
@@ -440,6 +451,13 @@ def _seed_state(snapshot: PipelineSnapshot, input_payload: dict[str, Any]) -> di
     # Seed autonomy from snapshot-level default so gate nodes can resolve it.
     if snapshot.default_autonomy_level:
         run_context["_pipeline_default_autonomy"] = snapshot.default_autonomy_level
+    # Seed the system-reserved override namespace from the run's FROZEN variant
+    # config only. This is the ONLY path that populates it — a caller-supplied
+    # ``_run_overrides`` in the input payload is never promoted here.
+    if isinstance(variant_config_snapshot, dict):
+        overrides = variant_config_snapshot.get("_run_overrides")
+        if isinstance(overrides, dict):
+            run_context["_run_overrides"] = overrides
     return {
         "run_context": run_context,
         "artifacts": [],
@@ -2278,6 +2296,7 @@ class PipelineExecutor:
             org_id=org_id,
             input_payload=input_payload,
         )
+        variant_config_snapshot = run.variant_config_snapshot
         scalars = self._capture_execution_scalars(pipeline, run)
         pipeline_id = scalars["pipeline_id"]
         max_concurrent = scalars["max_concurrent"]
@@ -2348,6 +2367,7 @@ class PipelineExecutor:
                 snapshot_id=snapshot_id,
                 snapshot=snapshot,
                 input_payload=input_payload,
+                variant_config_snapshot=variant_config_snapshot,
                 graph_json=graph_json,
                 eval_defs_by_node=eval_defs_by_node,
                 thread_id=thread_id,
@@ -2778,6 +2798,7 @@ class PipelineExecutor:
         snapshot_id: uuid.UUID,
         snapshot: PipelineSnapshot,
         input_payload: dict[str, Any],
+        variant_config_snapshot: dict[str, Any] | None,
         graph_json: dict[str, Any],
         eval_defs_by_node: dict[str, list[EvalDefDTO]],
         thread_id: str,
@@ -2809,7 +2830,7 @@ class PipelineExecutor:
             pipeline_node_timeout_seconds=pipeline_node_timeout_seconds,
         )
 
-        initial_state = _seed_state(snapshot, input_payload)
+        initial_state = _seed_state(snapshot, input_payload, variant_config_snapshot)
         initial_state.update(
             {
                 "_run_id": run_id,
