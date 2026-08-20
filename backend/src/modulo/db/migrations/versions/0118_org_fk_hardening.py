@@ -74,7 +74,7 @@ def upgrade() -> None:
                             EXECUTE format(
                                 'ALTER TABLE %I ADD CONSTRAINT %I '
                                 'FOREIGN KEY (organisation_id) '
-                                'REFERENCES organisations(id) ON DELETE CASCADE',
+                                'REFERENCES organisations(id) ON DELETE RESTRICT',
                                 rec.table_name,
                                 constraint_name
                             );

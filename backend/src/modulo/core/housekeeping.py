@@ -423,20 +423,18 @@ async def _scan_expired_webhook_dedups(session: AsyncSession, org_id: uuid.UUID)
 
 async def _scan_duplicate_triggers(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
     """Find pipelines with multiple triggers of the same type (e.g. two cron triggers)."""
-    from sqlalchemy import func as sa_func
-
     dup_subq = (
         select(
             Trigger.pipeline_id,
             Trigger.trigger_type,
-            sa_func.count(Trigger.id).label("cnt"),
+            func.count(Trigger.id).label("cnt"),
         )
         .where(
             Trigger.organisation_id == org_id,
             Trigger.deleted_at.is_(None),
         )
         .group_by(Trigger.pipeline_id, Trigger.trigger_type)
-        .having(sa_func.count(Trigger.id) > 1)
+        .having(func.count(Trigger.id) > 1)
         .subquery()
     )
 
@@ -650,12 +648,25 @@ async def _scan_unused_parameter_schemas(session: AsyncSession, org_id: uuid.UUI
 async def _scan_unused_schemas(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
     """Schemas not referenced by any agent (input/output) or snapshot schema pin. Excludes system schemas."""
     # IDs used by agents (input or output schema)
-    agent_input_ids = select(Agent.input_schema_id).where(Agent.organisation_id == org_id).distinct().subquery()
-    agent_output_ids = select(Agent.output_schema_id).where(Agent.organisation_id == org_id).distinct().subquery()
+    agent_input_ids = (
+        select(Agent.input_schema_id)
+        .where(Agent.organisation_id == org_id, Agent.input_schema_id.is_not(None))
+        .distinct()
+        .subquery()
+    )
+    agent_output_ids = (
+        select(Agent.output_schema_id)
+        .where(Agent.organisation_id == org_id, Agent.output_schema_id.is_not(None))
+        .distinct()
+        .subquery()
+    )
 
     # IDs used by snapshot schema pins
     pin_schema_ids = (
-        select(SnapshotSchemaPin.schema_id).where(SnapshotSchemaPin.organisation_id == org_id).distinct().subquery()
+        select(SnapshotSchemaPin.schema_id)
+        .where(SnapshotSchemaPin.organisation_id == org_id, SnapshotSchemaPin.schema_id.is_not(None))
+        .distinct()
+        .subquery()
     )
 
     schemas = (
@@ -724,10 +735,8 @@ async def _scan_invalid_org_fk(session: AsyncSession, org_id: uuid.UUID) -> list
     signal is: if ``organisation_id`` no longer exists in ``organisations``, every
     tenant-scoped row still carrying that value is orphaned and is floated here.
     """
-    from sqlalchemy import select as _select
-
     org_exists = (
-        await session.execute(_select(Organisation.id).where(Organisation.id == org_id))
+        await session.execute(select(Organisation.id).where(Organisation.id == org_id))
     ).scalar_one_or_none() is not None
 
     if org_exists:
@@ -738,7 +747,7 @@ async def _scan_invalid_org_fk(session: AsyncSession, org_id: uuid.UUID) -> list
     for cls in _tenant_models():
         table = cls.__table__
         org_col = table.c.organisation_id
-        stmt = _select(cls).where(org_col == org_id).where(org_col.is_not(None))
+        stmt = select(cls).where(org_col == org_id).where(org_col.is_not(None))
         rows = (await session.execute(stmt)).scalars().all()
         for r in rows:
             candidates.append(
