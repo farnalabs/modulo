@@ -65,6 +65,11 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="community",
     ),
     FeatureFlag(
+        name="dashboard_charts",
+        description="Dashboard trend charts (run activity sparklines)",
+        tier="community",
+    ),
+    FeatureFlag(
         name="polling_trigger",
         description="Trigger pipelines by polling external endpoints",
         tier="community",
@@ -548,7 +553,11 @@ class FeatureFlagRegistry:
         # is always in the inactive set — it is default-OFF by definition, so it
         # must not come active via the tier-rank fallback when the DB catalog is
         # empty; only an explicit ``_overrides`` entry can turn it on.
-        inactive: set[str] = getattr(self, "_inactive_flags", set()) | {"mobile_sidebar_rail"}
+        inactive: set[str] = getattr(self, "_inactive_flags", set()) | {
+            "mobile_sidebar_rail",
+            "dashboard_charts",
+            "saved_views",
+        }
 
         for flag in self._flags:
             if flag.name in inactive:

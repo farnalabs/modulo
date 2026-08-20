@@ -66,6 +66,12 @@ FLAGS: list[dict[str, str | None]] = [
         "depends_on": None,
     },
     {
+        "name": "dashboard_charts",
+        "description": "Dashboard trend charts (run activity sparklines)",
+        "tier_id": "community",
+        "depends_on": None,
+    },
+    {
         "name": "sso",
         "description": "Single sign-on via OIDC / SAML 2.0 providers",
         "tier_id": "team",

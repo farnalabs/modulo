@@ -34,7 +34,7 @@ class TestSavedViewsFlag:
         registry = FeatureFlagRegistry()
         flag = registry.get_flag("saved_views")
         assert flag is not None
-        assert flag.currently_active is True
+        assert flag.currently_active is False
 
 
 class TestMobileSidebarRailFlag:

@@ -985,6 +985,7 @@ export default {
       "team_tier": "Team tier",
       "license_key": "License Key",
       "feature_flags": "Feature Flags",
+      "search_flags": "Search flags",
       "not_set": "Not set",
       "failed_to_toggle_flag": "Failed to toggle flag:",
       "license_status": "License Status",
