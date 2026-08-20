@@ -218,7 +218,21 @@ def _coerce_snapshot_id(raw: Any) -> uuid.UUID | None:
     return uuid.UUID(str(raw)) if isinstance(raw, str) else raw
 
 
-_CONTROL_OVERRIDE_KEYS = ("model_backend_id", "prompt_version")
+# Control override keys are stored in the run's frozen ``variant_config_snapshot``
+# under the system-reserved ``_run_overrides`` namespace (seeded into run_context by
+# the executor — NEVER from caller input, see ``_merge_variant_payload`` / executor).
+#
+# FAR-343 verification conclusion: these two keys target DIFFERENT node types.
+#   - ``model_backend_id`` (a Modulo model-backend UUID) is consumed by the
+#     node_runner's ``agent`` node (single-shot LLM) path only — the node resolves
+#     the backend by UUID from ``_run_overrides["model_backend_id"]``.
+#   - ``model`` (an opencode model ID) is for ``sandbox_agent`` nodes. The
+#     ``agent_command`` is Jinja-rendered with ``run_context`` in scope, so a
+#     pipeline author can vary the opencode model per-run by writing
+#     ``--model {{ run_context._run_overrides.model }}`` in the command. It does
+#     NOT map to a Modulo model-backend UUID — it is the opencode CLI model ID
+#     (e.g. ``opencode-go/hy3``) baked into the E2B sandbox command.
+_CONTROL_OVERRIDE_KEYS = ("model_backend_id", "prompt_version", "model")
 
 
 async def _resolve_prompt_template_override(
