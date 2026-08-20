@@ -1464,14 +1464,31 @@ def make_node_fn(
         # FAR-332: a model_backend_id run_context override (fired by the variant
         # comparison / A/B test views) takes precedence over the snapshot-embedded
         # node_def backend, so every variant can run on a different model backend.
-        # The override is namespaced under the reserved ``_run_overrides`` key —
-        # never read from a bare top-level ``model_backend_id`` in user-supplied
-        # input, which is DATA and could silently reroute model routing.
-        _input = run_context.get("input") or {}
-        if isinstance(_input, dict):
-            _run_overrides = _input.get("_run_overrides")
-            if isinstance(_run_overrides, dict) and _run_overrides.get("model_backend_id"):
+        # The override is namespaced under the reserved TOP-LEVEL ``_run_overrides``
+        # key, seeded by the executor from the run's frozen variant config — never
+        # read from ``run_context["input"]``, where a bare top-level
+        # ``model_backend_id`` (or a crafted ``_run_overrides``) in user-supplied
+        # input is DATA and could silently reroute model routing.
+        #
+        # FAR-342: a prompt_templates override (resolved from the variant's
+        # prompt_version picker at run creation) likewise takes precedence over
+        # the snapshot-embedded node_def prompt, so every variant renders with
+        # its own prompt version. The override is a PER-AGENT map, so each node
+        # reads ONLY the template for its own agent — one agent's template never
+        # clobbers another's in a multi-agent snapshot. When the node's agent is
+        # absent from the map, fall back to the node_def prompt. Because the
+        # executor only ever seeds this from ``variant_config_snapshot``, a NORMAL
+        # run that carries ``_run_overrides`` as caller input never reaches this
+        # boundary (FAR-342 injection surface closed).
+        _run_overrides = run_context.get("_run_overrides")
+        if isinstance(_run_overrides, dict):
+            if _run_overrides.get("model_backend_id"):
                 model_backend_id_str = str(_run_overrides["model_backend_id"])
+            prompt_templates = _run_overrides.get("prompt_templates")
+            if isinstance(prompt_templates, dict) and agent_id is not None:
+                per_agent_prompt = prompt_templates.get(str(agent_id))
+                if isinstance(per_agent_prompt, str) and per_agent_prompt:
+                    prompt_template = per_agent_prompt
 
         # If no model_backend_id, fall back to stub behavior
         # (connector_binding nodes, manual nodes routed through wrong path, etc.).

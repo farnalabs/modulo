@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.db.crud.variant_group import (
+    _merge_variant_payload,
+    _resolve_prompt_template_override,
     check_pipeline_run_quota_for_batch,
     get_coverage_gaps,
     get_prompt_diffs,
@@ -14,6 +16,7 @@ from modulo.db.crud.variant_group import (
     run_variant_batch,
     run_variant_weighted,
 )
+from modulo.db.models.agent import Agent
 
 
 class TestPickVariantWeighted:
@@ -234,8 +237,10 @@ class TestRunVariantBatch:
         assert [r["variant"]["name"] for r in results] == ["control", "experiment"]
         assert results[0]["run_id"] == mock_run.id
         assert results[0]["merged_payload"]["shared"] == "payload"
-        assert results[0]["merged_payload"]["_run_overrides"]["model_backend_id"] == "backend-control"
-        assert results[1]["merged_payload"]["_run_overrides"]["model_backend_id"] == "backend-experiment"
+        # The override namespace lives in the frozen snapshot, NOT the payload.
+        assert "_run_overrides" not in results[0]["merged_payload"]
+        assert results[0]["frozen_snapshot"]["_run_overrides"]["model_backend_id"] == "backend-control"
+        assert results[1]["frozen_snapshot"]["_run_overrides"]["model_backend_id"] == "backend-experiment"
         mock_inc.assert_awaited_once_with(session, group.id, delta=2)
 
     async def test_prompt_version_override_merged_into_payload(self) -> None:
@@ -283,9 +288,120 @@ class TestRunVariantBatch:
             )
 
         assert results is not None
-        assert results[0]["merged_payload"]["_run_overrides"]["prompt_version"] == "v3"
-        assert results[1]["merged_payload"]["_run_overrides"]["prompt_version"] == "v4"
+        # The prompt_version control override lives in the frozen snapshot.
+        assert results[0]["frozen_snapshot"]["_run_overrides"]["prompt_version"] == "v3"
+        assert results[1]["frozen_snapshot"]["_run_overrides"]["prompt_version"] == "v4"
         assert results[0]["merged_payload"]["shared"] == "payload"
+        assert "_run_overrides" not in results[0]["merged_payload"]
+
+    async def test_prompt_version_override_resolved_to_template(self) -> None:
+        """A prompt_version override resolves to its per-agent templates (FAR-342).
+
+        The batch runner resolves the version label via each agent's
+        ``prompt_version_history`` and stores the per-agent template map
+        alongside the version under ``_run_overrides`` so the node runner can
+        render the right template for each node. The map contains ONLY the
+        matching agent.
+        """
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+        agent_a = str(uuid.uuid4())
+        group = self._make_group()
+        group.variants = [
+            {
+                "name": "v3",
+                "snapshot_id": str(uuid.uuid4()),
+                "weight": 1.0,
+                "run_context_overrides": {"prompt_version": "v3"},
+            }
+        ]
+
+        locked = self._make_locked(group)
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = locked
+        session.execute.return_value = exec_result
+
+        mock_run = MagicMock()
+        mock_run.id = uuid.uuid4()
+
+        with (
+            patch(
+                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
+            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
+            patch(
+                "modulo.db.crud.variant_group._resolve_prompt_template_override",
+                new_callable=AsyncMock,
+                return_value={agent_a: "You are v3."},
+            ),
+        ):
+            results = await run_variant_batch(
+                session,
+                org_id=org_id,
+                group=group,
+                input_payload={"shared": "payload"},
+            )
+
+        assert results is not None
+        overrides = results[0]["frozen_snapshot"]["_run_overrides"]
+        assert overrides["prompt_version"] == "v3"
+        assert overrides["prompt_templates"] == {agent_a: "You are v3."}
+        # The override namespace never leaks into the input payload.
+        assert "_run_overrides" not in results[0]["merged_payload"]
+
+    async def test_prompt_version_override_unresolved_leaves_template_unset(self) -> None:
+        """An unresolvable prompt_version leaves ``_run_overrides["prompt_templates"]`` unset.
+
+        The node runner then falls back to its snapshot-embedded prompt.
+        """
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+        group = self._make_group()
+        group.variants = [
+            {
+                "name": "v9",
+                "snapshot_id": str(uuid.uuid4()),
+                "weight": 1.0,
+                "run_context_overrides": {"prompt_version": "v9"},
+            }
+        ]
+
+        locked = self._make_locked(group)
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = locked
+        session.execute.return_value = exec_result
+
+        mock_run = MagicMock()
+        mock_run.id = uuid.uuid4()
+
+        with (
+            patch(
+                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
+            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
+            patch(
+                "modulo.db.crud.variant_group._resolve_prompt_template_override",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
+        ):
+            results = await run_variant_batch(
+                session,
+                org_id=org_id,
+                group=group,
+                input_payload={"shared": "payload"},
+            )
+
+        assert results is not None
+        overrides = results[0]["frozen_snapshot"]["_run_overrides"]
+        assert overrides["prompt_version"] == "v9"
+        assert "prompt_templates" not in overrides
 
     async def test_returns_none_when_quota_exceeded_for_batch(self) -> None:
         session = AsyncMock()
@@ -410,7 +526,7 @@ class TestRunVariantBatch:
             results = await run_variant_batch(session, org_id=org_id, group=group, input_payload={"topic": "x"})
 
         assert results is not None
-        assert [r["merged_payload"]["_run_overrides"].get("prompt_version") for r in results] == ["v3", "v4"]
+        assert [r["frozen_snapshot"]["_run_overrides"].get("prompt_version") for r in results] == ["v3", "v4"]
 
     async def test_injects_degraded_evals_flag_into_each_run(self) -> None:
         session = AsyncMock()
@@ -624,6 +740,17 @@ class TestRunVariantBatch:
         assert mock_create.await_args_list[1].kwargs["variant_config_snapshot"]["run_context_overrides"] == {
             "model_backend_id": "backend-experiment"
         }
+        # The system-reserved override namespace rides in the frozen snapshot
+        # (not the input payload), and each run was handed it via create_run.
+        assert mock_create.await_args_list[0].kwargs["variant_config_snapshot"]["_run_overrides"] == {
+            "model_backend_id": "backend-control"
+        }
+        assert mock_create.await_args_list[1].kwargs["variant_config_snapshot"]["_run_overrides"] == {
+            "model_backend_id": "backend-experiment"
+        }
+        # The override never leaks into the payload handed to create_run.
+        assert "_run_overrides" not in mock_create.await_args_list[0].kwargs["input_payload"]
+        assert "_run_overrides" not in mock_create.await_args_list[1].kwargs["input_payload"]
 
 
 @pytest.mark.asyncio
@@ -1077,3 +1204,225 @@ class TestPickVariantWeightedNonDict:
         variants = ["bad", 42, None, [1, 2, 3]]
         result = pick_variant_weighted(variants)
         assert result is None
+
+
+class TestMergeVariantPayloadStripsRunOverrides:
+    def _variant(self, **overrides: object) -> dict:
+        return {"name": "control", "snapshot_id": str(uuid.uuid4()), "run_context_overrides": dict(overrides)}
+
+    def test_strips_caller_supplied_run_overrides(self) -> None:
+        """A crafted ``_run_overrides`` in the base payload is dropped (FAR-342 security)."""
+        payload = {
+            "task": "classify",
+            "_run_overrides": {"prompt_templates": {"abc": "injected prompt"}},
+        }
+        merged, controls = _merge_variant_payload(self._variant(), payload, degraded_evals=False)
+        # No system control keys were set, so the namespace must not exist in the payload.
+        assert "_run_overrides" not in merged
+        # Control overrides are returned separately for the frozen snapshot.
+        assert controls == {}
+        # The caller's injected template must never survive.
+        assert "prompt_templates" not in merged
+
+    def test_strips_caller_supplied_run_overrides_then_readds_system_controls(self) -> None:
+        """System-set control keys replace (not merge with) a caller-supplied ``_run_overrides``.
+
+        The system control keys are returned SEPARATELY (for the frozen
+        ``variant_config_snapshot``), never written back into the payload.
+        """
+        payload = {
+            "task": "classify",
+            "_run_overrides": {
+                "prompt_version": "evil-version",
+                "model_backend_id": "evil-backend",
+                "prompt_templates": {"abc": "injected prompt"},
+            },
+        }
+        merged, controls = _merge_variant_payload(
+            self._variant(model_backend_id="good-backend", prompt_version="v3"),
+            payload,
+            degraded_evals=False,
+        )
+        assert controls == {"model_backend_id": "good-backend", "prompt_version": "v3"}
+        # The namespace is NOT written back into the payload (it lives in the
+        # frozen snapshot instead, seeded into run_context by the executor).
+        assert "_run_overrides" not in merged
+        # The caller's injection values must be gone, not merged over.
+        assert controls.get("prompt_templates") is None
+
+    def test_base_payload_not_mutated(self) -> None:
+        payload = {"task": "classify", "_run_overrides": {"prompt_templates": {"abc": "injected"}}}
+        _merge_variant_payload(self._variant(model_backend_id="good"), payload, degraded_evals=False)
+        # The caller's original dict is untouched (we copy before popping).
+        assert payload["_run_overrides"] == {"prompt_templates": {"abc": "injected"}}
+
+
+@pytest.mark.asyncio
+class TestResolvePromptTemplateOverride:
+    def _agent(self, agent_id: uuid.UUID, *, current: str, history: list[dict]) -> Agent:
+        return Agent(
+            id=agent_id,
+            name=f"agent-{agent_id}",
+            account_id=uuid.uuid4(),
+            prompt_template=current,
+            prompt_version_history=history,
+        )
+
+    def _session(self, *, snapshot_exists: bool, graph_json: object | None) -> AsyncMock:
+        session = AsyncMock()
+        id_result = MagicMock()
+        id_result.scalar_one_or_none.return_value = uuid.uuid4() if snapshot_exists else None
+        graph_result = MagicMock()
+        graph_result.scalar_one_or_none.return_value = graph_json
+        # snapshot_exists=True => run the graph query too; otherwise return early.
+        session.execute = AsyncMock(side_effect=[id_result] if not snapshot_exists else [id_result, graph_result])
+        return session
+
+    async def test_resolves_matching_version_per_agent(self) -> None:
+        """A version carried by an agent resolves to that agent's template."""
+        snapshot_id = uuid.uuid4()
+        a = self._agent(
+            uuid.UUID("22222222-2222-2222-2222-222222222222"),
+            current="current-a",
+            history=[{"version": "v3", "template": "A v3"}, {"version": "v1", "template": "A v1"}],
+        )
+        b = self._agent(
+            uuid.UUID("33333333-3333-3333-3333-333333333333"),
+            current="current-b",
+            history=[{"version": "v3", "template": "B v3"}],
+        )
+        session = self._session(
+            snapshot_exists=True,
+            graph_json={
+                "nodes": [
+                    {"agent_id": str(a.id)},
+                    {"agent_id": str(b.id)},
+                    {"agent_id": "not-a-uuid"},
+                    {"nested": True},
+                ]
+            },
+        )
+
+        def _get(session_mock, agent_id):
+            by_id = {a.id: a, b.id: b}
+            return by_id[agent_id]
+
+        with patch(
+            "modulo.db.crud.variant_group.get_agent",
+            new_callable=AsyncMock,
+            side_effect=_get,
+        ):
+            resolved = await _resolve_prompt_template_override(session, snapshot_id=snapshot_id, prompt_version="v3")
+
+        assert resolved == {str(a.id): "A v3", str(b.id): "B v3"}
+
+    async def test_unknown_version_omits_agent(self) -> None:
+        """An agent not carrying the requested version is omitted from the map."""
+        snapshot_id = uuid.uuid4()
+        a = self._agent(
+            uuid.UUID("22222222-2222-2222-2222-222222222222"),
+            current="current-a",
+            history=[{"version": "v1", "template": "A v1"}],
+        )
+        session = self._session(snapshot_exists=True, graph_json={"nodes": [{"agent_id": str(a.id)}]})
+
+        with patch(
+            "modulo.db.crud.variant_group.get_agent",
+            new_callable=AsyncMock,
+            return_value=a,
+        ):
+            resolved = await _resolve_prompt_template_override(session, snapshot_id=snapshot_id, prompt_version="v9")
+
+        assert resolved == {}
+
+    async def test_current_resolves_to_active_template(self) -> None:
+        """``"current"`` resolves to the agent's live ``prompt_template``."""
+        snapshot_id = uuid.uuid4()
+        a = self._agent(
+            uuid.UUID("22222222-2222-2222-2222-222222222222"),
+            current="live template",
+            history=[{"version": "v3", "template": "A v3"}],
+        )
+        session = self._session(snapshot_exists=True, graph_json={"nodes": [{"agent_id": str(a.id)}]})
+
+        with patch(
+            "modulo.db.crud.variant_group.get_agent",
+            new_callable=AsyncMock,
+            return_value=a,
+        ):
+            resolved = await _resolve_prompt_template_override(
+                session, snapshot_id=snapshot_id, prompt_version="current"
+            )
+
+        assert resolved == {str(a.id): "live template"}
+
+    async def test_empty_templates_omitted(self) -> None:
+        """Agents whose resolved template is empty are omitted."""
+        snapshot_id = uuid.uuid4()
+        a = self._agent(
+            uuid.UUID("22222222-2222-2222-2222-222222222222"),
+            current="",
+            history=[{"version": "v3", "template": ""}],
+        )
+        session = self._session(snapshot_exists=True, graph_json={"nodes": [{"agent_id": str(a.id)}]})
+
+        with patch(
+            "modulo.db.crud.variant_group.get_agent",
+            new_callable=AsyncMock,
+            return_value=a,
+        ):
+            resolved = await _resolve_prompt_template_override(session, snapshot_id=snapshot_id, prompt_version="v3")
+
+        assert resolved == {}
+
+    async def test_result_is_deterministic_and_keyed_per_agent(self) -> None:
+        """Iteration is over sorted agent ids, so the map is deterministic and keyed per-agent."""
+        snapshot_id = uuid.uuid4()
+        # Deliberately unordered in the graph so we prove the sort.
+        low = self._agent(
+            uuid.UUID("11111111-1111-1111-1111-111111111111"),
+            current="low",
+            history=[{"version": "v3", "template": "low v3"}],
+        )
+        high = self._agent(
+            uuid.UUID("99999999-9999-9999-9999-999999999999"),
+            current="high",
+            history=[{"version": "v3", "template": "high v3"}],
+        )
+        mid = self._agent(
+            uuid.UUID("55555555-5555-5555-5555-555555555555"),
+            current="mid",
+            history=[{"version": "v3", "template": "mid v3"}],
+        )
+        session = self._session(
+            snapshot_exists=True,
+            graph_json={"nodes": [{"agent_id": str(high.id)}, {"agent_id": str(low.id)}, {"agent_id": str(mid.id)}]},
+        )
+
+        def _get(session_mock, agent_id):
+            by_id = {low.id: low, mid.id: mid, high.id: high}
+            return by_id[agent_id]
+
+        with patch(
+            "modulo.db.crud.variant_group.get_agent",
+            new_callable=AsyncMock,
+            side_effect=_get,
+        ):
+            resolved = await _resolve_prompt_template_override(session, snapshot_id=snapshot_id, prompt_version="v3")
+
+        # Keyed per-agent with each agent's OWN template — never a single run-wide value.
+        assert resolved == {str(low.id): "low v3", str(mid.id): "mid v3", str(high.id): "high v3"}
+        assert list(resolved) == sorted(resolved)
+
+    async def test_returns_empty_when_snapshot_missing(self) -> None:
+        """A missing snapshot short-circuits to an empty map (node falls back to its prompt)."""
+        session = self._session(snapshot_exists=False, graph_json=None)
+        resolved = await _resolve_prompt_template_override(session, snapshot_id=uuid.uuid4(), prompt_version="v3")
+        assert resolved == {}
+
+    async def test_returns_empty_when_graph_not_a_dict(self) -> None:
+        """A non-dict ``graph_json`` yields an empty map."""
+        snapshot_id = uuid.uuid4()
+        session = self._session(snapshot_exists=True, graph_json="not-a-dict")
+        resolved = await _resolve_prompt_template_override(session, snapshot_id=snapshot_id, prompt_version="v3")
+        assert resolved == {}

@@ -710,6 +710,39 @@ def test_seed_state_seeds_iteration_counts():
     assert not state["_iteration_counts"]
 
 
+def test_seed_state_seeds_run_overrides_from_variant_snapshot():
+    """A variant run seeds ``_run_overrides`` as a TOP-LEVEL run_context key."""
+    snap = _make_snapshot()
+    overrides = {"model_backend_id": "backend-a", "prompt_templates": {"a": "v3"}}
+    state = _seed_state(snap, {"task": "x"}, {"_run_overrides": overrides})
+    assert state["run_context"]["_run_overrides"] == overrides
+    # The override must never appear inside the input payload.
+    assert "_run_overrides" not in state["run_context"]["input"]
+
+
+def test_seed_state_ignores_run_overrides_in_caller_input():
+    """A NORMAL run's caller-supplied ``_run_overrides`` in input stays DATA.
+
+    FAR-342 injection: with no frozen variant config the executor must never
+    promote a crafted ``_run_overrides`` from the input payload to the top-level
+    run_context key the node_runner trusts.
+    """
+    snap = _make_snapshot()
+    injected = {"prompt_templates": {"a": "injected prompt"}}
+    state = _seed_state(snap, {"task": "x", "_run_overrides": injected})
+    # Not promoted to the override boundary.
+    assert "_run_overrides" not in state["run_context"]
+    # The crafted dict remains inert data inside the input payload.
+    assert state["run_context"]["input"]["_run_overrides"] == injected
+
+
+def test_seed_state_non_dict_variant_snapshot_overrides_ignored():
+    """A malformed variant snapshot override is ignored (never seeded)."""
+    snap = _make_snapshot()
+    state = _seed_state(snap, {"task": "x"}, {"_run_overrides": "not-a-dict"})
+    assert "_run_overrides" not in state["run_context"]
+
+
 # ---------------------------------------------------------------------------
 # PipelineExecutor.execute — happy path
 # ---------------------------------------------------------------------------
