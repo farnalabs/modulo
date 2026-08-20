@@ -41,15 +41,16 @@ async def _bypass_triggers(conn: AsyncConnection) -> AsyncGenerator[None, None]:
     to model the pre-hardening state and prove the IDOR deny paths. The
     ``enforce_same_organisation`` triggers (migration 0110) legitimately reject
     such rows, so seeding must run with ``session_replication_role = replica``
-    (which disables triggers) and restore ``origin`` before the transaction
-    commits. This mirrors how production backfills cross-org rows with a
-    BYPASSRLS/maintenance role.
+    (which disables triggers). This mirrors how production backfills cross-org
+    rows with a BYPASSRLS/maintenance role.
+
+    ``SET LOCAL`` is scoped to the current transaction and is automatically
+    reset when the transaction ends (commit or rollback), so no explicit restore
+    is performed here. Restoring on the error path would raise a secondary
+    "current transaction is aborted" error that masks the real seed failure.
     """
     await conn.execute(text("SET LOCAL session_replication_role = replica"))
-    try:
-        yield
-    finally:
-        await conn.execute(text("SET LOCAL session_replication_role = origin"))
+    yield
 
 
 async def _seed_org(db_engine: AsyncEngine, name: str) -> uuid.UUID:
@@ -154,6 +155,7 @@ async def _seed_pipeline_snapshot(
     db_engine: AsyncEngine,
     org_id: uuid.UUID,
     pipeline_id: uuid.UUID,
+    snapshot_version: int = 1,
 ) -> uuid.UUID:
     snapshot_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin(), _bypass_triggers(conn):
@@ -163,10 +165,15 @@ async def _seed_pipeline_snapshot(
                 "snapshot_version, graph_json, connector_bindings_json, "
                 "schema_pins_json, prompt_pins_json, model_backend_pins_json, "
                 "run_context_defaults, config_json) "
-                "VALUES (:id, :pid, :oid, 1, '{}'::json, '[]'::json, "
+                "VALUES (:id, :pid, :oid, :version, '{}'::json, '[]'::json, "
                 "'[]'::json, '[]'::json, '[]'::json, '{}'::json, '{}'::json)",
             ),
-            {"id": str(snapshot_id), "pid": str(pipeline_id), "oid": str(org_id)},
+            {
+                "id": str(snapshot_id),
+                "pid": str(pipeline_id),
+                "oid": str(org_id),
+                "version": snapshot_version,
+            },
         )
     return snapshot_id
 
@@ -178,7 +185,7 @@ async def _seed_run(
     run_number: int = 1,
 ) -> uuid.UUID:
     run_id = uuid.uuid4()
-    snapshot_id = await _seed_pipeline_snapshot(db_engine, org_id, pipeline_id)
+    snapshot_id = await _seed_pipeline_snapshot(db_engine, org_id, pipeline_id, snapshot_version=run_number)
     async with db_engine.connect() as conn, conn.begin(), _bypass_triggers(conn):
         await conn.execute(
             text(
