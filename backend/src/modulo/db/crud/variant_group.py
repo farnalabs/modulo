@@ -291,24 +291,31 @@ def _merge_variant_payload(
 ) -> dict[str, Any]:
     """Merge a variant's ``run_context_overrides`` into the base payload.
 
-    Returns a NEW dict; neither *base_payload* nor *variant* is mutated. Control
-    keys (``model_backend_id``, ``prompt_version``) are namespaced under a
-    reserved ``_run_overrides`` dict in the payload instead of being merged at
-    the top level, so a legitimate data field named ``model_backend_id`` in
-    user-supplied input can never silently reroute model routing. Any other
-    (data) override still merges at the top level as before. When
-    ``degraded_evals`` is set the ``_degraded_evals`` marker is applied last so
-    the group setting always wins over any override.
+    Returns a NEW dict; neither *base_payload* nor *variant* is mutated. Any
+    caller-supplied ``_run_overrides`` in *base_payload* is STRIPPED (the
+    namespace is system-reserved — a crafted dict is a prompt-injection
+    vector). Control keys (``model_backend_id``, ``prompt_version``) are then
+    namespaced under a fresh ``_run_overrides`` dict in the payload instead of
+    being merged at the top level, so a legitimate data field named
+    ``model_backend_id`` in user-supplied input can never silently reroute
+    model routing. Any other (data) override still merges at the top level as
+    before. When ``degraded_evals`` is set the ``_degraded_evals`` marker is
+    applied last so the group setting always wins over any override.
     """
     payload = dict(base_payload)
+    # The ``_run_overrides`` namespace is system-reserved. ANY caller-supplied
+    # value in the base payload must be STRIPPED — a crafted ``_run_overrides``
+    # dict (e.g. ``{"prompt_templates": {<agent_id>: "injected prompt"}}``) is
+    # an arbitrary prompt-injection vector that would otherwise survive the
+    # merge and override the rendered prompt. The system re-populates ONLY the
+    # control keys it sets from ``run_context_overrides`` below (and later the
+    # resolved ``prompt_templates``), never trusting caller input.
+    payload.pop("_run_overrides", None)
     overrides = variant.get("run_context_overrides", {})
     if isinstance(overrides, dict):
         controls = {k: overrides[k] for k in _CONTROL_OVERRIDE_KEYS if k in overrides}
         if controls:
-            existing = payload.get("_run_overrides")
-            existing = dict(existing) if isinstance(existing, dict) else {}
-            existing.update(controls)
-            payload["_run_overrides"] = existing
+            payload["_run_overrides"] = controls
         data_overrides = {k: v for k, v in overrides.items() if k not in _CONTROL_OVERRIDE_KEYS}
         if data_overrides:
             payload.update(data_overrides)
