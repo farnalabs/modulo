@@ -28,8 +28,8 @@ routes:
         breadcrumb: Analytics
         parent: /
         product_map:
-        sidebar_group: core
-        sidebar_order: 2
+        sidebar_group: monitor
+        sidebar_order: 7
         type: page
         required_permissions: [analytics.query]
         <<: *community
@@ -58,7 +58,7 @@ routes:
         type: form_page
         pattern: /library/:id/create-pipeline
         dynamic_params:
-        -   id
+          - id
         <<: *community
         deprecated: false
 
@@ -79,7 +79,7 @@ routes:
         parent: /
         product_map:
         sidebar_group: core
-        sidebar_order: 3
+        sidebar_order: 2
         type: list_page
         exact: true
         <<: *community
@@ -91,7 +91,7 @@ routes:
         parent: /
         product_map:
         sidebar_group: core
-        sidebar_order: 4
+        sidebar_order: 3
         type: list_page
         <<: *community
         deprecated: false
@@ -113,7 +113,7 @@ routes:
         parent: /
         product_map:
         sidebar_group: core
-        sidebar_order: 5
+        sidebar_order: 4
         type: list_page
         <<: *community
         deprecated: false
@@ -139,7 +139,7 @@ routes:
         type: form_page
         pattern: /pipelines/:id/editor
         dynamic_params:
-        -   id
+          - id
         <<: *community
         deprecated: false
 
@@ -153,7 +153,7 @@ routes:
         type: detail_page
         pattern: /runs/:id
         dynamic_params:
-        -   id
+          - id
         <<: *community
         deprecated: false
 
@@ -167,7 +167,7 @@ routes:
         type: form_page
         pattern: /composites/:id/editor
         dynamic_params:
-        -   id
+          - id
         <<: *community
         deprecated: false
 
@@ -252,7 +252,7 @@ routes:
         type: form_page
         pattern: /schemas/editor/:id
         dynamic_params:
-        -   id
+          - id
         <<: *community
         deprecated: false
 
@@ -272,8 +272,8 @@ routes:
         breadcrumb: Remy Config
         parent: /
         product_map:
-        sidebar_group: admin
-        sidebar_order: 1
+        sidebar_group: configure
+        sidebar_order: 10
         type: form_page
         <<: *team
         visibility: private_preview
@@ -284,8 +284,8 @@ routes:
         breadcrumb: Remy Skills
         parent: /
         product_map:
-        sidebar_group: admin
-        sidebar_order: 2
+        sidebar_group: configure
+        sidebar_order: 11
         type: form_page
         <<: *community
         visibility: private_preview
@@ -297,7 +297,7 @@ routes:
         parent: /
         product_map:
         sidebar_group: admin
-        sidebar_order: 1
+        sidebar_order: 2
         type: list_page
         <<: *team
         deprecated: false
@@ -308,7 +308,7 @@ routes:
         parent: /
         product_map:
         sidebar_group: admin
-        sidebar_order: 2
+        sidebar_order: 5
         type: form_page
         <<: *team
         deprecated: false
@@ -319,18 +319,17 @@ routes:
         parent: /
         product_map:
         sidebar_group: admin
-        sidebar_order: 3
+        sidebar_order: 1
         type: form_page
         <<: *team
         deprecated: false
-
     /settings/mcp:
         name: settings-mcp
         breadcrumb: MCP
         parent: /
         product_map:
         sidebar_group: configure
-        sidebar_order: 4
+        sidebar_order: 3
         type: form_page
         <<: *community
         deprecated: false
@@ -365,9 +364,9 @@ routes:
         sidebar_group: configure
         sidebar_order: 7
         type: form_page
-        <<: *team
         deprecated: false
 
+        <<: *team
     /settings/rate-limits:
         name: settings-rate-limits
         breadcrumb: Rate Limits
@@ -376,61 +375,62 @@ routes:
         sidebar_group: configure
         sidebar_order: 8
         type: form_page
-        <<: *team
         deprecated: false
 
+        <<: *team
     /settings/hitl-review:
         name: settings-hitl-review
         breadcrumb: HITL Review
         parent: /
         product_map:
-        sidebar_group: admin
-        sidebar_order: 9
+        sidebar_group: monitor
+        sidebar_order: 5
         type: page
         <<: *community
         deprecated: false
 
     /settings/observability:
+        <<: *community
         name: settings-observability
         breadcrumb: Observability
         parent: /
         product_map:
         sidebar_group: admin
-        sidebar_order: 10
+        sidebar_order: 9
         type: form_page
-        <<: *team
         visibility: private_preview
         deprecated: false
 
+        required_permissions:
     /settings/error-forwarders:
         name: settings-error-forwarders
         breadcrumb: Error Forwarders
         parent: /
         product_map:
         sidebar_group: admin
-        sidebar_order: 11
+        sidebar_order: 2
         type: form_page
-        <<: *team
         deprecated: false
 
+        <<: *team
     /settings/email:
         name: settings-email
         breadcrumb: Email
         parent: /
         product_map:
         sidebar_group: admin
-        sidebar_order: 12
+        sidebar_order: 3
         type: form_page
-        <<: *team
         deprecated: false
 
+        <<: *team
     /settings/monitoring:
         name: settings-monitoring
         breadcrumb: Browser Monitoring
         parent: /
         product_map:
         sidebar_group: monitor
-        sidebar_order: 6
+        sidebar_order: 4
         type: form_page
         <<: *community
 
@@ -447,11 +447,11 @@ routes:
 
     /admin/org:
         name: admin-org
-        breadcrumb: Org Settings
+        breadcrumb: Organization
         parent: /
         product_map:
         sidebar_group: admin
-        sidebar_order: 2
+        sidebar_order: 3
         type: form_page
         <<: *team
         deprecated: false
@@ -462,7 +462,7 @@ routes:
         parent: /
         product_map:
         sidebar_group: admin
-        sidebar_order: 3
+        sidebar_order: 6
         type: list_page
         <<: *team
         deprecated: false
@@ -472,8 +472,8 @@ routes:
         breadcrumb: Costs
         parent: /
         product_map:
-        sidebar_group: admin
-        sidebar_order: 1
+        sidebar_group: monitor
+        sidebar_order: 6
         type: page
         <<: *team
         deprecated: false
@@ -518,7 +518,7 @@ routes:
         parent: /
         product_map:
         sidebar_group: configure
-        sidebar_order: 6
+        sidebar_order: 7
         type: list_page
         <<: *team
         deprecated: false
@@ -540,7 +540,7 @@ routes:
         parent: /
         product_map:
         sidebar_group: admin
-        sidebar_order: 3
+        sidebar_order: 7
         type: list_page
         <<: *team
         deprecated: false
@@ -553,27 +553,27 @@ routes:
         sidebar_group: admin
         sidebar_order: 4
         type: list_page
-        <<: *team
         deprecated: false
 
+        <<: *team
     /admin/housekeeping:
         name: admin-housekeeping
         breadcrumb: Housekeeping
         parent: /
         product_map:
         sidebar_group: admin
-        sidebar_order: 3
+        sidebar_order: 6
         type: page
         <<: *community
         deprecated: false
 
     /admin/environments:
         name: admin-environments
-        breadcrumb: Environments
+        breadcrumb: Run Environments
         parent: /
         product_map:
         sidebar_group: admin
-        sidebar_order: 5
+        sidebar_order: 8
         type: list_page
         <<: *team
         deprecated: false
@@ -595,19 +595,30 @@ routes:
         parent: /
         product_map:
         sidebar_group: admin
-        sidebar_order: 6
+        sidebar_order: 5
         type: form_page
-        <<: *team
         deprecated: false
 
+        <<: *team
     /admin/sandbox-concurrency:
         name: admin-sandbox-concurrency
         breadcrumb: Sandbox Concurrency
         parent: /
         product_map:
-        sidebar_group: admin
-        sidebar_order: 8
+        sidebar_group: configure
+        sidebar_order: 9
         type: form_page
+        <<: *team
+        deprecated: false
+
+    /admin/views:
+        name: admin-views
+        breadcrumb: Saved Views
+        parent: /
+        product_map:
+        sidebar_group: admin
+        sidebar_order: 7
+        type: list_page
         <<: *team
         deprecated: false
 
@@ -617,7 +628,7 @@ routes:
         parent: /
         product_map:
         sidebar_group: monitor
-        sidebar_order: 1
+        sidebar_order: 2
         type: list_page
         <<: *team
         deprecated: false
@@ -632,7 +643,7 @@ routes:
         type: detail_page
         pattern: /admin/errors/:id
         dynamic_params:
-        -   id
+          - id
         <<: *team
         deprecated: false
 
@@ -653,7 +664,7 @@ routes:
         parent: /
         product_map:
         sidebar_group: admin
-        sidebar_order: 1
+        sidebar_order: 4
         type: list_page
         <<: *team
         deprecated: false
@@ -664,7 +675,7 @@ routes:
         parent: /
         product_map:
         sidebar_group: core
-        sidebar_order: 9
+        sidebar_order: 5
         type: list_page
         <<: *community
         deprecated: false
@@ -680,7 +691,7 @@ routes:
         type: form_page
         pattern: /lifecycle-maps/:id/editor
         dynamic_params:
-        -   id
+          - id
         <<: *community
         deprecated: false
 
@@ -690,7 +701,7 @@ routes:
         parent: /
         product_map:
         sidebar_group: admin
-        sidebar_order: 2
+        sidebar_order: 9
         type: list_page
         <<: *community
         visibility: private_preview
@@ -706,7 +717,7 @@ routes:
         type: detail_page
         pattern: /lifecycle-maps/:id
         dynamic_params:
-        -   id
+          - id
         <<: *community
         deprecated: false
 
@@ -754,7 +765,7 @@ routes:
         type: form_page
         pattern: /environment-profiles/:id/edit
         dynamic_params:
-        -   id
+          - id
         <<: *team
         deprecated: false
 
@@ -781,7 +792,7 @@ routes:
         deprecated: false
         pattern: /setup/model-backend/:id
         dynamic_params:
-        -   id
+          - id
 
     /remy:
         name: remy-only
@@ -798,11 +809,11 @@ routes:
 
 elements:
     /admin/remy:
-    -   testid: remy-access-save
+      - testid: remy-access-save
         type: button
         label: Save Access List
         dynamic_testid: false
-    -   testid: remy-skills-add
+      - testid: remy-skills-add
         type: button
         label: Add Skill
         dynamic_testid: false
