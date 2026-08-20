@@ -30,61 +30,65 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.execute(
-        text(
-            """
-            DO $$
-            DECLARE
-                rec RECORD;
-                fk_exists BOOLEAN;
-                orphan_count BIGINT;
-                constraint_name TEXT;
-            BEGIN
-                FOR rec IN
-                    SELECT c.table_name
-                    FROM information_schema.columns c
-                    WHERE c.table_schema = 'public'
-                      AND c.column_name = 'organisation_id'
-                      AND c.table_name <> 'organisations'
-                LOOP
-                    constraint_name := 'fk_' || rec.table_name || '_organisation_id';
-                    SELECT EXISTS (
-                        SELECT 1
-                        FROM pg_constraint con
-                        JOIN pg_class rel ON rel.oid = con.conrelid
-                        JOIN pg_class refrel ON refrel.oid = con.confrelid
-                        JOIN pg_attribute att
-                            ON att.attrelid = rel.oid
-                           AND att.attnum = ANY(con.conkey)
-                        WHERE rel.relname = rec.table_name
-                          AND con.contype = 'f'
-                          AND refrel.relname = 'organisations'
-                          AND att.attname = 'organisation_id'
-                    ) INTO fk_exists;
-                    IF NOT fk_exists THEN
-                        EXECUTE format(
-                            'SELECT count(*) FROM %I t '
-                            'WHERE t.organisation_id IS NOT NULL '
-                            'AND NOT EXISTS ('
-                            '  SELECT 1 FROM organisations o WHERE o.id = t.organisation_id'
-                            ')',
-                            rec.table_name
-                        ) INTO orphan_count;
-                        IF orphan_count = 0 THEN
+    # The FK-hardening block below is Postgres-specific (PL/pgSQL, pg_constraint,
+    # information_schema). MariaDB is deprecated/untested and SQLite relies on app-level
+    # tenant filtering, so this reconciliation only runs on Postgres.
+    if op.get_context().dialect.name == "postgresql":
+        op.execute(
+            text(
+                """
+                DO $$
+                DECLARE
+                    rec RECORD;
+                    fk_exists BOOLEAN;
+                    orphan_count BIGINT;
+                    constraint_name TEXT;
+                BEGIN
+                    FOR rec IN
+                        SELECT c.table_name
+                        FROM information_schema.columns c
+                        WHERE c.table_schema = 'public'
+                          AND c.column_name = 'organisation_id'
+                          AND c.table_name <> 'organisations'
+                    LOOP
+                        constraint_name := 'fk_' || rec.table_name || '_organisation_id';
+                        SELECT EXISTS (
+                            SELECT 1
+                            FROM pg_constraint con
+                            JOIN pg_class rel ON rel.oid = con.conrelid
+                            JOIN pg_class refrel ON refrel.oid = con.confrelid
+                            JOIN pg_attribute att
+                                ON att.attrelid = rel.oid
+                               AND att.attnum = ANY(con.conkey)
+                            WHERE rel.relname = rec.table_name
+                              AND con.contype = 'f'
+                              AND refrel.relname = 'organisations'
+                              AND att.attname = 'organisation_id'
+                        ) INTO fk_exists;
+                        IF NOT fk_exists THEN
                             EXECUTE format(
-                                'ALTER TABLE %I ADD CONSTRAINT %I '
-                                'FOREIGN KEY (organisation_id) '
-                                'REFERENCES organisations(id) ON DELETE RESTRICT',
-                                rec.table_name,
-                                constraint_name
-                            );
+                                'SELECT count(*) FROM %I t '
+                                'WHERE t.organisation_id IS NOT NULL '
+                                'AND NOT EXISTS ('
+                                '  SELECT 1 FROM organisations o WHERE o.id = t.organisation_id'
+                                ')',
+                                rec.table_name
+                            ) INTO orphan_count;
+                            IF orphan_count = 0 THEN
+                                EXECUTE format(
+                                    'ALTER TABLE %I ADD CONSTRAINT %I '
+                                    'FOREIGN KEY (organisation_id) '
+                                    'REFERENCES organisations(id) ON DELETE RESTRICT',
+                                    rec.table_name,
+                                    constraint_name
+                                );
+                            END IF;
                         END IF;
-                    END IF;
-                END LOOP;
-            END $$;
-            """
+                    END LOOP;
+                END $$;
+                """
+            )
         )
-    )
 
 
 def downgrade() -> None:
