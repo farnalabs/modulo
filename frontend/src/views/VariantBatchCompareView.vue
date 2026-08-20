@@ -146,7 +146,7 @@
       </div>
 
       <EmptyState
-        v-else-if="!loading && !batch"
+        v-else-if="!batch"
         :title="$t('views.variantBatch.notFoundTitle')"
         :description="$t('views.variantBatch.notFoundDescription')"
       />
@@ -399,7 +399,6 @@ async function handleReFire() {
     if (data) {
       batch.value = data
       expandedRunIds.value = new Set()
-      refiring.value = false
       await router.replace(`/variants/compare/${data.batch_id}`)
       await loadComparisons()
     }
