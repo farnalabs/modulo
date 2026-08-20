@@ -124,7 +124,7 @@ routes:
         parent: /
         product_map:
         sidebar_group: monitor
-        sidebar_order: 1
+        sidebar_order: 2
         type: page
         <<: *community
         deprecated: false
@@ -329,7 +329,7 @@ routes:
         parent: /
         product_map:
         sidebar_group: configure
-        sidebar_order: 3
+        sidebar_order: 4
         type: form_page
         <<: *community
         deprecated: false
@@ -340,7 +340,7 @@ routes:
         parent: /
         product_map:
         sidebar_group: configure
-        sidebar_order: 5
+        sidebar_order: 6
         type: form_page
         <<: *community
         deprecated: false
@@ -351,7 +351,7 @@ routes:
         parent: /
         product_map:
         sidebar_group: configure
-        sidebar_order: 6
+        sidebar_order: 5
         type: form_page
         <<: *community
         deprecated: false
@@ -384,7 +384,7 @@ routes:
         parent: /
         product_map:
         sidebar_group: monitor
-        sidebar_order: 5
+        sidebar_order: 6
         type: page
         <<: *community
         deprecated: false
@@ -473,7 +473,7 @@ routes:
         parent: /
         product_map:
         sidebar_group: monitor
-        sidebar_order: 6
+        sidebar_order: 5
         type: page
         <<: *team
         deprecated: false
@@ -529,7 +529,7 @@ routes:
         parent: /
         product_map:
         sidebar_group: configure
-        sidebar_order: 2
+        sidebar_order: 3
         type: list_page
         <<: *team
         deprecated: false
@@ -584,7 +584,7 @@ routes:
         parent: /
         product_map:
         sidebar_group: configure
-        sidebar_order: 4
+        sidebar_order: 2
         type: list_page
         <<: *team
         deprecated: false
@@ -628,7 +628,7 @@ routes:
         parent: /
         product_map:
         sidebar_group: monitor
-        sidebar_order: 2
+        sidebar_order: 1
         type: list_page
         <<: *team
         deprecated: false
