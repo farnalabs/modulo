@@ -287,6 +287,110 @@ class TestRunVariantBatch:
         assert results[1]["merged_payload"]["_run_overrides"]["prompt_version"] == "v4"
         assert results[0]["merged_payload"]["shared"] == "payload"
 
+    async def test_prompt_version_override_resolved_to_template(self) -> None:
+        """A prompt_version override resolves to its template (FAR-342).
+
+        The batch runner resolves the version label via the agent's
+        ``prompt_version_history`` and stores the template alongside the version
+        under ``_run_overrides`` so the node runner can render it.
+        """
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+        group = self._make_group()
+        group.variants = [
+            {
+                "name": "v3",
+                "snapshot_id": str(uuid.uuid4()),
+                "weight": 1.0,
+                "run_context_overrides": {"prompt_version": "v3"},
+            }
+        ]
+
+        locked = self._make_locked(group)
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = locked
+        session.execute.return_value = exec_result
+
+        mock_run = MagicMock()
+        mock_run.id = uuid.uuid4()
+
+        with (
+            patch(
+                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
+            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
+            patch(
+                "modulo.db.crud.variant_group._resolve_prompt_template_override",
+                new_callable=AsyncMock,
+                return_value="You are v3.",
+            ),
+        ):
+            results = await run_variant_batch(
+                session,
+                org_id=org_id,
+                group=group,
+                input_payload={"shared": "payload"},
+            )
+
+        assert results is not None
+        overrides = results[0]["merged_payload"]["_run_overrides"]
+        assert overrides["prompt_version"] == "v3"
+        assert overrides["prompt_template"] == "You are v3."
+
+    async def test_prompt_version_override_unresolved_leaves_template_unset(self) -> None:
+        """An unresolvable prompt_version leaves ``_run_overrides["prompt_template"]`` unset.
+
+        The node runner then falls back to its snapshot-embedded prompt.
+        """
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+        group = self._make_group()
+        group.variants = [
+            {
+                "name": "v9",
+                "snapshot_id": str(uuid.uuid4()),
+                "weight": 1.0,
+                "run_context_overrides": {"prompt_version": "v9"},
+            }
+        ]
+
+        locked = self._make_locked(group)
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = locked
+        session.execute.return_value = exec_result
+
+        mock_run = MagicMock()
+        mock_run.id = uuid.uuid4()
+
+        with (
+            patch(
+                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
+            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
+            patch(
+                "modulo.db.crud.variant_group._resolve_prompt_template_override",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
+            results = await run_variant_batch(
+                session,
+                org_id=org_id,
+                group=group,
+                input_payload={"shared": "payload"},
+            )
+
+        assert results is not None
+        overrides = results[0]["merged_payload"]["_run_overrides"]
+        assert overrides["prompt_version"] == "v9"
+        assert "prompt_template" not in overrides
+
     async def test_returns_none_when_quota_exceeded_for_batch(self) -> None:
         session = AsyncMock()
         org_id = uuid.uuid4()

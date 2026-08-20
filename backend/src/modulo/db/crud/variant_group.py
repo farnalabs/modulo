@@ -13,6 +13,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.db.crud.agent import get_agent
 from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
 from modulo.db.crud.run import count_active_runs_for_pipeline, create_run
 from modulo.db.models.eval_definition import EvalDefinition
@@ -220,6 +221,64 @@ def _coerce_snapshot_id(raw: Any) -> uuid.UUID | None:
 _CONTROL_OVERRIDE_KEYS = ("model_backend_id", "prompt_version")
 
 
+async def _resolve_prompt_template_override(
+    session: AsyncSession,
+    *,
+    snapshot_id: uuid.UUID,
+    prompt_version: str,
+) -> str | None:
+    """Resolve a variant's ``prompt_version`` label to a prompt template.
+
+    Loads the snapshot's agent nodes to gather the ``agent_id`` set, then
+    queries each agent's ``prompt_version_history`` for the entry whose
+    ``version`` matches the override. Returns the resolved template, or
+    ``None`` when no agent carries the requested version (the node then falls
+    back to its snapshot-embedded prompt).
+
+    ``"current"`` resolves to an agent's active ``prompt_template`` (the first
+    agent in the snapshot that resolves it wins). This mirrors the version
+    resolution in ``modulo.api.routes.agents._resolve_prompt_template``.
+    """
+    snap_result = await session.execute(select(PipelineSnapshot.id).where(PipelineSnapshot.id == snapshot_id))
+    if snap_result.scalar_one_or_none() is None:
+        return None
+
+    graph_result = await session.execute(select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == snapshot_id))
+    graph_json = graph_result.scalar_one_or_none()
+    if not isinstance(graph_json, dict):
+        return None
+
+    agent_ids: set[uuid.UUID] = set()
+    for node in graph_json.get("nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        agent_id = node.get("agent_id")
+        if not agent_id:
+            continue
+        try:
+            agent_ids.add(uuid.UUID(str(agent_id)))
+        except (ValueError, TypeError):
+            continue
+
+    for agent_id in agent_ids:
+        agent = await get_agent(session, agent_id)
+        if agent is None:
+            continue
+        if prompt_version == "current":
+            template = agent.prompt_template
+            if template:
+                return template
+            continue
+        for entry in agent.prompt_version_history or []:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("version") == prompt_version:
+                tpl = entry.get("template")
+                if tpl:
+                    return tpl
+    return None
+
+
 def _merge_variant_payload(
     variant: dict[str, Any],
     base_payload: dict[str, Any],
@@ -280,11 +339,24 @@ async def run_variant_weighted(
     if variant is None:
         return None
 
-    merged_payload = _merge_variant_payload(variant, input_payload or {}, degraded_evals=group.degraded_evals)
-
     snapshot_id = _coerce_snapshot_id(variant.get("snapshot_id"))
     if snapshot_id is None:
         return None
+
+    merged_payload = _merge_variant_payload(variant, input_payload or {}, degraded_evals=group.degraded_evals)
+
+    # FAR-342: resolve a prompt_version override to its template (see the batch
+    # path for the full comment).
+    _run_overrides = merged_payload.get("_run_overrides")
+    if isinstance(_run_overrides, dict) and _run_overrides.get("prompt_version"):
+        resolved = await _resolve_prompt_template_override(
+            session,
+            snapshot_id=snapshot_id,
+            prompt_version=str(_run_overrides["prompt_version"]),
+        )
+        if resolved is not None:
+            _run_overrides["prompt_template"] = resolved
+            merged_payload["_run_overrides"] = _run_overrides
 
     run = await create_run(
         session,
@@ -355,11 +427,25 @@ async def run_variant_batch(
         overrides = variant.get("run_context_overrides", {})
         if not isinstance(overrides, dict):
             overrides = {}
-        payload = _merge_variant_payload(variant, input_payload or {}, degraded_evals=group.degraded_evals)
-
         snapshot_id = _coerce_snapshot_id(variant.get("snapshot_id"))
         if snapshot_id is None:
             return None  # defensive — the pre-flight loop above already guarantees this
+
+        payload = _merge_variant_payload(variant, input_payload or {}, degraded_evals=group.degraded_evals)
+
+        # FAR-342: resolve a prompt_version override to its template so the
+        # node_runner can render the selected prompt, not the snapshot-embedded
+        # one. Stored alongside the version label under _run_overrides.
+        _run_overrides = payload.get("_run_overrides")
+        if isinstance(_run_overrides, dict) and _run_overrides.get("prompt_version"):
+            resolved = await _resolve_prompt_template_override(
+                session,
+                snapshot_id=snapshot_id,
+                prompt_version=str(_run_overrides["prompt_version"]),
+            )
+            if resolved is not None:
+                _run_overrides["prompt_template"] = resolved
+                payload["_run_overrides"] = _run_overrides
 
         # Frozen snapshot/override capture at fire time — the single source of
         # truth for "which input this variant ran with". The compare view reads
