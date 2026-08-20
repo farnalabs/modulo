@@ -10,11 +10,12 @@ from sqlalchemy.orm import declarative_base
 
 from modulo.core import housekeeping as hk
 from modulo.core.housekeeping import (
-    _CATEGORY_TO_ENTITY,
     _SCANNERS,
     ENTITY_MODEL_MAP,
+    SCANNERS_BY_CATEGORY,
     Candidate,
     CategoryResult,
+    Scanner,
     scan_all,
 )
 
@@ -83,7 +84,15 @@ class TestScanAll:
         session = await self._fake_session()
         scanned_candidates = [Candidate(id=str(uuid.uuid4()), name="k", detail="d")]
 
-        scanners = [("orphan_secrets", AsyncMock(return_value=scanned_candidates))]
+        scanners = [
+            Scanner(
+                category="orphan_secrets",
+                scanner=AsyncMock(return_value=scanned_candidates),
+                label="Orphan Secrets",
+                description="d",
+                entity_type="secret",
+            )
+        ]
         with patch("modulo.core.housekeeping._SCANNERS", scanners):
             results = await scan_all(session, uuid.uuid4())
 
@@ -100,14 +109,24 @@ class TestScanAll:
         async def broken_scanner(_s, _o):  # type: ignore[no-untyped-def]
             raise RuntimeError("boom")
 
-        with (
-            patch(
-                "modulo.core.housekeeping._SCANNERS",
-                [
-                    ("orphan_secrets", AsyncMock(return_value=ok_candidates)),
-                    ("stale_pipelines", broken_scanner),
-                ],
-            ),
+        with patch(
+            "modulo.core.housekeeping._SCANNERS",
+            [
+                Scanner(
+                    category="orphan_secrets",
+                    scanner=AsyncMock(return_value=ok_candidates),
+                    label="Orphan Secrets",
+                    description="d",
+                    entity_type="secret",
+                ),
+                Scanner(
+                    category="stale_pipelines",
+                    scanner=broken_scanner,
+                    label="Stale Pipelines",
+                    description="d",
+                    entity_type="pipeline",
+                ),
+            ],
         ):
             results = await scan_all(session, org_id)
 
@@ -119,7 +138,18 @@ class TestScanAll:
     @pytest.mark.asyncio
     async def test_scan_all_returns_category_for_every_scanner(self) -> None:
         session = await self._fake_session()
-        with patch("modulo.core.housekeeping._SCANNERS", [("empty_teams", AsyncMock(return_value=[]))]):
+        with patch(
+            "modulo.core.housekeeping._SCANNERS",
+            [
+                Scanner(
+                    category="empty_teams",
+                    scanner=AsyncMock(return_value=[]),
+                    label="Empty Teams",
+                    description="d",
+                    entity_type="team",
+                )
+            ],
+        ):
             results = await scan_all(session, uuid.uuid4())
         assert len(results) == 1
         assert results[0].category == "empty_teams"
@@ -193,24 +223,46 @@ class TestScanInvalidOrgFk:
         assert candidates[0].id == orphan_code
         assert candidates[0].name.startswith("oauth_authorization_codes#")
 
-    def test_invalid_org_fk_is_registered_and_metadata_present(self) -> None:
-        assert ("invalid_org_fk", hk._scan_invalid_org_fk) in hk._SCANNERS
-        assert hk._CATEGORY_LABELS["invalid_org_fk"] == "Invalid Organisation FK"
-        assert "orphaned" in hk._CATEGORY_DESCRIPTIONS["invalid_org_fk"]
+    def test_invalid_org_fk_is_registered_in_scanners(self) -> None:
+        entry = SCANNERS_BY_CATEGORY.get("invalid_org_fk")
+        assert entry is not None
+        assert entry.scanner is hk._scan_invalid_org_fk
+        assert entry.label == "Invalid Organisation FK"
+        assert "orphaned" in entry.description.lower()
+        assert entry.entity_type is None
 
 
-class TestMappings:
-    def test_cleanup_categories_are_a_subset_of_scanners(self) -> None:
-        scanner_categories = {name for name, _ in _SCANNERS}
-        # Detection-only categories (e.g. invalid_org_fk) are intentionally not
-        # in _CATEGORY_TO_ENTITY, so the relation is a subset, not equality.
-        assert set(_CATEGORY_TO_ENTITY).issubset(scanner_categories)
+class TestScannerRegistry:
+    def test_every_scanner_has_label_and_description(self) -> None:
+        for entry in _SCANNERS:
+            assert entry.category
+            assert entry.label
+            assert entry.description
+
+    def test_every_scanner_is_registered_in_lookup(self) -> None:
+        for entry in _SCANNERS:
+            assert SCANNERS_BY_CATEGORY[entry.category] is entry
 
     def test_entity_types_are_valid_cleanup_targets(self) -> None:
-        for entity_type in set(_CATEGORY_TO_ENTITY.values()):
-            assert entity_type in ENTITY_MODEL_MAP, f"{entity_type} missing from ENTITY_MODEL_MAP"
+        for entry in _SCANNERS:
+            if entry.entity_type is None:
+                continue
+            assert entry.entity_type in ENTITY_MODEL_MAP, (
+                f"{entry.category} -> {entry.entity_type} missing from ENTITY_MODEL_MAP"
+            )
 
-    def test_every_cleanup_scanner_entity_type_is_deletable(self) -> None:
-        for category, entity_type in _CATEGORY_TO_ENTITY.items():
-            assert entity_type in ENTITY_MODEL_MAP
-            assert category in {name for name, _ in _SCANNERS}
+    @pytest.mark.asyncio
+    async def test_detection_only_scanner_preserves_candidate_entity_type(self) -> None:
+        # DETECTION-ONLY categories (e.g. invalid_org_fk) set entity_type directly
+        # on their candidates and must NOT be overridden by the category default.
+        scanned = [Candidate(id="x", name="n", detail="d", entity_type="invalid_org_fk")]
+        detection_only = Scanner(
+            category="invalid_org_fk",
+            scanner=AsyncMock(return_value=scanned),
+            label="Invalid Org FK",
+            description="Orphan rows referencing a missing organisation",
+            entity_type=None,
+        )
+        with patch("modulo.core.housekeeping._SCANNERS", [detection_only]):
+            results = await scan_all(AsyncMock(), uuid.uuid4())
+        assert results[0].candidates[0].entity_type == "invalid_org_fk"

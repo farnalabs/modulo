@@ -3,6 +3,8 @@
 import contextlib
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
@@ -83,73 +85,31 @@ ENTITY_MODEL_MAP: dict[str, type] = {
     "webhook_dedup": WebhookDedupHash,
 }
 
-_CATEGORY_LABELS: dict[str, str] = {
-    "orphan_secrets": "Orphan Secrets",
-    "unbound_connectors": "Unbound Connectors",
-    "untriggered_pipelines": "Untriggered Pipelines",
-    "stale_pipelines": "Stale Pipelines",
-    "unused_model_backends": "Unused Model Backends",
-    "inactive_triggers": "Inactive Triggers",
-    "orphan_snapshots": "Orphan Snapshots",
-    "expired_webhook_dedups": "Expired Webhook Dedups",
-    "duplicate_triggers": "Duplicate Triggers",
-    "unused_environment_profiles": "Unused Environment Profiles",
-    "stale_api_keys": "Stale API Keys",
-    "unused_sso_providers": "Unused SSO Providers",
-    "empty_teams": "Empty Teams",
-    "unused_parameter_schemas": "Unused Parameter Schemas",
-    "unused_schemas": "Unused Schemas",
-    "empty_lifecycle_maps": "Empty Lifecycle Maps",
-    "invalid_org_fk": "Invalid Organisation FK",
-}
-
-_CATEGORY_TO_ENTITY: dict[str, str] = {
-    "orphan_secrets": "secret",
-    "unbound_connectors": "connector",
-    "untriggered_pipelines": "pipeline",
-    "stale_pipelines": "pipeline",
-    "unused_model_backends": "model_backend",
-    "inactive_triggers": "trigger",
-    "orphan_snapshots": "pipeline_snapshot",
-    "expired_webhook_dedups": "webhook_dedup",
-    "duplicate_triggers": "trigger",
-    "unused_environment_profiles": "environment_profile",
-    "stale_api_keys": "org_api_key",
-    "unused_sso_providers": "sso_provider",
-    "empty_teams": "team",
-    "unused_parameter_schemas": "parameter_schema",
-    "unused_schemas": "schema",
-    "empty_lifecycle_maps": "lifecycle_map",
-}
-
 # Categories that are detection-only (surfaced for triage, never auto-deleted).
 # Submitting a candidate from one of these to the cleanup endpoint returns a
 # clear triage message instead of a misleading "Unknown entity type" error.
 NON_DELETABLE_ENTITY_TYPES: frozenset[str] = frozenset({"invalid_org_fk"})
 
 
-_CATEGORY_DESCRIPTIONS: dict[str, str] = {
-    "orphan_secrets": "Secrets whose key is not referenced by any connector config or agent connector_type_refs",
-    "unbound_connectors": "Connector instances not bound to any pipeline snapshot",
-    "untriggered_pipelines": "Pipelines with no trigger and no runs",
-    "stale_pipelines": "Pipelines with no runs in the last 4 weeks",
-    "unused_model_backends": "Model backends not assigned to any agent",
-    "inactive_triggers": "Triggers that are inactive and have never fired",
-    "orphan_snapshots": "Snapshots whose pipeline no longer exists",
-    "expired_webhook_dedups": "Expired webhook deduplication hash entries",
-    "duplicate_triggers": "Pipelines with multiple triggers of the same type (e.g. two cron triggers)",
-    "unused_environment_profiles": "Environment profiles not referenced by any pipeline snapshot",
-    "stale_api_keys": "API keys not used in the last 4 weeks",
-    "unused_sso_providers": "SSO providers with no accounts using them for authentication",
-    "empty_teams": "Teams with no active user members",
-    "unused_parameter_schemas": "Parameter schemas not assigned to any agent",
-    "unused_schemas": "Schemas not referenced by any agent or pipeline snapshot",
-    "empty_lifecycle_maps": "Lifecycle maps with empty content (no stages configured)",
-    "invalid_org_fk": (
-        "Tenant-scoped rows whose organisation_id references a non-existent "
-        "organisation (orphaned data) — surfaced for triage, not auto-deleted."
-    ),
-}
+@dataclass(frozen=True)
+class Scanner:
+    """A single housekeeping scanner registration.
+
+    Consolidates what was previously spread across four parallel dicts
+    (_SCANNERS, _CATEGORY_LABELS, _CATEGORY_DESCRIPTIONS, _CATEGORY_TO_ENTITY)
+    into one typed structure.
+
+    ``entity_type`` is the cleanup target entity type applied to every candidate
+    produced by the scanner. Set it to ``None`` for DETECTION-ONLY scanners
+    (e.g. ``invalid_org_fk``) whose candidates carry their own ``entity_type``
+    directly — those must not be overridden by the category default.
+    """
+
+    category: str
+    scanner: Callable[[AsyncSession, uuid.UUID], Awaitable[list["Candidate"]]]
+    label: str
+    description: str
+    entity_type: str | None = None
 
 
 class Candidate:
@@ -173,8 +133,9 @@ class Candidate:
 class CategoryResult:
     def __init__(self, category: str, candidates: list[Candidate]) -> None:
         self.category = category
-        self.label = _CATEGORY_LABELS.get(category, category)
-        self.description = _CATEGORY_DESCRIPTIONS.get(category, "")
+        entry = SCANNERS_BY_CATEGORY.get(category)
+        self.label = entry.label if entry is not None else category
+        self.description = entry.description if entry is not None else ""
         self.candidates = candidates
 
     def to_dict(self) -> dict[str, Any]:
@@ -780,38 +741,146 @@ async def _scan_invalid_org_fk(session: AsyncSession, org_id: uuid.UUID) -> list
     return candidates
 
 
-_SCANNERS: list[tuple[str, Any]] = [
-    ("orphan_secrets", _scan_orphan_secrets),
-    ("unbound_connectors", _scan_unbound_connectors),
-    ("untriggered_pipelines", _scan_untriggered_pipelines),
-    ("stale_pipelines", _scan_stale_pipelines),
-    ("unused_model_backends", _scan_unused_model_backends),
-    ("inactive_triggers", _scan_inactive_triggers),
-    ("orphan_snapshots", _scan_orphan_snapshots),
-    ("expired_webhook_dedups", _scan_expired_webhook_dedups),
-    ("duplicate_triggers", _scan_duplicate_triggers),
-    ("unused_environment_profiles", _scan_unused_environment_profiles),
-    ("stale_api_keys", _scan_stale_api_keys),
-    ("unused_sso_providers", _scan_unused_sso_providers),
-    ("empty_teams", _scan_empty_teams),
-    ("unused_parameter_schemas", _scan_unused_parameter_schemas),
-    ("unused_schemas", _scan_unused_schemas),
-    ("empty_lifecycle_maps", _scan_empty_lifecycle_maps),
-    ("invalid_org_fk", _scan_invalid_org_fk),
+_SCANNERS: list[Scanner] = [
+    Scanner(
+        category="orphan_secrets",
+        scanner=_scan_orphan_secrets,
+        label="Orphan Secrets",
+        description="Secrets whose key is not referenced by any connector config or agent connector_type_refs",
+        entity_type="secret",
+    ),
+    Scanner(
+        category="unbound_connectors",
+        scanner=_scan_unbound_connectors,
+        label="Unbound Connectors",
+        description="Connector instances not bound to any pipeline snapshot",
+        entity_type="connector",
+    ),
+    Scanner(
+        category="untriggered_pipelines",
+        scanner=_scan_untriggered_pipelines,
+        label="Untriggered Pipelines",
+        description="Pipelines with no trigger and no runs",
+        entity_type="pipeline",
+    ),
+    Scanner(
+        category="stale_pipelines",
+        scanner=_scan_stale_pipelines,
+        label="Stale Pipelines",
+        description="Pipelines with no runs in the last 4 weeks",
+        entity_type="pipeline",
+    ),
+    Scanner(
+        category="unused_model_backends",
+        scanner=_scan_unused_model_backends,
+        label="Unused Model Backends",
+        description="Model backends not assigned to any agent",
+        entity_type="model_backend",
+    ),
+    Scanner(
+        category="inactive_triggers",
+        scanner=_scan_inactive_triggers,
+        label="Inactive Triggers",
+        description="Triggers that are inactive and have never fired",
+        entity_type="trigger",
+    ),
+    Scanner(
+        category="orphan_snapshots",
+        scanner=_scan_orphan_snapshots,
+        label="Orphan Snapshots",
+        description="Snapshots whose pipeline no longer exists",
+        entity_type="pipeline_snapshot",
+    ),
+    Scanner(
+        category="expired_webhook_dedups",
+        scanner=_scan_expired_webhook_dedups,
+        label="Expired Webhook Dedups",
+        description="Expired webhook deduplication hash entries",
+        entity_type="webhook_dedup",
+    ),
+    Scanner(
+        category="duplicate_triggers",
+        scanner=_scan_duplicate_triggers,
+        label="Duplicate Triggers",
+        description="Pipelines with multiple triggers of the same type (e.g. two cron triggers)",
+        entity_type="trigger",
+    ),
+    Scanner(
+        category="unused_environment_profiles",
+        scanner=_scan_unused_environment_profiles,
+        label="Unused Environment Profiles",
+        description="Environment profiles not referenced by any pipeline snapshot",
+        entity_type="environment_profile",
+    ),
+    Scanner(
+        category="stale_api_keys",
+        scanner=_scan_stale_api_keys,
+        label="Stale API Keys",
+        description="API keys not used in the last 4 weeks",
+        entity_type="org_api_key",
+    ),
+    Scanner(
+        category="unused_sso_providers",
+        scanner=_scan_unused_sso_providers,
+        label="Unused SSO Providers",
+        description="SSO providers with no accounts using them for authentication",
+        entity_type="sso_provider",
+    ),
+    Scanner(
+        category="empty_teams",
+        scanner=_scan_empty_teams,
+        label="Empty Teams",
+        description="Teams with no active user members",
+        entity_type="team",
+    ),
+    Scanner(
+        category="unused_parameter_schemas",
+        scanner=_scan_unused_parameter_schemas,
+        label="Unused Parameter Schemas",
+        description="Parameter schemas not assigned to any agent",
+        entity_type="parameter_schema",
+    ),
+    Scanner(
+        category="unused_schemas",
+        scanner=_scan_unused_schemas,
+        label="Unused Schemas",
+        description="Schemas not referenced by any agent or pipeline snapshot",
+        entity_type="schema",
+    ),
+    Scanner(
+        category="empty_lifecycle_maps",
+        scanner=_scan_empty_lifecycle_maps,
+        label="Empty Lifecycle Maps",
+        description="Lifecycle maps with empty content (no stages configured)",
+        entity_type="lifecycle_map",
+    ),
+    Scanner(
+        category="invalid_org_fk",
+        scanner=_scan_invalid_org_fk,
+        label="Invalid Organisation FK",
+        description=(
+            "Tenant-scoped rows whose organisation_id references a non-existent "
+            "organisation (orphaned data) — surfaced for triage, not auto-deleted."
+        ),
+        entity_type=None,
+    ),
 ]
+
+SCANNERS_BY_CATEGORY: dict[str, Scanner] = {entry.category: entry for entry in _SCANNERS}
 
 
 async def scan_all(session: AsyncSession, org_id: uuid.UUID) -> list[CategoryResult]:
     results: list[CategoryResult] = []
-    for category, scanner in _SCANNERS:
+    for entry in _SCANNERS:
         try:
-            candidates = await scanner(session, org_id)
-            entity_type = _CATEGORY_TO_ENTITY.get(category)
-            if entity_type:
+            candidates = await entry.scanner(session, org_id)
+            # Detection-only scanners (entity_type=None) set entity_type directly
+            # on their candidates and must not be overridden here.
+            if entry.entity_type is not None:
                 for c in candidates:
-                    c.entity_type = entity_type
-            results.append(CategoryResult(category=category, candidates=candidates))
+                    c.entity_type = entry.entity_type
+            results.append(CategoryResult(category=entry.category, candidates=candidates))
         except Exception:
-            _log.exception("Housekeeping scanner '%s' failed", category)
-            results.append(CategoryResult(category=category, candidates=[]))
+            _log.exception("Housekeeping scanner '%s' failed", entry.category)
+            results.append(CategoryResult(category=entry.category, candidates=[]))
     return results
