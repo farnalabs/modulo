@@ -61,25 +61,35 @@ def _bdd_db_unavailable(request) -> None:
     request.node._monitor_db_error = SQLAlchemyError("connection lost")
 
 
+def _set_monitor_auth(request) -> None:
+    """Gate the monitor-config principal on the route's system-admin permission.
+
+    ``admin_monitor_config`` routes now use ``require_system_permission``
+    (``system.config.manage``), which checks ``get_current_user`` and requires
+    ``is_system_admin``. The shared ``client`` fixture only provides an org
+    admin here, so we override ``get_current_user`` to a system admin; the
+    viewer scenario overrides it to a viewer so the 403 path is still covered.
+    """
+    from modulo.api.main import app
+    from modulo.auth.dependencies import get_current_user
+    from modulo.auth.jwt import AuthenticatedPrincipal
+
+    is_viewer = getattr(request.node, "_viewer_auth", False)
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="viewer" if is_viewer else "testuser",
+        organisation_id=_ORG_ID,
+        account_id=uuid.uuid4(),
+        org_role="viewer" if is_viewer else "admin",
+        is_system_admin=not is_viewer,
+    )
+
+
 @when("I request GET /api/v1/admin/monitor-config")
 def _bdd_get_monitor_config(client: TestClient, request) -> None:
+    _set_monitor_auth(request)
     db_error = getattr(request.node, "_monitor_db_error", None)
     stored = getattr(request.node, "_monitor_stored_backends", None)
     if getattr(request.node, "_viewer_auth", False):
-        from modulo.api.main import app
-        from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
-        from modulo.auth.jwt import TenantPrincipal
-
-        async def _override_tenant() -> TenantPrincipal:
-            return TenantPrincipal(
-                username="viewer",
-                organisation_id=_ORG_ID,
-                account_id=uuid.uuid4(),
-                org_role="viewer",
-            )
-
-        app.dependency_overrides[get_current_tenant_user] = _override_tenant
-        app.dependency_overrides[get_current_tenant_user_or_api_key] = _override_tenant
         with patch(
             "modulo.api.routes.admin_monitor_config.get_config",
             new_callable=AsyncMock,
@@ -114,6 +124,7 @@ def _bdd_get_monitor_config(client: TestClient, request) -> None:
 
 @when(parsers.parse("I PUT /api/v1/admin/monitor-config with backends [{backends}]"))
 def _bdd_put_monitor_config(client: TestClient, request, backends: str) -> None:
+    _set_monitor_auth(request)
     import json
 
     parsed = json.loads(f"[{backends}]")
@@ -128,6 +139,7 @@ def _bdd_put_monitor_config(client: TestClient, request, backends: str) -> None:
 
 @when(parsers.parse("I PUT /api/v1/admin/monitor-config with backends [{backends}] and a clientToken"))
 def _bdd_put_monitor_config_with_token(client: TestClient, request, backends: str) -> None:
+    _set_monitor_auth(request)
     import json
 
     parsed = json.loads(f"[{backends}]")
@@ -145,12 +157,14 @@ def _bdd_put_monitor_config_with_token(client: TestClient, request, backends: st
 
 @when(parsers.parse('I PUT /api/v1/admin/monitor-config enabling "{backend}" without its required fields'))
 def _bdd_put_monitor_config_missing_fields(client: TestClient, request, backend: str) -> None:
+    _set_monitor_auth(request)
     resp = client.put(_URL, json={"backends": [backend], backend: {}})
     request.node._resp = resp
 
 
 @when("I PUT /api/v1/admin/monitor-config with backends []")
 def _bdd_put_monitor_config_empty(client: TestClient, request) -> None:
+    _set_monitor_auth(request)
     resp = client.put(_URL, json={"backends": []})
     request.node._resp = resp
 

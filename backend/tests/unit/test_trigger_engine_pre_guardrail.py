@@ -730,3 +730,89 @@ async def test_handle_webhook_event_filter_failure_keeps_raw_body_hash() -> None
         )
 
     _assert_failure_event_keeps_raw_body_hash(session, "event_type_not_accepted")
+
+
+async def test_handle_webhook_encrypted_hmac_secret_roundtrips() -> None:
+    """Dispatch path correctly decrypts a base64-encrypted hmac_secret.
+
+    This is the exact shape the API write path (``_encrypt_trigger_config_secrets``)
+    now stores: a base64 ``gAAAA...`` string in ``config_json``. The intake path
+    must decrypt it back to the plaintext before HMAC verification, proving the
+    write/read storage types agree.
+    """
+    import hashlib
+    import hmac as hmac_mod
+
+    from cryptography.fernet import Fernet
+
+    from modulo.auth.secret_storage import encrypt_stored_secret
+
+    plaintext_secret = "whsec_encrypted_intake_1234567890"
+    fernet_key = Fernet.generate_key().decode()
+    stored_encrypted = encrypt_stored_secret(plaintext_secret, fernet_key).decode()
+    assert stored_encrypted.startswith("gAAAA")
+
+    ts = str(int(time.time()))
+    hmac_payload = f"{ts}.".encode() + _RAW_BODY
+    sig = "sha256=" + hmac_mod.new(plaintext_secret.encode(), hmac_payload, hashlib.sha256).hexdigest()
+
+    trigger = _make_trigger()
+    trigger.config_json = {"hmac_secret": stored_encrypted}
+    session = _make_session(trigger=trigger, guardrail_rows=[])
+
+    fake_settings = MagicMock()
+    fake_settings.fernet_key = fernet_key
+    with (
+        patch("modulo.core.trigger_engine.create_run", return_value=MagicMock(id=uuid.uuid4())),
+        patch("modulo.core.trigger_engine.time.time", return_value=int(time.time())),
+        patch("modulo.settings.get_settings", return_value=fake_settings),
+    ):
+        _, te, _ = await TriggerEngine().handle_webhook(
+            session,
+            trigger_id=trigger.id,
+            org_id=_ORG,
+            raw_body=_RAW_BODY,
+            raw_payload=_RAW_PAYLOAD,
+            hmac_signature=sig,
+            modulo_timestamp=ts,
+            snapshot_id=_SNAP,
+        )
+
+    assert te.validation_result == "accepted"
+
+
+async def test_handle_webhook_encrypted_hmac_secret_rejects_tampered_payload() -> None:
+    """Tampering with an encrypted-secret webhook is still rejected."""
+    from cryptography.fernet import Fernet
+
+    from modulo.auth.secret_storage import encrypt_stored_secret
+
+    plaintext_secret = "whsec_encrypted_intake_1234567890"
+    fernet_key = Fernet.generate_key().decode()
+    stored_encrypted = encrypt_stored_secret(plaintext_secret, fernet_key).decode()
+
+    ts = str(int(time.time()))
+    sig = "sha256=bad0deadbeef"
+
+    trigger = _make_trigger()
+    trigger.config_json = {"hmac_secret": stored_encrypted}
+    session = _make_session(trigger=trigger, guardrail_rows=[])
+
+    fake_settings = MagicMock()
+    fake_settings.fernet_key = fernet_key
+    with (
+        patch("modulo.settings.get_settings", return_value=fake_settings),
+        pytest.raises(HmacValidationError),
+    ):
+        await TriggerEngine().handle_webhook(
+            session,
+            trigger_id=trigger.id,
+            org_id=_ORG,
+            raw_body=_RAW_BODY,
+            raw_payload=_RAW_PAYLOAD,
+            hmac_signature=sig,
+            modulo_timestamp=ts,
+            snapshot_id=_SNAP,
+        )
+
+    _assert_failure_event_keeps_raw_body_hash(session, "hmac_failed")

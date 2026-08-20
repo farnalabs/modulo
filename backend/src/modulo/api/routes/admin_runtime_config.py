@@ -9,12 +9,17 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
 
-from modulo.api.dependencies import require_feature, require_permission
+from modulo.api.dependencies import require_feature, require_system_permission
 from modulo.api.middleware.sensitive_mask import is_sensitive_env_key, mask_sensitive_value
-from modulo.auth.jwt import TenantPrincipal
+from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.runtime_config.store import KNOWN_KEYS, RuntimeConfigStore, get_runtime_config_store
 
-_CODE_RUNTIME_CONFIG_MANAGE = "runtime_config.manage"
+# WARNING: system.config.manage is currently ONLY assignable to is_system_admin
+# users. There is NO in-product path to grant is_system_admin. Self-hosted
+# single-org deployments that lock themselves out will need manual DB
+# intervention to recover. A follow-up design decision is needed for an
+# emergency-recovery path before this permission can be safely broadened.
+_CODE_RUNTIME_CONFIG_MANAGE = "system.config.manage"
 
 
 _log = logging.getLogger(__name__)
@@ -51,7 +56,7 @@ def _build_response(store: RuntimeConfigStore) -> dict[str, Any]:
 
 @router.get("", dependencies=[require_feature("runtime_config")])
 def get_runtime_config(
-    current_user: TenantPrincipal = require_permission(_CODE_RUNTIME_CONFIG_MANAGE),
+    current_user: AuthenticatedPrincipal = require_system_permission(_CODE_RUNTIME_CONFIG_MANAGE),  # type: ignore[assignment]
 ) -> dict[str, Any]:
     try:
         return _build_response(get_runtime_config_store())
@@ -68,7 +73,7 @@ def get_runtime_config(
 @router.put("", dependencies=[require_feature("runtime_config")])
 def set_runtime_config_overrides(
     req: dict[str, Any],
-    current_user: TenantPrincipal = require_permission(_CODE_RUNTIME_CONFIG_MANAGE),
+    current_user: AuthenticatedPrincipal = require_system_permission(_CODE_RUNTIME_CONFIG_MANAGE),  # type: ignore[assignment]
 ) -> dict[str, Any]:
     try:
         store = get_runtime_config_store()
@@ -123,7 +128,7 @@ def set_runtime_config_overrides(
 
 @router.post("/reload", dependencies=[require_feature("runtime_config")])
 def reload_runtime_config(
-    current_user: TenantPrincipal = require_permission(_CODE_RUNTIME_CONFIG_MANAGE),
+    current_user: AuthenticatedPrincipal = require_system_permission(_CODE_RUNTIME_CONFIG_MANAGE),  # type: ignore[assignment]
 ) -> dict[str, Any]:
     try:
         store = get_runtime_config_store()

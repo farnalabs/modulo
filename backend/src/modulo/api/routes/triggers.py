@@ -27,6 +27,7 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
 from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK, mask_config_json
 from modulo.auth.jwt import TenantPrincipal
+from modulo.auth.secret_storage import _is_encrypted_token, encrypt_stored_secret
 from modulo.core.cron_helpers import (
     _count_ongoing_runs,
     compute_next_fire,
@@ -47,6 +48,7 @@ from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.rls import set_rls_org
 from modulo.db.settings_resolver import org_row_is_paused
+from modulo.settings import Settings, get_settings
 
 _CODE_TRIGGER_LIST = "trigger.list"
 _CODE_TRIGGER_UPDATE = "trigger.update"
@@ -188,6 +190,29 @@ def _merge_trigger_config(current: dict[str, Any] | None, update: dict[str, Any]
         else:
             merged_cfg[k] = v
     return merged_cfg
+
+
+_SECRET_CONFIG_KEYS = frozenset({"hmac_secret", "signing_secret"})
+
+
+def _encrypt_trigger_config_secrets(config: dict[str, Any] | None, fernet_key: str) -> dict[str, Any]:
+    """Encrypt known secret fields in a trigger config_json before storage.
+
+    Only encrypts values that are plaintext strings (not already encrypted
+    bytes/base64 strings or masked placeholders). Existing encrypted values
+    are left unchanged so updates are idempotent.
+    """
+    if not config:
+        return {}
+    result = dict(config)
+    for key in _SECRET_CONFIG_KEYS:
+        val = result.get(key)
+        if isinstance(val, str) and val and val != SENSITIVE_VALUE_MASK and not _is_encrypted_token(val):
+            try:
+                result[key] = encrypt_stored_secret(val, fernet_key).decode()
+            except Exception:
+                _log.exception("trigger_config_encrypt_failed key=%s", key)
+    return result
 
 
 async def _guard_and_resolve_ongoing_changes(
@@ -809,6 +834,7 @@ async def create_trigger(
     req: TriggerCreate,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("trigger.create"),
+    settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     """Create a new trigger for a pipeline."""
     try:
@@ -837,6 +863,7 @@ async def create_trigger(
                 # A fresh ongoing trigger must fire on the first scheduler tick
                 # (the scan selects next_fire_at IS NULL OR due).
                 next_fire_at = datetime.datetime.now(datetime.UTC)
+            encrypted_config = _encrypt_trigger_config_secrets(req.config_json, settings.fernet_key)
             trigger = Trigger(
                 organisation_id=principal.organisation_id,
                 pipeline_id=pipeline_id,
@@ -844,7 +871,7 @@ async def create_trigger(
                 active=req.active,
                 max_concurrent_runs=req.max_concurrent_runs,
                 daily_spend_limit=req.daily_spend_limit,
-                config_json=req.config_json,
+                config_json=encrypted_config,
                 cron_expression=req.cron_expression,
                 cron_timezone=req.cron_timezone,
                 account_id=principal.account_id,
@@ -916,6 +943,7 @@ async def update_trigger(
     req: TriggerUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_TRIGGER_UPDATE),
+    settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     """Update a trigger's general configuration."""
     try:
@@ -960,7 +988,8 @@ async def update_trigger(
             if "daily_spend_limit" in req.model_fields_set:
                 trigger.daily_spend_limit = req.daily_spend_limit
             if req.config_json is not None:
-                trigger.config_json = _merge_trigger_config(trigger.config_json, req.config_json)
+                merged = _merge_trigger_config(trigger.config_json, req.config_json)
+                trigger.config_json = _encrypt_trigger_config_secrets(merged, settings.fernet_key)
             if req.cron_expression is not None:
                 trigger.cron_expression = req.cron_expression
             if req.cron_timezone is not None:
