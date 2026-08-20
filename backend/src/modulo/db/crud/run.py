@@ -346,6 +346,8 @@ async def create_run(
     work_item_refs: list[dict[str, Any]] | None = None,
     is_replay: bool | None = None,
     variant_group_id: uuid.UUID | None = None,
+    batch_id: uuid.UUID | None = None,
+    variant_config_snapshot: dict[str, Any] | None = None,
     feedback_correction: dict[str, Any] | None = None,
 ) -> Run:
     # Soft-deleted-org guard (follow-up gap from the reconcile delivery): a run
@@ -764,6 +766,8 @@ async def create_run(
         work_item_refs=canonical_refs,
         is_replay=is_replay,
         variant_group_id=variant_group_id,
+        batch_id=batch_id,
+        variant_config_snapshot=variant_config_snapshot,
         guardrail_summary_json=guardrail_summary_dict,
     )
     if guardrail_blocked:
@@ -904,12 +908,15 @@ async def list_runs(
     page_size: int = 20,
     cursor: str | None = None,
     team_id: uuid.UUID | None = None,
+    variant_group_id: uuid.UUID | None = None,
+    batch_id: uuid.UUID | None = None,
 ) -> PageResult[Run]:
     """List runs with optional org-scoped filtering.
 
     Defence-in-depth: when *organisation_id* is provided, the query also
     filters on ``organisation_id`` so cross-tenant access is impossible even
-    if RLS is misconfigured.
+    if RLS is misconfigured. ``variant_group_id`` and ``batch_id`` narrow to
+    a variant group's runs or a single fired batch (FAR-332 3e).
     """
     q = (
         select(Run)
@@ -949,6 +956,12 @@ async def list_runs(
         escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         q = q.where(Pipeline.name.ilike(f"%{escaped}%", escape="\\"))
         count_q = count_q.where(Pipeline.name.ilike(f"%{escaped}%", escape="\\"))
+    if variant_group_id is not None:
+        q = q.where(Run.variant_group_id == variant_group_id)
+        count_q = count_q.where(Run.variant_group_id == variant_group_id)
+    if batch_id is not None:
+        q = q.where(Run.batch_id == batch_id)
+        count_q = count_q.where(Run.batch_id == batch_id)
 
     if cursor is not None:
         paginator = CursorPaginator()
