@@ -1,0 +1,213 @@
+Feature: GitLab Issues Connector
+  As a pipeline author
+  I want to interact with GitLab issues, labels, milestones, notes, and CI via the connector
+  So that I can manage project tracking and pipelines
+
+  Scenario: Paginated query returns next page cursor
+    Given a GitLab connector with valid token
+    When I query GitLab resource "projects" on page "2"
+    Then the result has records
+    And the result reports a next page cursor
+
+  Scenario: Last page has no next page cursor
+    Given a GitLab connector with valid token
+    When I query GitLab resource "merge_requests" with project "group/project"
+    Then the result has records
+    And the result reports no next page cursor
+
+  Scenario: Query issues returns list
+    Given a GitLab connector with valid token
+    When I query GitLab resource "issues" with project "group/project" and state "opened"
+    Then the result has records
+    And the records contain issue metadata
+
+  Scenario: Query single issue by IID
+    Given a GitLab connector with valid token
+    When I query GitLab resource "issue" with project "group/project" and iid "42"
+    Then the result has records
+    And the record contains issue fields
+
+  Scenario: Query labels returns list
+    Given a GitLab connector with valid token
+    When I query GitLab resource "labels" with project "group/project"
+    Then the result has records
+
+  Scenario: Query single label by ID
+    Given a GitLab connector with valid token
+    When I query GitLab resource "label" with project "group/project" and label_id "1"
+    Then the result has records
+
+  Scenario: Query milestones returns list
+    Given a GitLab connector with valid token
+    When I query GitLab resource "milestones" with project "group/project"
+    Then the result has records
+
+  Scenario: Query issue notes
+    Given a GitLab connector with valid token
+    When I query GitLab resource "issue_notes" with project "group/project" and iid "42"
+    Then the result has records
+
+  Scenario: Query issue discussions
+    Given a GitLab connector with valid token
+    When I query GitLab resource "issue_discussions" with project "group/project" and iid "42"
+    Then the result has records
+
+  Scenario: Query merge requests with filters
+    Given a GitLab connector with valid token
+    When I query GitLab resource "merge_requests" with project "group/project" and state "opened"
+    Then the result has records
+
+  Scenario: Query single merge request by IID
+    Given a GitLab connector with valid token
+    When I query GitLab resource "merge_request" with project "group/project" and iid "5"
+    Then the result has records
+
+  Scenario: Query merge request changes
+    Given a GitLab connector with valid token
+    When I query GitLab resource "mr_changes" with project "group/project" and iid "5"
+    Then the result has records
+
+  Scenario: Query branch by name
+    Given a GitLab connector with valid token
+    When I query GitLab resource "branch" with project "group/project" and name "main"
+    Then the result has records
+
+  Scenario: Query branches list
+    Given a GitLab connector with valid token
+    When I query GitLab resource "branches" with project "group/project"
+    Then the result has records
+
+  Scenario: Query tags list
+    Given a GitLab connector with valid token
+    When I query GitLab resource "tags" with project "group/project"
+    Then the result has records
+
+  Scenario: Query pipelines list
+    Given a GitLab connector with valid token
+    When I query GitLab resource "pipelines" with project "group/project"
+    Then the result has records
+
+  Scenario: Query jobs for a pipeline
+    Given a GitLab connector with valid token
+    When I query GitLab resource "jobs" with project "group/project" and pipeline_id "1"
+    Then the result has records
+
+  Scenario: Write creates an issue
+    Given a GitLab connector with valid token
+    When I write GitLab issue with project "group/project" and title "Test Issue"
+    Then the write succeeds
+
+  Scenario: Write updates an issue
+    Given a GitLab connector with valid token
+    When I write GitLab issue_update for issue "42" with project "group/project" and state_event "close"
+    Then the write succeeds
+
+  Scenario: Write adds an issue note
+    Given a GitLab connector with valid token
+    When I write GitLab issue_note for issue "42" with project "group/project" and body "Fixed this"
+    Then the write succeeds
+
+  Scenario: Write replaces issue labels
+    Given a GitLab connector with valid token
+    When I write GitLab issue_label for issue "42" with project "group/project" and labels "bug,frontend"
+    Then the write succeeds
+
+  Scenario: Write creates a project label
+    Given a GitLab connector with valid token
+    When I write GitLab label with project "group/project" and name "bug"
+    Then the write succeeds
+
+  Scenario: Write deletes a file
+    Given a GitLab connector with valid token
+    When I write GitLab file_delete for project "group/project" and path "src/old.py"
+    Then the write succeeds
+
+  Scenario: Write merges a merge request
+    Given a GitLab connector with valid token
+    When I write GitLab mr_merge for project "group/project" and iid "7"
+    Then the write succeeds
+
+  Scenario: Write approves a merge request
+    Given a GitLab connector with valid token
+    When I write GitLab mr_approve for project "group/project" and iid "7"
+    Then the write succeeds
+
+  Scenario: Write comments on a merge request
+    Given a GitLab connector with valid token
+    When I write GitLab mr_comment for project "group/project" and iid "7" and body "LGTM"
+    Then the write succeeds
+
+  Scenario: Write creates a milestone
+    Given a GitLab connector with valid token
+    When I write GitLab milestone with project "group/project" and title "Sprint 1"
+    Then the write succeeds
+
+  Scenario: Write triggers a pipeline
+    Given a GitLab connector with valid token
+    When I write GitLab pipeline_run with project "group/project" and ref "main"
+    Then the write succeeds
+
+  Scenario: Query recursive tree listing
+    Given a GitLab connector with valid token
+    When I query GitLab tree for project "group/project" with path "src" and recursive
+    Then the result has records
+    And the tree result contains nested entries
+
+  Scenario: Write batch file operations in one commit
+    Given a GitLab connector with valid token
+    When I write GitLab files batch for project "group/project"
+    Then the write succeeds
+    And the batch write reports a commit id
+
+  Scenario: Batch file path traversal is blocked
+    Given a GitLab connector with valid token
+    When I write GitLab files batch for project "group/project" with traversal path "../evil.txt"
+    Then the result is an error
+
+  Scenario: Write requests MR approval from specific users
+    Given a GitLab connector with valid token
+    When I write GitLab mr_approval_request for project "group/project" and iid "7" for users "10,11"
+    Then the write succeeds
+    And the approval request reports the requested approvers
+
+  Scenario: MR approval request without users errors
+    Given a GitLab connector with valid token
+    When I write GitLab mr_approval_request for project "group/project" and iid "7" with no users
+    Then the approval request errors with a missing users message
+
+  Scenario: Health check with invalid token returns error
+    Given a GitLab connector with invalid token
+    When I check the connector health
+    Then the health result ok is false
+    And the health result detail describes the error
+
+  Scenario: Health check reports the instance version
+    Given a GitLab connector with valid token
+    When I check the connector health
+    Then the health result reports the GitLab version
+
+  Scenario: Path traversal on file write is blocked
+    Given a GitLab connector with valid token
+    When I write GitLab file for project "group/project" and path "../evil.txt"
+    Then the result is an error
+
+  Scenario: Health check with network error returns error
+    Given a GitLab connector with valid token
+    When the GitLab API is unreachable
+    Then the health result ok is false
+    And the health result detail describes the error
+
+  Scenario: Unsupported resource raises error
+    Given a GitLab connector with valid token
+    When I query resource "unsupported_resource"
+    Then the result is an error
+
+  Scenario: Error on write returns descriptive error
+    Given a GitLab connector with valid token
+    When the GitLab API returns 500 on issue creation
+    Then the write result is an error with "GitLab API HTTP 500"
+
+  Scenario: Error on query returns descriptive error
+    Given a GitLab connector with valid token
+    When the GitLab API returns 429 on issues query
+    Then the query result is an error with "GitLab API HTTP 429"

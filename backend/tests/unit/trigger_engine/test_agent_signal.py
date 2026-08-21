@@ -1,0 +1,545 @@
+"""Unit tests for agent_signal trigger — fire_agent_signal and helpers."""
+
+import asyncio
+import uuid
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from modulo.core.exceptions import TriggersPausedError
+from modulo.core.trigger_engine.agent_signal import _log_signal_event, fire_agent_signal
+from modulo.db.settings_resolver import PAUSE_SKIP_REASON
+
+
+def _make_trigger(
+    *,
+    trigger_id: uuid.UUID | None = None,
+    pipeline_id: uuid.UUID | None = None,
+    org_id: uuid.UUID | None = None,
+    source_pipeline_id: uuid.UUID | None = None,
+    source_node_id: str = "node-1",
+    active: bool = True,
+    max_concurrent_runs: int = 5,
+    snapshot_id: str | None = None,
+) -> MagicMock:
+    """Build a mock Trigger for testing."""
+    tid = trigger_id or uuid.uuid4()
+    pid = pipeline_id or uuid.uuid4()
+    oid = org_id or uuid.uuid4()
+    spid = source_pipeline_id or uuid.uuid4()
+
+    trigger = MagicMock()
+    trigger.id = tid
+    trigger.pipeline_id = pid
+    trigger.organisation_id = oid
+    trigger.active = active
+    trigger.max_concurrent_runs = max_concurrent_runs
+    trigger.config_json = {
+        "source_pipeline_id": str(spid),
+        "source_node_id": source_node_id,
+        "snapshot_id": snapshot_id,
+    }
+    return trigger
+
+
+@pytest.fixture
+def mock_session() -> MagicMock:
+    session = MagicMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+    return session
+
+
+def _setup_session(
+    session: MagicMock,
+    triggers: list[Any],
+    count: int = 0,
+    snapshot_id: uuid.UUID | None = None,
+) -> None:
+    """Set up session.execute() to dispatch trigger/count/snapshot queries.
+
+    Dispatches on the SQL text rather than call order so the mock stays
+    correct when multiple triggers each run the count + snapshot lookups.
+    """
+    trigger_result = MagicMock()
+    trigger_result.scalars.return_value.all.return_value = triggers
+    count_result = MagicMock()
+    count_result.scalar_one.return_value = count
+    snapshot_result = MagicMock()
+    snapshot_result.scalar_one_or_none.return_value = snapshot_id
+    org_result = MagicMock()
+    org_result.one_or_none.return_value = (False, "active")
+
+    async def side_effect(*args: Any, **kwargs: Any) -> Any:
+        sql = str(args[0]) if args else ""
+        if "organisations" in sql:
+            return org_result
+        if "count(" in sql:
+            return count_result
+        if "pipeline_snapshots" in sql:
+            return snapshot_result
+        return trigger_result
+
+    session.execute = side_effect
+
+
+@pytest.fixture
+def mock_create_run() -> Any:
+    with patch("modulo.core.trigger_engine.agent_signal.create_run", new_callable=AsyncMock) as m:
+        m.return_value = MagicMock(id=uuid.uuid4())
+        yield m
+
+
+# ---------------------------------------------------------------------------
+# fire_agent_signal — core function tests
+# ---------------------------------------------------------------------------
+
+
+class TestFireAgentSignal:
+    """Tests for the main fire_agent_signal() function."""
+
+    async def test_fires_child_run_on_matching_trigger(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """A matching agent_signal trigger should create a child run."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        source_run_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+        )
+        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=source_run_id,
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="my-node",
+            node_output={"result": "ok"},
+        )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "fired"
+        assert results[0]["trigger_id"] == str(trigger.id)
+        mock_create_run.assert_awaited_once()
+        call_kwargs = mock_create_run.call_args[1]
+        assert call_kwargs["org_id"] == org_id
+        assert call_kwargs["pipeline_id"] == trigger.pipeline_id
+        assert call_kwargs["trigger_type"] == "agent_signal"
+        assert call_kwargs["parent_run_id"] == source_run_id
+        assert call_kwargs["input_payload"]["source_run_id"] == str(source_run_id)
+        assert call_kwargs["input_payload"]["node_output"]["result"] == "ok"
+
+    async def test_no_matching_triggers_returns_empty(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """No agent_signal triggers at all should return empty list."""
+        _setup_session(mock_session, [])
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=uuid.uuid4(),
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=uuid.uuid4(),
+            completed_node_id="node-1",
+        )
+
+        assert results == []
+        mock_create_run.assert_not_called()
+
+    async def test_skips_non_matching_source_pipeline(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """Trigger watching a different pipeline should be skipped."""
+        org_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=uuid.uuid4(),  # different pipeline
+            source_node_id="node-1",
+        )
+        _setup_session(mock_session, [trigger])
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=uuid.uuid4(),  # different from trigger's source
+            completed_node_id="node-1",
+        )
+
+        assert results == []
+        mock_create_run.assert_not_called()
+
+    async def test_skips_non_matching_node_id(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """Trigger watching a different node should be skipped."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="watched-node",
+        )
+        _setup_session(mock_session, [trigger])
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="different-node",
+        )
+
+        assert results == []
+        mock_create_run.assert_not_called()
+
+    async def test_concurrency_limit_skips_fire(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """When child pipeline has too many active runs, skip firing."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="node-1",
+            max_concurrent_runs=1,
+        )
+        _setup_session(mock_session, [trigger], count=1)
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="node-1",
+        )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "skipped"
+        assert results[0]["reason"] == "concurrency_limit"
+        mock_create_run.assert_not_called()
+
+    async def test_fires_without_node_output(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """Should fire even when node_output is None."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+        )
+        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="my-node",
+            node_output=None,
+        )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "fired"
+        mock_create_run.assert_awaited_once()
+        input_payload = mock_create_run.call_args[1]["input_payload"]
+        assert "node_output" not in input_payload
+
+    async def test_fires_multiple_triggers_on_same_node(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """Multiple triggers watching the same node should all fire."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        trigger_a = _make_trigger(
+            trigger_id=uuid.uuid4(),
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="shared-node",
+            pipeline_id=uuid.uuid4(),
+        )
+        trigger_b = _make_trigger(
+            trigger_id=uuid.uuid4(),
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="shared-node",
+            pipeline_id=uuid.uuid4(),
+        )
+        _setup_session(mock_session, [trigger_a, trigger_b], snapshot_id=uuid.uuid4())
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="shared-node",
+        )
+
+        assert len(results) == 2
+        assert all(r["status"] == "fired" for r in results)
+        assert mock_create_run.await_count == 2
+
+    async def test_invalid_snapshot_id_skips_fire(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """Trigger with an invalid snapshot_id is skipped and logged as poll_error."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+            snapshot_id="not-a-uuid",
+        )
+        _setup_session(mock_session, [trigger])
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="my-node",
+        )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "skipped"
+        assert results[0]["reason"] == "invalid_snapshot_id"
+        mock_create_run.assert_not_called()
+        assert any(getattr(c[0][0], "validation_result", None) == "poll_error" for c in mock_session.add.call_args_list)
+
+    async def test_valid_snapshot_id_passed_to_create_run(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """A valid snapshot_id from config must be forwarded to create_run."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        snapshot_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+            snapshot_id=str(snapshot_id),
+        )
+        _setup_session(mock_session, [trigger])
+
+        await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="my-node",
+        )
+
+        assert mock_create_run.await_count == 1
+        assert mock_create_run.call_args[1]["snapshot_id"] == snapshot_id
+
+    async def test_missing_snapshot_id_resolves_latest(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """A trigger with no snapshot_id must use the pipeline's latest snapshot."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        snapshot_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+            snapshot_id=None,
+        )
+        _setup_session(mock_session, [trigger], snapshot_id=snapshot_id)
+
+        await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="my-node",
+        )
+
+        assert mock_create_run.await_count == 1
+        assert mock_create_run.call_args[1]["snapshot_id"] == snapshot_id
+
+    async def test_missing_snapshot_no_latest_skips_fire(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """A trigger with no pinned snapshot and no pipeline snapshot is skipped."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+            snapshot_id=None,
+        )
+        _setup_session(mock_session, [trigger], snapshot_id=None)
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="my-node",
+        )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "skipped"
+        assert results[0]["reason"] == "no_snapshot"
+        mock_create_run.assert_not_called()
+        assert any(getattr(c[0][0], "validation_result", None) == "poll_error" for c in mock_session.add.call_args_list)
+
+    async def test_create_run_failure_reports_error(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """A create_run failure should be recorded as an error result, not crash."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        snapshot_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+        )
+        _setup_session(mock_session, [trigger], snapshot_id=snapshot_id)
+        mock_create_run.side_effect = RuntimeError("boom")
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="my-node",
+        )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "error"
+        assert results[0]["reason"] == "create_run_failed"
+        assert any(
+            getattr(c[0][0], "validation_result", None) == "validation_failed" for c in mock_session.add.call_args_list
+        )
+
+    async def test_create_run_cancelled_error_propagates(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """asyncio.CancelledError must never be swallowed by the error handler."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+        )
+        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
+        mock_create_run.side_effect = asyncio.CancelledError()
+
+        with pytest.raises(asyncio.CancelledError):
+            await fire_agent_signal(
+                mock_session,
+                org_id=org_id,
+                source_run_id=uuid.uuid4(),
+                source_pipeline_id=source_pipeline_id,
+                completed_node_id="my-node",
+            )
+
+    async def test_create_run_paused_error_records_paused(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """A TriggersPausedError from create_run must be recorded as paused,
+        not swallowed or reported as a generic failure."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+        )
+        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
+        mock_create_run.side_effect = TriggersPausedError(
+            trigger_id=trigger.id, org_id=org_id, trigger_type="agent_signal"
+        )
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="my-node",
+        )
+
+        assert len(results) == 1
+        assert results[0]["trigger_id"] == str(trigger.id)
+        assert results[0]["status"] == "skipped"
+        assert results[0]["reason"] == PAUSE_SKIP_REASON
+        assert any(getattr(c[0][0], "validation_result", None) == "paused" for c in mock_session.add.call_args_list)
+
+
+# ---------------------------------------------------------------------------
+# _log_signal_event — trigger_event.error_detail sanitization (FAR-163)
+# ---------------------------------------------------------------------------
+
+
+async def test_log_signal_event_sanitizes_error_detail(mock_session: MagicMock) -> None:
+    """A create_run failure message embedding a DB URL must be redacted before
+    it lands in the TriggerEvent.error_detail column (user-visible)."""
+    trigger = _make_trigger()
+    event = await _log_signal_event(
+        mock_session,
+        trigger,
+        uuid.uuid4(),
+        result="validation_failed",
+        error_detail="create run failed postgresql://user:supersecret@db.example/modulo",
+    )
+
+    assert "supersecret" not in event.error_detail
+    assert "<redacted>" in event.error_detail
+
+
+async def test_log_signal_event_preserves_clean_detail_and_none(mock_session: MagicMock) -> None:
+    """Sanitization is a no-op for clean strings and must not turn None into ''."""
+    trigger = _make_trigger()
+    clean = await _log_signal_event(
+        mock_session,
+        trigger,
+        uuid.uuid4(),
+        result="signal_fired",
+        error_detail="all good",
+    )
+    assert clean.error_detail == "all good"
+
+    none_event = await _log_signal_event(mock_session, trigger, uuid.uuid4(), result="signal_fired")
+    assert none_event.error_detail is None

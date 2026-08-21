@@ -1,0 +1,11 @@
+rules:
+  - id: empty-catch-block
+    patterns:
+      - pattern: |
+          except:
+              pass
+    message: "Empty `except: pass` silently swallows errors — at minimum log the exception with `logger.exception()` or `logging.exception()`"
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/src/**"]

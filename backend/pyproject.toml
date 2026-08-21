@@ -1,0 +1,339 @@
+# Security Audit Policy
+# ---------------------
+# Dependency versions are pinned to minimums that fix known CVEs where possible.
+# Run `pip-audit` after any dependency change. The CI workflow
+# (.github/workflows/security-audit.yml) runs weekly and on PRs touching deps.
+# See docs/security/dependency-policy.md for severity SLAs and false-positive process.
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "farnalabs-modulo"
+version = "0.3.323"
+description = "Agent governance for your agentic SDLC"
+license = "BUSL-1.1"
+authors = [
+    { name = "Duncan Tait", email = "duncan@farnalabs.com" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: Other/Proprietary License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+requires-python = ">=3.12,<3.15"
+dependencies = [
+    # Settings
+    "pydantic-settings>=2.14.2",
+    # API
+    "fastapi>=0.116.2",
+    "starlette>=0.48.0",
+    "uvicorn[standard]>=0.49.0",
+    "websockets>=12.0",
+    "python-multipart>=0.0.32",
+    # LangGraph + LangChain
+    # PYSEC-2026-83 / CVE-2026-28277: RCE via msgpack checkpoint deserialization
+    "langgraph>=1.0.10",
+    # Required by langgraph>=1.0.10
+    "langchain-core>=1.2.31",
+    "langchain-anthropic>=1.4.0",
+    "langchain-cohere>=0.6.0",
+    # PYSEC-2026-76 / CVE-2026-41488: SSRF via TOCTOU in _url_to_size()
+    "langchain-openai>=1.1.14",
+    "langchain-aws>=0.2.0",
+    "langchain-google-genai>=4.2.6",
+    "langchain-google-vertexai>=2.0.0",
+    "langchain-mistralai>=0.2.0",
+    # Database
+    "sqlalchemy[asyncio]>=2.0.30",
+    "alembic>=1.16.0",
+    "asyncpg>=0.29.0",
+    "aiosqlite>=0.20.0",
+    # MariaDB (async MySQL)
+    "aiomysql>=0.3.2",
+    "pymysql>=1.1.1",
+    # HTTP client (GitHub connector)
+    "httpx>=0.28.1",
+    # Auth + crypto
+    "PyJWT[crypto]>=2.10.1",
+    "passlib[bcrypt]>=1.7.4",
+    "cryptography>=50.0.0",
+    # Docker SDK (local_docker runtime provider)
+    "docker>=7.0.0,<8.0.0",
+    # SSO / OIDC
+    "authlib>=1.3.0",
+    # SSO / SAML 2.0
+    "python3-saml>=1.16.0",
+    # XML parsing (safe, for SAML)
+    "defusedxml>=0.7.1",
+    # Templating
+    "jinja2>=3.1.4",
+    # YAML
+    "pyyaml>=6.0.3",
+    "jsonschema>=4.25.1,<4.26.dev0",
+    # Observability
+    "opentelemetry-sdk>=1.24.0",
+    "opentelemetry-exporter-otlp>=1.24.0",
+    # Structured logging
+    "python-json-logger>=3.1.0",
+    "croniter>=6.2.2",
+    "jmespath>=1.0.1",
+    "mcp>=1.28.1",
+    # Fixes CVE-2025-64439 (RCE via jsonplus), CVE-2026-27794 (RCE via pickle),
+    # and GHSA-47pj-3jcm-6whg (namespace prefix matching crosses segment boundaries; fixed in 3.1.1)
+    "langgraph-checkpoint-postgres>=3.1.1",
+    "psycopg-binary>=3.3.4",
+    # Runtime environments
+    "e2b>=0.15.0",
+    # Retry library — replaces hand-rolled retry-with-backoff patterns
+    "tenacity>=9.0.0",
+    # CLI
+    "click>=8.1.0",
+    "tqdm>=4.68.3",
+    "langchain-ibm>=1.1.0",
+    "redis>=6.4.0",
+    "saq[web]==0.26.4",
+    "aiohttp>=3.14.3",
+]
+
+[project.urls]
+Homepage = "https://modulo.run"
+Source = "https://github.com/farnalabs/modulo"
+BugTracker = "https://github.com/farnalabs/modulo/issues"
+
+[project.scripts]
+modulo = "modulo.cli.backup:cli"
+modulo-migrate = "modulo.cli.migrate:cli"
+modulo-break-glass = "modulo.cli.break_glass:cli"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=5.0.0",
+    "pytest-bdd>=7.2.0",
+    "pytest-xdist>=3.5.0",
+    "pytest-playwright>=0.8.0",
+    "httpx>=0.27.0",
+    # Starlette 1.x TestClient imports httpx2; keep this even without direct repo imports.
+    "httpx2>=2.0.0",
+    "respx>=0.21.0",
+    "testcontainers[postgres]>=4.14.2",
+    "locust>=2.32.0",
+    "websocket-client>=1.8.0",
+    "requests>=2.31.0",
+    "factory-boy>=3.3.3",
+    "mypy>=1.10.0",
+    "ruff>=0.4.0",
+    "bandit>=1.7.8",
+    "semgrep>=1.70.0",
+    "vulture>=2.16",
+    "import-linter>=2.1",
+    "pre-commit>=3.7.0",
+    "types-PyYAML>=6.0.12.20260518",
+    "types-passlib>=1.7.7",
+    "aiodocker>=0.21.0",
+    "hypothesis>=6.100.0",
+    "schemathesis>=3.30.0",
+    "pytest-recording>=0.13.0",
+    "mutmut>=3.6.0",
+]
+
+docker = ["aiodocker>=0.21.0"]
+redis = [
+    "redis>=6.4.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/modulo"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["src"]
+exclude = ["*.feature", "tests/connectors/__init__.py", ".semgrep/tests/"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes (dead code, unused imports ├óÔé¼ÔÇØ F841 catches uncovered vars, F811 catches redefs)
+    "I",        # isort
+    "N",        # pep8-naming
+    "UP",       # pyupgrade
+    "B",        # flake8-bugbear (real bugs ├óÔé¼ÔÇØ B006 mutating defaults, B023 loop var in closure)
+    "S",        # flake8-bandit (security ├óÔé¼ÔÇØ S608 detects raw f-string SQL injection)
+    "ASYNC",    # flake8-async (ASYNC251 catches unclosed event loops, ASYNC109 sync in async)
+    "RUF",      # ruff-specific rules (RUF012 mutable class defaults)
+    "SIM",      # flake8-simplify (SIM115 `open()` without context manager, SIM222 bool expr)
+    "C4",       # flake8-comprehensions (C416 unnecessary list comprehension)
+    "T20",      # flake8-print (T201 bare print in production code)
+    "RET",      # flake8-return (RET503 missing explicit return)
+    "PYI",      # flake8-pyi (PYI041 redundant `Optional` on union)
+    "FURB",     # refurb (FURB125 `while` ├óÔÇáÔÇÖ `for` loop, FURB163 unnecessary `None` check)
+]
+ignore = [
+    "S101",     # assert allowed in tests
+    "S105",     # hardcoded passwords (test fixtures have them)
+    "B008",     # FastAPI Depends() in function defaults is the idiomatic pattern
+]
+
+[tool.ruff.lint.per-file-ignores]
+"src/modulo/api/mcp_server.py" = ["RET503"]
+"tests/**" = ["S101", "S105", "S106", "S107", "S108", "S112", "S311", "B007", "B008"]
+
+"src/modulo/api/routes/scim.py" = ["N815", "N803"]
+"tests/unit/scim/test_scim_provisioning.py" = ["N815", "N803"]
+
+"scripts/*" = ["T20"]
+"scripts/gen_seed_sql.py" = ["S608"]
+"scripts/generate_remy_primer.py" = ["ASYNC240"]
+"deploy/*" = ["T20"]
+"tests/bdd/check-bdd-coverage.py" = ["N999"]
+"tests/unit/runtime_provider/*" = ["E402"]
+"tests/unit/secrets_backend/*" = ["E402"]
+"src/modulo/db/migrations/**" = ["RUF002", "RUF003", "E501"]
+"src/modulo/api/routes/triggers.py" = ["UP017"]
+"src/modulo/core/cron_scheduler.py" = ["UP017"]
+"src/modulo/core/reports/scheduler.py" = ["UP017"]
+"src/modulo/core/trigger_engine/polling.py" = ["UP017"]
+"src/modulo/core/housekeeping.py" = ["E501"]
+
+"tests/unit/test_mcp_security.py" = ["E402"]
+"tests/unit/test_multi_backend_sqlite.py" = ["E402"]
+"tests/unit/test_pipeline_node_conversion.py" = ["E402"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+exclude = ["migrations/"]
+mypy_path = ["src"]
+
+[[tool.mypy.overrides]]
+module = ["langgraph.*", "langchain.*", "testcontainers.*", "factory.*", "passlib.*", "croniter", "croniter.*", "defusedxml", "defusedxml.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["tests.bdd", "tests.bdd.*", "tests.bdd.steps", "tests.bdd.steps.*"]
+ignore_missing_imports = true
+allow_untyped_decorators = true
+allow_untyped_defs = true
+disallow_any_unimported = false
+disallow_untyped_calls = false
+disallow_incomplete_defs = false
+
+
+[[tool.mypy.overrides]]
+module = "modulo.api.mcp_server"
+# "return" errors remain because static analysis can't prove the for retry loop
+# always returns or raises (OperationalError raises on attempt 2).
+disable_error_code = ["return"]
+
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+filterwarnings = [
+    "error::RuntimeWarning",
+    "ignore:coroutine .to_thread. was never awaited:RuntimeWarning",
+    "default::pytest.PytestUnraisableExceptionWarning",
+    "error::ResourceWarning",
+    "error::DeprecationWarning",
+    "ignore::DeprecationWarning:onelogin",
+]
+testpaths = ["tests"]
+addopts = "-q -m 'not awaiting-implementation'"
+markers = [
+    "integration: marks tests as integration tests (require Postgres)",
+    "e2e: marks tests as end-to-end (require browser + running app)",
+    "slow: marks tests as slow",
+    "awaiting-implementation: marks scenarios that define desired behaviour not yet delivered",
+    "connector_conformance: connector contract conformance suite ├óÔé¼ÔÇØ every ConnectorType must pass",
+    "breakglass_gate: break-glass admin recovery deploy-gate regression (boot allow-list posture + connectivity smoke)",
+]
+
+[tool.coverage.run]
+source = ["src/modulo"]
+omit = ["*/tests/*", "*/migrations/*", "*/stub/*"]
+
+[tool.coverage.report]
+fail_under = 80
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@abstractmethod",
+]
+
+[tool.mutmut]
+source_paths = [
+    "src/modulo/auth/",
+    "src/modulo/db/rls.py",
+    "src/modulo/core/license.py",
+    "src/modulo/core/pipeline_engine/",
+    "src/modulo/core/eval_engine/",
+    "src/modulo/core/cost_controller/",
+    "src/modulo/core/audit_logger/",
+    "src/modulo/core/connector_hub/",
+    "src/modulo/core/model_backend_hub/",
+    "src/modulo/core/graph_validator/",
+    "src/modulo/core/run_context/",
+]
+runner = "pytest -q --timeout=60 -m 'not integration and not e2e'"
+backup = false
+pytest_add_cli_args_test_selection = [
+    "tests/unit/auth",
+    "tests/unit/core",
+    "tests/unit/db",
+    "tests/unit/graph_validator",
+    "tests/unit/audit_logger",
+    "tests/unit/pipeline_engine",
+    "tests/unit/connector_hub",
+    "tests/unit/model_backend_hub",
+    "tests/architecture",
+]
+
+[tool.importlinter]
+root_package = "modulo"
+
+[dependency-groups]
+dev = [
+    "bandit>=1.9.4",
+    "factory-boy>=3.3.3",
+    "httpx>=0.28.1",
+    # Starlette 1.x TestClient imports httpx2; keep this even without direct repo imports.
+    "httpx2>=2.0.0",
+    "import-linter>=2.1",
+    "mypy>=2.1.0",
+    "playwright>=1.60.0",
+    "pre-commit>=4.6.0",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-bdd>=7.2.0",
+    "pytest-cov>=7.1.0",
+    "pytest-playwright>=0.8.0",
+    "pytest-timeout>=2.4.0",
+    "pytest-xdist>=3.5.0",
+    "respx>=0.23.1",
+    "ruff>=0.15.18",
+    "semgrep>=1.70.0",
+    "vulture>=2.16",
+    "testcontainers[postgres]>=4.14.2",
+    "locust>=2.32.0",
+    "mutmut>=3.6.0",
+    "websocket-client>=1.8.0",
+    "requests>=2.31.0",
+    "types-jmespath>=1.1.0.20260508",
+    "types-passlib>=1.7.7",
+    "types-PyYAML>=6.0.12.20260518",
+    "aiodocker>=0.21.0",
+    "hypothesis>=6.100.0",
+    "schemathesis>=3.30.0",
+    "pytest-recording>=0.13.0",
+    "pip-audit>=2.9.0",
+]

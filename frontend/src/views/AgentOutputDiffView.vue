@@ -1,0 +1,260 @@
+<template>
+  <div class="page-wide">
+    <ErrorAlert v-if="error" :message="error" />
+    <template v-else>
+      <PageHeader :title="$t('views.AgentOutputDiffView.agent_output_diff')" :subtitle="$t('views.AgentOutputDiffView.subtitle')" />
+
+      <div v-if="loadingRuns" class="rounded-lg border bg-card p-6" data-testid="diff-loading">
+        <div class="grid gap-4">
+          <div v-for="n in 3" :key="n" class="h-9 animate-pulse rounded-lg bg-muted" />
+        </div>
+      </div>
+      <div v-else class="flex flex-wrap items-end gap-4 rounded-lg border bg-card p-6">
+        <div class="flex flex-col gap-1.5">
+          <label for="agentoutputdiffview-field-run-a" class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_a') }}</label>
+          <div class="flex gap-2">
+            <Select
+  aria-label="Select run A"
+  v-model="runIdA"
+  :placeholder="loadingRuns ? $t('views.AgentOutputDiffView.loading') : $t('views.AgentOutputDiffView.select_recent_run')"
+  data-testid="diff-recent-runs-a"
+  class="w-72"
+  :options="recentRuns.map(run => ({ value: run.id, label: run.pipeline_name + '—' + run.status + '(' + run.created_at + ')' }))"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
+            <input :aria-label="$t('views.AgentOutputDiffView.paste_run_id')"
+              v-model="runIdA"
+              id="agentoutputdiffview-field-run-a"
+              data-testid="diff-run-id-a"
+              type="text"
+              :placeholder="$t('views.AgentOutputDiffView.paste_run_id')"
+              class="w-48 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          </div>
+        </div>
+        <label for="agentoutputdiffview-field-1" class="flex flex-col gap-1.5">
+          <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.node_id') }}</span>
+          <input id="agentoutputdiffview-field-1"
+            v-model="nodeId"
+            data-testid="diff-node-id"
+            type="text"
+            :placeholder="$t('views.AgentOutputDiffView.node_id_placeholder')"
+            class="w-48 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+        </label>
+        <div class="flex flex-col gap-1.5">
+          <label for="agentoutputdiffview-field-run-b" class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_b') }}</label>
+          <div class="flex gap-2">
+            <Select
+  aria-label="Select run B"
+  v-model="runIdB"
+  :placeholder="loadingRuns ? $t('views.AgentOutputDiffView.loading') : $t('views.AgentOutputDiffView.select_recent_run')"
+  data-testid="diff-recent-runs-b"
+  class="w-72"
+  :options="recentRuns.map(run => ({ value: run.id, label: run.pipeline_name + '—' + run.status + '(' + run.created_at + ')' }))"
+  option-label="label"
+  option-value="value"
+>
+  <template #option="{ option }">
+    <span :data-value="option.value">{{ option.label }}</span>
+  </template>
+</Select>
+            <input :aria-label="$t('views.AgentOutputDiffView.paste_run_id')"
+              v-model="runIdB"
+              id="agentoutputdiffview-field-run-b"
+              data-testid="diff-run-id-b"
+              type="text"
+              :placeholder="$t('views.AgentOutputDiffView.paste_run_id')"
+              class="w-48 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          </div>
+        </div>
+        <Button :disabled="!canCompare || loading" data-testid="diff-compare-btn" class="px-5 py-2" @click="handleCompare">
+          {{ $t('views.AgentOutputDiffView.compare') }}
+        </Button>
+      </div>
+
+      <div v-if="result" class="space-y-6">
+        <div
+          v-if="!result.has_diff"
+          data-testid="diff-identical-banner"
+          class="rounded-lg border border-green-500/30 bg-green-500/10 p-4 text-center text-sm font-medium text-green-600"
+        >
+          {{ $t('views.AgentOutputDiffView.outputs_identical') }}
+        </div>
+
+        <div class="flex flex-wrap gap-4 text-sm">
+          <span class="rounded bg-muted px-2.5 py-1 tabular-nums text-muted-foreground">
+            {{ $t('views.AgentOutputDiffView.lines_total', { count: totalLines }) }}
+          </span>
+          <span class="rounded bg-green-500/10 px-2.5 py-1 tabular-nums text-green-600">
+            {{ $t('views.AgentOutputDiffView.added', { count: addedCount }) }}
+          </span>
+          <span class="rounded bg-red-500/10 px-2.5 py-1 tabular-nums text-red-600">
+            {{ $t('views.AgentOutputDiffView.removed', { count: removedCount }) }}
+          </span>
+          <span class="rounded bg-muted px-2.5 py-1 tabular-nums text-muted-foreground">
+            {{ $t('views.AgentOutputDiffView.unchanged', { count: unchangedCount }) }}
+          </span>
+        </div>
+
+        <details class="rounded-lg border bg-card">
+          <summary class="cursor-pointer px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground">
+            {{ $t('views.AgentOutputDiffView.raw_outputs') }}
+          </summary>
+          <div class="grid grid-cols-1 gap-4 border-t p-4 md:grid-cols-2">
+            <div>
+              <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_a_output', { runId: runIdA }) }}</h4>
+              <JsonViewer v-if="result.node_output_a" :data="result.node_output_a" :show-toolbar="true" :max-height="'16rem'" />
+              <span v-else class="text-xs text-muted-foreground">—</span>
+            </div>
+            <div>
+              <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_b_output', { runId: runIdB }) }}</h4>
+              <JsonViewer v-if="result.node_output_b" :data="result.node_output_b" :show-toolbar="true" :max-height="'16rem'" />
+              <span v-else class="text-xs text-muted-foreground">—</span>
+            </div>
+          </div>
+        </details>
+
+        <div class="overflow-hidden rounded-lg border bg-card">
+          <div class="border-b bg-muted/50 px-4 py-2 text-xs font-medium text-muted-foreground">
+            {{ $t('views.AgentOutputDiffView.line_level_diff') }} <span class="ml-2 text-green-500">{{ $t('views.AgentOutputDiffView.plus_added') }}</span> <span class="ml-1 text-red-500">{{ $t('views.AgentOutputDiffView.minus_removed') }}</span>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left font-mono text-xs leading-relaxed">
+              <thead>
+                <tr>
+                  <th scope="col" class="sr-only">{{ $t('views.AgentOutputDiffView.run_a') }}</th>
+                  <th scope="col" class="sr-only">{{ $t('views.AgentOutputDiffView.plus_added') }}</th>
+                  <th scope="col" class="sr-only">{{ $t('views.AgentOutputDiffView.run_b') }}</th>
+                  <th scope="col" class="sr-only">{{ $t('views.AgentOutputDiffView.line_level_diff') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-if="result.diff_lines.length === 0"
+                  class="text-center text-muted-foreground"
+                >
+                  <td colspan="4" class="px-4 py-6">{{ $t('views.AgentOutputDiffView.no_diff_lines') }}</td>
+                </tr>
+                <tr
+                  v-for="(line, idx) in result.diff_lines"
+                  :key="idx"
+                  :class="diffRowClass(line)"
+                >
+                  <td class="w-12 select-none px-2 text-right text-muted-foreground/50">{{ line.line_a ?? '' }}</td>
+                  <td class="w-px select-none px-1 text-muted-foreground/30">{{ diffMarker(line) }}</td>
+                  <td class="w-12 select-none px-2 text-right text-muted-foreground/50">{{ line.line_b ?? '' }}</td>
+                  <td class="whitespace-pre px-2 py-0.5" :class="diffContentClass(line)">{{ line.content }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, computed } from 'vue'
+import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
+import { useApi } from '../composables/useApi'
+import { useDataFetch } from '../composables/useDataFetch'
+import { useMutation } from '../composables/useMutation'
+import type { components } from '../lib/api/client'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import JsonViewer from '../components/shared/JsonViewer.vue'
+import PageHeader from '../components/shared/PageHeader.vue'
+import Button from 'primevue/button'
+import Select from 'primevue/select'
+
+type NodeOutputDiffResponse = components['schemas']['NodeOutputDiffResponse']
+type NodeOutputDiffLine = components['schemas']['NodeOutputDiffLine']
+
+const runIdA = ref('')
+const nodeId = ref('')
+const runIdB = ref('')
+const result = ref<NodeOutputDiffResponse | null>(null)
+
+interface RecentRun {
+  id: string
+  pipeline_name: string
+  status: string
+  created_at: string
+}
+
+const { get: getUntyped } = useApi()
+const { loading: loadingRuns, data: summaryResp } = useDataFetch(
+  async () => ({ data: await getUntyped<{ recent_runs: RecentRun[] }>('/api/v1/admin/dashboard/summary') }),
+  { immediate: true },
+)
+
+const recentRuns = computed(() => ((summaryResp.value as any)?.recent_runs ?? []) as RecentRun[])
+
+
+
+const canCompare = computed(() => {
+  return runIdA.value.trim() && nodeId.value.trim() && runIdB.value.trim()
+})
+
+const totalLines = computed(() => result.value?.diff_lines.length ?? 0)
+
+const addedCount = computed(() => {
+  return result.value?.diff_lines.filter(l => l.type === 'added').length ?? 0
+})
+
+const removedCount = computed(() => {
+  return result.value?.diff_lines.filter(l => l.type === 'removed').length ?? 0
+})
+
+const unchangedCount = computed(() => {
+  return result.value?.diff_lines.filter(l => l.type === 'unchanged').length ?? 0
+})
+
+function diffRowClass(line: NodeOutputDiffLine): string {
+  if (line.type === 'added') return 'bg-green-500/5'
+  if (line.type === 'removed') return 'bg-red-500/5'
+  return ''
+}
+
+function diffContentClass(line: NodeOutputDiffLine): string {
+  if (line.type === 'added') return 'text-green-600'
+  if (line.type === 'removed') return 'text-red-600'
+  return 'text-foreground'
+}
+
+function diffMarker(line: NodeOutputDiffLine): string {
+  if (line.type === 'added') return '+'
+  if (line.type === 'removed') return '-'
+  return ' '
+}
+
+const { loading, error, mutate: compare } = useMutation(async () => {
+  const { data, error: apiError } = await api.POST('/api/v1/runs/diff', {
+    body: {
+      run_id_a: runIdA.value.trim(),
+      node_id_a: nodeId.value.trim(),
+      run_id_b: runIdB.value.trim(),
+      node_id_b: nodeId.value.trim(),
+    },
+  })
+  if (apiError) throw new Error(formatApiError(apiError))
+  result.value = data as unknown as NodeOutputDiffResponse
+  return data
+})
+
+async function handleCompare() {
+  try {
+    await compare()
+  } catch (e) {
+    // useMutation exposes the error for the page-level alert.
+  }
+}
+</script>

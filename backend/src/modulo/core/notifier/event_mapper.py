@@ -1,0 +1,341 @@
+"""Notification event mapping — maps platform events to in-app Notification records.
+
+Event categories and their notification config:
+  - hitl_awaiting     → level: info,   scope: org,   category: "hitl.awaiting"
+  - run_failed        → level: error,  scope: org,   category: "run.failed"
+  - run_stalled       → level: warning, scope: org,   category: "run.stalled"
+  - budget_exceeded   → level: warning, scope: org,   category: "run.budget_exceeded"
+  - claim_expired     → level: info,   scope: org,   category: "hitl.claim_expired"
+  - hitl_overdue      → level: warning, scope: admin
+  - eval_regression   → level: warning, scope: org
+  - feedback_pending  → level: info,   scope: user (target_user_id assigned)
+  - system_announcement → level: info,  scope: org
+  - eval_blocked      → level: error,  scope: org
+"""
+
+from __future__ import annotations
+
+import logging
+import uuid
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from modulo.core.notifier import (
+    EVENT_BUDGET_EXCEEDED,
+    EVENT_CLAIM_EXPIRED,
+    EVENT_EVAL_BLOCKED,
+    EVENT_EVAL_REGRESSION,
+    EVENT_FEEDBACK_PENDING,
+    EVENT_GUARDRAIL_ENFORCEMENT_GAP,
+    EVENT_GUARDRAIL_KILL_SWITCH,
+    EVENT_GUARDRAIL_UNEXPECTED_SKIP,
+    EVENT_HITL_AWAITING,
+    EVENT_HITL_OVERDUE,
+    EVENT_RUN_FAILED,
+    EVENT_RUN_STALLED,
+    EVENT_SYSTEM_ANNOUNCEMENT,
+    EVENT_TRIGGER_DEACTIVATED,
+)
+from modulo.db.crud.notifications import create_notification
+from modulo.db.models.notification import Notification
+
+_log = logging.getLogger(__name__)
+
+# Deep-link template shared by every run-scoped notification action URL.
+_RUN_DETAIL_URL = "/runs/{run_id}"
+
+# HITL-gate guard events (hitl-gate-removal-guard-plan.md v19 §5). These are
+# emitted by the service-layer backstop as AuditEvents; the config registration
+# keeps the in-app Notification surface aware of them (scope: admin).
+EVENT_HITL_GATE_REMOVED = "hitl_gate_removed"
+EVENT_HITL_GATE_REMOVAL_DENIED = "hitl_gate_removal_denied"
+
+_EVENT_CONFIG: dict[str, dict[str, Any]] = {
+    EVENT_HITL_AWAITING: {
+        "level": "info",
+        "scope": "org",
+        "category": "hitl.awaiting",
+        "dismiss_strategy": "any_scope",
+        "dismissible_at_scope": True,
+        "ttl_hours": 72,
+    },
+    EVENT_RUN_FAILED: {
+        "level": "error",
+        "scope": "org",
+        "category": "run.failed",
+        "dismiss_strategy": "any_scope",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    EVENT_RUN_STALLED: {
+        "level": "warning",
+        "scope": "org",
+        "category": "run.stalled",
+        "dismiss_strategy": "any_scope",
+        "dismissible_at_scope": True,
+        "ttl_hours": 72,
+    },
+    EVENT_BUDGET_EXCEEDED: {
+        "level": "warning",
+        "scope": "org",
+        "category": "run.budget_exceeded",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    EVENT_CLAIM_EXPIRED: {
+        "level": "info",
+        "scope": "org",
+        "category": "hitl.claim_expired",
+        "dismiss_strategy": "any_scope",
+        "dismissible_at_scope": True,
+        "ttl_hours": 24,
+    },
+    EVENT_HITL_OVERDUE: {
+        "level": "warning",
+        "scope": "admin",
+        "category": "hitl.overdue",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    EVENT_HITL_GATE_REMOVED: {
+        "level": "warning",
+        "scope": "admin",
+        "category": "hitl.gate_removed",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    EVENT_HITL_GATE_REMOVAL_DENIED: {
+        "level": "error",
+        "scope": "admin",
+        "category": "hitl.gate_removal_denied",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    EVENT_EVAL_REGRESSION: {
+        "level": "warning",
+        "scope": "org",
+        "category": "eval.regression",
+        "dismiss_strategy": "any_scope",
+        "dismissible_at_scope": True,
+        "ttl_hours": 336,
+    },
+    EVENT_EVAL_BLOCKED: {
+        "level": "error",
+        "scope": "org",
+        "category": "eval.blocked",
+        "dismiss_strategy": "any_scope",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    EVENT_FEEDBACK_PENDING: {
+        "level": "info",
+        "scope": "user",
+        "category": "feedback.pending",
+        "dismiss_strategy": "user_only",
+        "dismissible_at_scope": False,
+        "ttl_hours": 336,
+    },
+    EVENT_SYSTEM_ANNOUNCEMENT: {
+        "level": "info",
+        "scope": "org",
+        "category": "system.announcement",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": None,
+    },
+    EVENT_TRIGGER_DEACTIVATED: {
+        "level": "warning",
+        "scope": "org",
+        "category": "triggers.auto_deactivated",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    EVENT_GUARDRAIL_ENFORCEMENT_GAP: {
+        "level": "error",
+        "scope": "admin",
+        "category": "guardrails.enforcement_gap",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    EVENT_GUARDRAIL_KILL_SWITCH: {
+        "level": "warning",
+        "scope": "admin",
+        "category": "guardrails.kill_switch",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    EVENT_GUARDRAIL_UNEXPECTED_SKIP: {
+        "level": "error",
+        "scope": "admin",
+        "category": "guardrails.unexpected_skip",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+}
+
+_TITLE_TEMPLATES: dict[str, str] = {
+    EVENT_HITL_AWAITING: "HITL review needed — {pipeline_name}",
+    EVENT_RUN_FAILED: "Run failed — {pipeline_name}",
+    EVENT_RUN_STALLED: "Run stalled — {pipeline_name}",
+    EVENT_BUDGET_EXCEEDED: "Budget exceeded — {pipeline_name}",
+    EVENT_CLAIM_EXPIRED: "HITL claim expired — {pipeline_name}",
+    EVENT_HITL_OVERDUE: "HITL overdue — {pipeline_name}",
+    EVENT_HITL_GATE_REMOVED: "HITL gate weakened — {pipeline_name}",
+    EVENT_HITL_GATE_REMOVAL_DENIED: "HITL gate removal denied",
+    EVENT_EVAL_REGRESSION: "Eval regression detected — {agent_name}",
+    EVENT_EVAL_BLOCKED: "Eval blocked — {pipeline_name}",
+    EVENT_FEEDBACK_PENDING: "Feedback awaiting review",
+    EVENT_SYSTEM_ANNOUNCEMENT: "System announcement",
+    EVENT_TRIGGER_DEACTIVATED: "Ongoing trigger auto-deactivated — {pipeline_name}",
+    EVENT_GUARDRAIL_ENFORCEMENT_GAP: "Guardrail enforcement gap — {guardrail}",
+    EVENT_GUARDRAIL_KILL_SWITCH: "Guardrails downgraded to observe (kill-switch enabled)",
+    EVENT_GUARDRAIL_UNEXPECTED_SKIP: "Guardrail skipped unexpectedly — {guardrail}",
+}
+
+_BODY_TEMPLATES: dict[str, str] = {
+    EVENT_HITL_AWAITING: 'Pipeline "{pipeline_name}" is waiting for human review.',
+    EVENT_RUN_FAILED: 'Run for "{pipeline_name}" failed with error: {error_code}.',
+    EVENT_RUN_STALLED: (
+        'Run for "{pipeline_name}" stalled — the agent produced no output for the configured stall timeout.'
+    ),
+    EVENT_BUDGET_EXCEEDED: 'Run for "{pipeline_name}" exceeded its token budget.',
+    EVENT_CLAIM_EXPIRED: 'A HITL claim on "{pipeline_name}" has expired.',
+    EVENT_HITL_OVERDUE: 'Pipeline "{pipeline_name}" has been awaiting human review for {minutes_overdue} minutes.',
+    EVENT_HITL_GATE_REMOVED: 'A HITL gate on "{pipeline_name}" was weakened or removed.',
+    EVENT_HITL_GATE_REMOVAL_DENIED: "A non-privileged attempt to weaken a HITL gate was denied.",
+    EVENT_EVAL_REGRESSION: 'Eval pass rate dropped for agent "{agent_name}".',
+    EVENT_EVAL_BLOCKED: 'An eval check blocked pipeline "{pipeline_name}".',
+    EVENT_FEEDBACK_PENDING: "A feedback record is pending your review.",
+    EVENT_SYSTEM_ANNOUNCEMENT: "{message}",
+    EVENT_TRIGGER_DEACTIVATED: (
+        'Ongoing trigger "{pipeline_name}" was auto-deactivated after {streak} consecutive no-delivery runs '
+        "(threshold {threshold})."
+    ),
+    EVENT_GUARDRAIL_ENFORCEMENT_GAP: (
+        'Guardrail "{guardrail}" could not be evaluated ({reason}) and is not enforcing. See the run for details.'
+    ),
+    EVENT_GUARDRAIL_KILL_SWITCH: (
+        "The org-wide guardrails kill-switch was enabled: every bound guardrail is now "
+        "observe-only (shadow mode). Guardrails are computed and logged but never block or redact."
+    ),
+    EVENT_GUARDRAIL_UNEXPECTED_SKIP: (
+        'Guardrail "{guardrail}" was skipped for an unexpected reason ({reason}) — not explained by '
+        "a soft-deleted pinned guardrail. See the run for details."
+    ),
+}
+
+_ACTION_URL_TEMPLATES: dict[str, str | None] = {
+    EVENT_HITL_AWAITING: _RUN_DETAIL_URL,
+    EVENT_RUN_FAILED: _RUN_DETAIL_URL,
+    EVENT_RUN_STALLED: _RUN_DETAIL_URL,
+    EVENT_BUDGET_EXCEEDED: _RUN_DETAIL_URL,
+    EVENT_CLAIM_EXPIRED: _RUN_DETAIL_URL,
+    EVENT_HITL_OVERDUE: _RUN_DETAIL_URL,
+    EVENT_HITL_GATE_REMOVED: None,
+    EVENT_HITL_GATE_REMOVAL_DENIED: None,
+    EVENT_EVAL_REGRESSION: "/evals",
+    EVENT_EVAL_BLOCKED: _RUN_DETAIL_URL,
+    EVENT_FEEDBACK_PENDING: "/feedback/inbox",
+    EVENT_SYSTEM_ANNOUNCEMENT: None,
+    EVENT_TRIGGER_DEACTIVATED: None,
+    EVENT_GUARDRAIL_ENFORCEMENT_GAP: "/runs/{run_id}",
+    EVENT_GUARDRAIL_KILL_SWITCH: None,
+    EVENT_GUARDRAIL_UNEXPECTED_SKIP: "/runs/{run_id}",
+}
+
+
+def notification_categories() -> frozenset[str]:
+    """All valid Notification.category values, derived from _EVENT_CONFIG.
+
+    Single source of truth for preference validation/response shaping — never
+    hardcode the category list (FAR-247). Includes every configured category
+    (org/admin/user scoped), so users can opt out of each one.
+    """
+    return frozenset(cfg["category"] for cfg in _EVENT_CONFIG.values())
+
+
+class NotificationEventMapper:
+    """Maps platform events to in-app notifications and creates DB records."""
+
+    async def create_from_event(
+        self,
+        session: AsyncSession,
+        *,
+        org_id: uuid.UUID,
+        event_type: str,
+        payload: dict[str, Any],
+        target_user_id: uuid.UUID | None = None,
+    ) -> Notification | None:
+        """Create a notification record from a platform event.
+
+        Returns None if the event type is not recognised.
+        """
+        config = _EVENT_CONFIG.get(event_type)
+        if config is None:
+            _log.debug("mapper.unknown_event_type", extra={"event_type": event_type})
+            return None
+
+        title = self._resolve_template(
+            _TITLE_TEMPLATES.get(event_type, event_type),
+            payload,
+        )
+        body = self._resolve_template(
+            _BODY_TEMPLATES.get(event_type, ""),
+            payload,
+        )
+        action_url = _ACTION_URL_TEMPLATES.get(event_type)
+        if action_url is not None:
+            action_url = self._resolve_template(action_url, payload)
+
+        ttl_hours = config.get("ttl_hours")
+        expires_at = None
+        if ttl_hours is not None and ttl_hours > 0:
+            expires_at = datetime.now(UTC) + timedelta(hours=ttl_hours)
+
+        notification = await create_notification(
+            session=session,
+            org_id=org_id,
+            scope=config["scope"],
+            level=config["level"],
+            category=config["category"],
+            title=title,
+            body=body,
+            action_url=action_url,
+            dismiss_strategy=config["dismiss_strategy"],
+            dismissible_at_scope=config["dismissible_at_scope"],
+            target_user_id=target_user_id,
+            expires_at=expires_at,
+        )
+        _log.info(
+            "mapper.notification_created",
+            extra={
+                "org_id": str(org_id),
+                "event_type": event_type,
+                "notification_id": str(notification.id),
+            },
+        )
+        return notification
+
+    def _resolve_template(self, template: str, payload: dict[str, Any]) -> str:
+        try:
+            return template.format(**payload)
+        except KeyError as exc:
+            _log.warning("mapper.template_key_missing", extra={"template": template, "key": str(exc)})
+            result = template.replace(f"{{{exc.args[0]}}}", "[unknown]")
+            try:
+                return result.format(**payload)
+            except KeyError:
+                return result
+        except (ValueError, IndexError, TypeError):
+            _log.warning("mapper.template_format_error", extra={"template": template})
+            return template

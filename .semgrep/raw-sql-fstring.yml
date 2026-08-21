@@ -1,0 +1,14 @@
+rules:
+  - id: raw-sql-fstring
+    patterns:
+      - pattern-either:
+          - pattern: text(f"$SQL")
+          - pattern: text(F"$SQL")
+      - metavariable-regex:
+          metavariable: $SQL
+          regex: '.*\{.*\}.*'
+    message: "SQL text() with f-string interpolation is SQL injection. Use parameterized queries: text(\"... :param ...\").bindparams(param=value)"
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/src/**"]

@@ -1,0 +1,442 @@
+"""Unit tests for /api/v1/admin/license endpoints."""
+
+import base64
+import json
+import uuid
+from collections.abc import Generator, Mapping
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from fastapi.testclient import TestClient
+
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
+from modulo.api.main import app
+from modulo.auth.dependencies import get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.license import (
+    clear_license,
+    get_license,
+    parse_and_verify,
+    set_public_key,
+    store_license,
+)
+from modulo.core.registry.crypto import generate_keypair, sign_primitive
+from modulo.settings import Settings, get_settings
+
+_VALID_32 = "a" * 32
+_TEST_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+_TEST_ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+
+# Use a known test keypair so we can sign payloads for testing
+_TEST_KP = generate_keypair()
+_TEST_PRIV = _TEST_KP["private_key"]
+_TEST_PUB = _TEST_KP["public_key"]
+
+
+def _make_settings() -> Settings:
+    return Settings(
+        database_url="postgresql+asyncpg://localhost/test",
+        secret_key=_VALID_32,
+        fernet_key=_VALID_32,
+        modulo_admin_password="testpass",
+        modulo_license_key="test-license-key",
+        # No real Redis in unit tests: the route caches the license status under
+        # ``license:{org_id}`` (60s TTL) and reads it back before touching the DB.
+        # With a live Redis the whole module shares one cache key, so a GET from
+        # one test short-circuits a later test's DB path (the in-process
+        # ``_current_license`` reset is not enough). An empty URL makes every
+        # cache read/write fail fast inside the route's ``except Exception``,
+        # keeping each test hermetic.
+        redis_url="",
+    )
+
+
+def _sign_license_payload(payload: Mapping[str, object], private_key: str = _TEST_PRIV) -> str:
+    sig_hex = sign_primitive(payload, private_key)
+    sig_bytes = bytes.fromhex(sig_hex)
+    payload_b64 = (
+        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
+        .decode()
+        .rstrip("=")
+    )
+    sig_b64 = base64.urlsafe_b64encode(sig_bytes).decode().rstrip("=")
+    return f"{payload_b64}.{sig_b64}"
+
+
+def _make_valid_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "tier": "team",
+        "features": ["sso", "team_rbac", "audit_viewer"],
+        "expires_at": (datetime.now(UTC) + timedelta(days=365)).isoformat(),
+        "org_id": "test-org",
+    }
+    payload.update(overrides)
+    return payload
+
+
+# ── Fixtures ──────────────────────────────────────────────────────────────
+
+
+def _mock_org(settings_json: dict[str, object] | None = None) -> MagicMock:
+    org = MagicMock()
+    org.settings_json = settings_json
+    return org
+
+
+@pytest.fixture(autouse=True)
+def _reset_license_state() -> Generator[None, None, None]:
+    clear_license()
+    set_public_key(_TEST_PUB)
+    yield
+    clear_license()
+
+
+def _make_mock_session() -> AsyncMock:
+    session = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    return session
+
+
+@pytest.fixture
+def client() -> Generator[TestClient, None, None]:
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = _make_mock_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="admin",
+        organisation_id=_TEST_ORG_ID,
+        account_id=_TEST_ACCOUNT_ID,
+        org_role="admin",
+        is_system_admin=True,
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def unauth_client() -> Generator[TestClient, None, None]:
+    app.dependency_overrides[get_settings] = _make_settings
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def tenantless_admin_client() -> Generator[TestClient, None, None]:
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="admin",
+        organisation_id=None,
+        account_id=_TEST_ACCOUNT_ID,
+        org_role="admin",
+    )
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def operator_client() -> Generator[TestClient, None, None]:
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = _make_mock_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="operator",
+        organisation_id=_TEST_ORG_ID,
+        account_id=_TEST_ACCOUNT_ID,
+        org_role="operator",
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+# ── Core license parsing tests ───────────────────────────────────────────
+
+
+class TestParseAndVerify:
+    def test_parses_valid_license(self) -> None:
+        payload = _make_valid_payload()
+        key = _sign_license_payload(payload)
+        result = parse_and_verify(key)
+        assert result.valid is True
+        assert result.license_data is not None
+        assert result.license_data.tier == "team"
+        assert "sso" in result.license_data.features
+        assert result.license_data.org_id == "test-org"
+
+    def test_rejects_tampered_payload(self) -> None:
+        payload = _make_valid_payload()
+        key = _sign_license_payload(payload)
+        parts = key.split(".")
+        tampered_payload_b64 = (
+            base64.urlsafe_b64encode(json.dumps({"tier": "community"}, separators=(",", ":"), sort_keys=True).encode())
+            .decode()
+            .rstrip("=")
+        )
+        tampered_key = f"{tampered_payload_b64}.{parts[1]}"
+        result = parse_and_verify(tampered_key)
+        assert result.valid is False
+        assert "Signature" in (result.error or "")
+
+    def test_rejects_expired_license(self) -> None:
+        payload = _make_valid_payload(expires_at=(datetime.now(UTC) - timedelta(days=1)).isoformat())
+        key = _sign_license_payload(payload)
+        result = parse_and_verify(key)
+        assert result.valid is False
+        assert "expired" in (result.error or "").lower()
+
+    def test_rejects_malformed_base64(self) -> None:
+        result = parse_and_verify("not-valid-base64!!.also-not-valid")
+        assert result.valid is False
+        assert result.error is not None
+
+    def test_rejects_missing_dot(self) -> None:
+        result = parse_and_verify("no-dot-separator")
+        assert result.valid is False
+        assert "expected" in (result.error or "").lower()
+
+    def test_rejects_wrong_public_key(self) -> None:
+        payload = _make_valid_payload()
+        other_kp = generate_keypair()
+        key = _sign_license_payload(payload, private_key=other_kp["private_key"])
+        result = parse_and_verify(key)
+        assert result.valid is False
+        assert "Signature" in (result.error or "")
+
+    def test_accepts_community_tier_no_expiry(self) -> None:
+        payload = {
+            "tier": "community",
+            "features": [],
+            "org_id": "test-org",
+        }
+        key = _sign_license_payload(payload)
+        result = parse_and_verify(key)
+        assert result.valid is True
+        assert result.license_data is not None
+        assert result.license_data.tier == "community"
+        assert not result.license_data.expires_at
+
+
+class TestStoreAndGetLicense:
+    def test_store_license(self) -> None:
+        assert get_license() is None
+        payload = _make_valid_payload()
+        key = _sign_license_payload(payload)
+        result = parse_and_verify(key)
+        assert result.license_data is not None
+        store_license(key, result.license_data)
+        stored = get_license()
+        assert stored is not None
+        assert stored.tier == "team"
+        assert stored.org_id == "test-org"
+
+    def test_clear_license(self) -> None:
+        payload = _make_valid_payload()
+        key = _sign_license_payload(payload)
+        result = parse_and_verify(key)
+        assert result.license_data is not None
+        store_license(key, result.license_data)
+        assert get_license() is not None
+        clear_license()
+        assert get_license() is None
+
+
+# ── API endpoint tests ───────────────────────────────────────────────────
+
+
+class TestGetLicense:
+    URL = "/api/v1/admin/license"
+
+    def test_returns_no_license_when_none_set(self, client: TestClient) -> None:
+        org = _mock_org(settings_json=None)
+        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+            resp = client.get(self.URL)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["has_license"] is False
+        assert data["tier"] == "community"
+        assert not data["features"]
+
+    def test_returns_license_when_set(self, client: TestClient) -> None:
+        payload = _make_valid_payload()
+        key = _sign_license_payload(payload)
+        result = parse_and_verify(key)
+        assert result.license_data is not None
+        store_license(key, result.license_data)
+
+        org = _mock_org(settings_json={})
+        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+            resp = client.get(self.URL)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["has_license"] is True
+        assert data["tier"] == "team"
+        assert "sso" in data["features"]
+        assert data["org_id"] == "test-org"
+
+    def test_requires_auth(self, unauth_client: TestClient) -> None:
+        resp = unauth_client.get(self.URL)
+        assert resp.status_code in (401, 403)
+
+    def test_requires_admin(self, operator_client: TestClient) -> None:
+        resp = operator_client.get(self.URL)
+        assert resp.status_code == 403
+
+    def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
+        with patch("modulo.api.routes.admin_license.get_organisation", side_effect=RuntimeError("boom")):
+            resp = client.get(self.URL)
+        assert resp.status_code == 500
+
+
+class TestUploadLicense:
+    URL = "/api/v1/admin/license"
+
+    def test_accepts_valid_license(self, client: TestClient) -> None:
+        payload = _make_valid_payload()
+        key = _sign_license_payload(payload)
+        resp = client.post(self.URL, json={"license_key": key})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert data["tier"] == "team"
+        assert "sso" in data["features"]
+        assert data["org_id"] == "test-org"
+
+    def test_persists_license(self, client: TestClient) -> None:
+        payload = _make_valid_payload()
+        key = _sign_license_payload(payload)
+        resp = client.post(self.URL, json={"license_key": key})
+        assert resp.status_code == 200
+
+        org = _mock_org(settings_json={})
+        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+            resp2 = client.get(self.URL)
+        assert resp2.status_code == 200
+        data2 = resp2.json()
+        assert data2["has_license"] is True
+        assert data2["tier"] == "team"
+
+    def test_rejects_invalid_signature(self, client: TestClient) -> None:
+        payload = _make_valid_payload()
+        wrong_kp = generate_keypair()
+        key = _sign_license_payload(payload, private_key=wrong_kp["private_key"])
+        resp = client.post(self.URL, json={"license_key": key})
+        assert resp.status_code == 422
+        assert "Signature" in resp.json()["detail"]
+
+    def test_rejects_expired_license(self, client: TestClient) -> None:
+        payload = _make_valid_payload(expires_at=(datetime.now(UTC) - timedelta(days=1)).isoformat())
+        key = _sign_license_payload(payload)
+        resp = client.post(self.URL, json={"license_key": key})
+        assert resp.status_code == 422
+        assert "expired" in resp.json()["detail"].lower()
+
+    def test_rejects_malformed_key(self, client: TestClient) -> None:
+        resp = client.post(self.URL, json={"license_key": "not-a-valid-key"})
+        assert resp.status_code == 422
+
+    def test_rejects_empty_key(self, client: TestClient) -> None:
+        resp = client.post(self.URL, json={"license_key": ""})
+        assert resp.status_code == 422
+
+    def test_requires_auth(self, unauth_client: TestClient) -> None:
+        resp = unauth_client.post(self.URL, json={"license_key": "dGVzdA==.dGVzdA=="})
+        assert resp.status_code in (401, 403)
+
+    def test_requires_admin(self, operator_client: TestClient) -> None:
+        resp = operator_client.post(self.URL, json={"license_key": "dGVzdA==.dGVzdA=="})
+        assert resp.status_code == 403
+
+    def test_requires_system_admin(self, tenantless_admin_client: TestClient) -> None:
+        # Under the require_system_permission("system.config.manage") gate the
+        # 403 now comes from the system-admin check (tenantless_admin_client
+        # has no is_system_admin=True), not from an org-membership check.
+        resp = tenantless_admin_client.post(self.URL, json={"license_key": "dGVzdA==.dGVzdA=="})
+        assert resp.status_code == 403
+
+
+class TestIssueLicense:
+    URL = "/api/v1/admin/license/issue"
+
+    @staticmethod
+    def _make_issue_settings() -> Settings:
+        return Settings(
+            database_url="postgresql+asyncpg://localhost/test",
+            secret_key=_VALID_32,
+            fernet_key=_VALID_32,
+            modulo_admin_password="testpass",
+            modulo_license_key="test-license-key",
+            modulo_license_private_key=_TEST_PRIV,
+            redis_url="",
+        )
+
+    @pytest.fixture
+    def issue_client(self) -> Generator[TestClient, None, None]:
+        app.dependency_overrides[get_settings] = self._make_issue_settings
+        app.dependency_overrides[get_db_session] = _make_mock_session
+        app.dependency_overrides[_get_engine] = lambda: MagicMock()
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="admin",
+            organisation_id=_TEST_ORG_ID,
+            account_id=_TEST_ACCOUNT_ID,
+            org_role="admin",
+            is_system_admin=True,
+        )
+        mock_plan = MagicMock()
+        mock_plan.feature_enabled.return_value = True
+        app.dependency_overrides[get_plan_context] = lambda: mock_plan
+        yield TestClient(app)
+        app.dependency_overrides.clear()
+
+    def test_issues_valid_license(self, issue_client: TestClient) -> None:
+        resp = issue_client.post(self.URL, json={"org_name": "Acme"})
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["org_name"] == "Acme"
+        assert data["tier"] == "team"
+        assert data["license_key"]
+        assert data["org_id"]
+        validation = parse_and_verify(data["license_key"])
+        assert validation.valid is True
+        assert validation.license_data is not None
+        assert validation.license_data.org_id == data["org_id"]
+
+    def test_issues_with_custom_features(self, issue_client: TestClient) -> None:
+        resp = issue_client.post(self.URL, json={"org_name": "Acme", "features": ["sso"]})
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["features"] == ["sso"]
+
+    def test_issues_with_email_sends_background_email(self, issue_client: TestClient) -> None:
+        with patch("modulo.api.routes.admin_license.email_team_license", new=AsyncMock()) as mock_email:
+            resp = issue_client.post(self.URL, json={"org_name": "Acme", "email": "bob@acme.com"})
+        assert resp.status_code == 201
+        mock_email.assert_awaited_once()
+        assert mock_email.await_args.args[1] == "bob@acme.com"
+
+    def test_requires_auth(self, unauth_client: TestClient) -> None:
+        resp = unauth_client.post(self.URL, json={"org_name": "Acme"})
+        assert resp.status_code in (401, 403)
+
+    def test_requires_admin(self, operator_client: TestClient) -> None:
+        resp = operator_client.post(self.URL, json={"org_name": "Acme"})
+        assert resp.status_code == 403
+
+    def test_empty_org_name_rejected(self, issue_client: TestClient) -> None:
+        resp = issue_client.post(self.URL, json={"org_name": ""})
+        assert resp.status_code == 422
+
+    def test_invalid_term_months_rejected(self, issue_client: TestClient) -> None:
+        resp = issue_client.post(self.URL, json={"org_name": "Acme", "term_months": 0})
+        assert resp.status_code == 422

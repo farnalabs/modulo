@@ -1,0 +1,27 @@
+# One-shot mutation testing container for the frontend
+# Build from repo root: docker build -t modulo-stryker -f frontend/Dockerfile.mutation .
+# Run: docker run --rm modulo-stryker
+
+FROM node:22-slim
+
+WORKDIR /app
+
+# Copy dependency manifests
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/.npmrc frontend/pnpm-workspace.yaml ./
+
+# Install dependencies (frozen lockfile is strict but fast — will fail if lockfile mismatch)
+RUN npm install -g pnpm@11.21.0 && pnpm install --frozen-lockfile
+
+# Copy source code and config
+COPY frontend/src/ src/
+COPY frontend/vite.config.ts ./
+COPY frontend/tsconfig.json ./
+COPY frontend/tsconfig.app.json ./
+COPY frontend/stryker.config.json ./
+COPY frontend/index.html ./
+COPY frontend/env.d.ts ./
+COPY frontend/postcss.config.js ./
+COPY frontend/tailwind.config.cjs ./
+
+# Default: mutate stores (fastest meaningful subset)
+CMD ["pnpm", "exec", "stryker", "run", "--mutate", "src/stores/**/*.ts"]

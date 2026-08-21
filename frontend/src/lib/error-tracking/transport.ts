@@ -1,0 +1,216 @@
+import type { ErrorEventInput, SessionKeyResponse } from './types'
+import { getAccessToken, onAuthChange } from '../api/client'
+
+let _sessionKey: string | null = null
+let _keyPromise: Promise<string | null> | null = null
+let _unsubAuth: (() => void) | null = null
+let _generation = 0
+
+interface PendingItem {
+  event: ErrorEventInput
+  retries: number
+}
+
+const PENDING: PendingItem[] = []
+const RETRY_TIMERS: ReturnType<typeof setTimeout>[] = []
+let flushTimer: ReturnType<typeof setTimeout> | null = null
+const RATE_LIMIT_WINDOW_MS = 60_000
+const RATE_LIMIT_MAX = 10
+let requestTimestamps: number[] = []
+
+export function initTransport(onAuthChangeFn: typeof onAuthChange): void {
+  _unsubAuth = onAuthChangeFn(() => {
+    _sessionKey = null
+    _keyPromise = null
+  })
+}
+
+export function disposeTransport(): void {
+  _generation += 1
+  if (flushTimer) {
+    clearTimeout(flushTimer)
+    flushTimer = null
+  }
+  for (const t of RETRY_TIMERS) clearTimeout(t)
+  RETRY_TIMERS.length = 0
+  if (_unsubAuth) {
+    _unsubAuth()
+    _unsubAuth = null
+  }
+  PENDING.length = 0
+  requestTimestamps = []
+  _sessionKey = null
+  _keyPromise = null
+}
+
+function isDisabled(): boolean {
+  return !!(window as unknown as Record<string, unknown>).__MODULO_ERROR_TRACKING_DISABLED__
+}
+
+async function getSessionKey(): Promise<string | null> {
+  if (_sessionKey) return _sessionKey
+  if (_keyPromise) return _keyPromise
+
+  const gen = _generation
+  _keyPromise = fetchSessionKey()
+  const key = await _keyPromise
+  if (gen === _generation) {
+    _sessionKey = key
+    _keyPromise = null
+  }
+  return key
+}
+
+async function fetchSessionKey(): Promise<string | null> {
+  if (isDisabled()) return null
+  try {
+    const token = getAccessToken()
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    }
+    if (token) headers['Authorization'] = `Bearer ${token}`
+
+    const res = await fetch('/api/v1/errors/session-key', {
+      method: 'POST',
+      headers,
+    })
+    if (!res.ok) return null
+    const data: SessionKeyResponse = await res.json()
+    return data.key
+  } catch (err) {
+    console.warn('[error-tracking] Failed to fetch session key:', err)
+    return null
+  }
+}
+
+async function signPayload(payload: string, key: string): Promise<string> {
+  try {
+    const encoder = new TextEncoder()
+    const cryptoKey = await crypto.subtle.importKey(
+      'raw',
+      encoder.encode(key),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign'],
+    )
+    const sig = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(payload))
+    return bytesToHex(new Uint8Array(sig))
+  } catch (err) {
+    console.warn('[error-tracking] HMAC sign failed, falling back to SHA-256:', err)
+    try {
+      const encoder = new TextEncoder()
+      const data = encoder.encode(payload + key)
+      const hash = await crypto.subtle.digest('SHA-256', data)
+      return bytesToHex(new Uint8Array(hash))
+    } catch (err2) {
+      console.warn('[error-tracking] SHA-256 digest fallback also failed:', err2)
+      return ''
+    }
+  }
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+function isRateLimited(): boolean {
+  const now = Date.now()
+  requestTimestamps = requestTimestamps.filter((t) => now - t < RATE_LIMIT_WINDOW_MS)
+  if (requestTimestamps.length >= RATE_LIMIT_MAX) return true
+  requestTimestamps.push(now)
+  return false
+}
+
+export function enqueueError(event: ErrorEventInput): void {
+  if (isDisabled()) return
+  PENDING.push({ event, retries: 0 })
+  if (PENDING.length >= 10) {
+    void flush()
+  } else if (!flushTimer) {
+    flushTimer = setTimeout(() => {
+      flushTimer = null
+      void flush()
+    }, 5000)
+  }
+}
+
+export async function flush(): Promise<void> {
+  if (isDisabled() || PENDING.length === 0) return
+
+  const gen = _generation
+  const batch = PENDING.splice(0)
+  if (isRateLimited()) {
+    reQueueWithBackoff(batch)
+    return
+  }
+  const body = JSON.stringify({ events: batch.map((b) => b.event) })
+
+  try {
+    const sessionKey = await getSessionKey()
+    if (gen !== _generation) return
+    if (!sessionKey) {
+      // Session key not available, re-queue with retry
+      reQueueWithBackoff(batch)
+      return
+    }
+
+    const token = getAccessToken()
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    }
+    if (token) headers['Authorization'] = `Bearer ${token}`
+
+    const signature = await signPayload(body, sessionKey)
+    if (gen !== _generation) return
+    if (signature) {
+      headers['X-Modulo-Error-Token'] = signature
+    }
+
+    const res = await fetch('/api/v1/errors/ingest', {
+      method: 'POST',
+      headers,
+      body,
+    })
+
+    if (gen !== _generation) return
+
+    if (!res.ok && res.status >= 500) {
+      reQueueWithBackoff(batch)
+    } else if (!res.ok) {
+      const messages = batch.map((b) => b.event.message).filter(Boolean)
+      console.warn('[error-tracking] Dropping %d events due to %d response', batch.length, res.status, messages)
+    }
+  } catch (err) {
+    if (gen !== _generation) return
+    console.warn('[error-tracking] Ingest fetch failed, queuing batch for retry:', err)
+    reQueueWithBackoff(batch)
+  }
+}
+
+const BACKOFF_DELAYS = [1000, 5000, 30_000]
+
+function scheduleRetryFlush(delay: number): void {
+  if (flushTimer) return
+  flushTimer = setTimeout(() => {
+    flushTimer = null
+    void flush()
+  }, delay)
+}
+
+function reQueueWithBackoff(items: PendingItem[]): void {
+  for (const item of items) {
+    if (item.retries < 3) {
+      item.retries++
+      const delay = BACKOFF_DELAYS[Math.min(item.retries - 1, BACKOFF_DELAYS.length - 1)]
+      const timer = setTimeout(() => {
+        const idx = RETRY_TIMERS.indexOf(timer)
+        if (idx !== -1) RETRY_TIMERS.splice(idx, 1)
+        PENDING.push(item)
+        scheduleRetryFlush(delay)
+      }, delay)
+      RETRY_TIMERS.push(timer)
+    } else {
+      console.warn('[error-tracking] Dropping event after %d failed retries:', 3, item.event.message)
+    }
+  }
+}

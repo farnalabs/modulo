@@ -1,0 +1,650 @@
+name: "CI: Fast Validation"
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  SECRET_KEY: ${{ secrets.SECRET_KEY }}
+  FERNET_KEY: ${{ secrets.FERNET_KEY }}
+
+jobs:
+  # Fast jobs run on ALL events (PR + push + manual)
+
+  backend-lint:
+    name: Lint (Backend)
+    runs-on: ubicloud-standard-2
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run --no-sync ruff check .
+      - name: Ruff format check
+        run: uv run --no-sync ruff format --check .
+      - run: uv run --no-sync mypy src/modulo/
+      - run: uv run --no-sync bandit -r src/modulo/ -ll
+      - name: Vulture (block new dead code)
+        # BLOCKING: no continue-on-error, no `|| true`. The repo-root
+        # .vulture_whitelist.py (framework-contract + test-referenced symbols)
+        # is the only sanctioned dead-code escape hatch; anything else fails CI.
+        # At --min-confidence 60 unused functions/methods/classes block (see
+        # scripts/run_vulture.py for the full finding-type semantics).
+        working-directory: .
+        run: uv run --project backend --no-sync python scripts/run_vulture.py
+      - name: Semgrep (block new findings)
+        working-directory: .
+        shell: bash
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            baseline="origin/$GITHUB_BASE_REF"
+          else
+            baseline="HEAD^"
+          fi
+          uv run --project backend --no-sync semgrep --config=.semgrep/ --baseline-commit "$baseline" --error .
+      - run: uv run --no-sync pip-audit
+      - name: Import-linter architecture contracts
+        run: uv run --no-sync lint-imports
+
+  backend-test:
+    name: Test (Backend)
+    runs-on: ubicloud-standard-2
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Run unit tests with coverage
+        shell: bash
+        run: ../.github/scripts/coverage-thresholds.sh
+        env:
+          DATABASE_URL: "postgresql+asyncpg://unused:unused@localhost/unused"
+      - name: Run architecture tests
+        # The architecture suite scans all of src/modulo for structural
+        # violations (raw SQL f-strings, sensitive data logging, module-level
+        # side effects, bare session.rollback, login-field drift, Dockerfile
+        # Python version drift). It previously only ran via pre-commit for a
+        # single file, which let a raw f-string SQL regression (probe.py) slip
+        # through on main (PR #690). Wire the whole package into CI so the
+        # enforcement actually gates merges.
+        shell: bash
+        run: uv run --no-sync pytest tests/architecture/ -q --tb=short --timeout=120 -p no:warnings
+      - name: Run email settings BDD scenarios
+        # The admin email-settings BDD feature file is self-contained (no
+        # browser/live app), so it runs here rather than only in the unit
+        # suite. Without this, the "8/8 email BDD scenarios pass" claim in
+        # Repos/devtools/dogfood/improve-history/architecture-tracker.md was never verified by CI.
+        shell: bash
+        run: uv run --no-sync pytest tests/bdd/steps/test_email_settings.py -q --tb=short --timeout=120 -p no:warnings
+      - name: Run repaired step-rot BDD modules
+        # The step-definition repairs for auth/eval/hitl (FAR-246) live in
+        # test_auth, test_eval, test_eval_block_steps and test_hitl. These are
+        # self-contained (no browser/live app), so wire them into CI — a green
+        # PR that never exercised the repaired steps would not validate them.
+        shell: bash
+        run: |
+          uv run --no-sync pytest tests/bdd/steps/test_auth.py tests/bdd/steps/test_eval.py \
+            tests/bdd/steps/test_eval_block_steps.py tests/bdd/steps/test_hitl.py \
+            -q --tb=short --timeout=120 -p no:warnings
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: backend/coverage.xml
+
+  integration-changed:
+    # Runs the integration test files a PR (or push) actually changed. The
+    # full integration suite only runs in the deploy pipeline's pre-deploy
+    # gate, so a broken integration test merged to main sails through PR CI
+    # and blocks every deploy (2026-08-14: PR #1266 added an assert-after-
+    # delete to an integration test; 6 deploys failed before it was
+    # caught). Skips green when no backend/tests/integration/ files changed.
+    name: Integration tests (changed)
+    runs-on: ubicloud-standard-2
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Detect changed integration test files
+        id: changed
+        shell: bash
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            BASE="origin/$GITHUB_BASE_REF"
+          else
+            BASE="HEAD^"
+          fi
+          CHANGED="$(git diff --name-only "$BASE" HEAD -- backend/tests/integration/ || true)"
+          # Keep only files that actually exist in the PR tree - a deleted or
+          # renamed-away integration test would otherwise be fed to pytest below
+          # and error "file or directory not found" (exit 4). Mirrors the
+          # migration-prefix collision check's HEAD-existence guard.
+          : > /tmp/integration-changed.txt
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            if ! git cat-file -e "HEAD:${f}" 2>/dev/null; then
+              echo "  (skip) not present in PR tree: ${f}"
+              continue
+            fi
+            printf '%s\n' "${f#backend/}" >> /tmp/integration-changed.txt
+          done <<< "$CHANGED"
+          CHANGED="$(tr '\n' ' ' < /tmp/integration-changed.txt | sed 's/ *$//')"
+          echo "changed_files=${CHANGED}" >> "$GITHUB_OUTPUT"
+          if [ -n "$CHANGED" ]; then
+            echo "Changed integration test files: ${CHANGED}"
+          else
+            echo "No integration test files changed - skipping."
+          fi
+      - name: Start Postgres (integration dependency)
+        if: steps.changed.outputs.changed_files != ''
+        shell: bash
+        run: |
+          docker rm -f modulo-ci-pg 2>/dev/null || true
+          docker run -d --name modulo-ci-pg \
+            -e POSTGRES_USER=modulo_test \
+            -e POSTGRES_PASSWORD=modulo_test \
+            -e POSTGRES_DB=modulo_test \
+            -p 5433:5432 \
+            postgres:16-alpine
+          for i in $(seq 1 60); do
+            if docker exec modulo-ci-pg pg_isready -U modulo_test 2>/dev/null; then
+              echo "Postgres ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Postgres did not become ready within the retry budget"
+          docker logs modulo-ci-pg 2>/dev/null || true
+          exit 1
+      - name: Start Redis (integration dependency)
+        if: steps.changed.outputs.changed_files != ''
+        shell: bash
+        run: |
+          docker rm -f modulo-ci-redis 2>/dev/null || true
+          docker run -d --name modulo-ci-redis -p 6379:6379 redis:7-alpine
+          for i in $(seq 1 30); do
+            if docker exec modulo-ci-redis redis-cli ping 2>/dev/null | grep -q PONG; then
+              echo "Redis ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Redis did not become ready within the retry budget"
+          docker logs modulo-ci-redis 2>/dev/null || true
+          exit 1
+      - name: Run changed integration tests
+        if: steps.changed.outputs.changed_files != ''
+        shell: bash
+        run: |
+          # Expand the newline-delimited list via mapfile - never interpolate
+          # PR-controlled filenames into `run:` (shell metacharacters and
+          # spaces would be executed/split). The list was written to a temp
+          # file by the Detect step.
+          mapfile -t TEST_FILES < /tmp/integration-changed.txt
+          echo "Running: pytest ${TEST_FILES[*]}"
+          uv run --no-sync pytest "${TEST_FILES[@]}" -q --tb=short --timeout=300 -p no:warnings
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: "true"
+          DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
+
+  frontend:
+    name: Frontend and WCAG
+    runs-on: ubicloud-standard-2
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.21.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install chromium
+      - name: Validate Playwright test compilation
+        run: pnpm exec playwright test --list
+      - name: Run WCAG contrast tests
+        run: pnpm exec playwright test wcag-contrast
+      - run: pnpm run lint
+      - run: pnpm run type-check
+      - name: Run unit tests (vitest)
+        # FAR-101: ubicloud-standard-2 is 2 vCPU. package.json's `test:unit`
+        # script hardcodes --maxWorkers=4, which saturates both cores with 4
+        # concurrently-loading jsdom environments (Vue SFC + ECharts/reka-ui/
+        # vue-query) and starves setImmediate (flushPromises) by 10+s. Cap the
+        # runner at 2 workers — matches actual CPU capacity, not a race-hiding
+        # hack. Invoke vitest directly so the script's --maxWorkers=4 is never
+        # inherited. 15000ms test/hook timeouts (vite.config.ts, from #817)
+        # remain the safety net for heavy mount+settle specs.
+        run: pnpm exec vitest run src --pool=threads --maxWorkers=2
+      - run: pnpm run build
+      - run: pnpm audit --audit-level=critical
+
+  schema-freshness:
+    # Regenerates frontend/src/lib/api/schema.ts from the backend's OpenAPI and
+    # FAILS if the committed schema differs from what the generator produces.
+    # Any backend API change (routes, request/response models) therefore forces
+    # `pnpm run generate:api` in the same PR. Mirrors scripts/run_generate_api_types.py:
+    # dump the OpenAPI JSON by importing modulo.api.main, then feed it to
+    # openapi-typescript. Runs on ALL events (PR + push to main + manual) so a
+    # schema that drifts out of sync on main is caught immediately.
+    name: Schema freshness
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.21.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install backend deps
+        working-directory: backend
+        run: uv sync --frozen
+      - name: Dump OpenAPI schema from backend
+        working-directory: backend
+        shell: bash
+        env:
+          DATABASE_URL: "sqlite+aiosqlite:///./modulo-gen-test.db"
+          SECRET_KEY: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          FERNET_KEY: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          MODULO_CSRF_ENABLED: "false"
+        run: |
+          cat > /tmp/gen_openapi.py <<'EOF'
+          import os, json, sys
+          sys.tracebacklimit = 0
+          from modulo.api.main import app
+          with open("/tmp/modulo_openapi.json", "w", encoding="utf-8") as f:
+              json.dump(app.openapi(), f, ensure_ascii=False)
+          print(f"Schema: {os.path.getsize('/tmp/modulo_openapi.json')} bytes")
+          EOF
+          uv run --no-sync python /tmp/gen_openapi.py
+      - name: Generate TypeScript types
+        # Pin the openapi-typescript version to the one in frontend/package.json
+        # (7.13.0) so the gate is deterministic — a bare `pnpm dlx openapi-typescript`
+        # would pull the latest release and cause version-skew churn between local
+        # (`pnpm run generate:api`, uses the lockfile install) and CI.
+        working-directory: frontend
+        shell: bash
+        run: pnpm dlx openapi-typescript@7.13.0 /tmp/modulo_openapi.json --output src/lib/api/schema.ts
+      - name: Fail if schema.ts is stale
+        shell: bash
+        run: |
+          if git diff --exit-code -- frontend/src/lib/api/schema.ts; then
+            echo "schema.ts is up to date"
+          else
+            echo "::error::frontend/src/lib/api/schema.ts is stale. Run 'pnpm run generate:api' from frontend/ and commit the regenerated file."
+            exit 1
+          fi
+
+  product-map-validate:
+    name: Product map validation
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: false
+      - name: Validate product map graph
+        shell: bash
+        run: uv run --project backend --no-sync python scripts/run_graph_validate.py --ci
+
+  manifest-validate:
+    name: Manifest validation
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: false
+      - name: Validate manifest.yaml
+        shell: bash
+        run: uv run --project backend --no-sync --with pyyaml python scripts/run_validate_manifest.py --ci
+
+  gitleaks:
+    name: Secret scan
+    runs-on: ubicloud-standard-2
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+
+
+  migration-heads-check:
+    name: Check migration heads
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Verify single migration head
+        working-directory: backend
+        shell: bash
+        run: |
+          uv sync --frozen
+          uv run --no-sync python -m alembic heads 2>&1 | tee /tmp/alembic_heads.txt
+          HEAD_COUNT=$(grep -c "\(head\)\|\(effective head\)" /tmp/alembic_heads.txt || true)
+          if [ "$HEAD_COUNT" -ne 1 ]; then
+            echo "::error::Alembic migration graph has $HEAD_COUNT heads (expected 1). Create a merge migration."
+            exit 1
+          fi
+          echo "Migration heads OK ($HEAD_COUNT head)"
+
+      # Numeric-prefix collision check vs base. `alembic heads` above catches TWO
+      # head migrations, but NOT a numeric-prefix collision: two migrations that
+      # both use prefix 0065_ (e.g. the PR's 0065_cost_components + main's
+      # 0065_reconcile_staging_schema) that are manually chained (one's
+      # down_revision is the other) produce a single head, so the multi-head check
+      # can't see the collision. We hit exactly this on PR #671 (A1); it was caught
+      # only because the two files were separate heads. Fail early here instead.
+      - name: Check numeric migration-prefix collisions vs base
+        if: github.event_name == 'pull_request'
+        working-directory: backend
+        shell: bash
+        run: |
+          MIG_DIR="src/modulo/db/migrations/versions"
+          BASE="origin/${{ github.base_ref }}"
+
+          # Migration files changed by this PR vs its merge-base.
+          CHANGED=$(git diff --name-only "${BASE}...HEAD" -- "${MIG_DIR}/" || true)
+          if [ -z "$CHANGED" ]; then
+            echo "No migration files changed by this PR -- skipping migration-prefix collision check"
+            exit 0
+          fi
+
+          # All migration filenames on the base (main) side.
+          BASE_FILES=$(git ls-tree --name-only "${BASE}" "${MIG_DIR}/" | sed 's|.*/||' || true)
+
+          echo "Migration files changed by this PR:"
+          printf '%s\n' "$CHANGED" | sed 's/^/  /'
+          echo ""
+
+          COLLISION=0
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            # Skip deletions/renamed-away files: only files still present in the
+            # PR tree can collide after merge.
+            if ! git cat-file -e "HEAD:${f}" 2>/dev/null; then
+              echo "  (skip) not present in PR tree: ${f}"
+              continue
+            fi
+            base_f=$(basename "$f")
+            prefix=$(printf '%s' "$base_f" | cut -d_ -f1)
+            while IFS= read -r bf; do
+              [ -z "$bf" ] && continue
+              bprefix=$(printf '%s' "$bf" | cut -d_ -f1)
+              if [ "$bprefix" = "$prefix" ] && [ "$bf" != "$base_f" ]; then
+                echo "::error::Numeric migration-prefix collision: ${base_f} collides with ${bf}. Renumber to the next free prefix (e.g. 0066, 0067...) and set down_revision to the actual current head."
+                COLLISION=1
+              fi
+            done <<< "$BASE_FILES"
+          done <<< "$CHANGED"
+
+          if [ "$COLLISION" -eq 1 ]; then
+            exit 1
+          fi
+          echo "No migration-prefix collision"
+          exit 0
+
+  # Break-glass deploy gate = acceptance (b) of the break-glass admin recovery
+  # plan sec. 3: automated staging verification = the boot-time allow-list assertion
+  # + the connectivity smoke that FAILS boot when ENABLED AND
+  # boot-failure-mode=fail. Runs the breakglass_gate-tagged regression suite
+  # (test_break_glass_gate.py) against testcontainers Postgres with the
+  # PRODUCTION bootstrap_role.py, in BOTH directions (clean config passes, a
+  # rogue grant FAILS the assertion) plus the transient-vs-fatal discriminator.
+  # Also runs the FAR-190/192 streak-engine SQL suite
+  # (test_trigger_streak_engine_sql.py) — the only per-PR run of the
+  # trigger_events vocabulary constraint + deactivation SQL against real
+  # Postgres (FAR-192 FIX 3).
+  break-glass-deploy-gate:
+    name: Break-glass deploy gate
+    runs-on: ubicloud-standard-2
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Break-glass boot allow-list + connectivity smoke
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: "true"
+        run: uv run --no-sync pytest tests/integration/test_break_glass_gate.py tests/integration/test_trigger_streak_engine_sql.py -q --tb=short --timeout=300 -p no:warnings
+
+  notify-pr-failure:
+    name: Trigger Branch Fixer
+    # The `manual-delivery` label must only suppress the webhook dispatch step
+    # below, NOT the whole job: a job-level skip surfaces this check as
+    # "skipped" in the check-runs API, which the PR Reviewer flags as a
+    # non-green signal on every such PR. The check itself always reports
+    # success on pull_request events; the label guard lives on the dispatch
+    # step so it keeps its documented meaning ("do not auto-dispatch the
+    # Branch Fixer").
+    if: github.event_name == 'pull_request' && always()
+    needs: [backend-lint, backend-test, integration-changed, frontend, schema-freshness, product-map-validate, manifest-validate, gitleaks, break-glass-deploy-gate]
+    runs-on: ubicloud-standard-2
+    permissions:
+      actions: write
+      pull-requests: write
+    steps:
+      - name: Check retry limit
+        id: retry-check
+        if: (failure() || cancelled()) && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+        run: |
+          PR_NUM="${{ github.event.pull_request.number }}"
+          BRANCH="${{ github.event.pull_request.head.ref }}"
+
+          # Count how many times the branch fixer has already pushed fix commits
+          # to this PR. Each successful fix produces exactly one commit with
+          # committer "modulo-branch-fixer".
+          FIX_COUNT=$(gh api "/repos/${{ github.repository }}/pulls/${PR_NUM}/commits?per_page=100" \
+            --jq '[.[] | select(.commit.committer.name == "modulo-branch-fixer")] | length' 2>/dev/null || echo "0")
+
+          echo "fix_attempts=$FIX_COUNT" >> "$GITHUB_OUTPUT"
+          echo "PR #${PR_NUM} on '${BRANCH}' -- branch fixer has pushed $FIX_COUNT fix commit(s)."
+
+          if [ "$FIX_COUNT" -ge 3 ]; then
+            echo "exhausted=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Branch fixer exhausted after $FIX_COUNT attempts against PR #${PR_NUM}."
+            gh pr comment "$PR_NUM" --body "## Branch Fixer Exhausted
+
+            The automated branch fixer has attempted $FIX_COUNT fixes against this PR but CI is still failing. Manual intervention is required.
+
+            The branch fixer will not retry again on this PR."
+          else
+            echo "exhausted=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Trigger Modulo Branch Fixer
+        if: (failure() || cancelled()) && steps.retry-check.outputs.exhausted == 'false' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+        shell: bash
+        run: |
+          TIMESTAMP=$(date +%s)
+          BODY=$(cat << ENDJSON
+          {
+            "branchName": "${BRANCH}",
+            "prNumber": ${PR_NUM},
+            "runUrl": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "failureDescription": "CI checks failed on PR #${PR_NUM} (branch: ${BRANCH})"
+          }
+          ENDJSON
+          )
+          echo "PR #${PR_NUM} on branch '${BRANCH}' -- CI checks failed."
+          echo "Sending to Modulo Branch Fixer pipeline..."
+          HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${HMAC_SECRET}" | sed 's/^.* //')
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${WEBHOOK_URL}" \
+            -H "Content-Type: application/json" \
+            -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+            -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+            -d "${BODY}")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY_RESP=$(echo "$RESPONSE" | sed '$d')
+          if [ "$HTTP_CODE" = "202" ]; then
+            echo "Modulo Branch Fixer accepted (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
+          elif [ "$HTTP_CODE" = "429" ]; then
+            echo "::warning::Modulo Branch Fixer rate-limited -- $(echo $BODY_RESP | jq -r '.detail // "too many requests"')"
+          else
+            echo "::warning::Modulo Branch Fixer returned HTTP $HTTP_CODE: $(echo $BODY_RESP | jq -r '.detail // "unknown"')"
+          fi
+
+      - name: Report Branch Fixer check status
+        if: success()
+        run: echo "Branch Fixer trigger check passed (all required checks green or fixer dispatched)."
+
+  notify-pr-review:
+    name: Trigger PR Reviewer
+    # Mirror the notify-pr-failure pattern above: a job-level `success()`
+    # surfaces this check as "skipped" in the check-runs API whenever any
+    # needed job fails or is cancelled (e.g. a runner outage), and the PR
+    # Reviewer flags that as a non-green signal. The check itself always
+    # reports success on pull_request events; the "only dispatch when all
+    # needed checks are green" logic lives on the webhook step below.
+    if: github.event_name == 'pull_request' && always()
+    needs: [backend-lint, backend-test, integration-changed, frontend, schema-freshness, product-map-validate, manifest-validate, gitleaks, break-glass-deploy-gate]
+    runs-on: ubicloud-standard-2
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Skip PR Reviewer when head already reviewed or only merged since last review
+        id: review-check
+        if: success() && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Guard the wiring: the dedup script is a no-op if the repo was not
+          # checked out (GitHub Actions runners start with an empty workspace),
+          # so the notify-pr-review job checks out the repo first. The
+          # deterministic path must fail LOUDLY, not fall through to the
+          # fail-open `|| echo "skip=false"` below, or a wiring bug silently
+          # dispatches every webhook and defeats the dedup feature.
+          test -f .github/scripts/pr-review-dedup.py || { echo "::error::pr-review-dedup.py not found - dedup disabled"; exit 1; }
+          # Fetch the PR's reviews and commits JSON, then run the versioned
+          # dedup decision script (.github/scripts/pr-review-dedup.py).
+          # The script handles multi-line bodies and pipe chars correctly
+          # (naive cut -d'|' is line-oriented and corrupts the SHA), and
+          # fails open (dispatch) on any load error or ambiguous state.
+          gh api "/repos/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" --paginate > /tmp/pr-reviews.json 2>/dev/null || echo "[]" > /tmp/pr-reviews.json
+          gh api "/repos/${REPO}/pulls/${PR_NUMBER}/commits?per_page=100" --paginate > /tmp/pr-commits.json 2>/dev/null || echo "[]" > /tmp/pr-commits.json
+          SKIP_OUTPUT=$(python3 .github/scripts/pr-review-dedup.py /tmp/pr-reviews.json /tmp/pr-commits.json "${HEAD_SHA}" 2>/tmp/pr-dedup-err || echo "skip=false")
+          echo "${SKIP_OUTPUT}" >> "$GITHUB_OUTPUT"
+          echo "PR Reviewer dedup: ${SKIP_OUTPUT}"
+          cat /tmp/pr-dedup-err
+      - name: Send webhook to Modulo PR Review Agent
+        if: success() && steps.review-check.outputs.skip != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+        env:
+          MODULO_WEBHOOK_URL: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_URL }}
+          MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_SECRET }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          TIMESTAMP=$(date +%s)
+          PAYLOAD=$(cat << ENDJSON
+          {
+            "action": "check_run",
+            "repository": {"full_name": "${REPO}"},
+            "pull_request": {
+              "number": ${PR_NUMBER},
+              "head": {"sha": "${SHA}", "ref": "${BRANCH}"}
+            }
+          }
+          ENDJSON
+          )
+          BODY=$(echo "${PAYLOAD}")
+          HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
+
+          # Retry with exponential backoff on 429/5xx (max 5 attempts, ~5 min total)
+          for i in 1 2 3 4 5; do
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${MODULO_WEBHOOK_URL}" \
+              -H "Content-Type: application/json" \
+              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+              -d "${BODY}")
+            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+            BODY_RESP=$(echo "$RESPONSE" | sed '$d')
+            if [ "$HTTP_CODE" = "202" ]; then
+              echo "PR Reviewer accepted (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
+              break
+            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
+              DELAY=$((2 ** (i - 1) * 5))
+              echo "::warning::PR Reviewer returned HTTP $HTTP_CODE (attempt $i/5) — retrying in ${DELAY}s"
+              sleep "$DELAY"
+            else
+              echo "::warning::PR Reviewer returned HTTP $HTTP_CODE: $(echo $BODY_RESP | jq -r '.detail // "unknown"')"
+              break
+            fi
+          done
+          echo "PR Reviewer notified"
+
+      - name: Report PR Reviewer check status
+        if: success()
+        run: echo "PR Reviewer trigger check passed (all required checks green, webhook sent or suppressed by manual-delivery label)."

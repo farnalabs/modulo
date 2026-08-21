@@ -1,0 +1,1032 @@
+"""Admin cost management routes — spend limits, cost reports, export, anomalies, scheduled reports."""
+
+import asyncio
+import csv
+import io
+import logging
+import math
+import uuid
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from typing import Any, Literal
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import func, select
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
+from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.dependencies import get_db_session, require_feature, require_permission
+from modulo.auth.jwt import TenantPrincipal
+from modulo.core.cost_controller import build_cost_report_buckets, get_cost_report, reset_pipeline_circuit_breaker
+from modulo.core.cost_settings import (
+    COST_CONTROLS_KEY,
+    DEFAULT_ALERT_THRESHOLDS,
+    DEFAULT_BILLING_PERIOD,
+    DEFAULT_CIRCUIT_BREAKER_ENABLED,
+    DEFAULT_CURRENCY,
+    SUPPORTED_BILLING_PERIODS,
+    SUPPORTED_CURRENCIES,
+)
+from modulo.db.crud.organisation import get_organisation
+from modulo.db.crud.scheduled_report import (
+    create_scheduled_report,
+    delete_scheduled_report,
+    list_scheduled_reports,
+)
+from modulo.db.crud.spend_anomaly import dismiss_anomaly, list_anomalies
+from modulo.db.crud.team import get_team, list_teams
+from modulo.db.models.daily_run_count import OrgDailyRunCount
+from modulo.db.models.scheduled_report import ScheduledReport
+from modulo.db.rls import set_rls_org
+
+_CODE_COST_MANAGE = "cost.manage"
+_MSG_DATABASE_ERROR_OCCURRED_PLEASE = "A database error occurred. Please try again."
+
+
+_log = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/v1/admin/costs", tags=["admin", "costs"])
+
+
+def _coerce_spend_limit_usd(value: Decimal | None) -> float | None:
+    """Convert a stored spend-limit value to float USD, or None when absent/invalid.
+
+    Returns None for NULL and non-numeric values so an empty/fresh database
+    serialises as ``null`` instead of raising (which would 500 the endpoint).
+    """
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _cost_controls(org: object) -> dict[str, Any]:
+    """Return the org's persisted ``cost_controls`` settings dict (may be empty).
+
+    ``settings_json`` is a JSON column that may be ``None`` or hold any shape;
+    only dict values are treated as cost-control settings.
+    """
+    settings = getattr(org, "settings_json", None)
+    if not isinstance(settings, dict):
+        return {}
+    cc = settings.get(COST_CONTROLS_KEY)
+    return cc if isinstance(cc, dict) else {}
+
+
+def _read_cost_control(org: object | None, key: str, default: Any) -> Any:
+    """Read a single persisted cost-control field, falling back to ``default``."""
+    if org is None:
+        return default
+    value = _cost_controls(org).get(key, default)
+    return value if value is not None else default
+
+
+def _read_currency(org: object | None) -> str:
+    value = _read_cost_control(org, "currency", DEFAULT_CURRENCY)
+    return value if isinstance(value, str) and value in SUPPORTED_CURRENCIES else DEFAULT_CURRENCY
+
+
+def _read_billing_period(org: object | None) -> str:
+    value = _read_cost_control(org, "billing_period", DEFAULT_BILLING_PERIOD)
+    return value if isinstance(value, str) and value in SUPPORTED_BILLING_PERIODS else DEFAULT_BILLING_PERIOD
+
+
+def _read_circuit_breaker(org: object | None) -> bool:
+    value = _read_cost_control(org, "circuit_breaker_enabled", DEFAULT_CIRCUIT_BREAKER_ENABLED)
+    return value if isinstance(value, bool) else DEFAULT_CIRCUIT_BREAKER_ENABLED
+
+
+def _read_alert_thresholds(org: object | None) -> list[float]:
+    """Read persisted alert thresholds, degrading to the default when corrupted.
+
+    ``settings_json`` is persisted JSON and may hold arbitrary shapes. Anything
+    that is not a non-empty list of whole numbers within 1..100 is rejected so a
+    corrupted persisted value degrades to the default instead of raising (which
+    would 500 the endpoint). Non-finite floats (``NaN``/``Infinity``) are also
+    rejected since ``int()`` cannot coerce them and ``json.loads`` accepts them.
+    Out-of-range ints are checked before any float conversion because
+    ``math.isfinite`` raises ``OverflowError`` for ints too large to fit a
+    float (e.g. a persisted ``[1000000000000000000000000000000]``). Normal
+    writes are validated by
+    ``UpdateCostControlsRequest._validate_alert_thresholds``; this read path is
+    what keeps defensiveness against previously-corrupted data.
+    """
+    value = _read_cost_control(org, "alert_thresholds", [])
+    if not isinstance(value, list) or not value:
+        return list(DEFAULT_ALERT_THRESHOLDS)
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            return list(DEFAULT_ALERT_THRESHOLDS)
+        if isinstance(item, int):
+            if not 1 <= item <= 100:
+                return list(DEFAULT_ALERT_THRESHOLDS)
+        elif not math.isfinite(item) or int(item) != item or not 1 <= item <= 100:
+            return list(DEFAULT_ALERT_THRESHOLDS)
+    return [float(v) for v in value]
+
+
+class CostReportComponent(BaseModel):
+    name: str
+    amount_usd: str
+
+
+class CostReportAnnotations(BaseModel):
+    refused_total_usd: float | None = None
+    clamped_total_usd: float | None = None
+
+
+class CostReportRow(BaseModel):
+    entity_id: str
+    entity_name: str
+    total_spend_usd: float
+    total_runs: int
+    components: list[CostReportComponent] = Field(default_factory=list)
+    annotations: CostReportAnnotations = Field(default_factory=CostReportAnnotations)
+
+
+class CostReportResponse(BaseModel):
+    period: str
+    group_by: str
+    items: list[CostReportRow]
+    # PR B reporting buckets — Decimal STRINGS (the NEW buckets are strings;
+    # total_spend_usd stays FLOAT). REPORTING only, never a health gate.
+    org_unassigned_components: str | None = None
+    legacy_total: str | None = None
+    org_total: str | None = None
+    has_more: bool = False
+
+
+class SpendLimitResponse(BaseModel):
+    organisation_id: str
+    org_daily_spend_limit: float | None
+    team_limits: list[dict[str, Any]]
+
+
+class SetSpendLimitRequest(BaseModel):
+    daily_spend_limit: float | None = Field(None, ge=0)
+
+
+@router.get("", response_model=CostReportResponse)
+@handle_db_errors("costs.get_costs")
+async def get_costs(
+    group_by: str = Query("team", pattern=r"^(team|org)$"),
+    period: str = Query("month", pattern=r"^(day|week|month|year)$"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
+    session: AsyncSession = Depends(get_db_session),
+) -> CostReportResponse:
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            rows = await get_cost_report(
+                session,
+                org_id=current_user.organisation_id,
+                group_by=group_by,
+                period=period,
+            )
+            buckets = {}
+            # REPORTING fields only — the ledger lines are the period-total
+            # source; a failure in the runs-based detail aggregation
+            # degrades to empty buckets, never to a 500. DB/HTTP/cancel errors
+            # still propagate to the outer handlers below.
+            try:
+                buckets = await build_cost_report_buckets(
+                    session,
+                    org_id=current_user.organisation_id,
+                    period=period,
+                )
+            except (SQLAlchemyError, HTTPException, asyncio.CancelledError):
+                raise  # outer handlers map these to the canonical 501/503/4xx responses
+            except Exception:
+                _log.exception("get_costs buckets aggregation failed (org_id=%s)", current_user.organisation_id)
+    except ProgrammingError:
+        _log.exception("get_costs ProgrammingError (org_id=%s)", current_user.organisation_id)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("get_costs SQLAlchemyError (org_id=%s)", current_user.organisation_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+        ) from None
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("Unexpected error in get_costs")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_INTERNAL_SERVER_ERROR,
+        ) from None
+
+    components_by_team = buckets.get("components_by_team", {}) if isinstance(buckets, dict) else {}
+    annotations_by_team = buckets.get("annotations_by_team", {}) if isinstance(buckets, dict) else {}
+    items = []
+    for r in rows:
+        bucket_key = "__org__" if group_by == "org" else r["entity_id"]
+        items.append(
+            CostReportRow(
+                entity_id=r["entity_id"],
+                entity_name=r["entity_name"],
+                total_spend_usd=r["total_spend_usd"],
+                total_runs=r["total_runs"],
+                components=[CostReportComponent(**c) for c in components_by_team.get(bucket_key, [])],
+                annotations=CostReportAnnotations(**(annotations_by_team.get(bucket_key, {}))),
+            )
+        )
+
+    return CostReportResponse(
+        period=period,
+        group_by=group_by,
+        items=items,
+        org_unassigned_components=buckets.get("org_unassigned_components") if isinstance(buckets, dict) else None,
+        legacy_total=buckets.get("legacy_total") if isinstance(buckets, dict) else None,
+        org_total=buckets.get("org_total") if isinstance(buckets, dict) else None,
+        has_more=bool(buckets.get("has_more", False)) if isinstance(buckets, dict) else False,
+    )
+
+
+@router.get("/limits", response_model=SpendLimitResponse)
+@handle_db_errors("costs.get_spend_limits")
+async def get_spend_limits(
+    _: object = require_feature("admin_spend_limits"),
+    __: object = require_feature("admin_cost_controls"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
+    session: AsyncSession = Depends(get_db_session),
+) -> SpendLimitResponse:
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            org = await get_organisation(session, current_user.organisation_id)
+
+            teams_result = await list_teams(session, org_id=current_user.organisation_id, page=1, page_size=1000)
+    except ProgrammingError:
+        _log.exception("get_spend_limits ProgrammingError (org_id=%s)", current_user.organisation_id)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("get_spend_limits SQLAlchemyError (org_id=%s)", current_user.organisation_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+        ) from None
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("Unexpected error in get_spend_limits")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_INTERNAL_SERVER_ERROR,
+        ) from None
+
+    return SpendLimitResponse(
+        organisation_id=str(current_user.organisation_id),
+        org_daily_spend_limit=(float(org.daily_spend_limit) if org and org.daily_spend_limit is not None else None),
+        team_limits=[
+            {
+                "team_id": str(t.id),
+                "team_name": t.name,
+                "daily_spend_limit": (float(t.daily_spend_limit) if t.daily_spend_limit is not None else None),
+            }
+            for t in teams_result.items
+        ],
+    )
+
+
+@router.put("/limits/org", response_model=dict[str, Any])
+@handle_db_errors("costs.set_org_spend_limit")
+async def set_org_spend_limit(
+    req: SetSpendLimitRequest,
+    _: object = require_feature("admin_spend_limits"),
+    __: object = require_feature("admin_cost_controls"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            org = await get_organisation(session, current_user.organisation_id)
+            if org is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+            org.daily_spend_limit = Decimal(str(req.daily_spend_limit)) if req.daily_spend_limit is not None else None
+            await session.flush()
+    except ProgrammingError:
+        _log.exception("set_org_spend_limit ProgrammingError (org_id=%s)", current_user.organisation_id)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("set_org_spend_limit SQLAlchemyError (org_id=%s)", current_user.organisation_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+        ) from None
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("Unexpected error in set_org_spend_limit")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_INTERNAL_SERVER_ERROR,
+        ) from None
+
+    return {
+        "organisation_id": str(org.id),
+        "daily_spend_limit": req.daily_spend_limit,
+    }
+
+
+@router.put("/limits/teams/{team_id}", response_model=dict[str, Any])
+@handle_db_errors("costs.set_team_spend_limit")
+async def set_team_spend_limit(
+    team_id: uuid.UUID,
+    req: SetSpendLimitRequest,
+    _: object = require_feature("admin_spend_limits"),
+    __: object = require_feature("admin_cost_controls"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            team = await get_team(session, team_id)
+            if team is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+            team.daily_spend_limit = Decimal(str(req.daily_spend_limit)) if req.daily_spend_limit is not None else None
+            await session.flush()
+    except ProgrammingError:
+        _log.exception("set_team_spend_limit ProgrammingError (team_id=%s)", team_id)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("set_team_spend_limit SQLAlchemyError (team_id=%s)", team_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+        ) from None
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("Unexpected error in set_team_spend_limit")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_INTERNAL_SERVER_ERROR,
+        ) from None
+
+    return {
+        "team_id": team_id,
+        "daily_spend_limit": req.daily_spend_limit,
+    }
+
+
+class CostControlsResponse(BaseModel):
+    teams: list[dict[str, object]]
+    budget: float | None = None
+    alert_thresholds: list[float] = Field(default_factory=lambda: list(DEFAULT_ALERT_THRESHOLDS))
+    circuit_breaker_enabled: bool = False
+    currency: str = "USD"
+    billing_period: str = "monthly"
+
+
+class UpdateCostControlsRequest(BaseModel):
+    budget: float | None = None
+    alert_thresholds: list[float] | None = None
+    circuit_breaker_enabled: bool | None = None
+    currency: Literal["USD", "EUR", "GBP"] | None = None
+    billing_period: Literal["monthly", "quarterly", "annual"] | None = None
+
+    @field_validator("alert_thresholds")
+    @classmethod
+    def _validate_alert_thresholds(cls, value: list[float] | None) -> list[float] | None:
+        if value is None:
+            return value
+        if not value:
+            raise ValueError("alert_thresholds must be a non-empty list of integers in 1..100")
+        for threshold in value:
+            if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
+                raise ValueError("alert_thresholds values must be integers in 1..100")
+            if int(threshold) != threshold or not 1 <= int(threshold) <= 100:
+                raise ValueError("alert_thresholds values must be integers in 1..100")
+        return value
+
+
+@router.get("/controls", response_model=CostControlsResponse)
+@handle_db_errors("costs.get_cost_controls")
+async def get_cost_controls(
+    _: object = require_feature("admin_cost_controls"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
+    session: AsyncSession = Depends(get_db_session),
+) -> CostControlsResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            teams_result = await list_teams(session, org_id=current_user.organisation_id, page=1, page_size=1000)
+            org = await get_organisation(session, current_user.organisation_id)
+    except ProgrammingError:
+        _log.exception("get_cost_controls ProgrammingError (org_id=%s)", current_user.organisation_id)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("get_cost_controls SQLAlchemyError (org_id=%s)", current_user.organisation_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+        ) from None
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("Unexpected error in get_cost_controls")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_INTERNAL_SERVER_ERROR,
+        ) from None
+
+    return CostControlsResponse(
+        teams=[
+            {
+                "id": str(t.id),
+                "name": t.name,
+                "daily_limit_usd": _coerce_spend_limit_usd(t.daily_spend_limit),
+            }
+            for t in teams_result.items
+        ],
+        budget=_coerce_spend_limit_usd(org.daily_spend_limit) if org is not None else None,
+        alert_thresholds=_read_alert_thresholds(org),
+        circuit_breaker_enabled=_read_circuit_breaker(org),
+        currency=_read_currency(org),
+        billing_period=_read_billing_period(org),
+    )
+
+
+@router.put("/controls", response_model=CostControlsResponse)
+@handle_db_errors("costs.update_cost_controls")
+async def update_cost_controls(
+    req: UpdateCostControlsRequest,
+    _: object = require_feature("admin_cost_controls"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
+    session: AsyncSession = Depends(get_db_session),
+) -> CostControlsResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            org = await get_organisation(session, current_user.organisation_id)
+            if org is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+
+            if req.budget is not None:
+                org.daily_spend_limit = Decimal(str(req.budget))
+
+            if (
+                req.currency is not None
+                or req.billing_period is not None
+                or req.circuit_breaker_enabled is not None
+                or req.alert_thresholds is not None
+            ):
+                settings_raw = org.settings_json if isinstance(org.settings_json, dict) else {}
+                settings_dict = dict(settings_raw)
+                cc = dict(_cost_controls(org))
+                if req.currency is not None:
+                    cc["currency"] = req.currency
+                if req.billing_period is not None:
+                    cc["billing_period"] = req.billing_period
+                if req.circuit_breaker_enabled is not None:
+                    cc["circuit_breaker_enabled"] = req.circuit_breaker_enabled
+                if req.alert_thresholds is not None:
+                    cc["alert_thresholds"] = [float(t) for t in req.alert_thresholds]
+                settings_dict[COST_CONTROLS_KEY] = cc
+                org.settings_json = settings_dict
+
+            await session.flush()
+            teams_result = await list_teams(session, org_id=current_user.organisation_id, page=1, page_size=1000)
+    except ProgrammingError:
+        _log.exception("update_cost_controls ProgrammingError (org_id=%s)", current_user.organisation_id)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("update_cost_controls SQLAlchemyError (org_id=%s)", current_user.organisation_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+        ) from None
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("Unexpected error in update_cost_controls")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_INTERNAL_SERVER_ERROR,
+        ) from None
+
+    return CostControlsResponse(
+        teams=[
+            {
+                "id": str(t.id),
+                "name": t.name,
+                "daily_limit_usd": _coerce_spend_limit_usd(t.daily_spend_limit),
+            }
+            for t in teams_result.items
+        ],
+        budget=_coerce_spend_limit_usd(org.daily_spend_limit),
+        alert_thresholds=_read_alert_thresholds(org),
+        circuit_breaker_enabled=_read_circuit_breaker(org),
+        currency=_read_currency(org),
+        billing_period=_read_billing_period(org),
+    )
+
+
+class CircuitBreakerResetResponse(BaseModel):
+    pipeline_id: str
+    circuit_breaker_tripped: bool
+    triggers_reactivated: int
+
+
+@router.post("/circuit-breaker/{pipeline_id}/reset", response_model=CircuitBreakerResetResponse)
+@handle_db_errors("costs.reset_circuit_breaker")
+async def reset_circuit_breaker(
+    pipeline_id: uuid.UUID,
+    _: object = require_feature("admin_cost_controls"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
+    session: AsyncSession = Depends(get_db_session),
+) -> CircuitBreakerResetResponse:
+    """Admin re-enable: clear a tripped pipeline circuit breaker.
+
+    Sets ``circuit_breaker_tripped = False`` on the pipeline and re-activates
+    all of its (non-deleted) triggers so new runs are allowed again (spec §8.10
+    ``circuit_breaker``: "Permanently pauses trigger until admin re-enables").
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            reset = await reset_pipeline_circuit_breaker(
+                session,
+                org_id=current_user.organisation_id,
+                pipeline_id=pipeline_id,
+            )
+            if not reset:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+    except ProgrammingError:
+        _log.exception("reset_circuit_breaker ProgrammingError (pipeline_id=%s)", pipeline_id)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("reset_circuit_breaker SQLAlchemyError (pipeline_id=%s)", pipeline_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+        ) from None
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("Unexpected error in reset_circuit_breaker")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_INTERNAL_SERVER_ERROR,
+        ) from None
+
+    return CircuitBreakerResetResponse(
+        pipeline_id=str(pipeline_id),
+        circuit_breaker_tripped=False,
+        triggers_reactivated=0,
+    )
+
+
+# ── Export ────────────────────────────────────────────────────────────────────
+
+
+@router.get("/export")
+@handle_db_errors("costs.export_costs")
+async def export_costs(
+    period: str = Query("this_month", pattern=r"^(this_month|last_month|7d|30d|90d)$"),
+    group_by: str = Query("team", pattern=r"^(team|pipeline|model)$"),
+    format: str = Query("csv", pattern=r"^(csv)$"),
+    _: object = require_feature("admin_cost_breakdown"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
+    session: AsyncSession = Depends(get_db_session),
+) -> Response:
+
+    period_map: dict[str, str] = {
+        "this_month": "month",
+        "last_month": "month",
+        "7d": "week",
+        "30d": "month",
+        "90d": "year",
+    }
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            rows = await get_cost_report(
+                session,
+                org_id=current_user.organisation_id,
+                group_by=group_by if group_by != "model" else "team",
+                period=period_map.get(period, "month"),
+            )
+    except ProgrammingError:
+        _log.exception("export_costs ProgrammingError (org_id=%s)", current_user.organisation_id)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("export_costs SQLAlchemyError (org_id=%s)", current_user.organisation_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+        ) from None
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("Unexpected error in export_costs")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_INTERNAL_SERVER_ERROR,
+        ) from None
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["entity_id", "entity_name", "total_spend_usd", "total_runs"])
+    for r in rows:
+        writer.writerow([r["entity_id"], r["entity_name"], r["total_spend_usd"], r["total_runs"]])
+    csv_content = output.getvalue()
+
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="costs-export-{period}.csv"'},
+    )
+
+
+# ── Scheduled Reports ────────────────────────────────────────────────────────
+
+
+class CreateReportRequest(BaseModel):
+    period: str = Field(pattern=r"^(daily|weekly|monthly)$")
+    group_by: str = Field(pattern=r"^(team|org)$")
+    format: str = Field(default="csv", pattern=r"^(csv|json)$")
+    recipients: list[str] = Field(min_length=1)
+    schedule_type: str = Field(default="one_time", pattern=r"^(one_time|recurring)$")
+
+
+class ReportResponse(BaseModel):
+    id: str
+    period: str
+    group_by: str
+    format: str
+    recipients: list[str]
+    schedule_type: str
+    created_at: str
+
+
+def _report_response(report: ScheduledReport) -> ReportResponse:
+    period = report.period
+    group_by = report.group_by
+    report_format = report.format
+    schedule_type = report.schedule_type
+    if period is None or group_by is None or report_format is None or schedule_type is None:
+        raise ValueError(f"Scheduled cost report {report.id} has invalid configuration")
+    return ReportResponse(
+        id=str(report.id),
+        period=period,
+        group_by=group_by,
+        format=report_format,
+        recipients=report.recipients,
+        schedule_type=schedule_type,
+        created_at=report.created_at.isoformat(),
+    )
+
+
+@router.post("/reports", response_model=ReportResponse, status_code=201)
+@handle_db_errors("costs.create_report")
+async def create_report(
+    req: CreateReportRequest,
+    _: object = require_feature("admin_cost_controls"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
+    session: AsyncSession = Depends(get_db_session),
+) -> ReportResponse:
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            report = await create_scheduled_report(
+                session,
+                organisation_id=current_user.organisation_id,
+                period=req.period,
+                group_by=req.group_by,
+                format=req.format,
+                recipients=req.recipients,
+                schedule_type=req.schedule_type,
+                account_id=current_user.account_id,
+            )
+    except ProgrammingError:
+        _log.exception("create_report ProgrammingError (org_id=%s)", current_user.organisation_id)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("create_report SQLAlchemyError (org_id=%s)", current_user.organisation_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+        ) from None
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("Unexpected error in create_report")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_INTERNAL_SERVER_ERROR,
+        ) from None
+
+    return _report_response(report)
+
+
+@router.get("/reports", response_model=list[ReportResponse])
+@handle_db_errors("costs.list_reports")
+async def list_reports(
+    _: object = require_feature("admin_cost_controls"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[ReportResponse]:
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            reports = await list_scheduled_reports(
+                session,
+                organisation_id=current_user.organisation_id,
+            )
+    except ProgrammingError:
+        _log.exception("list_reports ProgrammingError (org_id=%s)", current_user.organisation_id)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("list_reports SQLAlchemyError (org_id=%s)", current_user.organisation_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+        ) from None
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("Unexpected error in list_reports")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_INTERNAL_SERVER_ERROR,
+        ) from None
+
+    return [_report_response(report) for report in reports]
+
+
+@router.delete("/reports/{report_id}", status_code=204)
+@handle_db_errors("costs.delete_report")
+async def delete_report(
+    report_id: uuid.UUID,
+    _: object = require_feature("admin_cost_controls"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
+    session: AsyncSession = Depends(get_db_session),
+) -> None:
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            deleted = await delete_scheduled_report(
+                session,
+                report_id=report_id,
+                organisation_id=current_user.organisation_id,
+            )
+    except ProgrammingError:
+        _log.exception("delete_report ProgrammingError (org_id=%s)", current_user.organisation_id)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("delete_report SQLAlchemyError (org_id=%s)", current_user.organisation_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+        ) from None
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("Unexpected error in delete_report")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_INTERNAL_SERVER_ERROR,
+        ) from None
+
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
+
+
+# ── Anomalies ──────────────────────────────────────────────────────────────────
+
+
+class AnomalyResponse(BaseModel):
+    id: str
+    anomaly_date: str
+    pipeline_id: str | None
+    amount: float
+    baseline: float
+    percent_above: float
+    dismissed: bool
+
+
+@router.get("/anomalies", response_model=list[AnomalyResponse])
+@handle_db_errors("costs.get_anomalies")
+async def get_anomalies(
+    _: object = require_feature("admin_cost_breakdown"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[AnomalyResponse]:
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+
+            # Detect anomalies: daily org spend > 2x rolling 7-day avg
+            today = datetime.now(UTC).date()
+            lookback = today - timedelta(days=30)
+
+            counts_q = (
+                select(
+                    OrgDailyRunCount.run_date,
+                    func.sum(OrgDailyRunCount.total_spend_usd).label("daily_spend"),
+                )
+                .where(
+                    OrgDailyRunCount.organisation_id == current_user.organisation_id,
+                    OrgDailyRunCount.run_date >= lookback,
+                    OrgDailyRunCount.team_id.is_(None),
+                )
+                .group_by(OrgDailyRunCount.run_date)
+                .order_by(OrgDailyRunCount.run_date)
+            )
+
+            counts_result = await session.execute(counts_q)
+            raw_rows = counts_result.all()
+            daily_spends = [(r.run_date, float(str(r.daily_spend))) for r in raw_rows if r.daily_spend is not None]
+
+            anomalies: list[dict[str, Any]] = []
+            for i, (run_date, spend) in enumerate(daily_spends):
+                if i < 7:
+                    continue
+                window = [s for _, s in daily_spends[max(0, i - 7) : i]]
+                if not window:
+                    continue
+                avg = sum(window) / len(window)
+                if avg == 0:
+                    continue
+                ratio = spend / avg
+                if ratio > 2.0:
+                    anomalies.append(
+                        {
+                            "id": "",
+                            "anomaly_date": str(run_date),
+                            "pipeline_id": None,
+                            "amount": spend,
+                            "baseline": avg,
+                            "percent_above": round((ratio - 1.0) * 100, 2),
+                            "dismissed": False,
+                        }
+                    )
+
+            # Also return any previously stored anomalies
+            stored = await list_anomalies(session, organisation_id=current_user.organisation_id, dismissed=False)
+            stored_dict: dict[str, Any] = {}
+            for a in stored:
+                key = str(a.anomaly_date)
+                if key not in stored_dict:
+                    stored_dict[key] = {
+                        "id": str(a.id),
+                        "anomaly_date": str(a.anomaly_date),
+                        "pipeline_id": str(a.pipeline_id) if a.pipeline_id else None,
+                        "amount": float(a.amount),
+                        "baseline": float(a.baseline),
+                        "percent_above": float(a.percent_above),
+                        "dismissed": a.dismissed,
+                    }
+
+            # Merge: use stored dismissed status, and include stored anomalies
+            seen_dates: set[str] = set()
+            for a in anomalies:  # type: ignore[assignment]
+                key = a["anomaly_date"]  # type: ignore[index]
+                seen_dates.add(key)
+                if key in stored_dict:
+                    a["dismissed"] = stored_dict[key]["dismissed"]  # type: ignore[index]
+
+            for key, sa in stored_dict.items():
+                if key not in seen_dates:
+                    anomalies.append(sa)
+
+            return [AnomalyResponse(**a) for a in anomalies]
+    except ProgrammingError:
+        _log.exception("get_anomalies ProgrammingError (org_id=%s)", current_user.organisation_id)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("get_anomalies SQLAlchemyError (org_id=%s)", current_user.organisation_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+        ) from None
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("Unexpected error in get_anomalies")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_INTERNAL_SERVER_ERROR,
+        ) from None
+
+
+@router.post("/anomalies/dismiss/{anomaly_id}", status_code=204)
+@handle_db_errors("costs.dismiss_anomaly_endpoint")
+async def dismiss_anomaly_endpoint(
+    anomaly_id: uuid.UUID,
+    _: object = require_feature("admin_cost_breakdown"),
+    current_user: TenantPrincipal = require_permission(_CODE_COST_MANAGE),
+    session: AsyncSession = Depends(get_db_session),
+) -> None:
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            dismissed = await dismiss_anomaly(
+                session,
+                anomaly_id=anomaly_id,
+                organisation_id=current_user.organisation_id,
+            )
+    except ProgrammingError:
+        _log.exception("dismiss_anomaly ProgrammingError (org_id=%s)", current_user.organisation_id)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("dismiss_anomaly SQLAlchemyError (org_id=%s)", current_user.organisation_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+        ) from None
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("Unexpected error in dismiss_anomaly_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_INTERNAL_SERVER_ERROR,
+        ) from None
+
+    if not dismissed:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Anomaly not found")

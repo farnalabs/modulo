@@ -1,0 +1,1092 @@
+"""Regression tests for FAR-188: raw sandbox output retention on parse failure.
+
+When a sandbox_agent node's ``/home/user/output.json`` is missing, empty,
+malformed, or parses to a NON-dict, the node raises ``SandboxNodeFailedError``
+(retryable, A6) — but the run record must STILL retain the RAW output (the file
+content, the captured stdout, or both) so a ``pr_url`` the agent created inside
+the sandbox is never lost when the JSON fails to parse (classification FAR-189
+depends on it).
+
+The invariant under test: a run that created a PR must never lose the evidence
+of that PR when output.json fails to parse.
+
+QA round 1 rework (FAR-188): retention lives in a DEDICATED column
+``runs.raw_output_markers`` keyed by ``attempt_key`` — NEVER in the Agent
+Return Contract columns (``outputs_json`` / ``node_telemetry_json``), so the
+node-output endpoint can never serve raw stdout, ``recover_node``'s
+already-completed guard never sees a fake completed node, and finalize's
+split-output machinery never touches the marker. The persist is bounded by
+``asyncio.wait_for`` so a hung DB fails open with a log instead of converting
+the retryable raise into a terminal ``node_timeout``.
+"""
+
+import asyncio
+import logging
+import re
+import uuid
+from typing import Any, Self
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from modulo.core.pipeline_engine.node_runner import (
+    SandboxNodeFailedError,
+    _marker_delivery_done_for_node,
+    _persist_raw_output_marker,
+    _retain_raw_output_marker,
+    make_sandbox_agent_fn,
+)
+
+_ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
+_AGENT_COMMAND = "opencode run --auto --format json < /home/user/prompt.md"
+# Fail-open attempt key derived when the test state carries no claim lease:
+# ``run:{run_id}:node:{node_id}:claim-unknown``.
+_ATTEMPT_KEY = "run:run-1:node:n1:claim-unknown"
+_PR_1 = "https://github.com/farnalabs/modulo/pull/1"
+_PR_456 = "https://github.com/farnalabs/modulo/pull/456"
+_PR_777 = "https://github.com/farnalabs/modulo/pull/777"
+_PR_999 = "https://github.com/farnalabs/modulo/pull/999"
+
+
+def _base_node_def(**overrides) -> dict:
+    node_def = {
+        "id": "n1",
+        "agent_prompt": "Do the thing",
+        "agent_command": _AGENT_COMMAND,
+    }
+    node_def.update(overrides)
+    return node_def
+
+
+def _run_state() -> dict:
+    return {
+        "run_context": {"input": {"task": "x"}},
+        "_run_id": "run-1",
+        "_pipeline_id": "pipe-1",
+        "_org_id": _ORG_ID,
+    }
+
+
+def _make_sandbox_mock(*, output_json: str = '{"summary": "done"}', log_content: str = ""):
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = "agent stdout"
+    cmd_result.stderr = ""
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(return_value=cmd_result)
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            return output_json
+        return log_content
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=len(log_content)))
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+    return sandbox
+
+
+class _FakeRunRow:
+    """In-memory ``runs`` row capturing the persisted retention column.
+
+    Mirrors the ORM ``Run`` surface the persist helper touches. The Agent
+    Return Contract columns (``outputs_json`` / ``node_telemetry_json``) are
+    present so tests can PROVE retention no longer leaks into them (FIX 1).
+    """
+
+    def __init__(self, run_id: str = "run-1") -> None:
+        self.id = run_id
+        self.outputs_json: dict | None = None
+        self.node_telemetry_json: dict | None = None
+        self.raw_output_markers: dict | None = None
+
+
+class _RetentionResult:
+    def __init__(self, row: _FakeRunRow | None, statement: str = "") -> None:
+        self._row = row
+        self._statement = statement
+
+    def scalar_one_or_none(self) -> _FakeRunRow | None:
+        return self._row
+
+    def fetchone(self) -> tuple[Any] | None:
+        # The dispatch-marker fenced UPDATE (sandbox_dispatch_state ...
+        # RETURNING id) must grant regardless of row presence.
+        if "sandbox_dispatch_state" in self._statement:
+            return ("granted",)
+        if self._row is None:
+            return None
+        # FAR-228 guard A reads the run's raw_output_markers column directly;
+        # the dispatch-marker acquire reads claim_count.
+        if "raw_output_markers" in self._statement:
+            return (self._row.raw_output_markers,)
+        if "claim_count" in self._statement:
+            return (0,)
+        return (None,)
+
+
+class _RetentionSession:
+    """Fake async session serving the ORM ``select(Run)`` and ORM writes.
+
+    Compatible with the REAL ``set_rls_org`` (deliberately NOT mocked away —
+    FIX 9): it reports an active transaction and a sqlite dialect, so the real
+    guard stores the org in ``session.info`` exactly as on generic backends. A
+    session constructed with ``row=None`` models an RLS-hidden foreign-org run
+    (the SELECT resolves to no row).
+    """
+
+    def __init__(self, row: _FakeRunRow | None) -> None:
+        self._row = row
+        self.info: dict = {}
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+    def begin(self) -> "_RetentionSession":
+        return self
+
+    def in_transaction(self) -> bool:
+        return True
+
+    async def get_bind(self) -> MagicMock:
+        bind = MagicMock()
+        bind.dialect.name = "sqlite"
+        return bind
+
+    async def execute(self, stmt: object, params: dict | None = None) -> _RetentionResult:
+        return _RetentionResult(self._row if "FROM runs" in str(stmt) else None, statement=str(stmt))
+
+    async def flush(self) -> None:
+        return None
+
+
+def _retention_env(output_json: str):
+    """Return (node_fn, fake_row, sandbox) wired to an in-memory run row."""
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def, session_factory=_factory)
+    sandbox = _make_sandbox_mock(output_json=output_json)
+    return fn, row, sandbox
+
+
+def _single_marker(row: _FakeRunRow) -> dict:
+    assert row.raw_output_markers is not None, "raw output must be retained on the run record"
+    assert len(row.raw_output_markers) == 1
+    return next(iter(row.raw_output_markers.values()))
+
+
+async def test_malformed_output_json_retains_raw_output_and_pr_url():
+    """A malformed output.json (read succeeds, json.loads fails) still leaves the
+    RAW content — including an embedded pr_url — on the run record, in the
+    dedicated column only (never in the Agent Return Contract columns)."""
+    malformed = '{"summary": "PR created", "pr_url": "https://github.com/farnalabs/modulo/pull/123", '
+    fn, row, sandbox = _retention_env(output_json=malformed)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert marker["status"] == "failed"
+    assert marker["parse_error"]
+    assert "JSONDecodeError" in marker["parse_error"]
+    assert "https://github.com/farnalabs/modulo/pull/123" in marker["raw_output"]
+    assert marker["pr_url"] == "https://github.com/farnalabs/modulo/pull/123"
+    assert marker["_modulo_marker"] is True
+    assert marker["attempt_key"] == _ATTEMPT_KEY
+    # FIX 1(b): the Agent Return Contract columns stay clean — the node-output
+    # endpoint can never serve raw stdout.
+    assert row.outputs_json is None
+    assert row.node_telemetry_json is None
+
+
+async def test_bytes_output_json_that_fails_json_loads_retains_raw():
+    """A read that returns bytes which fail json.loads is decoded and retained."""
+    raw_bytes = b'{"pr_url": "https://github.com/farnalabs/modulo/pull/456" '
+    fn, row, sandbox = _retention_env(output_json=raw_bytes)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert isinstance(marker["raw_output"], str)
+    assert "https://github.com/farnalabs/modulo/pull/456" in marker["raw_output"]
+    assert marker["pr_url"] == _PR_456
+
+
+async def test_missing_output_json_falls_back_to_captured_stdout():
+    """When the output.json read itself fails (file missing / unreadable), the
+    captured stdout that carried the agent's result is retained instead."""
+    sandbox = _make_sandbox_mock()
+
+    # The final read of /home/user/output.json raises; the drain-log reads of
+    # /home/user/agent.log still succeed so the watchdog stays alive.
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            raise OSError("output.json missing")
+        return ""
+
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=_factory)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert marker["status"] == "failed"
+    assert marker["parse_error"]
+    assert "OSError" in marker["parse_error"]
+    # The stdout carried the raw content (here the fallback source).
+    assert "agent stdout" in marker["raw_output"]
+
+
+async def test_persist_failure_never_blocks_the_raise():
+    """A failing DB write during retention must NOT block the SandboxNodeFailedError
+    raise — the parse-failure path is best-effort and must not block terminalization."""
+    _fn, row, sandbox = _retention_env(output_json='{"summary": "broken", ')
+
+    class _BoomSession(_RetentionSession):
+        async def execute(self, stmt: object, params: dict | None = None) -> _RetentionResult:
+            raise RuntimeError("db down")
+
+    def _boom_factory() -> _BoomSession:
+        return _BoomSession(row)
+
+    boom_fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=_boom_factory)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError, match=r"no parseable output\.json"),
+    ):
+        await boom_fn(_run_state())
+
+
+async def test_stalled_command_retains_captured_stdout():
+    """A stalled command (idle watchdog fires, cmd_result None) retains the
+    drained stdout as the raw evidence — a pr_url echoed before the stall must
+    survive (FAR-188 invariant).
+
+    The watchdog's kill must actually be awaited (handle.kill is an AsyncMock
+    and is asserted called): the OLD test passed for the wrong reason — a
+    non-awaitable kill raising inside the watchdog's try/except let it go green
+    with EMPTY raw_output."""
+    cmd_result = MagicMock()
+    cmd_result.exit_code = -1
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.TimeoutError)
+    handle.kill = AsyncMock()
+
+    log_content = f"agent working...\nPR created: {_PR_999}\n"
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            raise OSError("no output.json")
+        return log_content
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=len(log_content)))
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=_factory)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 0.0),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.01),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    handle.kill.assert_awaited_once()
+    marker = _single_marker(row)
+    assert marker["status"] == "failed"
+    assert marker["parse_error"]
+    assert log_content in marker["raw_output"]
+    assert marker["pr_url"] == _PR_999
+
+
+async def test_successful_parse_does_not_write_retention_marker():
+    """A clean output.json parse does NOT write a raw-output marker — retention is
+    only for the parse-failure path."""
+    fn, row, sandbox = _retention_env(output_json='{"summary": "done", "pr_url": ""}')
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    assert row.raw_output_markers is None
+    assert row.outputs_json is None
+    assert row.node_telemetry_json is None
+
+
+async def test_multi_attempt_retention_preserves_first_pr_url():
+    """FIX 2 (attempt_key keying): two attempts under DIFFERENT attempt keys both
+    survive (a retry no longer clobbers the previous attempt's evidence), and
+    re-persisting the SAME attempt key with an empty pr_url never wipes
+    attempt-1's pr_url."""
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    attempt_1 = "run:run-1:node:n1:1"
+    attempt_2 = "run:run-1:node:n1:2"
+
+    def _marker(pr_url: str) -> dict:
+        return {
+            "status": "failed",
+            "summary": "s",
+            "raw_output": "raw",
+            "pr_url": pr_url,
+            "_modulo_marker": True,
+        }
+
+    # Attempt 1 persists with a pr_url.
+    await _persist_raw_output_marker(
+        _factory, run_id="run-1", org_id_raw=_ORG_ID, node_id="n1", attempt_key=attempt_1, marker=_marker(_PR_1)
+    )
+    # A retry re-executes the same node under the SAME attempt key with an empty pr_url.
+    await _persist_raw_output_marker(
+        _factory, run_id="run-1", org_id_raw=_ORG_ID, node_id="n1", attempt_key=attempt_1, marker=_marker("")
+    )
+    # A DIFFERENT attempt key is a separate attempt — its marker survives alongside.
+    await _persist_raw_output_marker(
+        _factory, run_id="run-1", org_id_raw=_ORG_ID, node_id="n1", attempt_key=attempt_2, marker=_marker("")
+    )
+
+    assert row.raw_output_markers is not None
+    assert set(row.raw_output_markers) == {attempt_1, attempt_2}, "every attempt's evidence survives"
+    assert row.raw_output_markers[attempt_1]["pr_url"] == _PR_1, "attempt-1 pr_url is preserved, never wiped"
+
+
+async def test_db_hang_persist_fails_open_and_node_stays_retryable(caplog):
+    """FIX 3 (bounded persist): a hung DB write (execute never resolves) must fail
+    open with a log BEFORE the node decorator grace budget is consumed — the
+    node still raises the retryable SandboxNodeFailedError and never becomes a
+    terminal node_timeout."""
+    caplog.set_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner")
+    _fn, row, sandbox = _retention_env(output_json='{"summary": "broken", ')
+
+    class _HangSession(_RetentionSession):
+        async def execute(self, stmt: object, params: dict | None = None) -> _RetentionResult:
+            await asyncio.Event().wait()  # never resolves
+            return _RetentionResult(None)
+
+    def _hang_factory() -> _HangSession:
+        return _HangSession(row)
+
+    hang_fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=_hang_factory)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._RAW_OUTPUT_MARKER_PERSIST_TIMEOUT", 0.1),
+        pytest.raises(SandboxNodeFailedError, match=r"no parseable output\.json"),
+    ):
+        await hang_fn(_run_state())
+
+    assert row.raw_output_markers is None, "the hung write must not land"
+    assert any("raw_output_marker_persist_timeout_or_error" in r.message for r in caplog.records), (
+        "the timeout must be logged (fail open), not silently swallowed"
+    )
+
+
+@pytest.mark.parametrize("non_dict", ["[]", '"just a string"', "123"])
+async def test_non_dict_output_json_retains_marker_and_completes(non_dict):
+    """Corrected FIX 4: a PARSEABLE but non-dict output.json ([], "str", 123)
+    retains the raw evidence as a marker but does NOT raise — it continues
+    through the existing shaping path with agent_status None (the pre-existing
+    test_node_runner_agent_status suite asserts exactly this proceed-with-None
+    behaviour and must stay green)."""
+    fn, row, sandbox = _retention_env(output_json=non_dict)
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert marker["status"] == "failed"
+    assert "non-dict" in marker["parse_error"]
+    assert non_dict in marker["raw_output"]
+    assert marker["_modulo_marker"] is True
+    # The node did NOT raise: it completed via the existing path, and no
+    # agent_status is fabricated from the non-dict output.
+    assert result["output"]["agent_status"] is None
+    assert result["artifacts"][0]["output"]["agent_status"] is None
+
+
+async def test_json_null_output_retains_and_raises():
+    """``null`` parses to None — the TRULY-no-output case: the raw marker is
+    retained AND the node raises SandboxNodeFailedError (unchanged original
+    FAR-188 semantics)."""
+    fn, row, sandbox = _retention_env(output_json="null")
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError, match=r"no parseable output\.json"),
+    ):
+        await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert "null" in marker["raw_output"]
+    assert marker["_modulo_marker"] is True
+
+
+async def test_non_dict_output_with_stdout_pr_url_extracts_and_completes():
+    """Corrected FIX 4: pr_url extraction works in the non-dict continue path
+    too — a pr_url echoed to stdout when output.json parses to a non-dict value
+    is captured in the marker, and the node still completes (no raise)."""
+    log_content = f"Agent finished. PR: {_PR_777}\n"
+    sandbox = _make_sandbox_mock(output_json="[]", log_content=log_content)
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=_factory)
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert marker["pr_url"] == _PR_777
+    assert _PR_777 in marker["raw_output"]
+    assert result["output"]["agent_status"] is None
+
+
+async def test_pr_url_echoed_to_stdout_found_when_output_json_malformed():
+    """FIX 5 (union of raw sources): the retained evidence is the file content AND
+    the captured stdout — a pr_url echoed to stdout when output.json is
+    present-but-malformed (a naive ``raw_output or stdout`` fallback would drop
+    it) must still be found."""
+    malformed = '{"summary": "PR created but output truncated'  # json.loads fails
+    log_content = f"Agent finished. PR: {_PR_777}\n"
+    sandbox = _make_sandbox_mock(output_json=malformed, log_content=log_content)
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=_factory)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert marker["pr_url"] == _PR_777
+    assert _PR_777 in marker["raw_output"]
+
+
+async def test_cross_tenant_run_id_writes_nothing(caplog):
+    """FIX 9 (cross-tenant isolation): persisting a marker for a run_id the
+    org-scoped query cannot see (RLS-invisible / foreign org) must write NOTHING
+    and never raise. The REAL ``set_rls_org`` guard is exercised (not mocked
+    away); the fake session resolves the SELECT to no row exactly as RLS would
+    hide a foreign-org run."""
+    caplog.set_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner")
+    row = _FakeRunRow()
+
+    def _foreign_factory() -> _RetentionSession:
+        return _RetentionSession(None)  # SELECT returns no row — RLS-hidden
+
+    await _persist_raw_output_marker(
+        _foreign_factory,
+        run_id="run-foreign-org",
+        org_id_raw=_ORG_ID,
+        node_id="n1",
+        attempt_key="run:run-foreign-org:node:n1:0",
+        marker={"status": "failed", "summary": "s", "raw_output": "x", "_modulo_marker": True},
+    )
+
+    assert row.raw_output_markers is None, "no marker may be written for an RLS-invisible run"
+    assert any("raw_output_marker_skip_row_not_found" in r.message for r in caplog.records), (
+        "the RLS-hidden path must log a distinguishable WARNING"
+    )
+
+
+async def test_silent_early_returns_are_logged(caplog):
+    """FIX 8 (observability): silent early returns — no run_id and an unparseable
+    org id — log WARNINGs instead of silently skipping."""
+    caplog.set_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner")
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    await _persist_raw_output_marker(
+        _factory, run_id="", org_id_raw=_ORG_ID, node_id="n1", attempt_key=None, marker={"x": 1}
+    )
+    await _persist_raw_output_marker(
+        _factory, run_id="run-1", org_id_raw="not-a-uuid", node_id="n1", attempt_key=None, marker={"x": 1}
+    )
+
+    messages = {r.message for r in caplog.records}
+    assert "sandbox_agent.raw_output_marker_skip_no_run_id" in messages
+    assert "sandbox_agent.raw_output_marker_skip_unparseable_org" in messages
+
+
+async def test_raw_output_redacts_tokenized_git_urls_but_keeps_pr_url():
+    """FAR-188 QA round 2: a malformed output.json whose raw source embeds a
+    tokenized git URL (the sandbox runs with GITHUB_TOKEN injected; agent
+    git push/clone output embeds ``https://x-access-token:<PAT>@github.com/...``)
+    is persisted with the credential scrubbed — while pr_url extraction still
+    runs against the FULL UNREDACTED source so the evidence is never lost."""
+    malformed = (
+        '{"summary": "clone via tokenized url", '
+        '"log": "https://x-access-token:ghp_abc123@github.com/org/repo.git and '
+        'http://x-access-token:ghp_http456@github.com/org/repo2.git", '
+        '"pr_url": "https://github.com/org/repo/pull/42"'
+    )
+    fn, row, sandbox = _retention_env(output_json=malformed)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert "ghp_abc123" not in marker["raw_output"], "the https tokenized URL userinfo must be redacted"
+    assert "ghp_http456" not in marker["raw_output"], "the http tokenized URL userinfo must be redacted"
+    assert "https://<redacted>@github.com/" in marker["raw_output"]
+    assert "http://<redacted>@github.com/" in marker["raw_output"]
+    assert "x-access-token:" not in marker["raw_output"]
+    # pr_url is extracted from the FULL source BEFORE redaction — never lost.
+    assert marker["pr_url"] == "https://github.com/org/repo/pull/42"
+
+
+async def test_raw_output_redacts_bare_token_patterns():
+    """FAR-188 QA round 2: defensively mask bare credential values that follow
+    known labels (ghp_/gho_/github_pat_, Bearer , token=, x-access-token:) even
+    when they appear OUTSIDE a URL — e.g. echoed auth lines in agent stdout."""
+    log_content = (
+        f"clone ok\nauth: Bearer gho_secret789\ntoken=github_pat_11AAABBBCC\nx-access-token:ghp_zzzzzz\nPR: {_PR_456}\n"
+    )
+    sandbox = _make_sandbox_mock(output_json="[]", log_content=log_content)
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=_factory)
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert result["output"]["agent_status"] is None
+    assert "gho_secret789" not in marker["raw_output"]
+    assert "github_pat_11AAABBBCC" not in marker["raw_output"]
+    assert "ghp_zzzzzz" not in marker["raw_output"]
+    assert "Bearer <redacted>" in marker["raw_output"]
+    assert "token=<redacted>" in marker["raw_output"]
+    assert "x-access-token:<redacted>" in marker["raw_output"]
+    assert marker["pr_url"] == _PR_456
+
+
+async def test_redaction_failure_never_blocks_retention():
+    """FAR-188 QA round 2: if redaction itself raises (best-effort), the ORIGINAL
+    content is retained and the marker still persists — retention must never be
+    blocked by the scrub step, and pr_url extraction still ran first."""
+    malformed = (
+        '{"log": "https://x-access-token:ghp_abc123@github.com/org/repo.git", '
+        '"pr_url": "https://github.com/org/repo/pull/42", '
+    )
+    fn, row, sandbox = _retention_env(output_json=malformed)
+
+    _boom_pattern = MagicMock()
+    _boom_pattern.sub.side_effect = re.error("boom")
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch(
+            "modulo.core.pipeline_engine.node_runner._TOKENIZED_GIT_URL_PATTERN",
+            new=_boom_pattern,
+        ),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert "ghp_abc123" in marker["raw_output"], "on redaction failure the original content is kept (fail open)"
+    assert marker["pr_url"] == "https://github.com/org/repo/pull/42"
+
+
+# ---------------------------------------------------------------------------
+# FAR-228 idempotency gate: delivery_sentinel marker extraction
+# ---------------------------------------------------------------------------
+
+_SENTINEL = "EMAIL_SENT"
+
+
+async def _retain(row: _FakeRunRow, *, source: str, sentinel: str | None, summary: str = "s") -> None:
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    await _retain_raw_output_marker(
+        _factory,
+        run_id="run-1",
+        org_id_raw=_ORG_ID,
+        node_id="n1",
+        attempt_key=_ATTEMPT_KEY,
+        summary=summary,
+        source=source,
+        parse_error="boom",
+        exit_code=1,
+        stdout_length=len(source),
+        stderr_length=0,
+        delivery_sentinel=sentinel,
+    )
+
+
+async def test_delivery_sentinel_full_line_stamps_delivery_done():
+    """FAR-228: an opt-in node whose raw output contains the sentinel as a FULL
+    LINE persists ``delivery_done: True`` on the marker."""
+    row = _FakeRunRow()
+    await _retain(row, source=f"email sent to alice@x.com\n{_SENTINEL}\nrest of log\n", sentinel=_SENTINEL)
+    marker = _single_marker(row)
+    assert marker["delivery_done"] is True
+
+
+async def test_delivery_sentinel_detected_even_with_large_prior_output():
+    """FAR-228: delivery_done is decided on the FULL pre-truncation source — a
+    >512KB prior output (which the stored raw_output truncates away) must not
+    hide a sentinel at the end of the log."""
+    source = ("x" * 600_000) + f"\n{_SENTINEL}\n"
+    row = _FakeRunRow()
+    await _retain(row, source=source, sentinel=_SENTINEL)
+    marker = _single_marker(row)
+    assert marker["delivery_done"] is True
+    assert len(marker["raw_output"]) <= 512_000, "the STORED copy is truncated, but delivery_done survived"
+
+
+async def test_delivery_sentinel_non_opt_in_extracts_nothing():
+    """FAR-228: a node WITHOUT delivery_sentinel never stamps delivery_done —
+    even when the literal sentinel text appears in the output."""
+    row = _FakeRunRow()
+    await _retain(row, source=f"email sent\n{_SENTINEL}\n", sentinel=None)
+    marker = _single_marker(row)
+    assert marker.get("delivery_done") is None
+
+
+async def test_delivery_sentinel_mid_line_never_matches():
+    """FAR-228: the sentinel must match as a FULL LINE — a mid-line occurrence
+    in unrelated prose never fabricates a delivery."""
+    row = _FakeRunRow()
+    await _retain(row, source=f"prefix {_SENTINEL} suffix on the same line\n", sentinel=_SENTINEL)
+    marker = _single_marker(row)
+    assert marker.get("delivery_done") is None
+
+
+async def test_delivery_sentinel_trailing_cr_matches():
+    """FAR-228: a sentinel line terminated with a bare carriage return still
+    matches the full-line pattern (^<sentinel>\r?$)."""
+    row = _FakeRunRow()
+    await _retain(row, source=f"email sent\n{_SENTINEL}\r\n", sentinel=_SENTINEL)
+    marker = _single_marker(row)
+    assert marker["delivery_done"] is True
+
+
+async def test_retry_marker_without_sentinel_never_unsets_delivery_done():
+    """FAR-228 monotone preservation: a retry re-persists the SAME attempt_key
+    WITHOUT the sentinel — delivery_done stays True (an explicit False is never
+    written, so a later failed attempt cannot unset the delivered fact)."""
+    row = _FakeRunRow()
+    await _retain(row, source=f"email sent\n{_SENTINEL}\n", sentinel=_SENTINEL)
+    assert _single_marker(row)["delivery_done"] is True
+    # Retry re-executes the node: no sentinel this time.
+    await _retain(row, source="email already sent, nothing to do\n", sentinel=_SENTINEL, summary="retry")
+    assert len(row.raw_output_markers) == 1
+    assert row.raw_output_markers[_ATTEMPT_KEY]["delivery_done"] is True
+
+
+async def test_cancelled_node_retains_delivery_done_and_reraises():
+    """FAR-228 (THE INCIDENT FIX): an opt-in node whose command wait is
+    cancelled AFTER the delivery sentinel hit the log tail best-effort persists
+    delivery_done and RE-RAISES the CancelledError — the run 9559 scenario where
+    attempt 1 was cancelled after sending the email and attempt 2 re-sent it."""
+    log_content = f"email sent\n{_SENTINEL}\n"
+    sandbox = _make_sandbox_mock(output_json='{"summary": "done"}', log_content=log_content)
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.CancelledError())
+    handle.kill = AsyncMock()
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(
+        _base_node_def(timeout_seconds=30, delivery_sentinel=_SENTINEL),
+        session_factory=_factory,
+    )
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert marker["delivery_done"] is True
+    assert "delivery sentinel observed" in marker["summary"]
+
+
+async def test_cancelled_node_without_sentinel_writes_nothing():
+    """FAR-228: a cancelled node WITHOUT delivery_sentinel never writes a
+    retention marker on cancellation (non-opt-in pays zero on the cancel path)."""
+    log_content = f"email sent\n{_SENTINEL}\n"
+    sandbox = _make_sandbox_mock(output_json='{"summary": "done"}', log_content=log_content)
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.CancelledError())
+    handle.kill = AsyncMock()
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=_factory)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_run_state())
+
+    assert row.raw_output_markers is None
+
+
+async def test_cancelled_during_provisioning_reraises_cleanly():
+    """FAR-228 review fix: a CancelledError raised DURING sandbox provisioning —
+    strictly BEFORE the inner drain closure binds ``_drain_fn`` (the create await
+    at ``AsyncSandbox.create`` precedes the inner ``try:``) — must propagate as
+    CancelledError, NOT as an UnboundLocalError from the outer handler's
+    ``_drain_fn is not None`` guard."""
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(
+        _base_node_def(timeout_seconds=30, delivery_sentinel=_SENTINEL),
+        session_factory=_factory,
+    )
+
+    with (
+        patch(
+            "e2b.AsyncSandbox.create",
+            new=AsyncMock(side_effect=asyncio.CancelledError()),
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_run_state())
+
+    # Nothing was delivered and no sandbox was created — the cancellation
+    # escaped before any evidence existed, so no retention marker is written.
+    assert row.raw_output_markers is None
+
+
+async def test_guard_a_skips_when_prior_attempt_marked_delivery_done():
+    """FAR-228 guard A: an opt-in single-node run whose PRIOR attempt's marker
+    carries delivery_done=True returns the SKIPPED ENVELOPE without provisioning
+    a sandbox."""
+    row = _FakeRunRow()
+    row.raw_output_markers = {
+        "run:run-1:node:n1:1": {
+            "_modulo_marker": True,
+            "delivery_done": True,
+            "attempt_key": "run:run-1:node:n1:1",
+        }
+    }
+    sandbox = _make_sandbox_mock()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(
+        _base_node_def(timeout_seconds=30, delivery_sentinel=_SENTINEL),
+        session_factory=_factory,
+        single_sandbox_node=True,
+    )
+    settings = MagicMock(modulo_idempotency_gate_enabled=True)
+    state = _run_state()
+    state["_claim_lease"] = "tok-claim"
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.settings.get_settings", return_value=settings),
+    ):
+        result = await fn(state)
+
+    sandbox.commands.run.assert_not_awaited(), "guard A must not provision a sandbox"
+    assert result["artifacts"][0]["status"] == "skipped"
+    assert result["artifacts"][0]["output"]["output_json"]["idempotency_gate"] == "email_sent"
+    assert result["artifacts"][0]["output"]["output_json"]["delivery_done"] is True
+
+
+async def test_guard_a_skips_after_success_persisted_marker():
+    """FAR-228 review fix: a delivery_done marker persisted on the SUCCESS path
+    (not just the failure/cancel paths) is visible to guard A on re-entry — the
+    completed-node-then-process-death scenario. First execution succeeds and
+    persists the marker; a SECOND execution of the same node returns the skipped
+    envelope without provisioning a sandbox or re-sending."""
+    log_content = f"email sent\n{_SENTINEL}\n"
+    sandbox = _make_sandbox_mock(output_json='{"summary": "done"}', log_content=log_content)
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(
+        _base_node_def(timeout_seconds=30, delivery_sentinel=_SENTINEL),
+        session_factory=_factory,
+        single_sandbox_node=True,
+    )
+    settings = MagicMock(modulo_idempotency_gate_enabled=True)
+    state = _run_state()
+    state["_claim_lease"] = "tok-claim"
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.settings.get_settings", return_value=settings),
+    ):
+        first = await fn(state)
+
+    assert first["output"]["status"] == "completed"
+    assert _single_marker(row)["delivery_done"] is True
+    assert _marker_delivery_done_for_node(row.raw_output_markers, "run-1", "n1") is True
+
+    # Re-entry: the same node executes again (process death after completion).
+    # Guard A must read the SUCCESS-persisted marker and skip — no sandbox.
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.settings.get_settings", return_value=settings),
+    ):
+        second = await fn(state)
+
+    sandbox.commands.run.assert_awaited_once(), "only the FIRST execution provisions a sandbox"
+    assert second["artifacts"][0]["status"] == "skipped"
+    assert second["artifacts"][0]["output"]["output_json"]["idempotency_gate"] == "email_sent"
+    assert second["artifacts"][0]["output"]["output_json"]["delivery_done"] is True
+
+
+async def test_guard_a_skips_when_gate_disabled_by_kill_switch():
+    """FAR-228 guard A kill-switch: with the gate disabled the run provisions
+    normally even when a prior marker carries delivery_done."""
+    row = _FakeRunRow()
+    row.raw_output_markers = {
+        "run:run-1:node:n1:1": {
+            "_modulo_marker": True,
+            "delivery_done": True,
+            "attempt_key": "run:run-1:node:n1:1",
+        }
+    }
+    sandbox = _make_sandbox_mock()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(
+        _base_node_def(timeout_seconds=30, delivery_sentinel=_SENTINEL),
+        session_factory=_factory,
+        single_sandbox_node=True,
+    )
+    settings = MagicMock(modulo_idempotency_gate_enabled=False)
+    state = _run_state()
+    state["_claim_lease"] = "tok-claim"
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.settings.get_settings", return_value=settings),
+    ):
+        result = await fn(state)
+
+    sandbox.commands.run.assert_awaited_once(), "kill-switch off -> provision normally"
+    assert result["output"]["status"] == "completed"
+
+
+async def test_success_path_persists_delivery_done_marker_when_sentinel_in_stdout():
+    """FAR-228 success-path marker: an opt-in successful run whose FULL stdout
+    carries the sentinel persists a ``delivery_done`` marker into
+    ``raw_output_markers`` — the ONLY column guard A / guard B / classification
+    / gate_fired read. The marker (not the returned envelope, which nothing
+    reads for delivery_done) is the observable record that closes the
+    completed-node-then-process-death gap."""
+    log_content = f"email sent\n{_SENTINEL}\n"
+    sandbox = _make_sandbox_mock(output_json='{"summary": "done"}', log_content=log_content)
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(
+        _base_node_def(timeout_seconds=30, delivery_sentinel=_SENTINEL),
+        session_factory=_factory,
+    )
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    marker = _single_marker(row)
+    assert marker["delivery_done"] is True
+    assert marker["status"] == "completed"
+    assert marker["summary"] == "Sandbox agent completed with delivery sentinel observed (idempotency gate)"
+    assert _marker_delivery_done_for_node(row.raw_output_markers, "run-1", "n1") is True
+
+
+async def test_success_path_no_sentinel_no_stamp():
+    """FAR-228: a successful opt-in run WITHOUT the sentinel in stdout writes no
+    marker and no delivery_done field (opt-in but nothing delivered)."""
+    sandbox = _make_sandbox_mock(output_json='{"summary": "done"}', log_content="no delivery here\n")
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(
+        _base_node_def(timeout_seconds=30, delivery_sentinel=_SENTINEL),
+        session_factory=_factory,
+    )
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["output"].get("delivery_done") is None
+    assert result["artifacts"][0]["output"].get("delivery_done") is None
+    assert row.raw_output_markers is None, "no sentinel -> no success marker persisted"
+
+
+async def test_cancelled_node_persist_failure_fail_open_reraises():
+    """FAR-228 (THE INCIDENT FIX) fail-open: when the best-effort marker persist
+    FAILS inside the caught CancelledError (e.g. a DB error), the CancelledError
+    STILL propagates — the retention write is best-effort and must never mask or
+    delay the cancellation."""
+    log_content = f"email sent\n{_SENTINEL}\n"
+    sandbox = _make_sandbox_mock(output_json='{"summary": "done"}', log_content=log_content)
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.CancelledError())
+    handle.kill = AsyncMock()
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(
+        _base_node_def(timeout_seconds=30, delivery_sentinel=_SENTINEL),
+        session_factory=_factory,
+    )
+
+    persist_mock = AsyncMock(side_effect=RuntimeError("db gone"))
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch(
+            "modulo.core.pipeline_engine.node_runner._persist_raw_output_marker",
+            persist_mock,
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_run_state())
+
+    persist_mock.assert_awaited(), "the persist WAS attempted once the sentinel was in the drained tail"
+    assert row.raw_output_markers is None, "the failed persist never wrote a marker (fail-open, nothing fabricated)"
+
+
+async def test_cancelled_node_unreadable_log_fail_open_reraises():
+    """FAR-228 fail-open on the drain side: when the sandbox log is unreadable at
+    cancellation time (get_info raises), the guarded final drain fails silently
+    (log + return) and the CancelledError STILL propagates — an unreadable log
+    never blocks cancellation and never fabricates a delivery marker."""
+    sandbox = _make_sandbox_mock(output_json='{"summary": "done"}', log_content="ignored")
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.CancelledError())
+    handle.kill = AsyncMock()
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.files.get_info = AsyncMock(side_effect=RuntimeError("log file gone"))
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(
+        _base_node_def(timeout_seconds=30, delivery_sentinel=_SENTINEL),
+        session_factory=_factory,
+    )
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_run_state())
+
+    assert row.raw_output_markers is None, "unreadable log -> no sentinel observed -> no delivery marker"
+
+
+async def test_guard_a_inert_when_multi_node():
+    """FAR-228 guard A single-node scope: on a MULTI-node graph
+    (single_sandbox_node=False) guard A is INERT — even with a prior
+    delivery_done marker the node provisions a sandbox normally (the gate must
+    not skip a node in a pipeline with other sandbox nodes)."""
+    row = _FakeRunRow()
+    row.raw_output_markers = {
+        "run:run-1:node:n1:1": {
+            "_modulo_marker": True,
+            "delivery_done": True,
+            "attempt_key": "run:run-1:node:n1:1",
+        }
+    }
+    sandbox = _make_sandbox_mock()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(
+        _base_node_def(timeout_seconds=30, delivery_sentinel=_SENTINEL),
+        session_factory=_factory,
+        single_sandbox_node=False,
+    )
+    settings = MagicMock(modulo_idempotency_gate_enabled=True)
+    state = _run_state()
+    state["_claim_lease"] = "tok-claim"
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.settings.get_settings", return_value=settings),
+    ):
+        result = await fn(state)
+
+    sandbox.commands.run.assert_awaited_once(), "multi-node -> guard A must not skip, sandbox is provisioned"
+    assert result["output"]["status"] == "completed"
