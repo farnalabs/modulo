@@ -304,8 +304,9 @@ async def _aggregate_error_stats(
     by_level: dict[str, int] = {}
     total = 0
     for row in result:
-        by_level[row.level_peak] = row.count
-        total += row.count
+        count = int(row._mapping["count"] or 0)
+        by_level[row.level_peak] = count
+        total += count
     return {"total": total, "by_level": by_level}
 
 
@@ -319,21 +320,21 @@ async def _build_integration_inventory(session: AsyncSession, org_ids: list[uuid
         .where(ModelBackend.organisation_id.in_(org_ids))
         .group_by(ModelBackend.provider)
     )
-    model_providers: dict[str, int] = {row.provider: row.count for row in result}
+    model_providers: dict[str, int] = {row.provider: int(row._mapping["count"] or 0) for row in result}
 
     result = await session.execute(
         select(ConnectorInstance.connector_type_id, func.count().label("count"))
         .where(ConnectorInstance.organisation_id.in_(org_ids))
         .group_by(ConnectorInstance.connector_type_id)
     )
-    connector_types: dict[str, int] = {str(row.connector_type_id): row.count for row in result}
+    connector_types: dict[str, int] = {str(row.connector_type_id): int(row._mapping["count"] or 0) for row in result}
 
     result = await session.execute(
         select(Trigger.trigger_type, func.count().label("count"))
         .where(Trigger.organisation_id.in_(org_ids))
         .group_by(Trigger.trigger_type)
     )
-    trigger_types: dict[str, int] = {row.trigger_type: row.count for row in result}
+    trigger_types: dict[str, int] = {row.trigger_type: int(row._mapping["count"] or 0) for row in result}
 
     return {
         "model_providers": model_providers,
@@ -349,7 +350,7 @@ async def _get_or_create_instance_id(factory: Any) -> str:
         if instance_id is None:
             instance_id = str(uuid.uuid4())
             await write_system_config(session, key, instance_id)
-    return instance_id
+    return str(instance_id)
 
 
 async def _build_instance_metadata(factory: Any) -> dict[str, Any]:
