@@ -1,4 +1,4 @@
-import { ref, readonly } from 'vue'
+import { computed, readonly } from 'vue'
 import type { AnalyticsEventType } from './productAnalyticsEvents'
 
 /**
@@ -36,6 +36,7 @@ const _buffer: AnalyticsEvent[] = []
 let _flushTimer: ReturnType<typeof setInterval> | null = null
 let _eventIdCounter = 0
 let _consentFn: (() => boolean) | null = null
+let _visibilityHandler: (() => void) | null = null
 
 function _isConsented(): boolean {
   if (!_consentFn) return false
@@ -46,7 +47,7 @@ function _isConsented(): boolean {
   }
 }
 
-function _flush(): void {
+function _flush(keepalive = false): void {
   if (_buffer.length === 0) return
   const batch = _buffer.splice(0)
   fetch(EVENTS_API, {
@@ -54,6 +55,7 @@ function _flush(): void {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ events: batch }),
     credentials: 'include',
+    keepalive,
   }).catch((err: unknown) => {
     console.warn('[product-analytics] failed to flush events', err)
   })
@@ -71,6 +73,13 @@ export function initProductAnalytics(consentFn: () => boolean): void {
   _consentFn = consentFn
   if (_flushTimer) return
   _flushTimer = setInterval(_flush, FLUSH_INTERVAL_MS)
+
+  _visibilityHandler = () => {
+    if (document.visibilityState === 'hidden') {
+      _flush(true)
+    }
+  }
+  document.addEventListener('visibilitychange', _visibilityHandler)
 }
 
 /**
@@ -110,6 +119,6 @@ export function useProductAnalytics(): {
   return {
     track,
     flush: _flush,
-    bufferLength: readonly(ref(_buffer.length)),
+    bufferLength: readonly(computed(() => _buffer.length)),
   }
 }
