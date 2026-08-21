@@ -36,7 +36,15 @@ import httpx
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from httpx import AsyncClient
-from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolCallChunk,
+    ToolMessage,
+)
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
@@ -719,7 +727,7 @@ def _accumulate_tool_call_chunks(chunk: AIMessageChunk, buffers: dict[int, dict[
         _accumulate_one_tool_call(chunk_call, buffers)
 
 
-def _accumulate_one_tool_call(chunk_call: dict[str, Any], buffers: dict[int, dict[str, Any]]) -> None:
+def _accumulate_one_tool_call(chunk_call: ToolCallChunk, buffers: dict[int, dict[str, Any]]) -> None:
     """Merge a single tool-call chunk into the index-keyed buffers."""
     idx = chunk_call.get("index") or 0
     buf = buffers.get(idx)
