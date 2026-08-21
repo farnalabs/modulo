@@ -66,29 +66,33 @@ async def rotate_secret(session: AsyncSession) -> str:
 
 
 async def _get_or_create_uuid(session: AsyncSession, key: str) -> uuid.UUID:
-    """Idempotently mint a UUID in SystemConfig."""
-    existing = await session.execute(select(SystemConfig.value).where(SystemConfig.key == key))
-    raw = existing.scalar_one_or_none()
-    if raw is not None:
-        return uuid.UUID(str(raw))
+    """Idempotently mint a UUID in SystemConfig.
 
+    Uses ``_upsert_config`` (which does ``SELECT … FOR UPDATE``) to avoid
+    TOCTOU races between concurrent callers.
+    """
     new_id = uuid.uuid4()
     await _upsert_config(session, key, str(new_id))
+    # Re-select the authoritative value — another caller may have won the race.
+    row = await session.execute(select(SystemConfig.value).where(SystemConfig.key == key))
+    raw = row.scalar_one()
     _log.info("product_analytics.instance_id_minted")
-    return new_id
+    return uuid.UUID(str(raw))
 
 
 async def _get_or_create_secret(session: AsyncSession, key: str) -> str:
-    """Idempotently mint a hex secret in SystemConfig."""
-    existing = await session.execute(select(SystemConfig.value).where(SystemConfig.key == key))
-    raw = existing.scalar_one_or_none()
-    if raw is not None:
-        return str(raw)
+    """Idempotently mint a hex secret in SystemConfig.
 
+    Uses ``_upsert_config`` (which does ``SELECT … FOR UPDATE``) to avoid
+    TOCTOU races between concurrent callers.
+    """
     new_secret = secrets.token_hex(32)
     await _upsert_config(session, key, new_secret)
+    # Re-select the authoritative value — another caller may have won the race.
+    row = await session.execute(select(SystemConfig.value).where(SystemConfig.key == key))
+    raw = row.scalar_one()
     _log.info("product_analytics.secret_generated")
-    return new_secret
+    return str(raw)
 
 
 async def _upsert_config(session: AsyncSession, key: str, value: str) -> None:

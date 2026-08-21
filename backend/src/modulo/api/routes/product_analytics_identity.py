@@ -13,7 +13,6 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
-from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_system_permission
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.product_analytics.hmac_verify import verify_hmac
@@ -31,6 +30,8 @@ router = APIRouter(
 )
 
 # ── Rate limiter for rotation (in-memory, per-process) ─────────────────────
+# TODO: move to Redis for multi-worker rate limiting — this dict is per-process
+# and ineffective behind a load balancer with multiple workers.
 
 _rotation_timestamps: dict[str, list[float]] = defaultdict(list)
 _MAX_ROTATIONS = 5
@@ -75,7 +76,6 @@ class RotateResponse(BaseModel):
 
 
 @router.get("/identity", response_model=IdentityResponse)
-@handle_db_errors("product_analytics.get_identity")
 async def get_identity(
     current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
@@ -114,10 +114,10 @@ async def get_identity(
 
 
 @router.post("/rotate", response_model=RotateResponse)
-@handle_db_errors("product_analytics.rotate_secret")
 async def rotate_identity_secret(
     req: RotateRequest,
     request: Request,
+    current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> RotateResponse:
     """Rotate the shared secret, authenticated by the old secret.
@@ -140,11 +140,10 @@ async def rotate_identity_secret(
                 )
 
             # Verify HMAC (replay protection)
-            # We use the old_secret for HMAC verification since that's what the
-            # client used to sign the request.
+            # Use old_secret for HMAC verification — the client signed with it.
             payload_bytes = str(instance_id).encode("utf-8")
             if not verify_hmac(
-                current_secret,
+                req.old_secret,
                 payload_bytes,
                 req.timestamp,
                 req.sequence,
