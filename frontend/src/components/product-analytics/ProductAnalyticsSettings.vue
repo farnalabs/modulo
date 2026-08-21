@@ -14,24 +14,13 @@
             {{ $t('views.ProductAnalytics.opt_in_toggle_description') }}
           </p>
         </div>
-        <span
-          class="inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors"
-          role="switch"
-          :aria-checked="store.isOptedIn"
-          :aria-label="$t('views.ProductAnalytics.opt_in_toggle_label')"
-          tabindex="0"
+        <ToggleSwitch
+          :checked="store.isOptedIn"
           :disabled="store.loading"
+          :label="$t('views.ProductAnalytics.opt_in_toggle_label')"
           data-testid="product-analytics-toggle"
-          @click="handleToggle"
-          @keydown.enter="handleToggle"
-          @keydown.space.prevent="handleToggle"
-          :class="store.isOptedIn ? 'bg-primary' : 'bg-input'"
-        >
-          <span
-            class="inline-block h-4 w-4 rounded-full bg-background shadow-sm transition-transform"
-            :class="store.isOptedIn ? 'translate-x-[18px]' : 'translate-x-0.5'"
-          />
-        </span>
+          @toggle="handleToggle"
+        />
       </div>
 
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -54,6 +43,7 @@ import { computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import SectionCard from '../shared/SectionCard.vue'
 import ProductAnalyticsError from './ProductAnalyticsError.vue'
+import ToggleSwitch from '../shared/ToggleSwitch.vue'
 import { useProductAnalyticsStore } from '../../stores/productAnalyticsStore'
 
 const { t } = useI18n()
@@ -76,8 +66,7 @@ onMounted(() => {
   store.fetchConsent()
 })
 
-async function handleToggle() {
-  const newLevel = store.isOptedIn ? 'off' : 'all'
-  await store.updateLevel(newLevel)
+async function handleToggle(newOptedIn: boolean) {
+  await store.updateLevel(newOptedIn ? 'all' : 'off')
 }
 </script>
