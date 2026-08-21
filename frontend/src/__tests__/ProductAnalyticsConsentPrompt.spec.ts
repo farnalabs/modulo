@@ -41,33 +41,37 @@ describe('ProductAnalyticsConsentPrompt', () => {
     setActivePinia(createPinia())
   })
 
-  it('renders when prompt is eligible', () => {
-    setupConsentStore()
+  const visibilityCases: Array<[string, ConsentOverrides, boolean]> = [
+    ['renders when prompt is eligible', {}, true],
+    ['does not render when already consented', { prompted: 'yes', level: 'all' }, false],
+    ['does not render when instance is disabled', { instanceEnabled: false }, false],
+    ['does not render when declined permanently', { prompted: 'no' }, false],
+    [
+      'does not render when dismissed within cooldown',
+      { prompted: 'dismissed', prompted_at: new Date().toISOString() },
+      false,
+    ],
+    [
+      'renders when dismiss cooldown has expired',
+      {
+        prompted: 'dismissed',
+        prompted_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(), // nosemgrep: new-date-without-guard - deterministic past timestamp
+      },
+      true,
+    ],
+  ]
 
-    const wrapper = mount(ProductAnalyticsConsentPrompt)
-    expect(wrapper.find('[data-testid="product-analytics-consent-prompt"]').exists()).toBe(true)
-  })
+  it.each(visibilityCases)(
+    '%s',
+    (name: string, overrides: ConsentOverrides, expectedVisible: boolean) => {
+      setupConsentStore(overrides)
 
-  it('does not render when already consented', () => {
-    setupConsentStore({ prompted: 'yes', level: 'all' })
-
-    const wrapper = mount(ProductAnalyticsConsentPrompt)
-    expect(wrapper.find('[data-testid="product-analytics-consent-prompt"]').exists()).toBe(false)
-  })
-
-  it('does not render when instance is disabled', () => {
-    setupConsentStore({ instanceEnabled: false })
-
-    const wrapper = mount(ProductAnalyticsConsentPrompt)
-    expect(wrapper.find('[data-testid="product-analytics-consent-prompt"]').exists()).toBe(false)
-  })
-
-  it('does not render when declined permanently', () => {
-    setupConsentStore({ prompted: 'no' })
-
-    const wrapper = mount(ProductAnalyticsConsentPrompt)
-    expect(wrapper.find('[data-testid="product-analytics-consent-prompt"]').exists()).toBe(false)
-  })
+      const wrapper = mount(ProductAnalyticsConsentPrompt)
+      expect(
+        wrapper.find('[data-testid="product-analytics-consent-prompt"]').exists(),
+      ).toBe(expectedVisible)
+    },
+  )
 
   it.each([
     ['accept', 'product-analytics-accept'],
@@ -90,22 +94,5 @@ describe('ProductAnalyticsConsentPrompt', () => {
     expect(wrapper.find('[data-testid="product-analytics-partner-enable"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="product-analytics-partner-stay-community"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="product-analytics-accept"]').exists()).toBe(false)
-  })
-
-  it('does not render when dismissed within cooldown', () => {
-    setupConsentStore({ prompted: 'dismissed', prompted_at: new Date().toISOString() })
-
-    const wrapper = mount(ProductAnalyticsConsentPrompt)
-    expect(wrapper.find('[data-testid="product-analytics-consent-prompt"]').exists()).toBe(false)
-  })
-
-  it('renders when dismiss cooldown has expired', () => {
-    setupConsentStore({
-      prompted: 'dismissed',
-      prompted_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(), // nosemgrep: new-date-without-guard - deterministic past timestamp
-    })
-
-    const wrapper = mount(ProductAnalyticsConsentPrompt)
-    expect(wrapper.find('[data-testid="product-analytics-consent-prompt"]').exists()).toBe(true)
   })
 })

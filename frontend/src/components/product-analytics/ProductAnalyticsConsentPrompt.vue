@@ -25,7 +25,7 @@
           size="small"
           :disabled="store.loading"
           data-testid="product-analytics-accept"
-          @click="handleAccept"
+          @click="submit('accept')"
         >
           {{ $t('views.ProductAnalytics.accept') }}
         </Button>
@@ -35,7 +35,7 @@
           size="small"
           :disabled="store.loading"
           data-testid="product-analytics-decline"
-          @click="handleDecline"
+          @click="submit('decline')"
         >
           {{ $t('views.ProductAnalytics.decline') }}
         </Button>
@@ -44,7 +44,7 @@
           class="text-xs text-muted-foreground underline underline-offset-2 hover:no-underline"
           :disabled="store.loading"
           data-testid="product-analytics-dismiss"
-          @click="handleDismiss"
+          @click="submit('dismiss')"
         >
           {{ $t('views.ProductAnalytics.dismiss') }}
         </button>
@@ -57,7 +57,7 @@
           size="small"
           :disabled="store.loading"
           data-testid="product-analytics-partner-enable"
-          @click="handleAccept"
+          @click="submit('accept')"
         >
           {{ $t('views.ProductAnalytics.partner_enable') }}
         </Button>
@@ -66,7 +66,7 @@
           class="text-xs text-muted-foreground underline underline-offset-2 hover:no-underline"
           :disabled="store.loading"
           data-testid="product-analytics-partner-stay-community"
-          @click="handleDecline"
+          @click="submit('decline')"
         >
           {{ $t('views.ProductAnalytics.partner_stay_community') }}
         </button>
@@ -100,15 +100,7 @@ onMounted(() => {
   }
 })
 
-async function handleAccept() {
-  await store.submitConsent('accept')
-}
-
-async function handleDecline() {
-  await store.submitConsent('decline')
-}
-
-async function handleDismiss() {
-  await store.submitConsent('dismiss')
+async function submit(action: 'accept' | 'decline' | 'dismiss') {
+  await store.submitConsent(action)
 }
 </script>
