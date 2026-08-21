@@ -34,6 +34,7 @@ from modulo.db.crud.agent import (
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.rls import set_rls_org
 from modulo.settings import get_settings
+from modulo.util import sanitise_log_value as _sanitise_log_value
 
 _CODE_AGENT_LIST = "agent.list"
 _MSG_DATABASE_OPERATION_FAILED = "Database operation failed"
@@ -270,7 +271,7 @@ def _validate_generic_agent(
             "an eval rubric before production promotion. "
             "Consider adding at least one eval before deploying this agent "
             "in a production pipeline.",
-            name,
+            _sanitise_log_value(name),
         )
 
 

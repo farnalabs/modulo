@@ -7,6 +7,8 @@ import os
 from dataclasses import dataclass
 from threading import Lock, RLock
 
+from modulo.util import sanitise_log_value as _sanitise_log_value
+
 _log = logging.getLogger(__name__)
 
 
@@ -120,25 +122,25 @@ class RuntimeConfigStore:
     def set_override(self, key: str, value: str) -> None:
         """Set a runtime override that stays in memory until cleared or reloaded."""
         if not key or key.strip() != key:
-            _log.warning("Runtime config override rejected: invalid key %r", key)
+            _log.warning("Runtime config override rejected: invalid key %r", _sanitise_log_value(key))
             return
         if key not in KNOWN_KEYS:
-            _log.warning("Runtime config override set for unknown key: %s", key)
+            _log.warning("Runtime config override set for unknown key: %s", _sanitise_log_value(key))
         with self._lock:
             self._overrides[key] = value
-            _log.info("Runtime config override set: %s", key)
+            _log.info("Runtime config override set: %s", _sanitise_log_value(key))
 
     def clear_override(self, key: str) -> None:
         """Remove a runtime override for a single key."""
         if not key or key.strip() != key:
-            _log.warning("Runtime config override clear rejected: invalid key %r", key)
+            _log.warning("Runtime config override clear rejected: invalid key %r", _sanitise_log_value(key))
             return
         with self._lock:
             removed = self._overrides.pop(key, None)
             if removed is not None:
-                _log.info("Runtime config override cleared: %s", key)
+                _log.info("Runtime config override cleared: %s", _sanitise_log_value(key))
             else:
-                _log.debug("Runtime config override not found (no-op): %s", key)
+                _log.debug("Runtime config override not found (no-op): %s", _sanitise_log_value(key))
 
     def clear_all_overrides(self) -> None:
         """Remove all runtime overrides."""

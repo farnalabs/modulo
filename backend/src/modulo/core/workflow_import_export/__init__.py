@@ -37,6 +37,7 @@ from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.schema import Schema, SchemaVersion
 from modulo.db.models.team import Team
 from modulo.db.models.trigger import Trigger
+from modulo.util import sanitise_log_value as _sanitise_log_value
 
 logger = logging.getLogger(__name__)
 
@@ -865,7 +866,7 @@ async def materialize_import(
 
     logger.info(
         "Materializing import: pipeline='%s' (%d agents, %d schemas, %d edges)",
-        pname,
+        _sanitise_log_value(pname),
         len(agents_data),
         len(schemas_data),
         len(edges_data),
@@ -932,7 +933,7 @@ async def materialize_import(
 
     logger.info(
         "Imported pipeline '%s' (id=%s) with %d agents, %d edges, %d schemas",
-        pname,
+        _sanitise_log_value(pname),
         pipeline.id,
         len(agents_data),
         len(edges_data),
@@ -1060,7 +1061,7 @@ async def _create_import_primitive(
             account_id=created_by,
         )
     except Exception:
-        logger.exception("Failed to create library primitive for pipeline '%s'", pname)
+        logger.exception("Failed to create library primitive for pipeline '%s'", _sanitise_log_value(pname))
         raise
 
 
@@ -1375,7 +1376,7 @@ async def _create_agent_with_retry(
             agent_args["name"] = aname
             warnings.append(f"Agent name collided; retrying as '{aname}'.")
         except (ValueError, SQLAlchemyError):
-            logger.exception("Failed to create agent '%s'", aname)
+            logger.exception("Failed to create agent '%s'", _sanitise_log_value(aname))
             raise
 
 
@@ -1437,7 +1438,7 @@ async def _create_imported_pipeline(
             pname = suggest_import_name(existing_pipeline_names, base_name)
             warnings.append(f"Pipeline name '{base_name}' conflicted; retrying as '{pname}'.")
         except Exception:
-            logger.exception("Failed to create pipeline '%s'", pname)
+            logger.exception("Failed to create pipeline '%s'", _sanitise_log_value(pname))
             raise
 
 

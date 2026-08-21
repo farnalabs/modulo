@@ -95,6 +95,7 @@ from modulo.api.routes.parameter_schemas import router as parameter_schemas_rout
 from modulo.api.routes.pipeline_folders import router as pipeline_folders_router
 from modulo.api.routes.pipelines import router as pipelines_router
 from modulo.api.routes.plugins import router as plugins_router
+from modulo.api.routes.product_analytics import router as product_analytics_router
 from modulo.api.routes.product_analytics_identity import router as product_analytics_identity_router
 from modulo.api.routes.registry import router as registry_router
 from modulo.api.routes.remy import router as remy_router
@@ -1181,6 +1182,7 @@ app.include_router(mcp_oauth_router)
 app.include_router(mcp_setup_router)
 app.include_router(me_router)
 app.include_router(org_settings_router)
+app.include_router(product_analytics_router)
 app.include_router(registry_router)
 app.include_router(determination_router)
 app.include_router(evals_router)

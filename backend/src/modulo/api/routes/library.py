@@ -78,6 +78,7 @@ from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.team import Team
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.util import sanitise_log_value as _sanitise_log_value
 
 _MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE = (
     "The library feature is temporarily unavailable due to a database issue. Please retry."
@@ -517,8 +518,8 @@ async def create_library_primitive_endpoint(
         _log.exception("library.create_library_primitive_endpoint")
         _log.warning(
             "create_library_primitive_endpoint: IntegrityError — slug collision on %s/%s",
-            req.primitive_type,
-            req.slug,
+            _sanitise_log_value(req.primitive_type),
+            _sanitise_log_value(req.slug),
             exc_info=True,
         )
         raise HTTPException(

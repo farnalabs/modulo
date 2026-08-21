@@ -819,6 +819,35 @@ class TestListAuditEvents:
         assert result["next_cursor"] is None
         assert any("failed to decode cursor" in rec.message for rec in caplog.records)
 
+    async def test_list_with_invalid_cursor_logs_no_raw_crlf(self, caplog, session):
+        """A cursor embedding CR/LF must be escaped in the log (S5145).
+
+        The sanitised value must leave no raw newline or carriage-return in the
+        emitted log line, so an attacker cannot forge or split log entries.
+        """
+        org_id = uuid.uuid4()
+
+        call_count = 0
+
+        async def _execute(*a, **kw):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _scalar_result(0)
+            return _scalars_result([])
+
+        session.execute = _execute
+
+        with caplog.at_level(logging.WARNING):
+            result = await list_audit_events(session, org_id, cursor="bad\nauth\rid")
+        assert not result["items"]
+        assert result["next_cursor"] is None
+        assert any("failed to decode cursor" in rec.message for rec in caplog.records)
+        for rec in caplog.records:
+            assert "\n" not in rec.message
+            assert "\r" not in rec.message
+            assert "bad\nauth\rid" not in rec.message
+
     async def test_list_with_valid_cursor(self, session):
         """A well-formed cursor decodes and positions the next page."""
         import json as _json
