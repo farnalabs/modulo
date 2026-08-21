@@ -52,6 +52,7 @@ from modulo.core.workflow_import_export import (
     resolve_schema,
     suggest_import_name,
 )
+from modulo.db.crud.base import PageResult
 from modulo.db.crud.library_primitive import (
     create_library_primitive,
     restore_library_primitive,
@@ -73,6 +74,7 @@ from modulo.db.crud.rating import (
     submit_rating,
     update_primitive_ratings_aggregate,
 )
+from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.team import Team
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -101,6 +103,36 @@ def _split_primitive_types(raw: str | None) -> list[str] | None:
         return None
     types = [t.strip() for t in raw.split(",") if t.strip()]
     return types or None
+
+
+def _conflict_error() -> HTTPException:
+    """HTTP 409 for a resource that already exists (e.g. slug collision)."""
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=MSG_RESOURCE_ALREADY_EXISTS,
+    )
+
+
+def _not_implemented_error() -> HTTPException:
+    """HTTP 501 when the library tables/migrations are not yet present."""
+    return HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail=MSG_FEATURE_NOT_AVAILABLE,
+    )
+
+
+def _unavailable_error() -> HTTPException:
+    """HTTP 503 for a transient database failure while serving the library."""
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
+    )
+
+
+async def _set_rls_context(session: AsyncSession, principal: TenantPrincipal) -> None:
+    """Establish the org + user RLS context for a library transaction."""
+    await set_rls_org(session, principal.organisation_id)
+    await set_rls_user_context(session, principal.account_id, principal.org_role)
 
 
 # ---------------------------------------------------------------------------
@@ -308,70 +340,90 @@ async def list_library_primitives_endpoint(
 ) -> LibraryPrimitiveListResponse:
     if include_in_dev:
         require_in_dev_operator(principal, "library.search.in_dev")
+    result = await _fetch_primitives(
+        session,
+        principal,
+        page=page,
+        page_size=page_size,
+        cursor=cursor,
+        primitive_type=primitive_type,
+        primitive_types=primitive_types,
+        search=search,
+        source=source,
+        include_in_dev=include_in_dev,
+    )
     try:
-        try:
-            async with session.begin():
-                await set_rls_org(session, principal.organisation_id)
-                await set_rls_user_context(session, principal.account_id, principal.org_role)
-                include_community = source != "local"
-                result = await list_primitives(
-                    session,
-                    principal.organisation_id,
-                    primitive_type=primitive_type,
-                    primitive_types=_split_primitive_types(primitive_types),
-                    search=search,
-                    page=page,
-                    page_size=page_size,
-                    include_community=include_community,
-                    source=source,
-                    cursor=cursor,
-                    excluded_tiers=[] if include_in_dev else None,
-                )
-        except ProgrammingError:
-            _log.exception("library.list_library_primitives_endpoint")
-            _log.warning(
-                "list_library_primitives_endpoint: ProgrammingError — missing DB table or migration",
-                exc_info=True,
+        items = [LibraryPrimitiveResponse.model_validate(p) for p in result.items]
+    except Exception:
+        _log.exception("LibraryPrimitiveResponse.model_validate failed on %d items", len(result.items))
+        if result.items:
+            _log.error(
+                "first item type=%s id=%s",
+                type(result.items[0]).__name__,
+                getattr(result.items[0], "id", "?"),
             )
-            raise HTTPException(
-                status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                detail=MSG_FEATURE_NOT_AVAILABLE,
-            ) from None
-        except SQLAlchemyError:
-            _log.exception("list_library_primitives_endpoint: SQLAlchemyError — transient DB failure")
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
-            ) from None
-        try:
-            items = [LibraryPrimitiveResponse.model_validate(p) for p in result.items]
-        except Exception:
-            _log.exception("LibraryPrimitiveResponse.model_validate failed on %d items", len(result.items))
-            if result.items:
-                _log.error(
-                    "first item type=%s id=%s",
-                    type(result.items[0]).__name__,
-                    getattr(result.items[0], "id", "?"),
-                )
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to parse library primitives. The schema may be out of sync with the database.",
-            ) from None
-        try:
-            return LibraryPrimitiveListResponse(
-                items=items,
-                total=result.total,
-                page=result.page,
-                page_size=result.page_size,
-                next_cursor=result.next_cursor,
-                has_more=result.has_more,
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to parse library primitives. The schema may be out of sync with the database.",
+        ) from None
+    try:
+        return LibraryPrimitiveListResponse(
+            items=items,
+            total=result.total,
+            page=result.page,
+            page_size=result.page_size,
+            next_cursor=result.next_cursor,
+            has_more=result.has_more,
+        )
+    except Exception:
+        _log.exception("LibraryPrimitiveListResponse construction failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to build library primitives response.",
+        ) from None
+
+
+async def _fetch_primitives(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    *,
+    page: int,
+    page_size: int,
+    cursor: str | None,
+    primitive_type: str | None,
+    primitive_types: str | None,
+    search: str | None,
+    source: str | None,
+    include_in_dev: bool,
+) -> PageResult[LibraryPrimitive]:
+    """Query the library primitives list, translating DB failures to HTTP errors."""
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            include_community = source != "local"
+            return await list_primitives(
+                session,
+                principal.organisation_id,
+                primitive_type=primitive_type,
+                primitive_types=_split_primitive_types(primitive_types),
+                search=search,
+                page=page,
+                page_size=page_size,
+                include_community=include_community,
+                source=source,
+                cursor=cursor,
+                excluded_tiers=[] if include_in_dev else None,
             )
-        except Exception:
-            _log.exception("LibraryPrimitiveListResponse construction failed")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to build library primitives response.",
-            ) from None
+    except ProgrammingError:
+        _log.exception("library.list_library_primitives_endpoint")
+        _log.warning(
+            "list_library_primitives_endpoint: ProgrammingError — missing DB table or migration",
+            exc_info=True,
+        )
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("list_library_primitives_endpoint: SQLAlchemyError — transient DB failure")
+        raise _unavailable_error() from None
     except HTTPException:
         raise
     except Exception:
@@ -397,27 +449,17 @@ async def get_library_primitive_endpoint(
 ) -> LibraryPrimitiveResponse:
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             primitive = await get_primitive(session, principal.organisation_id, primitive_id)
     except IntegrityError:
         _log.exception("library.get_library_primitive_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        raise _conflict_error() from None
     except ProgrammingError:
         _log.exception("library.get_library_primitive_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        raise _not_implemented_error() from None
     except SQLAlchemyError:
         _log.exception("get_library_primitive_endpoint: SQLAlchemyError")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
-        ) from None
+        raise _unavailable_error() from None
     if primitive is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -440,8 +482,7 @@ async def create_library_primitive_endpoint(
 ) -> LibraryPrimitiveResponse:
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             existing = await get_primitive_by_slug(session, principal.organisation_id, req.primitive_type, req.slug)
             if existing is not None:
                 raise HTTPException(
@@ -487,16 +528,10 @@ async def create_library_primitive_endpoint(
         ) from None
     except ProgrammingError:
         _log.exception("library.create_library_primitive_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        raise _not_implemented_error() from None
     except SQLAlchemyError:
         _log.exception("create_library_primitive_endpoint: SQLAlchemyError")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
-        ) from None
+        raise _unavailable_error() from None
     return LibraryPrimitiveResponse.model_validate(prim)
 
 
@@ -511,27 +546,17 @@ async def update_library_primitive_endpoint(
     updates = req.model_dump(exclude_unset=True)
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             prim = await update_library_primitive(session, primitive_id, updates)
     except IntegrityError:
         _log.exception("library.update_library_primitive_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        raise _conflict_error() from None
     except ProgrammingError:
         _log.exception("library.update_library_primitive_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        raise _not_implemented_error() from None
     except SQLAlchemyError:
         _log.exception("update_library_primitive_endpoint: SQLAlchemyError")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
-        ) from None
+        raise _unavailable_error() from None
     if prim is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -549,27 +574,17 @@ async def delete_library_primitive_endpoint(
 ) -> LibraryPrimitiveResponse:
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             prim = await soft_delete_library_primitive(session, primitive_id)
     except IntegrityError:
         _log.exception("library.delete_library_primitive_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        raise _conflict_error() from None
     except ProgrammingError:
         _log.exception("library.delete_library_primitive_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        raise _not_implemented_error() from None
     except SQLAlchemyError:
         _log.exception("delete_library_primitive_endpoint: SQLAlchemyError")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
-        ) from None
+        raise _unavailable_error() from None
     if prim is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -587,21 +602,14 @@ async def restore_library_primitive_endpoint(
 ) -> LibraryPrimitiveResponse:
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             prim = await restore_library_primitive(session, primitive_id)
     except ProgrammingError:
         _log.exception("library.restore_library_primitive_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        raise _not_implemented_error() from None
     except SQLAlchemyError:
         _log.exception("restore_library_primitive_endpoint: SQLAlchemyError")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
-        ) from None
+        raise _unavailable_error() from None
     if prim is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -645,22 +653,13 @@ async def copy_to_adapt_endpoint(
         ) from None
     except IntegrityError:
         _log.exception("library.copy_to_adapt_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        raise _conflict_error() from None
     except ProgrammingError:
         _log.exception("library.copy_to_adapt_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        raise _not_implemented_error() from None
     except SQLAlchemyError:
         _log.exception("copy_to_adapt_endpoint: SQLAlchemyError")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
-        ) from None
+        raise _unavailable_error() from None
     return LibraryPrimitiveResponse.model_validate(result)
 
 
@@ -679,8 +678,7 @@ async def export_pipeline_endpoint(
 ) -> Response:
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             pipeline = await get_pipeline(session, pipeline_id)
             if pipeline is None:
                 raise HTTPException(
@@ -693,22 +691,13 @@ async def export_pipeline_endpoint(
                 bundle_bytes = await export_pipeline_bundle(session, pipeline_id)
     except IntegrityError:
         _log.exception("library.export_pipeline_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        raise _conflict_error() from None
     except ProgrammingError:
         _log.exception("library.export_pipeline_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        raise _not_implemented_error() from None
     except SQLAlchemyError:
         _log.exception("export_pipeline_endpoint: SQLAlchemyError")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
-        ) from None
+        raise _unavailable_error() from None
     safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in pipeline.name)
     if format == "v2":
         return Response(
@@ -747,96 +736,52 @@ async def _analyse_bundle(
 
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
 
             pipeline_info = bundle.get("pipeline", {})
             pipeline_name = pipeline_info.get("name", "Unnamed Pipeline")
+            await _resolve_pipeline_name_conflict(
+                session,
+                principal,
+                pipeline_name,
+                name_conflicts,
+                warnings,
+            )
 
-            existing_pipeline_names = await get_existing_pipeline_names(session, principal.organisation_id)
-            if pipeline_name in existing_pipeline_names:
-                suggested = suggest_import_name(existing_pipeline_names, pipeline_name)
-                name_conflicts.append(
-                    {
-                        "type": "pipeline",
-                        "original": pipeline_name,
-                        "suggested": suggested,
-                    }
-                )
-                warnings.append(f"Pipeline '{pipeline_name}' already exists. Suggested: '{suggested}'.")
+            await _resolve_bundle_schemas(
+                session,
+                principal,
+                bundle,
+                resolved_schemas,
+                warnings,
+            )
 
-            for schema in bundle.get("schemas", []):
-                result = await resolve_schema(session, principal.organisation_id, schema)
-                resolved_schemas.append(result)
-                if result.get("schema_id"):
-                    schema["_resolved_id"] = result["schema_id"]
-                    schema["_resolved_version"] = result["version"]
-                if result.get("warning"):
-                    warnings.append(result["warning"])
+            connector_instance_map = await _resolve_bundle_connectors(
+                session,
+                principal,
+                bundle,
+                resolved_connectors,
+                warnings,
+            )
 
-            seen_connector_types: set[str] = set()
-            connector_instance_map: dict[str, str] = {}
-            for agent in bundle.get("agents", []):
-                for ref in agent.get("connector_type_refs", []):
-                    ctid = ref.get("connector_type_id", ref.get("type", ""))
-                    if ctid and ctid not in seen_connector_types:
-                        seen_connector_types.add(ctid)
-                        result = await resolve_connector_type(session, principal.organisation_id, ctid)
-                        resolved_connectors.append(result)
-                        if result.get("instance_id"):
-                            connector_instance_map[ctid] = result["instance_id"]
-                        if result.get("warning"):
-                            warnings.append(result["warning"])
+            mb_id_by_name = await _resolve_bundle_model_backends(
+                session,
+                principal,
+                bundle,
+                resolved_model_backends_list,
+                warnings,
+            )
 
-            for mb in bundle.get("model_backends", []):
-                result = await resolve_model_backend(session, principal.organisation_id, mb)
-                resolved_model_backends_list.append(result)
-                if result.get("model_backend_id"):
-                    mb["_resolved_model_backend_id"] = result["model_backend_id"]
-                if result.get("warning"):
-                    warnings.append(result["warning"])
-
-            # Check for duplicate agent names within the bundle
-            agent_names_in_bundle = [a.get("name", "") for a in bundle.get("agents", [])]
-            seen_names: set[str] = set()
-            for aname in agent_names_in_bundle:
-                if aname and aname in seen_names:
-                    warnings.append(
-                        f"Duplicate agent name '{aname}' found in bundle. Each agent must have a unique name."
-                    )
-                if aname:
-                    seen_names.add(aname)
-
-            existing_agent_names = await get_existing_agent_names(session, principal.organisation_id)
-            for agent in bundle.get("agents", []):
-                aname = agent.get("name", "")
-                if aname in existing_agent_names:
-                    suggested = suggest_import_name(existing_agent_names, aname)
-                    name_conflicts.append(
-                        {
-                            "type": "agent",
-                            "original": aname,
-                            "suggested": suggested,
-                        }
-                    )
-                    warnings.append(f"Agent '{aname}' already exists. Suggested: '{suggested}'.")
-
-            for node in pipeline_info.get("graph_nodes_json", []):
-                binding = node.get("connector_binding", {})
-                if isinstance(binding, dict):
-                    ctid = binding.get("connector_type_id", "")
-                    if ctid and ctid in connector_instance_map:
-                        binding["instance_id"] = connector_instance_map[ctid]
-
-            mb_id_by_name: dict[str, str] = {}
-            for mb in bundle.get("model_backends", []):
-                rid = mb.get("_resolved_model_backend_id")
-                if rid:
-                    mb_id_by_name[mb.get("name", "")] = rid
-            for agent in bundle.get("agents", []):
-                mb_name = agent.get("model_backend_name", "")
-                if mb_name and mb_name in mb_id_by_name:
-                    agent["model_backend_id"] = mb_id_by_name[mb_name]
+            _warn_duplicate_agent_names(bundle, warnings)
+            await _resolve_existing_agent_conflicts(
+                session,
+                principal,
+                bundle,
+                name_conflicts,
+                warnings,
+            )
+            _bind_connector_instances_to_graph(pipeline_info, connector_instance_map)
+            _bind_model_backends_to_agents(bundle, mb_id_by_name)
 
             teams_result = await session.execute(
                 select(Team).where(
@@ -847,10 +792,7 @@ async def _analyse_bundle(
             teams = list(teams_result.scalars())
     except IntegrityError:
         _log.exception("library._analyse_bundle")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        raise _conflict_error() from None
     except ProgrammingError:
         _log.warning("_analyse_bundle: ProgrammingError — missing DB table or migration", exc_info=True)
         raise HTTPException(
@@ -876,6 +818,151 @@ async def _analyse_bundle(
         name_conflicts=name_conflicts,
         available_teams=available_teams,
     )
+
+
+async def _resolve_pipeline_name_conflict(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    pipeline_name: str,
+    name_conflicts: list[dict[str, str]],
+    warnings: list[str],
+) -> None:
+    """Warn when the bundle's pipeline name already exists in the org."""
+    existing_pipeline_names = await get_existing_pipeline_names(session, principal.organisation_id)
+    if pipeline_name in existing_pipeline_names:
+        suggested = suggest_import_name(existing_pipeline_names, pipeline_name)
+        name_conflicts.append(
+            {
+                "type": "pipeline",
+                "original": pipeline_name,
+                "suggested": suggested,
+            }
+        )
+        warnings.append(f"Pipeline '{pipeline_name}' already exists. Suggested: '{suggested}'.")
+
+
+async def _resolve_bundle_schemas(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    bundle: dict[str, Any],
+    resolved_schemas: list[dict[str, Any]],
+    warnings: list[str],
+) -> None:
+    """Resolve every schema in the bundle, stamping resolved ids onto the bundle."""
+    for schema in bundle.get("schemas", []):
+        result = await resolve_schema(session, principal.organisation_id, schema)
+        resolved_schemas.append(result)
+        if result.get("schema_id"):
+            schema["_resolved_id"] = result["schema_id"]
+            schema["_resolved_version"] = result["version"]
+        if result.get("warning"):
+            warnings.append(result["warning"])
+
+
+async def _resolve_bundle_connectors(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    bundle: dict[str, Any],
+    resolved_connectors: list[dict[str, Any]],
+    warnings: list[str],
+) -> dict[str, str]:
+    """Resolve the distinct connector types referenced by bundle agents."""
+    seen_connector_types: set[str] = set()
+    connector_instance_map: dict[str, str] = {}
+    for agent in bundle.get("agents", []):
+        for ref in agent.get("connector_type_refs", []):
+            ctid = ref.get("connector_type_id", ref.get("type", ""))
+            if ctid and ctid not in seen_connector_types:
+                seen_connector_types.add(ctid)
+                result = await resolve_connector_type(session, principal.organisation_id, ctid)
+                resolved_connectors.append(result)
+                if result.get("instance_id"):
+                    connector_instance_map[ctid] = result["instance_id"]
+                if result.get("warning"):
+                    warnings.append(result["warning"])
+    return connector_instance_map
+
+
+async def _resolve_bundle_model_backends(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    bundle: dict[str, Any],
+    resolved_model_backends: list[dict[str, Any]],
+    warnings: list[str],
+) -> dict[str, str]:
+    """Resolve every model backend in the bundle, mapping name -> backend id."""
+    for mb in bundle.get("model_backends", []):
+        result = await resolve_model_backend(session, principal.organisation_id, mb)
+        resolved_model_backends.append(result)
+        if result.get("model_backend_id"):
+            mb["_resolved_model_backend_id"] = result["model_backend_id"]
+        if result.get("warning"):
+            warnings.append(result["warning"])
+
+    mb_id_by_name: dict[str, str] = {}
+    for mb in bundle.get("model_backends", []):
+        rid = mb.get("_resolved_model_backend_id")
+        if rid:
+            mb_id_by_name[mb.get("name", "")] = rid
+    return mb_id_by_name
+
+
+def _warn_duplicate_agent_names(bundle: dict[str, Any], warnings: list[str]) -> None:
+    """Warn when two agents inside the bundle share the same name."""
+    agent_names_in_bundle = [a.get("name", "") for a in bundle.get("agents", [])]
+    seen_names: set[str] = set()
+    for aname in agent_names_in_bundle:
+        if aname and aname in seen_names:
+            warnings.append(f"Duplicate agent name '{aname}' found in bundle. Each agent must have a unique name.")
+        if aname:
+            seen_names.add(aname)
+
+
+async def _resolve_existing_agent_conflicts(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    bundle: dict[str, Any],
+    name_conflicts: list[dict[str, str]],
+    warnings: list[str],
+) -> None:
+    """Warn when a bundle agent's name collides with an existing org agent."""
+    existing_agent_names = await get_existing_agent_names(session, principal.organisation_id)
+    for agent in bundle.get("agents", []):
+        aname = agent.get("name", "")
+        if aname in existing_agent_names:
+            suggested = suggest_import_name(existing_agent_names, aname)
+            name_conflicts.append(
+                {
+                    "type": "agent",
+                    "original": aname,
+                    "suggested": suggested,
+                }
+            )
+            warnings.append(f"Agent '{aname}' already exists. Suggested: '{suggested}'.")
+
+
+def _bind_connector_instances_to_graph(
+    pipeline_info: dict[str, Any],
+    connector_instance_map: dict[str, str],
+) -> None:
+    """Stamp resolved connector instance ids onto graph node bindings."""
+    for node in pipeline_info.get("graph_nodes_json", []):
+        binding = node.get("connector_binding", {})
+        if isinstance(binding, dict):
+            ctid = binding.get("connector_type_id", "")
+            if ctid and ctid in connector_instance_map:
+                binding["instance_id"] = connector_instance_map[ctid]
+
+
+def _bind_model_backends_to_agents(
+    bundle: dict[str, Any],
+    mb_id_by_name: dict[str, str],
+) -> None:
+    """Stamp resolved model backend ids onto bundle agents by name."""
+    for agent in bundle.get("agents", []):
+        mb_name = agent.get("model_backend_name", "")
+        if mb_name and mb_name in mb_id_by_name:
+            agent["model_backend_id"] = mb_id_by_name[mb_name]
 
 
 @router.post("/import/upload-zip", response_model=ImportBundleResponse)
@@ -960,8 +1047,7 @@ async def confirm_import_endpoint(
 
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             result = await materialize_import(
                 session,
                 org_id=principal.organisation_id,
@@ -976,10 +1062,7 @@ async def confirm_import_endpoint(
             )
     except IntegrityError:
         _log.exception("library.confirm_import_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        raise _conflict_error() from None
     except ProgrammingError:
         _log.warning("confirm_import_endpoint: ProgrammingError — missing DB table or migration", exc_info=True)
         raise HTTPException(
@@ -1021,27 +1104,17 @@ async def list_ratings_endpoint(
 ) -> RatingListResponse:
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             result = await list_ratings_for_primitive(session, primitive_id, page=page, page_size=page_size)
     except IntegrityError:
         _log.exception("library.list_ratings_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        raise _conflict_error() from None
     except ProgrammingError:
         _log.exception("library.list_ratings_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        raise _not_implemented_error() from None
     except SQLAlchemyError:
         _log.exception("list_ratings_endpoint: SQLAlchemyError")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
-        ) from None
+        raise _unavailable_error() from None
     return RatingListResponse(
         items=[RatingResponse.model_validate(r) for r in result.items],
         total=result.total,
@@ -1057,27 +1130,17 @@ async def get_rating_aggregate_endpoint(
 ) -> RatingAggregateResponse:
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             avg, count = await get_rating_aggregate(session, primitive_id)
     except IntegrityError:
         _log.exception("library.get_rating_aggregate_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        raise _conflict_error() from None
     except ProgrammingError:
         _log.exception("library.get_rating_aggregate_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        raise _not_implemented_error() from None
     except SQLAlchemyError:
         _log.exception("get_rating_aggregate_endpoint: SQLAlchemyError")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
-        ) from None
+        raise _unavailable_error() from None
     return RatingAggregateResponse(
         average_rating=float(avg) if avg is not None else None,
         review_count=count,
@@ -1098,8 +1161,7 @@ async def submit_rating_endpoint(
 ) -> RatingResponse:
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             rating = await submit_rating(
                 session,
                 org_id=principal.organisation_id,
@@ -1125,16 +1187,10 @@ async def submit_rating_endpoint(
         ) from e
     except ProgrammingError:
         _log.exception("library.submit_rating_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        raise _not_implemented_error() from None
     except SQLAlchemyError:
         _log.exception("submit_rating_endpoint: SQLAlchemyError")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
-        ) from None
+        raise _unavailable_error() from None
     return RatingResponse.model_validate(rating)
 
 
@@ -1152,8 +1208,7 @@ async def submit_abuse_report_endpoint(
 ) -> AbuseReportResponse:
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             report = await submit_abuse_report(
                 session,
                 org_id=principal.organisation_id,
@@ -1164,22 +1219,13 @@ async def submit_abuse_report_endpoint(
             )
     except IntegrityError:
         _log.exception("library.submit_abuse_report_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        raise _conflict_error() from None
     except ProgrammingError:
         _log.exception("library.submit_abuse_report_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        raise _not_implemented_error() from None
     except SQLAlchemyError:
         _log.exception("submit_abuse_report_endpoint: SQLAlchemyError")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
-        ) from None
+        raise _unavailable_error() from None
     return AbuseReportResponse.model_validate(report)
 
 
@@ -1207,16 +1253,35 @@ def _build_pipeline_from_template(
 
     # Build a map from template string IDs to stable UUIDs so PipelineEdge
     # foreign keys (Uuid columns) don't crash on human-readable IDs.
+    node_id_map = _build_template_node_id_map(graph_nodes)
+
+    pipeline_nodes = _convert_template_nodes(graph_nodes, agents, node_id_map)
+    pipeline_edges = _convert_template_edges(edges, node_id_map)
+
+    return name, description, pipeline_nodes, pipeline_edges, len(agents), len(edges)
+
+
+def _build_template_node_id_map(graph_nodes: list[dict[str, Any]]) -> dict[str, str]:
+    """Map each template node's human-readable id to a stable UUID string."""
     node_id_map: dict[str, str] = {}
     for node in graph_nodes:
         tid = node.get("id", "")
         if tid:
             node_id_map[tid] = str(uuid.uuid4())
+    return node_id_map
 
-    # Convert template graph nodes to pipeline graph nodes.
-    # Template nodes use agent_index to reference template agents.
-    # We embed the agent definition in the node metadata so the frontend
-    # can resolve it later when the user configures real agents.
+
+def _convert_template_nodes(
+    graph_nodes: list[dict[str, Any]],
+    agents: list[dict[str, Any]],
+    node_id_map: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Convert template graph nodes to pipeline graph nodes.
+
+    Template nodes use ``agent_index`` to reference template agents. The
+    agent definition is embedded in the node metadata so the frontend can
+    resolve it later when the user configures real agents.
+    """
     pipeline_nodes: list[dict[str, Any]] = []
     for node in graph_nodes:
         tid = node.get("id", "")
@@ -1237,9 +1302,18 @@ def _build_pipeline_from_template(
             pipeline_node["label"] = node.get("label", "Manual Gate")
 
         pipeline_nodes.append(pipeline_node)
+    return pipeline_nodes
 
-    # Convert template edges to pipeline edge format, mapping source/target
-    # through node_id_map so human-readable template IDs become UUIDs.
+
+def _convert_template_edges(
+    edges: list[dict[str, Any]],
+    node_id_map: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Convert template edges to pipeline edge format.
+
+    Source/target are mapped through ``node_id_map`` so human-readable
+    template IDs become UUIDs.
+    """
     pipeline_edges: list[dict[str, Any]] = []
     for edge in edges:
         old_source = edge.get("source", edge.get("source_node_id", ""))
@@ -1254,8 +1328,7 @@ def _build_pipeline_from_template(
         if hitl_config:
             pipeline_edge["hitl_gate_config"] = hitl_config
         pipeline_edges.append(pipeline_edge)
-
-    return name, description, pipeline_nodes, pipeline_edges, len(agents), len(edges)
+    return pipeline_edges
 
 
 @router.post(
@@ -1274,16 +1347,10 @@ async def create_pipeline_from_template_endpoint(
         primitive = await get_primitive(session, principal.organisation_id, primitive_id)
     except IntegrityError:
         _log.exception(_CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE)
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        raise _conflict_error() from None
     except ProgrammingError:
         _log.exception(_CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        raise _not_implemented_error() from None
     if primitive is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1304,8 +1371,7 @@ async def create_pipeline_from_template_endpoint(
 
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             pipeline = await create_pipeline(
                 session,
                 org_id=principal.organisation_id,
@@ -1330,16 +1396,10 @@ async def create_pipeline_from_template_endpoint(
             await session.flush()
     except IntegrityError:
         _log.exception(_CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE)
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        raise _conflict_error() from None
     except ProgrammingError:
         _log.exception(_CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        raise _not_implemented_error() from None
 
     return PipelineFromTemplateResponse(
         id=pipeline.id,
@@ -1375,8 +1435,7 @@ async def create_lifecycle_map_from_primitive_endpoint(
     """
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await _set_rls_context(session, principal)
             primitive = await get_primitive(session, principal.organisation_id, primitive_id)
             if primitive is None:
                 raise HTTPException(
@@ -1401,22 +1460,13 @@ async def create_lifecycle_map_from_primitive_endpoint(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
     except IntegrityError:
         _log.exception("library.create_lifecycle_map_from_primitive_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        raise _conflict_error() from None
     except ProgrammingError:
         _log.exception("library.create_lifecycle_map_from_primitive_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        raise _not_implemented_error() from None
     except SQLAlchemyError:
         _log.exception("create_lifecycle_map_from_primitive_endpoint: SQLAlchemyError")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
-        ) from None
+        raise _unavailable_error() from None
     return LifecycleMapResponse.model_validate(lifecycle_map)
 
 
@@ -1473,22 +1523,13 @@ async def community_contribute_endpoint(
         )
     except IntegrityError:
         _log.exception("library.community_contribute_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        raise _conflict_error() from None
     except ProgrammingError:
         _log.exception("library.community_contribute_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        raise _not_implemented_error() from None
     except SQLAlchemyError:
         _log.exception("community_contribute_endpoint: SQLAlchemyError")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
-        ) from None
+        raise _unavailable_error() from None
     return LibraryPrimitiveResponse.model_validate(result)
 
 
@@ -1518,10 +1559,7 @@ async def list_community_contributions_endpoint(
             )
         except IntegrityError:
             _log.exception("library.list_community_contributions_endpoint")
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=MSG_RESOURCE_ALREADY_EXISTS,
-            ) from None
+            raise _conflict_error() from None
         except ProgrammingError:
             _log.exception("library.list_community_contributions_endpoint")
             _log.warning(
@@ -1585,20 +1623,11 @@ async def admin_publish_contribution_endpoint(
         ) from None
     except IntegrityError:
         _log.exception("library.admin_publish_contribution_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
+        raise _conflict_error() from None
     except ProgrammingError:
         _log.exception("library.admin_publish_contribution_endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
+        raise _not_implemented_error() from None
     except SQLAlchemyError:
         _log.exception("admin_publish_contribution_endpoint: SQLAlchemyError")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
-        ) from None
+        raise _unavailable_error() from None
     return LibraryPrimitiveResponse.model_validate(result)
