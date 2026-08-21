@@ -1,4 +1,5 @@
 import { computed, reactive, readonly } from 'vue'
+import type { Ref } from 'vue'
 import type { AnalyticsEventType } from './productAnalyticsEvents'
 
 /**
@@ -96,7 +97,7 @@ export function initProductAnalytics(consentFn: () => boolean): void {
 export function useProductAnalytics(): {
   track: (eventType: AnalyticsEventType, payload?: Record<string, unknown>) => void
   flush: () => void
-  bufferLength: ReturnType<typeof readonly>
+  bufferLength: Readonly<Ref<number>>
 } {
   function track(eventType: AnalyticsEventType, payload?: Record<string, unknown>): void {
     if (!_isConsented()) return
