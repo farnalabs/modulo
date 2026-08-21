@@ -44,6 +44,7 @@ VERSIONS_DIR = os.path.join(REPO_ROOT, "backend", "src", "modulo", "db", "migrat
 _RE_REVISION = re.compile(r"(?m)^revision:\s*str\s*=\s*\"([^\"]+)\"")
 _RE_DOWN_STRING = re.compile(r"(?m)^down_revision:.*=\s*\"([^\"]+)\"")
 _RE_PREFIX = re.compile(r"^(\d{4})_")
+_DIFF_RANGE_RE = re.compile(r"^[A-Za-z0-9._~^/\-]+$")
 
 
 def _resolve_repo_root() -> str:
@@ -60,6 +61,9 @@ def _resolve_repo_root() -> str:
 
 def _changed_names(diff_range: str | None) -> list[str]:
     if diff_range:
+        if not _DIFF_RANGE_RE.match(diff_range):
+            print(f"check-migration-heads: invalid --diff-range {diff_range!r}", file=sys.stderr)
+            sys.exit(1)
         result = subprocess.run(
             ["git", "diff", "--name-only", "--diff-filter=ACMR", diff_range],
             capture_output=True,

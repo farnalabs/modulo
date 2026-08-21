@@ -420,7 +420,7 @@ async def heartbeat_loop(
                 superseded.set()
             break
         except asyncio.CancelledError:
-            break
+            raise
         except Exception:
             consecutive_failures += 1
             _log.warning("Heartbeat failed for run %s (%d consecutive)", run_id, consecutive_failures)

@@ -3880,7 +3880,8 @@ async def update_trigger(
         tid, input_err = _validate_trigger_update_inputs(trigger_id, max_concurrent_runs, daily_spend_limit)
         if input_err:
             return input_err
-        assert tid is not None  # nosec B101 -- genuine invariant: _validate_trigger_update_inputs returns (tid, None) only when there is no input error, so a non-None tid is guaranteed here
+        if tid is None:
+            raise RuntimeError("_validate_trigger_update_inputs returned an error dict but no parsed trigger id")
 
         async with _session(org_id) as s:
             trigger = await _load_trigger_for_update(s, org_id, tid)

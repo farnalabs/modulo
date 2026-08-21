@@ -315,7 +315,9 @@ def test_build_idempotency_key_deterministic():
         "correction_id": "corr_no_secrets",
         "redacted_input": {"body": "secret: abc"},
     }
-    assert build_idempotency_key(**kwargs) == build_idempotency_key(**kwargs)
+    first = build_idempotency_key(**kwargs)
+    second = build_idempotency_key(**kwargs)
+    assert first == second
 
 
 # ---------------------------------------------------------------------------
