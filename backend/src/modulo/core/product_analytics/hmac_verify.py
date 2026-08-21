@@ -17,6 +17,15 @@ six decimal places (``"%.6f"``) — any other precision (``int(ts)``, ``"%.9f"``
 scientific notation, etc.) silently breaks verification because the signed byte
 string no longer matches. Keep every signer and verifier in lockstep with this
 format.
+
+Distinct protocol — do NOT conflate with the vendor batch signer
+----------------------------------------------------------------
+This module is the signer/verifier for the inbound *rotation-request* protocol
+(see :mod:`modulo.api.routes.product_analytics_identity`).  It is **NOT**
+interchangeable with ``sign_outbound_batch`` in
+:mod:`modulo.core.product_analytics.vendor_client`, which signs outbound metrics
+batches with the ``<payload><timestamp>:<sequence>`` format.  The two protocols
+intentionally use different wire formats and must never be cross-used.
 """
 
 from __future__ import annotations
@@ -28,15 +37,21 @@ import time
 _TIMESTAMP_WINDOW_SECONDS = 300  # 5 minutes
 
 
-def compute_hmac(
+def sign_rotation_request(
     secret: str,
     payload_bytes: bytes,
     timestamp: float,
     sequence: int,
 ) -> str:
-    """Compute HMAC-SHA256 over ``(payload || timestamp || sequence)``.
+    """Compute HMAC-SHA256 for the inbound rotation-request protocol.
 
     Returns the hex digest string.
+
+    This is the canonical signer for rotation requests verified by
+    :func:`verify_hmac`.  It is NOT interchangeable with
+    ``sign_outbound_batch`` in
+    :mod:`modulo.core.product_analytics.vendor_client` — see the module
+    docstring for the distinct wire formats of the two protocols.
     """
     message = _build_message(payload_bytes, timestamp, sequence)
     return hmac.new(
@@ -83,7 +98,7 @@ def verify_hmac(
     if abs(current_time - timestamp) > _TIMESTAMP_WINDOW_SECONDS:
         return False
 
-    expected = compute_hmac(secret, payload_bytes, timestamp, sequence)
+    expected = sign_rotation_request(secret, payload_bytes, timestamp, sequence)
     return hmac.compare_digest(expected, expected_mac)
 
 

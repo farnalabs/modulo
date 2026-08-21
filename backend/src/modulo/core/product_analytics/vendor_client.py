@@ -24,10 +24,25 @@ RETRY_DELAYS = [1.0, 5.0, 30.0]
 REQUEST_TIMEOUT = 30.0
 
 
-def compute_hmac(secret: str, payload: bytes, timestamp: float, sequence: int) -> str:
-    """Compute HMAC-SHA256 over ``payload + timestamp + sequence``.
+def sign_outbound_batch(secret: str, payload: bytes, timestamp: float, sequence: int) -> str:
+    """Compute HMAC-SHA256 for the outbound vendor batch protocol.
 
     Returns the hex digest string (no ``sha256=`` prefix).
+
+    Wire format (vendor batch protocol)
+    -----------------------------------
+    The message fed into HMAC-SHA256 is::
+
+        payload + f"{timestamp}:{sequence}"
+
+    This is the canonical signer for batches posted to the metrics vendor via
+    :meth:`VendorClient.post_batch`.  It is **NOT** interchangeable with the
+    rotation-request signer in
+    :mod:`modulo.core.product_analytics.hmac_verify`: that module signs with a
+    ``|<timestamp:.6f>|<sequence>`` format under a fixed-precision cross-SDK
+    contract.  The two protocols intentionally use different wire formats — never
+    reuse this helper to sign or verify rotation requests, and never reuse the
+    hmac_verify helper for outbound batches.
     """
     message = payload + f"{timestamp}:{sequence}".encode()
     return hmac.new(secret.encode(), message, hashlib.sha256).hexdigest()
@@ -61,7 +76,7 @@ class VendorClient:
 
         Returns ``(success, status_code, error_message)``.
         """
-        signature = compute_hmac(self._instance_secret, payload, timestamp, sequence)
+        signature = sign_outbound_batch(self._instance_secret, payload, timestamp, sequence)
         url = f"{self._endpoint_url}/api/v1/batch"
 
         client = await self._get_client()

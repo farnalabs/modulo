@@ -10,7 +10,7 @@ import pytest
 
 from modulo.core.product_analytics.hmac_verify import (
     _TIMESTAMP_WINDOW_SECONDS,
-    compute_hmac,
+    sign_rotation_request,
     verify_hmac,
 )
 from modulo.core.product_analytics.instance_identity import (
@@ -184,8 +184,8 @@ class TestHMAC:
         ts = 1700000000.0
         seq = 1
 
-        mac1 = compute_hmac(secret, payload, ts, seq)
-        mac2 = compute_hmac(secret, payload, ts, seq)
+        mac1 = sign_rotation_request(secret, payload, ts, seq)
+        mac2 = sign_rotation_request(secret, payload, ts, seq)
         assert mac1 == mac2
         assert len(mac1) == 64  # SHA-256 hex = 64 chars
 
@@ -195,8 +195,8 @@ class TestHMAC:
         ts = 1700000000.0
         seq = 1
 
-        mac1 = compute_hmac("secret-a", payload, ts, seq)
-        mac2 = compute_hmac("secret-b", payload, ts, seq)
+        mac1 = sign_rotation_request("secret-a", payload, ts, seq)
+        mac2 = sign_rotation_request("secret-b", payload, ts, seq)
         assert mac1 != mac2
 
     def test_compute_hmac_different_sequences(self):
@@ -205,8 +205,8 @@ class TestHMAC:
         payload = b'{"test": true}'
         ts = 1700000000.0
 
-        mac1 = compute_hmac(secret, payload, ts, 1)
-        mac2 = compute_hmac(secret, payload, ts, 2)
+        mac1 = sign_rotation_request(secret, payload, ts, 1)
+        mac2 = sign_rotation_request(secret, payload, ts, 2)
         assert mac1 != mac2
 
     def test_verify_hmac_valid(self):
@@ -216,7 +216,7 @@ class TestHMAC:
         ts = time.time()
         seq = 1
 
-        mac = compute_hmac(secret, payload, ts, seq)
+        mac = sign_rotation_request(secret, payload, ts, seq)
         assert verify_hmac(secret, payload, ts, seq, mac) is True
 
     def test_verify_hmac_invalid_mac(self):
@@ -235,7 +235,7 @@ class TestHMAC:
         old_ts = time.time() - _TIMESTAMP_WINDOW_SECONDS - 1
         seq = 1
 
-        mac = compute_hmac(secret, payload, old_ts, seq)
+        mac = sign_rotation_request(secret, payload, old_ts, seq)
         assert verify_hmac(secret, payload, old_ts, seq, mac) is False
 
     def test_verify_hmac_future_timestamp(self):
@@ -245,7 +245,7 @@ class TestHMAC:
         future_ts = time.time() + _TIMESTAMP_WINDOW_SECONDS + 1
         seq = 1
 
-        mac = compute_hmac(secret, payload, future_ts, seq)
+        mac = sign_rotation_request(secret, payload, future_ts, seq)
         assert verify_hmac(secret, payload, future_ts, seq, mac) is False
 
     def test_verify_hmac_at_boundary(self):
@@ -256,7 +256,7 @@ class TestHMAC:
         boundary_ts = now - _TIMESTAMP_WINDOW_SECONDS + 1  # 1s inside window
         seq = 1
 
-        mac = compute_hmac(secret, payload, boundary_ts, seq)
+        mac = sign_rotation_request(secret, payload, boundary_ts, seq)
         assert verify_hmac(secret, payload, boundary_ts, seq, mac, now=now) is True
 
     def test_verify_hmac_just_outside_boundary(self):
@@ -267,7 +267,7 @@ class TestHMAC:
         ts = now - _TIMESTAMP_WINDOW_SECONDS - 0.001
         seq = 1
 
-        mac = compute_hmac(secret, payload, ts, seq)
+        mac = sign_rotation_request(secret, payload, ts, seq)
         assert verify_hmac(secret, payload, ts, seq, mac, now=now) is False
 
     def test_verify_hmac_with_injected_now(self):
@@ -278,7 +278,7 @@ class TestHMAC:
         ts = fixed_now
         seq = 42
 
-        mac = compute_hmac(secret, payload, ts, seq)
+        mac = sign_rotation_request(secret, payload, ts, seq)
         assert verify_hmac(secret, payload, ts, seq, mac, now=fixed_now) is True
 
     def test_verify_hmac_wrong_secret(self):
@@ -287,5 +287,5 @@ class TestHMAC:
         ts = time.time()
         seq = 1
 
-        mac = compute_hmac("correct-secret", payload, ts, seq)
+        mac = sign_rotation_request("correct-secret", payload, ts, seq)
         assert verify_hmac("wrong-secret", payload, ts, seq, mac) is False

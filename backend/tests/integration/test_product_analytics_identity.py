@@ -25,7 +25,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from modulo.auth.jwt import create_access_token
-from modulo.core.product_analytics.hmac_verify import compute_hmac
+from modulo.core.product_analytics.hmac_verify import sign_rotation_request
 from modulo.core.product_analytics.instance_identity import get_or_create_instance_identity
 
 pytestmark = pytest.mark.integration
@@ -56,7 +56,7 @@ def _rotate_body(secret: str, instance_id: str, sequence: int, timestamp: float 
     """Build a valid-shaped RotateRequest body signed with ``secret``."""
     ts = timestamp if timestamp is not None else time.time()
     payload = str(instance_id).encode("utf-8")
-    mac = compute_hmac(secret, payload, ts, sequence)
+    mac = sign_rotation_request(secret, payload, ts, sequence)
     return {
         "old_secret": secret,
         "timestamp": ts,

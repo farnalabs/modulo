@@ -1,8 +1,9 @@
 """Instance identity for product analytics — Trust-On-First-Use bootstrap.
 
 Mints a unique instance_id (UUID) and a shared secret (hex token) once per
-deployment, storing both in SystemConfig.  The secret is stored with
-``repr=False`` so it never leaks into logs or payloads.
+deployment, storing both in SystemConfig.  The secret is never returned by the
+identity helpers and is only revealed through an explicit rotation call, so it
+never leaks into logs or payloads.
 """
 
 from __future__ import annotations
