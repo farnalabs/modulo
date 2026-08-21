@@ -512,8 +512,11 @@ jobs:
             echo "exhausted=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Public-repo author gate (FAR-256): only auto-dispatch the Branch Fixer for
+      # PRs raised by farnalabs org members (MEMBER/OWNER). External contributors'
+      # PRs still get CI feedback but are not auto-processed by the agent.
       - name: Trigger Modulo Branch Fixer
-        if: (failure() || cancelled()) && steps.retry-check.outputs.exhausted == 'false' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+        if: (failure() || cancelled()) && steps.retry-check.outputs.exhausted == 'false' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery') && (github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'OWNER')
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
@@ -597,8 +600,11 @@ jobs:
           echo "${SKIP_OUTPUT}" >> "$GITHUB_OUTPUT"
           echo "PR Reviewer dedup: ${SKIP_OUTPUT}"
           cat /tmp/pr-dedup-err
+      # Public-repo author gate (FAR-256): only auto-dispatch the PR Reviewer for
+      # PRs raised by farnalabs org members (MEMBER/OWNER). External contributors'
+      # PRs still get CI feedback but are not auto-processed by the agent.
       - name: Send webhook to Modulo PR Review Agent
-        if: success() && steps.review-check.outputs.skip != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+        if: success() && steps.review-check.outputs.skip != 'true' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery') && (github.event.pull_request.author_association == 'MEMBER' || github.event.pull_request.author_association == 'OWNER')
         env:
           MODULO_WEBHOOK_URL: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_URL }}
           MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_SECRET }}
