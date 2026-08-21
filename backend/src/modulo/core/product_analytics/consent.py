@@ -14,6 +14,7 @@ from modulo.core.product_analytics.constants import (
     DEFAULT_PROMPTED,
     DEFAULT_PROMPTED_AT,
     DISMISS_COOLDOWN,
+    ENV_INSTANCE_SWITCH,
     INSTANCE_SWITCH_KEY,
     LEVEL_ALL,
     LEVEL_OFF,
@@ -175,7 +176,7 @@ async def is_instance_analytics_enabled(session: AsyncSession) -> bool:
             return config.value.lower() in ("1", "true", "yes")
         return bool(config.value)
     # Env var fallback
-    env_val = os.environ.get("MODULO_PRODUCT_ANALYTICS_ENABLED", "")
+    env_val = os.environ.get(ENV_INSTANCE_SWITCH, "")
     return env_val.lower() in ("1", "true", "yes")
 
 

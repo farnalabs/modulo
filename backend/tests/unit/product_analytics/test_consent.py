@@ -4,14 +4,17 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from modulo.core.product_analytics import consent as consent_module
 from modulo.core.product_analytics.consent import (
     apply_consent_action,
     default_consent_state,
     get_product_analytics_block,
     is_egress_allowed,
+    is_license_enforcement_enabled,
     is_partner_carve_out_active,
     is_prompt_eligible,
     merge_product_analytics_block,
@@ -297,3 +300,59 @@ class TestPartnerCarveOut:
     def test_carve_out_inactive_when_not_required(self) -> None:
         license_data = SimpleNamespace(claims={})
         assert is_partner_carve_out_active(license_data, LEVEL_OFF) is False
+
+
+# ---------------------------------------------------------------------------
+# License enforcement kill switch (bool-inversion regression, consent.py:223)
+# ---------------------------------------------------------------------------
+
+
+class _Config:
+    def __init__(self, value: object) -> None:
+        self.value = value
+
+
+class TestLicenseEnforcementKillSwitch:
+    """Lock in the truth table for is_license_enforcement_enabled.
+
+    The kill switch defaults to ENFORCED when absent (matching
+    authz_enforce convention). A boolean/string ``true`` DISABLES enforcement;
+    ``false`` re-enables it. This is the regression test for the bool-inversion
+    fix (consent.py:223) — currently inert until FAR-361, but the contract must
+    not drift.
+    """
+
+    async def test_absent_key_enforces(self) -> None:
+        session = AsyncMock()
+        with patch.object(consent_module, "get_config", new=AsyncMock(return_value=None)):
+            assert await is_license_enforcement_enabled(session) is True
+
+    async def test_bool_true_disables(self) -> None:
+        session = AsyncMock()
+        with patch.object(consent_module, "get_config", new=AsyncMock(return_value=_Config(True))):
+            assert await is_license_enforcement_enabled(session) is False
+
+    async def test_bool_false_enforces(self) -> None:
+        session = AsyncMock()
+        with patch.object(consent_module, "get_config", new=AsyncMock(return_value=_Config(False))):
+            assert await is_license_enforcement_enabled(session) is True
+
+    async def test_str_true_disables(self) -> None:
+        session = AsyncMock()
+        with patch.object(consent_module, "get_config", new=AsyncMock(return_value=_Config("true"))):
+            assert await is_license_enforcement_enabled(session) is False
+
+    async def test_str_false_enforces(self) -> None:
+        session = AsyncMock()
+        with patch.object(consent_module, "get_config", new=AsyncMock(return_value=_Config("false"))):
+            assert await is_license_enforcement_enabled(session) is True
+
+    async def test_str_yes_disables(self) -> None:
+        session = AsyncMock()
+        with patch.object(consent_module, "get_config", new=AsyncMock(return_value=_Config("yes"))):
+            assert await is_license_enforcement_enabled(session) is False
+
+    async def test_str_no_enforces(self) -> None:
+        session = AsyncMock()
+        with patch.object(consent_module, "get_config", new=AsyncMock(return_value=_Config("no"))):
+            assert await is_license_enforcement_enabled(session) is True
