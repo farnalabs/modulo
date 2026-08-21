@@ -119,3 +119,83 @@ def test_create_rule_maps_unique_violation_to_422(client: TestClient) -> None:
     )
 
     assert resp.status_code == 422
+
+
+class _CommunityPlan:
+    """Plan-context stub with every feature disabled (community / no license)."""
+
+    def feature_enabled(self, name: str) -> bool:
+        return False
+
+    def list_enabled_features(self) -> list:
+        return []
+
+    def tier(self) -> str:
+        return "community"
+
+    def has_license_key(self) -> bool:
+        return False
+
+
+@pytest.fixture
+def community_client() -> Generator[TestClient, None, None]:
+    session = _make_session(flush_raises=False)
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+
+    class _MockFactory:
+        def __init__(self, s: AsyncMock) -> None:
+            self._session = s
+
+        def __call__(self) -> "_MockFactory":
+            return self
+
+        async def __aenter__(self) -> AsyncMock:
+            return self._session
+
+        async def __aexit__(self, *args: object) -> None:
+            pass
+
+    app.dependency_overrides[_get_session_factory] = lambda: _MockFactory(session)
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="testuser",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="testuser",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+    app.dependency_overrides[get_plan_context] = lambda: _CommunityPlan()
+
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+def test_community_plan_webhook_rule_returns_402(community_client: TestClient) -> None:
+    """Community tier has no webhook action — a webhook rule must be 402."""
+    resp = community_client.post(
+        "/api/v1/errors/notification-rules",
+        json={"name": "webhook-rule", "action_type": "webhook", "webhook_url": "https://example.com/hook"},
+    )
+
+    assert resp.status_code == 402
+    assert "Team tier" in resp.text
+
+
+def test_community_plan_in_app_rule_passes_tier_check(community_client: TestClient) -> None:
+    """Community tier may create in_app rules (3 max) — the tier check must pass."""
+    resp = community_client.post(
+        "/api/v1/errors/notification-rules",
+        json={"name": "in-app-rule", "action_type": "in_app"},
+    )
+
+    assert resp.status_code != 402

@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_feature, require_permission
+from modulo.api.dependencies import get_db_session, get_plan_context, require_permission
 from modulo.api.models.error_notification_rule import (
     ErrorNotificationRuleCreate,
     ErrorNotificationRuleListResponse,
@@ -22,6 +22,7 @@ from modulo.api.models.error_notification_rule import (
 )
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.feature_flags import PlanContext
 from modulo.db.models.error_notification_rule import ErrorNotificationRule
 from modulo.db.rls import set_rls_org
 
@@ -56,7 +57,7 @@ def _serialize_rule(rule: ErrorNotificationRule) -> dict[str, Any]:
     }
 
 
-@router.get("", response_model=ErrorNotificationRuleListResponse, dependencies=[require_feature("error_tracking")])
+@router.get("", response_model=ErrorNotificationRuleListResponse)
 @handle_db_errors("error_notification_rules.list_notification_rules")
 async def list_notification_rules(
     limit: int = Query(20, ge=1, le=100),
@@ -119,19 +120,25 @@ async def list_notification_rules(
     "",
     response_model=ErrorNotificationRuleResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[require_feature("error_tracking")],
 )
 @handle_db_errors("error_notification_rules.create_notification_rule")
 async def create_notification_rule(
     req: ErrorNotificationRuleCreate,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_ERROR_NOTIFICATION_MANAGE),
+    plan: PlanContext = Depends(get_plan_context),
 ) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_NO_ORGANISATION)
 
-    max_rules = _MAX_RULES_COMMUNITY if principal.org_role == "runner" else _MAX_RULES_PER_ORG
+    is_team = plan.feature_enabled("error_tracking")
+    max_rules = _MAX_RULES_PER_ORG if is_team else _MAX_RULES_COMMUNITY
+    if not is_team and req.action_type == "webhook":
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="Webhook notification rules require the Team tier",
+        )
 
     try:
         async with session.begin():
@@ -198,7 +205,6 @@ async def create_notification_rule(
 @router.put(
     "/{rule_id}",
     response_model=ErrorNotificationRuleResponse,
-    dependencies=[require_feature("error_tracking")],
 )
 @handle_db_errors("error_notification_rules.update_notification_rule")
 async def update_notification_rule(
@@ -206,10 +212,18 @@ async def update_notification_rule(
     req: ErrorNotificationRuleUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_ERROR_NOTIFICATION_MANAGE),
+    plan: PlanContext = Depends(get_plan_context),
 ) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_NO_ORGANISATION)
+
+    is_team = plan.feature_enabled("error_tracking")
+    if not is_team and (req.action_type == "webhook" or req.webhook_url is not None):
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="Webhook notification rules require the Team tier",
+        )
 
     try:
         async with session.begin():
@@ -270,7 +284,7 @@ async def update_notification_rule(
     return _serialize_rule(rule)
 
 
-@router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[require_feature("error_tracking")])
+@router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
 @handle_db_errors("error_notification_rules.delete_notification_rule")
 async def delete_notification_rule(
     rule_id: uuid.UUID,
