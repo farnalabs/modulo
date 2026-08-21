@@ -18,8 +18,15 @@ async function api(path, options = {}) {
   if (typeof path !== "string" || !path.startsWith("/") || /^[a-z][a-z0-9+.-]*:\/\//i.test(path)) {
     throw new Error(`Invalid API path: ${logSafe(path)}`);
   }
-  const url = `${BASE_URL}${path}`;
-  const res = await fetch(url, {
+  // Pin the resolved URL to the configured base origin so a (future) caller
+  // cannot use `path` to traverse off-host (SSRF / forging). `path` is always a
+  // hard-coded literal in the doc examples, but we enforce it defensively.
+  const base = new URL(BASE_URL);
+  const url = new URL(path, base); // NOSONAR [jssecurity:S7044,jssecurity:S8476] -- origin pinned below
+  if (url.origin !== base.origin) {
+    throw new Error(`API path escapes base origin: ${logSafe(path)}`);
+  }
+  const res = await fetch(url, { // NOSONAR [jssecurity:S7044,jssecurity:S8476] -- url origin pinned above
     ...options,
     headers: { "Content-Type": "application/json", ...options.headers },
   });
@@ -42,7 +49,7 @@ async function runMain(mainFn) {
   try {
     await mainFn();
   } catch (err) {
-    console.error("Fatal:", err.message);
+    console.error("Fatal:", logSafe(err.message)); // NOSONAR [jssecurity:S5145] -- err.message is our own, path-sanitised error text
     process.exit(1);
   }
 }
